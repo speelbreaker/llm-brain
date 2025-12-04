@@ -32,8 +32,9 @@ args = "python server.py"
 waitForPort = 5000
 
 [deployment]
-deploymentTarget = "vm"
+deploymentTarget = "gce"
 run = ["python", "agent_loop.py"]
+ignorePorts = true
 
 [[ports]]
 localPort = 5000
