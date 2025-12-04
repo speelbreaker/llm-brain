@@ -4,7 +4,7 @@ Reads from environment variables and .env file.
 """
 from __future__ import annotations
 
-from typing import Optional
+from typing import Literal
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -18,6 +18,11 @@ class Settings(BaseSettings):
         env_file=".env",
         env_file_encoding="utf-8",
         extra="ignore",
+    )
+
+    mode: Literal["production", "research"] = Field(
+        default="research",
+        description="Operating mode: 'production' for mainnet, 'research' for testnet exploration",
     )
 
     deribit_base_url: str = Field(
@@ -42,33 +47,71 @@ class Settings(BaseSettings):
         description="Maximum absolute net delta exposure",
     )
     max_expiry_exposure: float = Field(
-        default=10.0,
-        description="Maximum exposure per expiry (in contracts)",
+        default=0.3,
+        description="Maximum exposure per expiry (in BTC/ETH notionals) for production",
     )
 
     ivrv_min: float = Field(
-        default=1.0,
-        description="Minimum IV/RV ratio to consider selling options",
+        default=1.2,
+        description="Minimum IV/RV ratio to consider selling options (production)",
     )
     delta_min: float = Field(
-        default=0.10,
-        description="Minimum delta for candidate options",
+        default=0.20,
+        description="Minimum delta for candidate options (production)",
     )
     delta_max: float = Field(
-        default=0.35,
-        description="Maximum delta for candidate options",
+        default=0.30,
+        description="Maximum delta for candidate options (production)",
     )
     dte_min: int = Field(
-        default=1,
-        description="Minimum days to expiry for candidate options",
+        default=5,
+        description="Minimum days to expiry for candidate options (production)",
     )
     dte_max: int = Field(
-        default=14,
-        description="Maximum days to expiry for candidate options",
+        default=10,
+        description="Maximum days to expiry for candidate options (production)",
     )
     premium_min_usd: float = Field(
         default=50.0,
         description="Minimum premium in USD for candidate options",
+    )
+
+    research_ivrv_min: float = Field(
+        default=1.0,
+        description="Minimum IV/RV ratio in research mode (looser)",
+    )
+    research_delta_min: float = Field(
+        default=0.10,
+        description="Minimum delta in research mode (wider range)",
+    )
+    research_delta_max: float = Field(
+        default=0.40,
+        description="Maximum delta in research mode (wider range)",
+    )
+    research_dte_min: int = Field(
+        default=1,
+        description="Minimum DTE in research mode (allow shorter)",
+    )
+    research_dte_max: int = Field(
+        default=21,
+        description="Maximum DTE in research mode (allow longer)",
+    )
+    research_max_expiry_exposure: float = Field(
+        default=1.0,
+        description="Maximum exposure per expiry in research mode (higher for testnet)",
+    )
+
+    explore_prob: float = Field(
+        default=0.25,
+        description="Probability of exploring non-best candidate (research mode only)",
+    )
+    explore_top_k: int = Field(
+        default=3,
+        description="Number of top candidates to consider for exploration",
+    )
+    policy_version: str = Field(
+        default="rb_v1_explore",
+        description="Policy version identifier for logging",
     )
 
     default_order_size: float = Field(
@@ -103,7 +146,7 @@ class Settings(BaseSettings):
     )
 
     dry_run: bool = Field(
-        default=True,
+        default=False,
         description="If True, no real orders are placed (simulation mode)",
     )
     loop_interval_sec: int = Field(
@@ -115,6 +158,41 @@ class Settings(BaseSettings):
         default="logs",
         description="Directory for JSON decision logs",
     )
+
+    @property
+    def is_research(self) -> bool:
+        """Check if running in research mode."""
+        return self.mode == "research"
+
+    @property
+    def effective_ivrv_min(self) -> float:
+        """Get mode-appropriate IVRV minimum."""
+        return self.research_ivrv_min if self.is_research else self.ivrv_min
+
+    @property
+    def effective_delta_min(self) -> float:
+        """Get mode-appropriate delta minimum."""
+        return self.research_delta_min if self.is_research else self.delta_min
+
+    @property
+    def effective_delta_max(self) -> float:
+        """Get mode-appropriate delta maximum."""
+        return self.research_delta_max if self.is_research else self.delta_max
+
+    @property
+    def effective_dte_min(self) -> int:
+        """Get mode-appropriate DTE minimum."""
+        return self.research_dte_min if self.is_research else self.dte_min
+
+    @property
+    def effective_dte_max(self) -> int:
+        """Get mode-appropriate DTE maximum."""
+        return self.research_dte_max if self.is_research else self.dte_max
+
+    @property
+    def effective_max_expiry_exposure(self) -> float:
+        """Get mode-appropriate per-expiry exposure limit."""
+        return self.research_max_expiry_exposure if self.is_research else self.max_expiry_exposure
 
 
 settings = Settings()

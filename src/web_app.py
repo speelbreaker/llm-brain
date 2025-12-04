@@ -86,8 +86,9 @@ def chat_endpoint(
 @app.get("/", response_class=HTMLResponse)
 def index() -> str:
     """Minimal HTML dashboard for live status + chat."""
-    mode = "LLM" if settings.llm_enabled else "Rule-based"
-    dry_run = "True" if settings.dry_run else "False"
+    decision_mode = "LLM" if settings.llm_enabled else "Rule-based"
+    op_mode = settings.mode.upper()
+    explore_pct = int(settings.explore_prob * 100)
     
     return f"""
 <!DOCTYPE html>
@@ -124,6 +125,8 @@ def index() -> str:
       margin-right: 0.5rem;
     }}
     .badge-mode {{ background: #e3f2fd; color: #1565c0; }}
+    .badge-research {{ background: #f3e5f5; color: #7b1fa2; }}
+    .badge-production {{ background: #e8f5e9; color: #2e7d32; }}
     .badge-dry {{ background: #fff3e0; color: #e65100; }}
     .badge-live {{ background: #e8f5e9; color: #2e7d32; }}
     .section {{
@@ -237,7 +240,10 @@ def index() -> str:
   <p class="subtitle">Deribit Testnet - Covered Call Strategy</p>
   
   <div>
-    <span class="badge badge-mode">{mode} Mode</span>
+    <span class="badge badge-mode">{decision_mode}</span>
+    <span class="badge {'badge-research' if settings.is_research else 'badge-production'}">
+      {op_mode} ({explore_pct}% explore)
+    </span>
     <span class="badge {'badge-dry' if settings.dry_run else 'badge-live'}">
       {'DRY RUN' if settings.dry_run else 'LIVE TRADING'}
     </span>

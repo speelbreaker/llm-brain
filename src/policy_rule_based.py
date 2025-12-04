@@ -1,9 +1,12 @@
 """
 Rule-based policy module.
 Implements deterministic decision logic for covered call strategy.
+Supports research mode with exploration and production mode with strict filtering.
 """
 from __future__ import annotations
 
+import math
+import random
 from typing import Any
 
 from src.config import Settings, settings
@@ -32,6 +35,73 @@ def _get_open_covered_calls(
     return covered_calls
 
 
+def score_candidate(candidate: CandidateOption, cfg: Settings) -> float:
+    """
+    Score a candidate covered call. Higher is better.
+    
+    Rewards:
+    - Higher premium (log-scaled to avoid huge skew)
+    - Closeness to target delta and DTE (based on effective ranges)
+    - IVRV above the minimum threshold
+    
+    Args:
+        candidate: The candidate option to score
+        cfg: Settings configuration
+    
+    Returns:
+        Score value (higher is better)
+    """
+    target_delta = (cfg.effective_delta_min + cfg.effective_delta_max) / 2.0
+    target_dte = (cfg.effective_dte_min + cfg.effective_dte_max) / 2.0
+
+    delta_penalty = (candidate.delta - target_delta) ** 2
+    dte_penalty = ((candidate.dte - target_dte) / max(target_dte, 1)) ** 2
+
+    premium_score = math.log1p(max(candidate.premium_usd, 0.0))
+
+    score = premium_score - 5.0 * delta_penalty - 2.0 * dte_penalty
+
+    ivrv_excess = max(candidate.ivrv - cfg.effective_ivrv_min, 0.0)
+    score += 1.0 * ivrv_excess
+
+    return score
+
+
+def choose_candidate_with_exploration(
+    candidates: list[CandidateOption],
+    cfg: Settings,
+) -> tuple[CandidateOption | None, bool]:
+    """
+    Choose a candidate, with optional exploration in research mode.
+    
+    Args:
+        candidates: List of candidate options
+        cfg: Settings configuration
+    
+    Returns:
+        Tuple of (chosen candidate or None, whether this was an exploration choice)
+    """
+    if not candidates:
+        return None, False
+
+    scored = [(score_candidate(c, cfg), c) for c in candidates]
+    scored.sort(key=lambda x: x[0], reverse=True)
+
+    best_score, best_candidate = scored[0]
+
+    if not cfg.is_research or cfg.explore_prob <= 0.0:
+        return best_candidate, False
+
+    if random.random() < cfg.explore_prob:
+        k = max(1, cfg.explore_top_k)
+        top_k = scored[:k]
+        _, chosen = random.choice(top_k)
+        is_exploration = chosen.symbol != best_candidate.symbol
+        return chosen, is_exploration
+
+    return best_candidate, False
+
+
 def _select_best_candidate(
     candidates: list[CandidateOption],
     underlying: str | None = None,
@@ -40,11 +110,16 @@ def _select_best_candidate(
 ) -> CandidateOption | None:
     """
     Select the best candidate option for opening a covered call.
+    Uses scoring and exploration logic based on mode.
     
-    Selection criteria (in order of priority):
-    1. IVRV ratio >= configured minimum
-    2. Highest premium
-    3. DTE in preferred range (closer to middle of range)
+    Args:
+        candidates: List of candidate options
+        underlying: Filter to specific underlying (optional)
+        exclude_symbols: Symbols to exclude (optional)
+        config: Settings configuration
+    
+    Returns:
+        Best candidate or None if no suitable candidates
     """
     cfg = config or settings
     exclude = set(exclude_symbols or [])
@@ -55,7 +130,7 @@ def _select_best_candidate(
             continue
         if c.symbol in exclude:
             continue
-        if c.ivrv < cfg.ivrv_min:
+        if c.ivrv < cfg.effective_ivrv_min:
             continue
         filtered.append(c)
     
@@ -69,20 +144,8 @@ def _select_best_candidate(
     if not filtered:
         return None
     
-    def score_candidate(c: CandidateOption) -> float:
-        premium_score = c.premium_usd
-        
-        dte_mid = (cfg.dte_min + cfg.dte_max) / 2
-        dte_range = cfg.dte_max - cfg.dte_min
-        dte_deviation = abs(c.dte - dte_mid) / dte_range if dte_range > 0 else 0
-        dte_score = 1.0 - dte_deviation
-        
-        ivrv_bonus = max(0, c.ivrv - cfg.ivrv_min) * 10
-        
-        return premium_score * (1 + dte_score * 0.1) + ivrv_bonus
-    
-    filtered.sort(key=score_candidate, reverse=True)
-    return filtered[0]
+    chosen, _ = choose_candidate_with_exploration(filtered, cfg)
+    return chosen
 
 
 def _should_roll_position(
@@ -124,6 +187,7 @@ def decide_action(
 ) -> dict[str, Any]:
     """
     Decide the next action based on current state using rule-based logic.
+    Uses research vs production mode and exploration settings.
     
     Decision flow:
     1. Check for positions that need rolling
@@ -135,7 +199,7 @@ def decide_action(
         config: Settings configuration
     
     Returns:
-        Dict with keys: action, params, reasoning
+        Dict with keys: action, params, reasoning, mode, policy_version
     """
     cfg = config or settings
     
@@ -146,37 +210,46 @@ def decide_action(
             should_roll, roll_reason = _should_roll_position(cc, agent_state, cfg)
             
             if should_roll:
-                new_candidate = _select_best_candidate(
-                    agent_state.candidate_options,
-                    underlying=underlying,
-                    exclude_symbols=[cc.symbol],
-                    config=cfg,
-                )
+                candidates = [
+                    c for c in agent_state.candidate_options
+                    if c.underlying == underlying and c.symbol != cc.symbol
+                ]
                 
-                if new_candidate:
-                    return {
-                        "action": ActionType.ROLL_COVERED_CALL.value,
-                        "params": {
-                            "underlying": underlying,
-                            "from_symbol": cc.symbol,
-                            "to_symbol": new_candidate.symbol,
-                            "size": cc.size,
-                        },
-                        "reasoning": f"Rolling {cc.symbol}: {roll_reason}. "
-                                   f"New position: {new_candidate.symbol} "
-                                   f"(DTE={new_candidate.dte}, premium=${new_candidate.premium_usd:.2f})",
-                    }
-                else:
-                    return {
-                        "action": ActionType.CLOSE_COVERED_CALL.value,
-                        "params": {
-                            "underlying": underlying,
-                            "symbol": cc.symbol,
-                            "size": cc.size,
-                        },
-                        "reasoning": f"Closing {cc.symbol}: {roll_reason}. "
-                                   f"No suitable candidates available for rolling.",
-                    }
+                if candidates:
+                    new_candidate, was_exploration = choose_candidate_with_exploration(candidates, cfg)
+                    
+                    if new_candidate:
+                        explore_tag = "Exploratory " if was_exploration else ""
+                        return {
+                            "action": ActionType.ROLL_COVERED_CALL.value,
+                            "params": {
+                                "underlying": underlying,
+                                "from_symbol": cc.symbol,
+                                "to_symbol": new_candidate.symbol,
+                                "size": cc.size,
+                            },
+                            "reasoning": f"{explore_tag}Rolling {cc.symbol}: {roll_reason}. "
+                                       f"New position: {new_candidate.symbol} "
+                                       f"(DTE={new_candidate.dte}, delta={new_candidate.delta:.2f}, "
+                                       f"premium=${new_candidate.premium_usd:.2f}, IVRV={new_candidate.ivrv:.2f}). "
+                                       f"Mode={cfg.mode}, policy={cfg.policy_version}.",
+                            "mode": cfg.mode,
+                            "policy_version": cfg.policy_version,
+                        }
+                
+                return {
+                    "action": ActionType.CLOSE_COVERED_CALL.value,
+                    "params": {
+                        "underlying": underlying,
+                        "symbol": cc.symbol,
+                        "size": cc.size,
+                    },
+                    "reasoning": f"Closing {cc.symbol}: {roll_reason}. "
+                               f"No suitable candidates available for rolling. "
+                               f"Mode={cfg.mode}, policy={cfg.policy_version}.",
+                    "mode": cfg.mode,
+                    "policy_version": cfg.policy_version,
+                }
     
     for underlying in cfg.underlyings:
         covered_calls = _get_open_covered_calls(agent_state, underlying)
@@ -188,19 +261,23 @@ def decide_action(
             ]
             
             if candidates:
-                best = _select_best_candidate(candidates, underlying=underlying, config=cfg)
+                chosen, was_exploration = choose_candidate_with_exploration(candidates, cfg)
                 
-                if best:
+                if chosen:
+                    explore_tag = "Exploratory " if was_exploration else ""
                     return {
                         "action": ActionType.OPEN_COVERED_CALL.value,
                         "params": {
                             "underlying": underlying,
-                            "symbol": best.symbol,
+                            "symbol": chosen.symbol,
                             "size": cfg.default_order_size,
                         },
-                        "reasoning": f"Opening covered call: {best.symbol} "
-                                   f"(DTE={best.dte}, delta={best.delta:.2f}, "
-                                   f"premium=${best.premium_usd:.2f}, IVRV={best.ivrv:.2f})",
+                        "reasoning": f"{explore_tag}OPEN_COVERED_CALL on {chosen.symbol}: "
+                                   f"DTE={chosen.dte}, delta={chosen.delta:.2f}, "
+                                   f"premium=${chosen.premium_usd:.2f}, IVRV={chosen.ivrv:.2f}. "
+                                   f"Mode={cfg.mode}, policy={cfg.policy_version}.",
+                        "mode": cfg.mode,
+                        "policy_version": cfg.policy_version,
                     }
     
     existing_positions = []
@@ -218,5 +295,7 @@ def decide_action(
     return {
         "action": ActionType.DO_NOTHING.value,
         "params": {},
-        "reasoning": reasoning,
+        "reasoning": f"{reasoning} Mode={cfg.mode}, policy={cfg.policy_version}.",
+        "mode": cfg.mode,
+        "policy_version": cfg.policy_version,
     }

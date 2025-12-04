@@ -93,8 +93,14 @@ def _build_status_snapshot(
         "final_action": final_action,
         "execution": execution_result,
         "config_snapshot": {
+            "mode": settings.mode,
+            "policy_version": settings.policy_version,
             "dry_run": settings.dry_run,
             "llm_enabled": settings.llm_enabled,
+            "explore_prob": settings.explore_prob,
+            "explore_top_k": settings.explore_top_k,
+            "effective_delta_range": [settings.effective_delta_min, settings.effective_delta_max],
+            "effective_dte_range": [settings.effective_dte_min, settings.effective_dte_max],
             "max_margin_used_pct": settings.max_margin_used_pct,
             "max_net_delta_abs": settings.max_net_delta_abs,
         },
@@ -127,10 +133,14 @@ def run_agent_loop_forever(
     print("=" * 60)
     print("Options Trading Agent - Deribit Testnet")
     print("=" * 60)
-    print(f"Mode: {'LLM-based' if settings.llm_enabled else 'Rule-based'}")
+    print(f"Operating Mode: {settings.mode.upper()}")
+    print(f"Decision Mode: {'LLM-based' if settings.llm_enabled else 'Rule-based'}")
     print(f"Dry Run: {settings.dry_run}")
+    print(f"Explore Probability: {settings.explore_prob * 100:.0f}%")
     print(f"Loop Interval: {settings.loop_interval_sec} seconds")
     print(f"Underlyings: {', '.join(settings.underlyings)}")
+    print(f"Delta Range: {settings.effective_delta_min:.2f} - {settings.effective_delta_max:.2f}")
+    print(f"DTE Range: {settings.effective_dte_min} - {settings.effective_dte_max}")
     print(f"Max Margin: {settings.max_margin_used_pct}%")
     print(f"Max Delta: {settings.max_net_delta_abs}")
     print("=" * 60)

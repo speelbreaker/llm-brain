@@ -1,36 +1,36 @@
 # Options Trading Agent - Deribit Testnet
 
 ## Overview
-A modular Python framework for automated BTC/ETH covered call trading on Deribit testnet. This is a research/experimentation system with both rule-based and LLM-powered decision modes.
+A modular Python framework for automated BTC/ETH covered call trading on Deribit testnet. This is a research/experimentation system with both rule-based and LLM-powered decision modes, featuring exploration-based learning for testnet experimentation.
 
 ## Project Status
 - Core framework: Complete
-- Rule-based policy: Implemented
+- Rule-based policy: Implemented with scoring and exploration
 - LLM decision mode: Implemented (uses Replit AI Integrations for OpenAI)
 - FastAPI web dashboard: Complete with live status and chat
+- Research/Production mode: Implemented with mode-specific parameters
 - Backtesting scaffold: Stub ready for future expansion
 
 ## Recent Changes
 - 2024-12: Initial implementation of all core modules
 - 2024-12: Added OpenAI integration via Replit AI Integrations
 - 2024-12: Enhanced risk_engine.py with critical safety checks
-- 2024-12: Refactored to FastAPI web dashboard with:
-  - `/` - Live dashboard with status cards and chat interface
-  - `/status` - JSON endpoint for current agent state
-  - `/chat` - POST endpoint for natural language queries
-  - `/health` - Health check for deployments
-  - Background agent loop running in separate thread
-  - In-memory status store for real-time updates
+- 2024-12: Refactored to FastAPI web dashboard
+- 2024-12: Added research vs production mode system:
+  - Research mode: Wider delta/DTE/IVRV ranges for testnet exploration
+  - Exploration: 25% probability of picking non-best candidate (epsilon-greedy)
+  - Scoring function for candidate ranking
+  - Mode and policy_version tracked in all decisions
 
 ## Architecture
 
 ### Core Modules (src/)
-- `config.py` - Pydantic settings with risk limits and strategy parameters
+- `config.py` - Pydantic settings with mode selection and effective parameters
 - `models.py` - Type-safe data models for instruments, positions, state
 - `deribit_client.py` - httpx-based API wrapper for Deribit testnet
-- `state_builder.py` - Market data aggregation and candidate filtering
+- `state_builder.py` - Market data aggregation and candidate filtering (uses effective params)
 - `risk_engine.py` - Pre-trade validation (margin, delta, exposure)
-- `policy_rule_based.py` - Deterministic decision logic
+- `policy_rule_based.py` - Decision logic with scoring and exploration
 - `agent_brain_llm.py` - LLM-based decisions via OpenAI Chat API
 - `execution.py` - Order translation with dry-run support
 - `logging_utils.py` - Structured JSONL logging
@@ -47,23 +47,38 @@ A modular Python framework for automated BTC/ETH covered call trading on Deribit
 
 ## Configuration
 
+### Mode Selection
+- `MODE=research` - Research mode (default, wider ranges, exploration enabled)
+- `MODE=production` - Production mode (stricter ranges, no exploration)
+
 ### Environment Variables
 Required for live trading (testnet):
 - `DERIBIT_CLIENT_ID` - Deribit testnet API client ID
 - `DERIBIT_CLIENT_SECRET` - Deribit testnet API secret
 
 Optional settings:
-- `DRY_RUN=true` - Simulate orders without placing them
+- `DRY_RUN=false` - Simulate orders without placing them
 - `LLM_ENABLED=false` - Toggle LLM decision mode
 - `LLM_MODEL_NAME=gpt-4.1-mini` - OpenAI model for LLM mode
 - `LOOP_INTERVAL_SEC=300` - Sleep between iterations
 
+### Research Mode Parameters (wider ranges for testnet)
+- `RESEARCH_DELTA_MIN=0.10`, `RESEARCH_DELTA_MAX=0.40` - Delta range
+- `RESEARCH_DTE_MIN=1`, `RESEARCH_DTE_MAX=21` - Days to expiry range
+- `RESEARCH_IVRV_MIN=1.0` - Minimum IV/RV ratio
+- `RESEARCH_MAX_EXPIRY_EXPOSURE=1.0` - Higher per-expiry limit
+- `EXPLORE_PROB=0.25` - 25% chance of exploration
+- `EXPLORE_TOP_K=3` - Explore among top 3 candidates
+
+### Production Mode Parameters (stricter for mainnet)
+- `DELTA_MIN=0.20`, `DELTA_MAX=0.30` - Delta range
+- `DTE_MIN=5`, `DTE_MAX=10` - Days to expiry range
+- `IVRV_MIN=1.2` - Minimum IV/RV ratio
+- `MAX_EXPIRY_EXPOSURE=0.3` - Conservative per-expiry limit
+
 ### Risk Parameters
 - `MAX_MARGIN_USED_PCT=80` - Maximum margin usage
 - `MAX_NET_DELTA_ABS=5.0` - Maximum absolute delta
-- `IVRV_MIN=1.0` - Minimum IV/RV ratio
-- `DELTA_MIN=0.10`, `DELTA_MAX=0.35` - Delta range
-- `DTE_MIN=1`, `DTE_MAX=14` - Days to expiry range
 - `PREMIUM_MIN_USD=50` - Minimum premium in USD
 
 ## User Preferences
@@ -81,6 +96,7 @@ uvicorn src.web_app:app --host 0.0.0.0 --port 5000
 The dashboard shows:
 - Live BTC/ETH prices
 - Portfolio value and positions
+- Current mode (Research/Production) with exploration percentage
 - Last action taken
 - Full status JSON (expandable)
 - Chat interface for querying agent decisions
@@ -89,8 +105,6 @@ The dashboard shows:
 ```bash
 python agent_loop.py
 ```
-
-The agent runs in dry-run mode by default (no real orders placed).
 
 ## Chatting with the Agent
 
@@ -117,8 +131,17 @@ Returns the latest agent status snapshot as JSON:
     "portfolio": {...},
     "top_candidates": [...]
   },
-  "final_action": {...},
-  "execution": {...}
+  "final_action": {
+    "action": "...",
+    "mode": "research",
+    "policy_version": "rb_v1_explore"
+  },
+  "config_snapshot": {
+    "mode": "research",
+    "explore_prob": 0.25,
+    "effective_delta_range": [0.1, 0.4],
+    "effective_dte_range": [1, 21]
+  }
 }
 ```
 
@@ -141,3 +164,4 @@ Health check endpoint for deployment monitoring.
 - Structured JSONL logging for future ML/RL training
 - Risk engine validates all decisions before execution
 - FastAPI with background thread for non-blocking web + agent
+- Research mode with epsilon-greedy exploration for data collection

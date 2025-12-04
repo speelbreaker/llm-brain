@@ -258,7 +258,7 @@ def build_agent_state(
                 
                 dte = _calculate_dte(expiry)
                 
-                if dte < cfg.dte_min or dte > cfg.dte_max:
+                if dte < cfg.effective_dte_min or dte > cfg.effective_dte_max:
                     continue
                 
                 if strike <= spot:
@@ -287,7 +287,7 @@ def build_agent_state(
                 
                 delta = _approximate_delta(spot, strike, dte, opt_type, mark_iv / 100)
                 
-                if delta < cfg.delta_min or delta > cfg.delta_max:
+                if delta < cfg.effective_delta_min or delta > cfg.effective_delta_max:
                     continue
                 
                 rv_placeholder = mark_iv * 0.8

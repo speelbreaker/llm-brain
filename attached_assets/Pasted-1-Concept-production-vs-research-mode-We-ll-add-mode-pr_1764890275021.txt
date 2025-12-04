@@ -1,0 +1,438 @@
+1. Concept: “production” vs “research” mode
+
+We’ll add:
+
+mode: "production" | "research" in settings.
+
+Production mode (future mainnet):
+
+Narrow delta/DTE band.
+
+Stricter IVRV, smaller size, lower exposure.
+
+Only “best” trades.
+
+Research mode (now on testnet):
+
+Wider delta/DTE/IVRV range.
+
+Higher per-expiry exposure limit (still sane).
+
+Exploration probability: sometimes pick a less-than-perfect candidate just to see how it behaves.
+
+We’ll also:
+
+Compute effective parameters based on mode, so the rest of the code simply uses:
+
+cfg.effective_delta_min, cfg.effective_delta_max, etc.
+
+2. Code changes (conceptual)
+2.1 config.py – add research settings & helpers
+
+Add new fields and helper properties to Settings:
+
+# config.py
+from typing import Literal
+from pydantic import BaseSettings
+
+class Settings(BaseSettings):
+    # ──────────────
+    # Mode selection
+    # ──────────────
+    mode: Literal["production", "research"] = "research"
+
+    # Production defaults (what you already had – keep your current values)
+    ivrv_min: float = 1.2
+    delta_min: float = 0.20
+    delta_max: float = 0.30
+    dte_min: int = 5
+    dte_max: int = 10
+    max_expiry_exposure: float = 0.3  # in BTC/ETH notionals (covered calls)
+    # ... other existing fields ...
+
+    # Research overrides (looser, for testnet exploration)
+    research_ivrv_min: float = 1.0
+    research_delta_min: float = 0.10
+    research_delta_max: float = 0.40
+    research_dte_min: int = 3
+    research_dte_max: int = 21
+    research_max_expiry_exposure: float = 1.0  # allow more per-expiry on testnet
+
+    # Exploration behavior (research mode only)
+    explore_prob: float = 0.25   # 25% of the time, explore among top candidates
+    explore_top_k: int = 3       # explore within top-K candidates by score
+
+    # (Optional, for logging / analysis – can use later)
+    policy_version: str = "rb_v1_explore"
+
+    # LLM fields you already have
+    llm_enabled: bool = False
+    llm_model_name: str = "gpt-4.1-mini"
+    # dry_run, loop_interval_sec, etc.
+
+    @property
+    def is_research(self) -> bool:
+        return self.mode == "research"
+
+    # “Effective” parameters used by scanner/policy
+    @property
+    def effective_ivrv_min(self) -> float:
+        return self.research_ivrv_min if self.is_research else self.ivrv_min
+
+    @property
+    def effective_delta_min(self) -> float:
+        return self.research_delta_min if self.is_research else self.delta_min
+
+    @property
+    def effective_delta_max(self) -> float:
+        return self.research_delta_max if self.is_research else self.delta_max
+
+    @property
+    def effective_dte_min(self) -> int:
+        return self.research_dte_min if self.is_research else self.dte_min
+
+    @property
+    def effective_dte_max(self) -> int:
+        return self.research_dte_max if self.is_research else self.dte_max
+
+    @property
+    def effective_max_expiry_exposure(self) -> float:
+        return (
+            self.research_max_expiry_exposure
+            if self.is_research
+            else self.max_expiry_exposure
+        )
+
+settings = Settings()
+
+
+Where you used to reference cfg.delta_min etc., you can now use cfg.effective_delta_min and friends when you want mode-dependent behaviour.
+
+Risk engine: for now you can still use cfg.max_expiry_exposure in mainnet, and switch to cfg.effective_max_expiry_exposure as you move to a fully mode-aware risk engine.
+
+2.2 Candidate filtering – use effective values
+
+Wherever you filter options into CandidateOptions (likely in state_builder.py or similar), switch to effective parameters:
+
+Before (example):
+
+if not (cfg.delta_min <= candidate.delta <= cfg.delta_max):
+    continue
+
+if not (cfg.dte_min <= candidate.dte <= cfg.dte_max):
+    continue
+
+if candidate.ivrv < cfg.ivrv_min:
+    continue
+
+
+After:
+
+if not (cfg.effective_delta_min <= candidate.delta <= cfg.effective_delta_max):
+    continue
+
+if not (cfg.effective_dte_min <= candidate.dte <= cfg.effective_dte_max):
+    continue
+
+if candidate.ivrv < cfg.effective_ivrv_min:
+    continue
+
+
+So research mode automatically broadens the candidate universe.
+
+2.3 policy_rule_based.py – add scoring + exploration
+
+We’ll:
+
+Add a score function for candidates.
+
+Use it to rank candidates.
+
+In research mode, use explore_prob to sometimes pick a non-best candidate (within top-K).
+
+Example:
+
+# policy_rule_based.py
+from __future__ import annotations
+
+import math
+import random
+from typing import Any
+
+from src.config import Settings, settings
+from src.models import AgentState, CandidateOption, ActionType
+
+
+def score_candidate(candidate: CandidateOption, cfg: Settings) -> float:
+    """
+    Score a candidate covered call.
+    Higher is better.
+
+    We reward:
+      - premium (USD)
+      - closeness to target delta and DTE
+    We can later add IVRV and OTM% preferences.
+    """
+    # Target values for scoring (can tie to config)
+    target_delta = (cfg.effective_delta_min + cfg.effective_delta_max) / 2.0
+    target_dte = (cfg.effective_dte_min + cfg.effective_dte_max) / 2.0
+
+    # Normalize deviations
+    delta_penalty = (candidate.delta - target_delta) ** 2
+    dte_penalty = ((candidate.dte - target_dte) / max(target_dte, 1)) ** 2
+
+    # Premium scaling (soft log to avoid huge skew)
+    premium_score = math.log1p(max(candidate.premium_usd, 0.0))
+
+    # Combine into a single score
+    score = premium_score - 5.0 * delta_penalty - 2.0 * dte_penalty
+
+    # Optional: small bonus for IVRV above minimum
+    ivrv_excess = max(candidate.ivrv - cfg.effective_ivrv_min, 0.0)
+    score += 1.0 * ivrv_excess
+
+    return score
+
+
+def choose_candidate_with_exploration(
+    candidates: list[CandidateOption],
+    cfg: Settings,
+) -> CandidateOption | None:
+    """
+    Choose a candidate, with optional exploration in research mode.
+    """
+    if not candidates:
+        return None
+
+    scored = [
+        (score_candidate(c, cfg), c)
+        for c in candidates
+    ]
+    # Sort best first
+    scored.sort(key=lambda x: x[0], reverse=True)
+
+    # Always have a best candidate
+    best_score, best_candidate = scored[0]
+
+    # If not in research mode or no exploration -> just exploit
+    if not cfg.is_research or cfg.explore_prob <= 0.0:
+        return best_candidate
+
+    # Research mode: with explore_prob, pick randomly among top-K candidates
+    if random.random() < cfg.explore_prob:
+        k = max(1, cfg.explore_top_k)
+        top_k = scored[:k]
+        # Filter out very bad scores (optional)
+        # For now, just randomly choose among them
+        _, chosen = random.choice(top_k)
+        return chosen
+
+    # Default: exploit (best)
+    return best_candidate
+
+
+def decide_action(agent_state: AgentState, cfg: Settings | None = None) -> dict[str, Any]:
+    """
+    Rule-based decision policy.
+    Uses research vs production mode and exploration settings.
+    """
+    settings_ = cfg or settings
+    portfolio = agent_state.portfolio
+    candidates = agent_state.candidate_options or []
+
+    # Default result (do nothing)
+    action: dict[str, Any] = {
+        "action": ActionType.DO_NOTHING.value,
+        "params": {},
+        "reasoning": "No suitable action found.",
+        "mode": settings_.mode,
+        "policy_version": settings_.policy_version,
+    }
+
+    # If no candidates, nothing to do
+    if not candidates:
+        action["reasoning"] = "No candidate options available."
+        return action
+
+    # Example: only open a new CC if we have some BTC and per-expiry exposure not maxed
+    # (Actual exposure limit is enforced by risk_engine; here we just propose.)
+    # You can add more nuanced logic later.
+    chosen = choose_candidate_with_exploration(candidates, settings_)
+    if chosen is None:
+        action["reasoning"] = "No candidate passed scoring/exploration filters."
+        return action
+
+    # For now: always propose OPEN_COVERED_CALL on chosen candidate
+    size = settings_.default_order_size  # existing field
+    action["action"] = ActionType.OPEN_COVERED_CALL.value
+    action["params"] = {
+        "underlying": chosen.underlying,
+        "symbol": chosen.symbol,
+        "size": size,
+    }
+
+    action["reasoning"] = (
+        f"{'Exploratory' if settings_.is_research else 'Baseline'} OPEN_COVERED_CALL "
+        f"on {chosen.symbol}: DTE={chosen.dte}, delta={chosen.delta:.2f}, "
+        f"premium=${chosen.premium_usd:.2f}, IVRV={chosen.ivrv:.2f}. "
+        f"Mode={settings_.mode}, policy={settings_.policy_version}."
+    )
+
+    return action
+
+
+The important bit: in research mode, random.random() < cfg.explore_prob means 25% of the time (or whatever you set), it picks randomly among the top K candidates instead of always the single “best” one.
+
+You still have:
+
+Risk engine as final gatekeeper (margin, coverage, expiry exposure).
+
+Dry-run flag for safety while testing behaviour.
+
+3. Prompt you can paste to Replit
+
+Here’s a cleaned-up prompt you can drop straight into Replit’s AI dev agent:
+
+PROMPT TO REPLIT: ADD RESEARCH MODE + EXPLORATION
+
+I already have a modular Deribit testnet options agent running in Python (under src/), with:
+
+config.py defining a Settings class and settings instance,
+
+state_builder.py (or equivalent) building AgentState and candidate_options,
+
+policy_rule_based.py making rule-based decisions,
+
+risk_engine.py validating actions,
+
+logs/agent_decisions_*.jsonl as the flight recorder.
+
+I want to introduce a clear mode system: "production" vs "research", and in research mode I want the agent to:
+
+use wider delta/DTE/IVRV ranges,
+
+allow higher per-expiry exposure (still bounded),
+
+and use ε-greedy exploration to sometimes pick a non-best candidate.
+
+Please implement the following changes:
+
+1. Update Settings in config.py
+
+Add a mode: Literal["production", "research"] = "research" field.
+
+Keep my existing prod fields (ivrv_min, delta_min, delta_max, dte_min, dte_max, max_expiry_exposure, etc.).
+
+Add “research” overrides:
+
+research_ivrv_min: float = 1.0
+
+research_delta_min: float = 0.10
+
+research_delta_max: float = 0.40
+
+research_dte_min: int = 3
+
+research_dte_max: int = 21
+
+research_max_expiry_exposure: float = 1.0
+
+Add exploration parameters:
+
+explore_prob: float = 0.25
+
+explore_top_k: int = 3
+
+policy_version: str = "rb_v1_explore"
+
+Add helper properties:
+
+is_research → mode == "research"
+
+effective_ivrv_min, effective_delta_min/max, effective_dte_min/max, effective_max_expiry_exposure that return either the prod or research values depending on mode.
+
+2. Use effective parameters in candidate filtering
+
+In the module where we build CandidateOptions (likely state_builder.py), replace any use of:
+
+cfg.delta_min, cfg.delta_max
+
+cfg.dte_min, cfg.dte_max
+
+cfg.ivrv_min
+
+for filtering candidates with:
+
+cfg.effective_delta_min, cfg.effective_delta_max
+
+cfg.effective_dte_min, cfg.effective_dte_max
+
+cfg.effective_ivrv_min
+
+So that research mode automatically broadens the candidate set.
+
+3. Add scoring + exploration to policy_rule_based.py
+
+In policy_rule_based.py:
+
+Ensure we import random and math, and Settings, settings from src.config.
+
+Implement a helper:
+
+def score_candidate(candidate: CandidateOption, cfg: Settings) -> float:
+    """
+    Score a candidate covered call. Higher is better.
+    - Reward higher premium.
+    - Penalize distance from target delta and target DTE (based on effective ranges).
+    - Optional small bonus for IVRV above effective_ivrv_min.
+    """
+    ...
+
+
+Implement:
+
+def choose_candidate_with_exploration(
+    candidates: list[CandidateOption],
+    cfg: Settings,
+) -> CandidateOption | None:
+    """
+    Sort candidates by score (descending).
+    If cfg.is_research and random.random() < cfg.explore_prob:
+        randomly choose among top cfg.explore_top_k candidates.
+    Else:
+        choose the best-scoring candidate.
+    """
+
+
+Update decide_action(agent_state, cfg=None) to:
+
+Use cfg or settings.
+
+Use choose_candidate_with_exploration(agent_state.candidate_options, cfg) to pick a candidate.
+
+If there is a chosen candidate, propose an OPEN_COVERED_CALL on it as before, but:
+
+Include mode and policy_version fields in the returned dict.
+
+Include reasoning text mentioning:
+
+DTE, delta, premium, IVRV
+
+whether this was “Exploratory” (research mode with exploration) or baseline,
+
+current mode and policy_version.
+
+Resulting proposed_action dict should look like:
+
+{
+  "action": "OPEN_COVERED_CALL",
+  "params": {"underlying": "...", "symbol": "...", "size": 0.1},
+  "reasoning": "Exploratory OPEN_COVERED_CALL on BTC-19DEC25-97000-C ... Mode=research, policy=rb_v1_explore.",
+  "mode": "research",
+  "policy_version": "rb_v1_explore",
+}
+
+
+Make sure this still logs correctly into logs/agent_decisions_*.jsonl with the new fields, and that the risk engine remains the final gatekeeper.
+
+Leave mode="research" as default for now so that on Deribit testnet the agent explores more aggressively (within risk limits).
