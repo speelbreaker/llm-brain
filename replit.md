@@ -27,6 +27,12 @@ A modular Python framework for automated BTC/ETH covered call trading on Deribit
   - Uses effective_* parameters for mode-aware decision making
   - decision_source field tracks "llm" vs "rule_based" in all outputs
   - Risk engine still validates all LLM proposals before execution
+- 2024-12: Backtesting framework implemented:
+  - CoveredCallSimulator for historical "what if" analysis
+  - MarketDataSource abstraction for pluggable data sources
+  - DeribitDataSource using mainnet public API for historical data
+  - Training data generation for ML/RL (state, action, reward tuples)
+  - CSV/JSONL export and grid search utilities
 
 ## Architecture
 
@@ -48,8 +54,20 @@ A modular Python framework for automated BTC/ETH covered call trading on Deribit
 - `agent_loop.py` - Standalone CLI orchestration script
 - `src/web_app.py` - FastAPI web app with background agent
 
+### Backtesting Module (src/backtest/)
+- `data_source.py` - Generic MarketDataSource protocol interface
+- `deribit_client.py` - Deribit mainnet public API wrapper for historical data
+- `deribit_data_source.py` - MarketDataSource implementation using Deribit API
+- `types.py` - CallSimulationConfig, SimulatedTrade, SimulationResult, TrainingExample
+- `covered_call_simulator.py` - Core simulation engine with:
+  - `simulate_single_call()` - "What if I sold this call here?"
+  - `simulate_policy()` - Run policy across multiple decision times
+  - `generate_training_data()` - Emit (state, action, reward) tuples
+- `training_dataset.py` - Export training data to CSV/JSONL, grid search
+- `backtest_example.py` - Example usage script
+
 ### Future Development
-- `backtest/env_simulator.py` - RL environment stub
+- RL environment wrapper around CoveredCallSimulator
 
 ## Configuration
 

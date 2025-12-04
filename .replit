@@ -40,14 +40,6 @@ ignorePorts = true
 localPort = 5000
 externalPort = 80
 
-[[ports]]
-localPort = 34359
-externalPort = 3000
-
-[[ports]]
-localPort = 43401
-externalPort = 3001
-
 [userenv]
 
 [userenv.shared]

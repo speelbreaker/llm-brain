@@ -1,0 +1,479 @@
+1. DeribitDataSource: using Deribit’s TradingView-style data
+
+Deribit exposes OHLC data via:
+
+public/get_tradingview_chart_data – for any instrument (index, futures, options).
+
+public/get_instruments – list of instruments per underlying & kind.
+
+public/ticker / public/get_book_summary_by_instrument – IV, mark price, greeks metadata.
+
+We’ll wrap this into a small client + data source.
+
+1.1. Simple Deribit HTTP client
+# src/backtest/deribit_client.py
+from __future__ import annotations
+
+import httpx
+from datetime import datetime
+from typing import Any, Dict
+
+DERIBIT_PUBLIC_BASE = "https://www.deribit.com/api/v2"
+
+
+class DeribitPublicClient:
+    def __init__(self, base_url: str = DERIBIT_PUBLIC_BASE, timeout: float = 10.0):
+        self.base_url = base_url.rstrip("/")
+        self.client = httpx.Client(base_url=self.base_url, timeout=timeout)
+
+    def _get(self, method: str, params: Dict[str, Any]) -> Dict[str, Any]:
+        resp = self.client.get("/public/" + method, params=params)
+        resp.raise_for_status()
+        data = resp.json()
+        if data.get("error"):
+            raise RuntimeError(f"Deribit API error: {data['error']}")
+        return data["result"]
+
+    # --- TradingView-style OHLC ---
+    def get_tradingview_chart_data(
+        self,
+        instrument_name: str,
+        start: datetime,
+        end: datetime,
+        resolution: str,
+    ) -> Dict[str, Any]:
+        """
+        Wrap public/get_tradingview_chart_data.
+
+        resolution examples:
+          '1', '5', '15', '60', '240', '1D' etc.
+        times are in ms since epoch.
+        """
+        start_ms = int(start.timestamp() * 1000)
+        end_ms = int(end.timestamp() * 1000)
+        return self._get(
+            "get_tradingview_chart_data",
+            {
+                "instrument_name": instrument_name,
+                "start_timestamp": start_ms,
+                "end_timestamp": end_ms,
+                "resolution": resolution,
+            },
+        )
+
+    def get_instruments(self, currency: str, kind: str = "option") -> list[Dict[str, Any]]:
+        """
+        public/get_instruments
+        kind: 'option', 'future', etc.
+        """
+        return self._get(
+            "get_instruments",
+            {
+                "currency": currency,
+                "kind": kind,
+                "expired": False,
+            },
+        )
+
+    def get_ticker(self, instrument_name: str) -> Dict[str, Any]:
+        """
+        public/ticker: includes mark_price, greeks, etc.
+        """
+        return self._get("ticker", {"instrument_name": instrument_name})
+
+
+For backtesting, you’d usually call this against historical endpoints or pre-downloaded data, but structurally this is what you want.
+
+1.2. MarketDataSource implementation for Deribit
+
+We’ll now implement MarketDataSource using that client.
+
+We’ll treat “spot” as Deribit’s index (e.g. BTC_USDC index) or the perpetual future (e.g. BTC-PERPETUAL); you can choose which you prefer. For pure options PnL, index is fine.
+
+# src/backtest/deribit_data_source.py
+from __future__ import annotations
+
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from typing import List, Literal
+
+import pandas as pd
+
+from .data_source import MarketDataSource, Timeframe
+from .deribit_client import DeribitPublicClient
+
+
+@dataclass
+class OptionSnapshot:
+    instrument_name: str
+    underlying: str       # "BTC", "ETH", etc.
+    kind: Literal["call", "put"]
+    strike: float
+    expiry: datetime
+    delta: float | None
+    iv: float | None
+    mark_price: float | None
+
+
+class DeribitDataSource(MarketDataSource):
+    """
+    MarketDataSource implementation using Deribit's public API.
+    Suitable for live chain snapshots and OHLC pulls.
+    For bulk historical backtest, you'll likely want to cache this or use offline data instead.
+    """
+
+    def __init__(self, client: DeribitPublicClient | None = None):
+        self.client = client or DeribitPublicClient()
+
+    # --- helper to map timeframe -> resolution ---
+    def _timeframe_to_resolution(self, timeframe: Timeframe) -> str:
+        mapping = {
+            "1m": "1",
+            "5m": "5",
+            "15m": "15",
+            "1h": "60",
+            "4h": "240",
+            "1d": "1D",
+        }
+        return mapping[timeframe]
+
+    def get_spot_ohlc(
+        self,
+        underlying: str,
+        start: datetime,
+        end: datetime,
+        timeframe: Timeframe,
+    ) -> pd.DataFrame:
+        """
+        Use Deribit index instrument as spot proxy.
+        Example mapping: BTC -> "BTC_USDC", ETH -> "ETH_USDC".
+        You can adjust to use PERPETUAL futures if you prefer.
+        """
+        # Simple mapping; you may need to adapt for non-USDC underlyings
+        index_name = f"{underlying}_USDC"
+        res = self.client.get_tradingview_chart_data(
+            instrument_name=index_name,
+            start=start,
+            end=end,
+            resolution=self._timeframe_to_resolution(timeframe),
+        )
+
+        # Deribit returns { ticks: [timestamp_ms], open, close, high, low, volume }
+        # shape: {"ticks": [...], "open": [...], "close": [...], ...}
+        timestamps = [datetime.fromtimestamp(ts / 1000, tz=timezone.utc) for ts in res["ticks"]]
+        df = pd.DataFrame(
+            {
+                "open": res["open"],
+                "high": res["high"],
+                "low": res["low"],
+                "close": res["close"],
+                "volume": res["volume"],
+            },
+            index=pd.DatetimeIndex(timestamps, name="timestamp"),
+        )
+        return df
+
+    def list_option_chain(
+        self,
+        underlying: str,
+        as_of: datetime,
+    ) -> List[OptionSnapshot]:
+        """
+        Build a 'chain' view at or near 'as_of' time.
+
+        For live usage, this just lists non-expired options and fetches greeks via ticker.
+        For true historical backtest, you'd ideally have historical tick/greeks data.
+        """
+        # Deribit uses currency like "BTC", "ETH" in get_instruments
+        instruments = self.client.get_instruments(currency=underlying, kind="option")
+
+        snapshots: List[OptionSnapshot] = []
+        for inst in instruments:
+            name = inst["instrument_name"]
+            # Example: BTC-19DEC25-97000-C
+            try:
+                parts = name.split("-")
+                cur = parts[0]
+                expiry_str = parts[1]        # e.g. "19DEC25"
+                strike_str = parts[2]        # e.g. "97000"
+                cp_flag = parts[3]           # "C" or "P"
+            except (IndexError, KeyError):
+                continue
+
+            # Parse expiry. In live API inst["expiration_timestamp"] exists in ms.
+            expiry_ts = inst.get("expiration_timestamp")
+            if expiry_ts is not None:
+                expiry = datetime.fromtimestamp(expiry_ts / 1000, tz=timezone.utc)
+            else:
+                # Fallback: skip if we can't parse properly
+                continue
+
+            # Only keep options that haven't expired yet relative to as_of
+            if expiry <= as_of:
+                continue
+
+            kind = "call" if cp_flag.upper() == "C" else "put"
+            strike = float(strike_str)
+
+            # Fetch greeks via ticker
+            ticker = self.client.get_ticker(name)
+            greeks = ticker.get("greeks") or {}
+            delta = greeks.get("delta")
+            iv = greeks.get("iv")
+            mark = ticker.get("mark_price")
+
+            snapshots.append(
+                OptionSnapshot(
+                    instrument_name=name,
+                    underlying=cur,
+                    kind=kind, strike=strike,
+                    expiry=expiry, delta=delta, iv=iv, mark_price=mark,
+                )
+            )
+
+        return snapshots
+
+    def get_option_ohlc(
+        self,
+        instrument_name: str,
+        start: datetime,
+        end: datetime,
+        timeframe: Timeframe,
+    ) -> pd.DataFrame:
+        """
+        Use Deribit's TradingView chart data for the specific option.
+        """
+        res = self.client.get_tradingview_chart_data(
+            instrument_name=instrument_name,
+            start=start,
+            end=end,
+            resolution=self._timeframe_to_resolution(timeframe),
+        )
+        timestamps = [datetime.fromtimestamp(ts / 1000, tz=timezone.utc) for ts in res["ticks"]]
+        df = pd.DataFrame(
+            {
+                "open": res["open"],
+                "high": res["high"],
+                "low": res["low"],
+                "close": res["close"],
+                "volume": res["volume"],
+            },
+            index=pd.DatetimeIndex(timestamps, name="timestamp"),
+        )
+        return df
+
+
+For true historical backtest, you’d probably want a cached/offline version of this that reads from local files or a DB instead of hitting the live API, but the interface stays the same.
+
+2. Picking a 7DTE ~0.25Δ call at a given time
+
+Using DeribitDataSource.list_option_chain, we can implement the “pick target call” logic in the simulator.
+
+Here’s how you’d do it inside CoveredCallSimulator:
+
+# src/backtest/covered_call_simulator.py (partial)
+from __future__ import annotations
+
+from datetime import datetime
+from typing import List, Optional
+
+import pandas as pd
+
+from .deribit_data_source import DeribitDataSource, OptionSnapshot
+from .types import CallSimulationConfig, SimulatedTrade
+
+
+class CoveredCallSimulator:
+    def __init__(self, data_source: DeribitDataSource, config: CallSimulationConfig):
+        self.ds = data_source
+        self.cfg = config
+
+    def _find_target_call(
+        self,
+        as_of: datetime,
+    ) -> Optional[OptionSnapshot]:
+        """
+        Find a call option for cfg.underlying with:
+        - expiry ~ cfg.target_dte days from as_of (within cfg.dte_tolerance),
+        - delta ~ cfg.target_delta (within cfg.delta_tolerance),
+        and return the closest match.
+        """
+        chain = self.ds.list_option_chain(self.cfg.underlying, as_of=as_of)
+        if not chain:
+            return None
+
+        target_dte = self.cfg.target_dte
+        dte_tol = self.cfg.dte_tolerance
+        target_delta = self.cfg.target_delta
+        delta_tol = self.cfg.delta_tolerance
+
+        candidates: List[OptionSnapshot] = []
+        for opt in chain:
+            if opt.kind != "call":
+                continue
+
+            # Days to expiry
+            dte_days = (opt.expiry - as_of).total_seconds() / 86400.0
+
+            if dte_days < 0:
+                continue
+
+            # Focus on options roughly in our DTE window
+            if abs(dte_days - target_dte) > dte_tol:
+                continue
+
+            # Require delta info
+            if opt.delta is None:
+                continue
+
+            # Long calls have positive delta, short calls negative;
+            # Deribit greeks for calls are usually positive. If not, take abs.
+            delta_val = float(opt.delta)
+
+            # We want OTM calls, so we expect delta around +0.25
+            if abs(delta_val - target_delta) > delta_tol:
+                continue
+
+            candidates.append(opt)
+
+        if not candidates:
+            return None
+
+        # Among candidates, choose the closest delta to target
+        best = min(
+            candidates,
+            key=lambda o: abs(float(o.delta) - target_delta),
+        )
+        return best
+
+    def simulate_single_call(
+        self,
+        decision_time: datetime,
+        size: float,
+    ) -> Optional[SimulatedTrade]:
+        """
+        If I sold 'size' units of a 7DTE ~0.25Δ call at decision_time,
+        what would PnL and drawdown have been vs HODL?
+        """
+
+        target = self._find_target_call(as_of=decision_time)
+        if target is None or target.mark_price is None:
+            return None  # no suitable option found
+
+        cfg = self.cfg
+        ds = self.ds
+
+        # initial premium at decision_time (we can refine with intrabar price)
+        open_time = decision_time
+        open_price = float(target.mark_price)
+
+        # spot at open_time
+        # (you can pull from your spot OHLC or from ticker)
+        spot_df = ds.get_spot_ohlc(
+            underlying=cfg.underlying,
+            start=decision_time,
+            end=target.expiry,
+            timeframe=cfg.timeframe,
+        )
+        if spot_df.empty:
+            return None
+
+        # Option price path from decision_time -> expiry
+        opt_df = ds.get_option_ohlc(
+            instrument_name=target.instrument_name,
+            start=decision_time,
+            end=target.expiry,
+            timeframe=cfg.timeframe,
+        )
+        if opt_df.empty:
+            return None
+
+        # Align indices
+        idx = spot_df.index.union(opt_df.index)
+        spot = spot_df.reindex(idx).ffill()["close"]
+        opt_price = opt_df.reindex(idx).ffill()["close"]
+
+        # Portfolio = size * spot + short call
+        # Short call PnL at time u: size * (open_price - opt_price[u])
+        premium_in = size * open_price
+
+        portfolio_values = []
+        hodl_values = []
+
+        for ts in idx:
+            s = float(spot.loc[ts])
+            c = float(opt_price.loc[ts])
+            # HODL: just the spot
+            hodl_val = size * s
+            # Covered call: spot + short call
+            cc_val = size * s + size * (open_price - c)
+            portfolio_values.append(cc_val)
+            hodl_values.append(hodl_val)
+
+        # Use expiry last value or explicit settlement
+        final_cc = portfolio_values[-1]
+        final_hodl = hodl_values[-1]
+
+        pnl = final_cc - hodl_values[0]    # vs starting HODL value
+        pnl_vs_hodl = final_cc - final_hodl
+
+        # Max drawdown of the covered-call portfolio
+        peak = portfolio_values[0]
+        max_dd_pct = 0.0
+        for v in portfolio_values:
+            if v > peak:
+                peak = v
+            dd = (peak - v) / peak if peak > 0 else 0.0
+            if dd > max_dd_pct:
+                max_dd_pct = dd
+
+        return SimulatedTrade(
+            instrument_name=target.instrument_name,
+            underlying=cfg.underlying,
+            side="SHORT_CALL",
+            size=size,
+            open_time=open_time,
+            close_time=target.expiry,
+            open_price=open_price,
+            close_price=float(opt_price.iloc[-1]),
+            pnl=pnl,
+            pnl_vs_hodl=pnl_vs_hodl,
+            max_drawdown_pct=max_dd_pct * 100.0,
+            notes=(
+                f"target_dte={cfg.target_dte}, delta≈{target.delta}, "
+                f"expiry={target.expiry.isoformat()}"
+            ),
+        )
+
+
+This method answers your exact question:
+
+“If I sold this 7DTE 0.25Δ call here, what would PnL and drawdown have been vs HODL?”
+
+You can loop over many decision_times (e.g. every week for 2 years) and build a whole distribution of these hypothetical trades.
+
+3. Extending to all Deribit options (BTC, ETH, SOL, DOGE later)
+
+Because everything above is parameterized by underlying: str:
+
+Changing from BTC to ETH is just:
+
+cfg = CallSimulationConfig(
+    underlying="ETH",
+    ...
+)
+
+
+The data source uses get_instruments(currency=underlying, kind="option") so it will pick up ETH options automatically.
+
+If/when Deribit offers SOL, DOGE options:
+
+You just set underlying="SOL" or "DOGE",
+
+As long as Deribit’s currency code matches, the same logic works.
+
+Later enhancements:
+
+Let CallSimulationConfig include a list of underlyings and run multi-asset portfolios.
+
+Let policies decide between BTC, ETH, SOL calls at each decision time, etc.

@@ -1,0 +1,648 @@
+I’ll give you concrete modules + an example script you can run. You can hand this straight to Replit as “add these files / integrate with existing repo”.
+
+I’ll assume a structure like:
+
+src/backtest/
+
+__init__.py
+
+data_source.py
+
+deribit_client.py
+
+deribit_data_source.py
+
+types.py
+
+covered_call_simulator.py
+
+backtest_example.py
+
+You can adjust paths if your repo is slightly different.
+
+1. types.py – config + result models
+# src/backtest/types.py
+from __future__ import annotations
+
+from dataclasses import dataclass
+from datetime import datetime
+from typing import Literal, Dict, List
+
+from .data_source import Timeframe
+
+
+@dataclass
+class CallSimulationConfig:
+    """
+    Configuration for a simple covered-call simulation on a single underlying.
+    """
+    underlying: str                 # "BTC", "ETH", "SOL", "DOGE", ...
+    start: datetime
+    end: datetime
+    timeframe: Timeframe            # e.g. "1h"
+    decision_interval_bars: int     # e.g. 24 -> one decision per day if timeframe="1h"
+
+    initial_spot_position: float    # e.g. 1.0 BTC held as cover
+    contract_size: float            # e.g. 1.0 BTC per option contract (inverse)
+    fee_rate: float                 # maker/taker fee in fraction, e.g. 0.0005 for 0.05%
+    risk_free_rate: float = 0.0     # optional, for more advanced variants
+
+    # Target covered-call profile (your classic 7DTE 0.25Δ)
+    target_dte: int = 7             # days to expiry
+    dte_tolerance: int = 2          # +/- tolerance in days
+    target_delta: float = 0.25
+    delta_tolerance: float = 0.05
+
+    hold_to_expiry: bool = True     # for now we always hold to expiry
+
+
+@dataclass
+class SimulatedTrade:
+    instrument_name: str
+    underlying: str
+    side: Literal["SHORT_CALL"]
+    size: float                     # number of underlying units covered
+    open_time: datetime
+    close_time: datetime
+    open_price: float               # option premium at open
+    close_price: float              # option price at close
+    pnl: float                      # portfolio PnL vs starting portfolio value
+    pnl_vs_hodl: float              # PnL vs pure spot HODL benchmark
+    max_drawdown_pct: float         # max drawdown in % over trade life
+    notes: str = ""
+
+
+@dataclass
+class SimulationResult:
+    trades: List[SimulatedTrade]
+    equity_curve: Dict[datetime, float]      # covered-call portfolio value over time
+    equity_vs_hodl: Dict[datetime, float]    # incremental vs pure HODL
+    metrics: Dict[str, float]                # summary stats, e.g. avg PnL, MDD, etc.
+
+2. data_source.py – the generic interface
+# src/backtest/data_source.py
+from __future__ import annotations
+
+from datetime import datetime
+from typing import Protocol, Literal
+import pandas as pd
+
+Timeframe = Literal["1m", "5m", "15m", "1h", "4h", "1d"]
+
+
+class MarketDataSource(Protocol):
+    """
+    Generic interface for market data used by the backtest simulator.
+    Implementations can be live Deribit API, offline CSV, Tardis, etc.
+    """
+
+    def get_spot_ohlc(
+        self,
+        underlying: str,
+        start: datetime,
+        end: datetime,
+        timeframe: Timeframe,
+    ) -> pd.DataFrame:
+        """
+        Return OHLCV for the underlying index/future used as 'spot' for options.
+        Index: timestamp.
+        Columns: ['open', 'high', 'low', 'close', 'volume'].
+        """
+
+    def list_option_chain(
+        self,
+        underlying: str,
+        as_of: datetime,
+    ):
+        """
+        Return option chain snapshot for underlying at (or near) 'as_of'.
+        Exact return type is implementation-specific; for DeribitDataSource it will be List[OptionSnapshot].
+        """
+
+    def get_option_ohlc(
+        self,
+        instrument_name: str,
+        start: datetime,
+        end: datetime,
+        timeframe: Timeframe,
+    ) -> pd.DataFrame:
+        """
+        Return OHLCV for a specific option instrument over the requested period.
+        Same structure as get_spot_ohlc.
+        """
+
+3. deribit_client.py – Deribit public API wrapper
+# src/backtest/deribit_client.py
+from __future__ import annotations
+
+from datetime import datetime
+from typing import Any, Dict, List
+
+import httpx
+
+
+DEFAULT_DERIBIT_MAINNET = "https://www.deribit.com/api/v2"
+DEFAULT_DERIBIT_TESTNET = "https://test.deribit.com/api/v2"
+
+
+class DeribitPublicClient:
+    """
+    Minimal wrapper around Deribit's public endpoints used for backtesting:
+    - get_tradingview_chart_data
+    - get_instruments
+    - ticker
+    """
+
+    def __init__(
+        self,
+        base_url: str = DEFAULT_DERIBIT_MAINNET,
+        timeout: float = 15.0,
+    ):
+        self.base_url = base_url.rstrip("/")
+        self.client = httpx.Client(base_url=self.base_url, timeout=timeout)
+
+    def _get(self, method: str, params: Dict[str, Any]) -> Dict[str, Any]:
+        resp = self.client.get("/public/" + method, params=params)
+        resp.raise_for_status()
+        data = resp.json()
+        if data.get("error"):
+            raise RuntimeError(f"Deribit API error: {data['error']}")
+        return data["result"]
+
+    def get_tradingview_chart_data(
+        self,
+        instrument_name: str,
+        start: datetime,
+        end: datetime,
+        resolution: str,
+    ) -> Dict[str, Any]:
+        """
+        Wrap public/get_tradingview_chart_data.
+        resolution examples: '1','5','15','60','240','1D'.
+        """
+        start_ms = int(start.timestamp() * 1000)
+        end_ms = int(end.timestamp() * 1000)
+        return self._get(
+            "get_tradingview_chart_data",
+            {
+                "instrument_name": instrument_name,
+                "start_timestamp": start_ms,
+                "end_timestamp": end_ms,
+                "resolution": resolution,
+            },
+        )
+
+    def get_instruments(self, currency: str, kind: str = "option") -> List[Dict[str, Any]]:
+        return self._get(
+            "get_instruments",
+            {
+                "currency": currency,
+                "kind": kind,
+                "expired": False,
+            },
+        )
+
+    def get_ticker(self, instrument_name: str) -> Dict[str, Any]:
+        return self._get("ticker", {"instrument_name": instrument_name})
+
+
+For historical backtesting you’d typically call mainnet, not testnet. For offline work later you can swap this for a local-data version.
+
+4. deribit_data_source.py – MarketDataSource for Deribit
+# src/backtest/deribit_data_source.py
+from __future__ import annotations
+
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from typing import List, Literal, Optional
+
+import pandas as pd
+
+from .data_source import MarketDataSource, Timeframe
+from .deribit_client import DeribitPublicClient
+
+
+@dataclass
+class OptionSnapshot:
+    instrument_name: str
+    underlying: str       # "BTC", "ETH", ...
+    kind: Literal["call", "put"]
+    strike: float
+    expiry: datetime
+    delta: Optional[float]
+    iv: Optional[float]
+    mark_price: Optional[float]
+
+
+class DeribitDataSource(MarketDataSource):
+    """
+    MarketDataSource using Deribit's public API.
+
+    NOTE: For heavy historical backtesting, you'll likely want to cache or replace
+    this with a local DB / CSV-based implementation, but the interface stays the same.
+    """
+
+    def __init__(self, client: Optional[DeribitPublicClient] = None):
+        self.client = client or DeribitPublicClient()
+
+    @staticmethod
+    def _timeframe_to_resolution(timeframe: Timeframe) -> str:
+        mapping = {
+            "1m": "1",
+            "5m": "5",
+            "15m": "15",
+            "1h": "60",
+            "4h": "240",
+            "1d": "1D",
+        }
+        return mapping[timeframe]
+
+    def get_spot_ohlc(
+        self,
+        underlying: str,
+        start: datetime,
+        end: datetime,
+        timeframe: Timeframe,
+    ) -> pd.DataFrame:
+        """
+        Use Deribit index as spot proxy, e.g. BTC -> BTC_USDC index.
+        Adjust mapping if you want futures instead.
+        """
+        index_name = f"{underlying}_USDC"
+        res = self.client.get_tradingview_chart_data(
+            instrument_name=index_name,
+            start=start,
+            end=end,
+            resolution=self._timeframe_to_resolution(timeframe),
+        )
+        if not res["ticks"]:
+            return pd.DataFrame()
+
+        timestamps = [
+            datetime.fromtimestamp(ts / 1000, tz=timezone.utc) for ts in res["ticks"]
+        ]
+        df = pd.DataFrame(
+            {
+                "open": res["open"],
+                "high": res["high"],
+                "low": res["low"],
+                "close": res["close"],
+                "volume": res["volume"],
+            },
+            index=pd.DatetimeIndex(timestamps, name="timestamp"),
+        )
+        return df
+
+    def list_option_chain(
+        self,
+        underlying: str,
+        as_of: datetime,
+    ) -> List[OptionSnapshot]:
+        """
+        Chain snapshot at ~as_of:
+        - list non-expired options for underlying
+        - attach delta/IV/mark via ticker
+        """
+        instruments = self.client.get_instruments(currency=underlying, kind="option")
+        snapshots: List[OptionSnapshot] = []
+
+        for inst in instruments:
+            name = inst["instrument_name"]
+            parts = name.split("-")
+            if len(parts) < 4:
+                continue
+
+            cur = parts[0]
+            expiry_ts = inst.get("expiration_timestamp")
+            if expiry_ts is None:
+                continue
+            expiry = datetime.fromtimestamp(expiry_ts / 1000, tz=timezone.utc)
+
+            if expiry <= as_of:
+                continue
+
+            strike_str = parts[2]
+            cp_flag = parts[3].upper()
+            kind = "call" if cp_flag == "C" else "put"
+
+            try:
+                strike = float(strike_str)
+            except ValueError:
+                continue
+
+            ticker = self.client.get_ticker(name)
+            greeks = ticker.get("greeks") or {}
+            delta = greeks.get("delta")
+            iv = greeks.get("iv")
+            mark = ticker.get("mark_price")
+
+            snapshots.append(
+                OptionSnapshot(
+                    instrument_name=name,
+                    underlying=cur,
+                    kind=kind,
+                    strike=strike,
+                    expiry=expiry,
+                    delta=float(delta) if delta is not None else None,
+                    iv=float(iv) if iv is not None else None,
+                    mark_price=float(mark) if mark is not None else None,
+                )
+            )
+
+        return snapshots
+
+    def get_option_ohlc(
+        self,
+        instrument_name: str,
+        start: datetime,
+        end: datetime,
+        timeframe: Timeframe,
+    ) -> pd.DataFrame:
+        res = self.client.get_tradingview_chart_data(
+            instrument_name=instrument_name,
+            start=start,
+            end=end,
+            resolution=self._timeframe_to_resolution(timeframe),
+        )
+        if not res["ticks"]:
+            return pd.DataFrame()
+
+        timestamps = [
+            datetime.fromtimestamp(ts / 1000, tz=timezone.utc) for ts in res["ticks"]
+        ]
+        df = pd.DataFrame(
+            {
+                "open": res["open"],
+                "high": res["high"],
+                "low": res["low"],
+                "close": res["close"],
+                "volume": res["volume"],
+            },
+            index=pd.DatetimeIndex(timestamps, name="timestamp"),
+        )
+        return df
+
+5. covered_call_simulator.py – the core “what if I sold this call?” engine
+# src/backtest/covered_call_simulator.py
+from __future__ import annotations
+
+from datetime import datetime
+from typing import Optional, List, Dict
+
+import pandas as pd
+
+from .deribit_data_source import DeribitDataSource, OptionSnapshot
+from .types import CallSimulationConfig, SimulatedTrade, SimulationResult
+
+
+class CoveredCallSimulator:
+    """
+    Simple covered-call simulator.
+
+    Focus now:
+    - Given a decision_time, simulate a single 7DTE ~0.25Δ covered call trade.
+    Later:
+    - Add simulate_policy(...) that walks across all decision times.
+    """
+
+    def __init__(self, data_source: DeribitDataSource, config: CallSimulationConfig):
+        self.ds = data_source
+        self.cfg = config
+
+    # ---------- Helpers ----------
+
+    def _find_target_call(self, as_of: datetime) -> Optional[OptionSnapshot]:
+        """
+        Find a call option for cfg.underlying with:
+        - expiry ~ target_dte days from as_of (within tolerance),
+        - delta ~ target_delta (within tolerance),
+        and return the closest delta.
+        """
+        chain = self.ds.list_option_chain(self.cfg.underlying, as_of=as_of)
+        if not chain:
+            return None
+
+        target_dte = self.cfg.target_dte
+        dte_tol = self.cfg.dte_tolerance
+        target_delta = self.cfg.target_delta
+        delta_tol = self.cfg.delta_tolerance
+
+        candidates: List[OptionSnapshot] = []
+        for opt in chain:
+            if opt.kind != "call":
+                continue
+            if opt.expiry <= as_of:
+                continue
+
+            dte_days = (opt.expiry - as_of).total_seconds() / 86400.0
+            if abs(dte_days - target_dte) > dte_tol:
+                continue
+
+            if opt.delta is None:
+                continue
+
+            delta_val = float(opt.delta)
+            # For OTM calls we expect delta ≈ +0.25
+            if abs(delta_val - target_delta) > delta_tol:
+                continue
+
+            candidates.append(opt)
+
+        if not candidates:
+            return None
+
+        best = min(candidates, key=lambda o: abs(float(o.delta) - target_delta))
+        return best
+
+    # ---------- Single trade simulation ----------
+
+    def simulate_single_call(
+        self,
+        decision_time: datetime,
+        size: float,
+    ) -> Optional[SimulatedTrade]:
+        """
+        Core Q:
+        'If I sold size units of a 7DTE ~0.25Δ call at decision_time,
+         what would PnL and drawdown have been vs HODL?'
+        """
+
+        target = self._find_target_call(as_of=decision_time)
+        if target is None or target.mark_price is None:
+            return None
+
+        cfg = self.cfg
+        ds = self.ds
+
+        open_time = decision_time
+        open_price = float(target.mark_price)
+
+        # Spot path from decision -> expiry
+        spot_df = ds.get_spot_ohlc(
+            underlying=cfg.underlying,
+            start=decision_time,
+            end=target.expiry,
+            timeframe=cfg.timeframe,
+        )
+        if spot_df.empty:
+            return None
+
+        # Option price path
+        opt_df = ds.get_option_ohlc(
+            instrument_name=target.instrument_name,
+            start=decision_time,
+            end=target.expiry,
+            timeframe=cfg.timeframe,
+        )
+        if opt_df.empty:
+            return None
+
+        # Align timestamps
+        idx = spot_df.index.union(opt_df.index).sort_values()
+        spot = spot_df.reindex(idx).ffill()["close"]
+        opt_price = opt_df.reindex(idx).ffill()["close"]
+
+        # Starting values
+        # HODL: size * spot
+        # Covered call: spot + short call
+        portfolio_values: List[float] = []
+        hodl_values: List[float] = []
+
+        for ts in idx:
+            s = float(spot.loc[ts])
+            c = float(opt_price.loc[ts])
+
+            hodl_val = size * s
+            cc_val = size * s + size * (open_price - c)
+            portfolio_values.append(cc_val)
+            hodl_values.append(hodl_val)
+
+        if not portfolio_values:
+            return None
+
+        start_portfolio = portfolio_values[0]
+        start_hodl = hodl_values[0]
+        final_cc = portfolio_values[-1]
+        final_hodl = hodl_values[-1]
+        final_opt_price = float(opt_price.iloc[-1])
+
+        pnl = final_cc - start_portfolio
+        pnl_vs_hodl = final_cc - final_hodl
+
+        # Max drawdown on covered-call portfolio
+        peak = portfolio_values[0]
+        max_dd_pct = 0.0
+        for v in portfolio_values:
+            if v > peak:
+                peak = v
+            dd = (peak - v) / peak if peak > 0 else 0.0
+            if dd > max_dd_pct:
+                max_dd_pct = dd
+
+        return SimulatedTrade(
+            instrument_name=target.instrument_name,
+            underlying=cfg.underlying,
+            side="SHORT_CALL",
+            size=size,
+            open_time=open_time,
+            close_time=target.expiry,
+            open_price=open_price,
+            close_price=final_opt_price,
+            pnl=pnl,
+            pnl_vs_hodl=pnl_vs_hodl,
+            max_drawdown_pct=max_dd_pct * 100.0,
+            notes=(
+                f"target_dte={cfg.target_dte}, target_delta={cfg.target_delta}, "
+                f"actual_delta={target.delta}, expiry={target.expiry.isoformat()}"
+            ),
+        )
+
+    # ---------- Placeholder for full policy simulation ----------
+
+    def simulate_policy(self, policy_fn) -> SimulationResult:
+        """
+        Placeholder for future work:
+        - Loop through all decision times between cfg.start and cfg.end.
+        - At each decision time, build state, generate candidates, ask policy_fn.
+        - Track open positions, equity curve, metrics.
+        For now, you can leave this unimplemented or implement later.
+        """
+        raise NotImplementedError("simulate_policy is not yet implemented.")
+
+6. backtest_example.py – quick demo script
+
+This is a small script you can run (locally or via Replit Shell) to sanity-check the simulator.
+
+# src/backtest/backtest_example.py
+from __future__ import annotations
+
+from datetime import datetime, timezone, timedelta
+
+from .deribit_client import DeribitPublicClient
+from .deribit_data_source import DeribitDataSource
+from .types import CallSimulationConfig
+from .covered_call_simulator import CoveredCallSimulator
+
+
+def run_example() -> None:
+    """
+    Example:
+    - Underlying: BTC
+    - Pick a decision time a few days before some expiry.
+    - Simulate selling 0.1 BTC of a 7DTE 0.25Δ call.
+    """
+
+    # Choose a recent-ish window (you can adjust)
+    decision_time = datetime(2024, 6, 1, 12, 0, tzinfo=timezone.utc)
+
+    cfg = CallSimulationConfig(
+        underlying="BTC",
+        start=decision_time,
+        end=decision_time + timedelta(days=10),
+        timeframe="1h",
+        decision_interval_bars=24,
+        initial_spot_position=1.0,
+        contract_size=1.0,
+        fee_rate=0.0005,
+        target_dte=7,
+        dte_tolerance=2,
+        target_delta=0.25,
+        delta_tolerance=0.05,
+        hold_to_expiry=True,
+    )
+
+    client = DeribitPublicClient()  # mainnet history
+    ds = DeribitDataSource(client=client)
+    sim = CoveredCallSimulator(data_source=ds, config=cfg)
+
+    trade = sim.simulate_single_call(decision_time=decision_time, size=0.1)
+
+    if trade is None:
+        print("No suitable call found for the given time/parameters.")
+        return
+
+    print("=== Simulated trade ===")
+    print(f"Instrument:   {trade.instrument_name}")
+    print(f"Underlying:   {trade.underlying}")
+    print(f"Side:         {trade.side}")
+    print(f"Size:         {trade.size}")
+    print(f"Open time:    {trade.open_time}")
+    print(f"Close time:   {trade.close_time}")
+    print(f"Open price:   {trade.open_price:.4f}")
+    print(f"Close price:  {trade.close_price:.4f}")
+    print(f"PnL:          {trade.pnl:.2f}")
+    print(f"PnL vs HODL:  {trade.pnl_vs_hodl:.2f}")
+    print(f"Max DD (%):   {trade.max_drawdown_pct:.2f}")
+    print(f"Notes:        {trade.notes}")
+
+
+if __name__ == "__main__":
+    run_example()
+
+
+Run it like:
+
+python -m src.backtest.backtest_example
+
+
+You’ll get a single historical “what if I sold this call?” result with PnL and max drawdown.

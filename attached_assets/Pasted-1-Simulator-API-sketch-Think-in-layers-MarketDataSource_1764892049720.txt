@@ -1,0 +1,202 @@
+1. Simulator API sketch
+
+Think in layers:
+
+MarketDataSource – how we get spot + options OHLC.
+
+SimulatorConfig – what we’re simulating (underlying, timeframe, etc.).
+
+SimulationResult – trades, equity curve, metrics.
+
+CoveredCallSimulator – the engine that can answer “what if I sold X here?”.
+
+1.1 MarketDataSource interface
+
+This lets you plug in:
+
+A Deribit-live API implementation,
+
+Or CSV files,
+
+Or Tardis/CryptoDataDownload datasets.
+
+# src/backtest/data_source.py
+from datetime import datetime
+from typing import Protocol, Literal
+import pandas as pd
+
+Timeframe = Literal["1m", "5m", "15m", "1h", "4h", "1d"]
+
+class MarketDataSource(Protocol):
+    def get_spot_ohlc(
+        self,
+        underlying: str,          # "BTC", "ETH", "SOL", "DOGE", etc.
+        start: datetime,
+        end: datetime,
+        timeframe: Timeframe,
+    ) -> pd.DataFrame:
+        """
+        Return OHLCV for the underlying index/future used as 'spot' for options.
+        Index by timestamp, columns: ['open','high','low','close','volume'].
+        """
+
+    def list_option_chain(
+        self,
+        underlying: str,
+        as_of: datetime,
+    ) -> list["OptionSnapshot"]:
+        """
+        Return the option chain snapshot at a given timestamp.
+        Each OptionSnapshot includes instrument_name, strike, expiry, call/put, delta, mid_price, iv, etc.
+        """
+
+    def get_option_ohlc(
+        self,
+        instrument_name: str,
+        start: datetime,
+        end: datetime,
+        timeframe: Timeframe,
+    ) -> pd.DataFrame:
+        """
+        Return OHLCV for a specific option instrument over its life.
+        Index by timestamp, columns: ['open','high','low','close','volume'].
+        """
+
+
+OptionSnapshot is a lightweight Pydantic/dataclass tying Deribit’s instrument_name to Greeks/price at a moment.
+
+1.2 Simulation config & results
+# src/backtest/types.py
+from dataclasses import dataclass
+from datetime import datetime
+from typing import Literal, Dict, List
+
+@dataclass
+class CallSimulationConfig:
+    underlying: str                   # "BTC", "ETH", ...
+    start: datetime
+    end: datetime
+    timeframe: Timeframe              # bar size for simulation, e.g. "1h"
+    decision_interval_bars: int       # e.g. 4 -> decision every 4x timeframe
+    initial_spot_position: float      # e.g. 1.0 BTC held as cover
+    contract_size: float              # e.g. 1.0 BTC per option for inverse
+    fee_rate: float                   # taker/maker fee in % of underlying
+    risk_free_rate: float             # optional, for more realistic pricing
+    # strategy preferences:
+    target_dte: int                   # 7 for 7DTE covered calls
+    dte_tolerance: int                # +/- days
+    target_delta: float               # 0.25
+    delta_tolerance: float            # +/- 0.05
+    hold_to_expiry: bool              # or use roll rules later
+
+@dataclass
+class SimulatedTrade:
+    instrument_name: str
+    underlying: str
+    side: Literal["SHORT_CALL"]
+    size: float                       # e.g. 0.1 BTC
+    open_time: datetime
+    close_time: datetime
+    open_price: float                 # option premium
+    close_price: float
+    pnl: float                        # in USD
+    pnl_vs_hodl: float                # vs pure spot
+    max_drawdown_pct: float           # during life of trade
+    notes: str                        # e.g. "7DTE, delta=0.24 at entry"
+
+@dataclass
+class SimulationResult:
+    trades: List[SimulatedTrade]
+    equity_curve: Dict[datetime, float]      # total portfolio equity over time
+    equity_vs_hodl: Dict[datetime, float]    # extra vs pure spot
+    metrics: Dict[str, float]                # summary stats (avg PnL, MDD, etc.)
+
+1.3 CoveredCallSimulator core
+# src/backtest/covered_call_simulator.py
+from typing import Callable, List
+from datetime import datetime
+
+from .data_source import MarketDataSource
+from .types import CallSimulationConfig, SimulatedTrade, SimulationResult
+
+State = dict   # later you can make this a proper dataclass
+
+# Policy: given state + list of candidate options, choose one or DO_NOTHING
+PolicyFn = Callable[[State, List["OptionSnapshot"]], "OptionSnapshot | None"]
+
+
+class CoveredCallSimulator:
+    def __init__(self, data_source: MarketDataSource, config: CallSimulationConfig):
+        self.ds = data_source
+        self.cfg = config
+
+    def _generate_decision_times(self) -> list[datetime]:
+        """
+        Based on start/end and timeframe + decision_interval_bars,
+        produce a list of timestamps when we 'pretend' to make a decision.
+        """
+        ...
+
+    def _build_state(self, t: datetime) -> State:
+        """
+        Build a simplified AgentState-like snapshot at time t:
+        - spot price
+        - current covered-call position (if any)
+        - realized/unrealized PnL
+        - maybe IV, realized vol, etc.
+        """
+        ...
+
+    def _find_candidate_call(
+        self,
+        t: datetime,
+        state: State,
+    ) -> "OptionSnapshot | None":
+        """
+        For the simple 'always 7DTE, ~0.25Δ' case:
+        - get option chain at time t for cfg.underlying
+        - filter calls with DTE close to target_dte
+        - choose option with delta nearest target_delta
+        """
+        ...
+
+    def simulate_single_call(
+        self,
+        decision_time: datetime,
+        size: float,
+    ) -> SimulatedTrade:
+        """
+        Answer your question:
+        'If I sold size BTC of a 7DTE 0.25Δ call at decision_time,
+         what would PnL and drawdown have been vs HODL?'
+        Uses cfg.target_dte and cfg.target_delta to pick the option.
+        Steps forward to expiry, computes PnL, max DD, etc.
+        """
+
+    def simulate_policy(
+        self,
+        policy: PolicyFn,
+    ) -> SimulationResult:
+        """
+        Full backtest:
+        - Loop over decision times.
+        - For each t:
+            - build state
+            - build candidate list (e.g. calls within DTE/Δ bands)
+            - ask policy(state, candidates) which option (or None)
+            - if option chosen and we don't have an open call, open it
+        - Mark to market portfolio over time (spot + short call).
+        - Close calls at expiry (or via policy rules later).
+        - Return trades, equity curve, and summary metrics.
+        """
+
+
+This simulator can:
+
+Run a pure rule-based policy (like your current one).
+
+Run a saved LLM policy offline by wrapping it in a PolicyFn that calls the model.
+
+Generate exactly the “what if I sold X here?” samples for ML.
+
+Because everything is parameterized by underlying: str, it will naturally extend to BTC/ETH/SOL/DOGE etc later; your data source just needs to know how to map that to Deribit instrument names.
