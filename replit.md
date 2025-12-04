@@ -21,6 +21,12 @@ A modular Python framework for automated BTC/ETH covered call trading on Deribit
   - Exploration: 25% probability of picking non-best candidate (epsilon-greedy)
   - Scoring function for candidate ranking
   - Mode and policy_version tracked in all decisions
+- 2024-12: LLM decision mode enabled:
+  - LLM brain uses OpenAI via Replit AI Integrations
+  - Sandboxed to only allow valid actions (DO_NOTHING, OPEN/ROLL/CLOSE)
+  - Uses effective_* parameters for mode-aware decision making
+  - decision_source field tracks "llm" vs "rule_based" in all outputs
+  - Risk engine still validates all LLM proposals before execution
 
 ## Architecture
 
@@ -57,8 +63,8 @@ Required for live trading (testnet):
 - `DERIBIT_CLIENT_SECRET` - Deribit testnet API secret
 
 Optional settings:
-- `DRY_RUN=false` - Simulate orders without placing them
-- `LLM_ENABLED=false` - Toggle LLM decision mode
+- `DRY_RUN=true` - Simulate orders without placing them (default: true for safety)
+- `LLM_ENABLED=true` - Toggle LLM decision mode (currently enabled)
 - `LLM_MODEL_NAME=gpt-4.1-mini` - OpenAI model for LLM mode
 - `LOOP_INTERVAL_SEC=300` - Sleep between iterations
 

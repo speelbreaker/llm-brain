@@ -1,0 +1,221 @@
+Nice, time to let the LLM actually drive the plane (still over testnet clouds only 😄).
+
+I’ll walk you through:
+
+How to wire the LLM decision brain into the loop
+
+How to switch it on safely (dry-run first)
+
+What to check in logs / UI to confirm it’s working
+
+1. Make sure the LLM brain is wired into the loop
+
+You likely already have a agent_brain_llm.py with something like choose_action_with_llm(...).
+In agent_loop.py (or whatever runs the loop), you want this pattern inside each iteration:
+
+# agent_loop.py (inside run_agent_loop_forever)
+
+from src.config import settings
+from src.policy_rule_based import decide_action as decide_rule_based
+from src.agent_brain_llm import choose_action_with_llm
+from src.risk_engine import check_action_allowed
+from src.execution import execute_action
+from src.logging_utils import log_decision  # whatever you use
+# ...
+
+def run_agent_loop_forever(status_callback: StatusCallback | None = None) -> None:
+    while True:
+        # 1) Build state
+        agent_state = build_agent_state(deribit_client, settings)
+        candidates = agent_state.candidate_options or []
+
+        # 2) Brain: rule-based vs LLM
+        if settings.llm_enabled:
+            proposed_action = choose_action_with_llm(agent_state, candidates)
+            decision_source = "llm"
+        else:
+            proposed_action = decide_rule_based(agent_state, settings)
+            decision_source = "rule_based"
+
+        # 3) Risk check
+        allowed, reasons = check_action_allowed(agent_state, proposed_action, settings)
+
+        final_action = dict(proposed_action)
+        if not allowed:
+            final_action["action"] = "DO_NOTHING"
+            final_action.setdefault("params", {})
+            final_action["reasoning"] = (
+                final_action.get("reasoning", "") +
+                f" | Risk engine blocked: {', '.join(reasons)}"
+            )
+
+        # 4) Execution
+        if final_action["action"] != "DO_NOTHING" and not settings.dry_run:
+            exec_result = execute_action(deribit_client, final_action, settings)
+        else:
+            exec_result = {
+                "status": "simulated" if settings.dry_run else "skipped",
+                "dry_run": settings.dry_run,
+                "orders": [],
+                "message": "No real order sent.",
+            }
+
+        # 5) Build snapshot for log + /status
+        snapshot = {
+            "log_timestamp": datetime.utcnow().isoformat(),
+            "state": compress_state_for_log(agent_state),
+            "proposed_action": proposed_action,
+            "risk_check": {"allowed": allowed, "reasons": reasons},
+            "final_action": final_action,
+            "execution": exec_result,
+            "config_snapshot": {
+                "mode": settings.mode,
+                "llm_enabled": settings.llm_enabled,
+                "dry_run": settings.dry_run,
+                "max_margin_used_pct": settings.max_margin_used_pct,
+                "max_net_delta_abs": settings.max_net_delta_abs,
+                "max_expiry_exposure": settings.max_expiry_exposure,
+            },
+            "decision_source": decision_source,
+        }
+
+        log_decision(snapshot)
+
+        if status_callback:
+            status_callback(snapshot)
+
+        time.sleep(settings.loop_interval_sec)
+
+
+Key bits:
+
+Switch on settings.llm_enabled.
+
+Keep risk_engine and execution exactly the same downstream.
+
+Include decision_source: "llm" | "rule_based" in the snapshot so you can see who drove that decision.
+
+If Replit already wired this, just verify:
+
+if settings.llm_enabled: branch exists and uses choose_action_with_llm.
+
+decision_source (or equivalent field) is logged.
+
+2. Confirm agent_brain_llm.py is “sandboxed”
+
+Quick checklist for choose_action_with_llm:
+
+It only allows these actions:
+DO_NOTHING, OPEN_COVERED_CALL, ROLL_COVERED_CALL, CLOSE_COVERED_CALL.
+
+It never invents symbols/sizes:
+
+size comes from config (e.g. settings.default_order_size),
+
+symbol must be from candidates or existing positions.
+
+It returns JSON like:
+
+{
+    "action": "OPEN_COVERED_CALL",
+    "params": {"underlying": "BTC", "symbol": "BTC-19DEC25-97000-C", "size": 0.1},
+    "reasoning": "short explanation ..."
+}
+
+
+Anything malformed → you catch with a try/except and fall back to:
+
+{"action": "DO_NOTHING", "params": {}, "reasoning": "Failed to parse model JSON; defaulting to DO_NOTHING."}
+
+
+If that’s already there, you’re good.
+
+3. Turn on LLM mode safely
+
+On your testnet VM / Replit env:
+
+Keep dry-run ON at first
+
+DRY_RUN=true
+
+
+Enable LLM
+
+In .env or config:
+
+LLM_ENABLED=true
+LLM_MODEL_NAME=gpt-4.1-mini   # or gpt-5-mini, etc.
+MODE=research                 # if you want the exploratory profile
+
+
+Make sure OPENAI_API_KEY is set (Replit-managed or your own).
+
+Redeploy / restart your web app (the FastAPI + background agent).
+
+Open your dashboard in the browser.
+
+You should start seeing in /status (and logs):
+
+decision_source: "llm"
+
+proposed_action.action values that match the allowed set.
+
+proposed_action.reasoning paragraphs that are clearly LLM-generated.
+
+Also check the top of the UI:
+
+It may show Mode: LLM or llm_enabled: true depending on how we wired the template.
+
+4. What to look for in the logs / UI
+
+While DRY_RUN=true:
+
+Confirm risk engine is still obeyed:
+
+If LLM tries something that breaches margin/exposure, final_action.action should be DO_NOTHING even if proposed_action.action was not.
+
+You’ll see Risk engine blocked: ... added to reasoning.
+
+Compare to old behaviour:
+
+Is the LLM picking the same 97k call each time?
+
+Does it sometimes choose a different strike / DTE than your rule-based policy?
+
+Use Chat with Agent to interrogate it:
+
+“Are you using LLM mode now?”
+
+“Why did you change from the 96k to 97k strike?”
+
+“What would you do if I had no BTC spot?”
+
+This is all still paper trading on testnet, but now the LLM is choosing the moves.
+
+5. When you’re happy, let it actually trade (still testnet)
+
+Once you’ve watched:
+
+A few dozen LLM-driven iterations,
+
+Seen risk engine block misbehaving suggestions,
+
+Liked its reasoning,
+
+you can move to real orders on testnet:
+
+Set:
+
+DRY_RUN=false
+LLM_ENABLED=true
+
+
+Keep size and exposure modest (e.g. DEFAULT_ORDER_SIZE=0.1, MAX_EXPIRY_EXPOSURE=1.0 BTC) so it can trade but not go crazy.
+
+Redeploy.
+
+Then watch:
+
+Testnet Deribit UI for actual orders/positions.
+
+Logs for execution.status changing from simulated → submitted/filled.

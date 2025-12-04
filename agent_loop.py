@@ -104,6 +104,7 @@ def _build_status_snapshot(
             "max_margin_used_pct": settings.max_margin_used_pct,
             "max_net_delta_abs": settings.max_net_delta_abs,
         },
+        "decision_source": final_action.get("decision_source", "unknown"),
     }
 
 

@@ -44,10 +44,14 @@ externalPort = 80
 localPort = 34359
 externalPort = 3000
 
+[[ports]]
+localPort = 43401
+externalPort = 3001
+
 [userenv]
 
 [userenv.shared]
-DRY_RUN = "false"
-LLM_ENABLED = "false"
+DRY_RUN = "true"
+LLM_ENABLED = "true"
 DEFAULT_ORDER_SIZE = "0.1"
 MAX_EXPIRY_EXPOSURE = "0.1"

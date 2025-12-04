@@ -136,10 +136,11 @@ Return ONLY valid JSON matching the requested schema."""
 
     high_level_rules = {
         "objective": "Sell weekly covered calls to collect premium while controlling drawdowns.",
+        "mode": settings.mode,
         "preferences": {
-            "ivrv_min": settings.ivrv_min,
-            "delta_range": [settings.delta_min, settings.delta_max],
-            "dte_range": [settings.dte_min, settings.dte_max],
+            "ivrv_min": settings.effective_ivrv_min,
+            "delta_range": [settings.effective_delta_min, settings.effective_delta_max],
+            "dte_range": [settings.effective_dte_min, settings.effective_dte_max],
             "premium_min_usd": settings.premium_min_usd,
         },
         "avoid": [
@@ -217,5 +218,9 @@ Return ONLY valid JSON matching the requested schema."""
     if decision["action"] not in valid_actions:
         decision["action"] = "DO_NOTHING"
         decision["reasoning"] = f"Invalid action '{decision.get('action')}'; defaulting to DO_NOTHING."
+
+    decision["mode"] = settings.mode
+    decision["policy_version"] = "llm_v1"
+    decision["decision_source"] = "llm"
 
     return decision

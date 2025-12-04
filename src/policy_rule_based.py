@@ -235,6 +235,7 @@ def decide_action(
                                        f"Mode={cfg.mode}, policy={cfg.policy_version}.",
                             "mode": cfg.mode,
                             "policy_version": cfg.policy_version,
+                            "decision_source": "rule_based",
                         }
                 
                 return {
@@ -249,6 +250,7 @@ def decide_action(
                                f"Mode={cfg.mode}, policy={cfg.policy_version}.",
                     "mode": cfg.mode,
                     "policy_version": cfg.policy_version,
+                    "decision_source": "rule_based",
                 }
     
     for underlying in cfg.underlyings:
@@ -278,6 +280,7 @@ def decide_action(
                                    f"Mode={cfg.mode}, policy={cfg.policy_version}.",
                         "mode": cfg.mode,
                         "policy_version": cfg.policy_version,
+                        "decision_source": "rule_based",
                     }
     
     existing_positions = []
@@ -298,4 +301,5 @@ def decide_action(
         "reasoning": f"{reasoning} Mode={cfg.mode}, policy={cfg.policy_version}.",
         "mode": cfg.mode,
         "policy_version": cfg.policy_version,
+        "decision_source": "rule_based",
     }

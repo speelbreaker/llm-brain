@@ -272,6 +272,10 @@ def index() -> str:
         <div class="label">Last Action</div>
         <div class="value" id="last-action">--</div>
       </div>
+      <div class="status-card">
+        <div class="label">Decision By</div>
+        <div class="value" id="decision-source">--</div>
+      </div>
     </div>
     <details>
       <summary style="cursor: pointer; font-weight: 600; margin-bottom: 0.5rem;">Full Status JSON</summary>
@@ -312,6 +316,10 @@ def index() -> str:
         document.getElementById('eth-price').innerText = spot.ETH ? '$' + spot.ETH.toLocaleString() : '--';
         document.getElementById('portfolio-value').innerText = formatNumber(portfolio.equity_usd);
         document.getElementById('last-action').innerText = finalAction.replace('_', ' ');
+        
+        // Update decision source
+        const decisionSource = data.decision_source || data.final_action?.decision_source || '--';
+        document.getElementById('decision-source').innerText = decisionSource.toUpperCase();
         
         // Update full JSON
         document.getElementById('status-box').innerText = JSON.stringify(data, null, 2);
