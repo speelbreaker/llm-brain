@@ -29,3 +29,7 @@ args = "python agent_loop.py"
 
 [workflows.workflow.metadata]
 outputType = "console"
+
+[deployment]
+deploymentTarget = "vm"
+run = ["python", "agent_loop.py"]
