@@ -51,18 +51,32 @@ class DeribitClient:
         params: Optional[dict[str, Any]] = None,
         private: bool = False,
     ) -> Any:
-        """Make an API request to Deribit."""
+        """Make an API request to Deribit using JSON-RPC 2.0."""
         if private:
             self._ensure_authenticated()
         
         url = f"{self.base_url}/api/v2/{method}"
         
-        headers = {}
+        headers = {"Content-Type": "application/json"}
         if private and self._access_token:
             headers["Authorization"] = f"Bearer {self._access_token}"
         
         try:
-            response = self._client.get(url, params=params, headers=headers)
+            if private:
+                json_rpc = {
+                    "jsonrpc": "2.0",
+                    "id": int(time.time() * 1000),
+                    "method": method,
+                    "params": params or {},
+                }
+                response = self._client.post(
+                    f"{self.base_url}/api/v2/",
+                    json=json_rpc,
+                    headers=headers,
+                )
+            else:
+                response = self._client.get(url, params=params, headers=headers)
+            
             response.raise_for_status()
             data = response.json()
             

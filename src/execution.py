@@ -11,21 +11,28 @@ from src.deribit_client import DeribitClient, DeribitAPIError
 from src.models import ActionType
 
 
+def _round_price(price: float, tick_size: float = 0.0001) -> float:
+    """Round price to valid tick size for Deribit options."""
+    return round(price / tick_size) * tick_size
+
+
 def _get_mid_price(client: DeribitClient, symbol: str) -> float:
-    """Get the mid price for an instrument."""
+    """Get the mid price for an instrument, rounded to valid tick size."""
     try:
         ticker = client.get_ticker(symbol)
         bid = ticker.get("best_bid_price", 0.0) or 0.0
         ask = ticker.get("best_ask_price", 0.0) or 0.0
         
         if bid > 0 and ask > 0:
-            return (bid + ask) / 2
+            mid = (bid + ask) / 2
         elif bid > 0:
-            return bid
+            mid = bid
         elif ask > 0:
-            return ask
+            mid = ask
         else:
-            return ticker.get("mark_price", 0.0) or 0.0
+            mid = ticker.get("mark_price", 0.0) or 0.0
+        
+        return _round_price(mid)
     except DeribitAPIError:
         return 0.0
 

@@ -39,3 +39,11 @@ ignorePorts = true
 [[ports]]
 localPort = 5000
 externalPort = 80
+
+[userenv]
+
+[userenv.shared]
+DRY_RUN = "false"
+LLM_ENABLED = "false"
+DEFAULT_ORDER_SIZE = "0.1"
+MAX_EXPIRY_EXPOSURE = "0.1"
