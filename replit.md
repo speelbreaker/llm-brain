@@ -7,17 +7,20 @@ A modular Python framework for automated BTC/ETH covered call trading on Deribit
 - Core framework: Complete
 - Rule-based policy: Implemented
 - LLM decision mode: Implemented (uses Replit AI Integrations for OpenAI)
+- FastAPI web dashboard: Complete with live status and chat
 - Backtesting scaffold: Stub ready for future expansion
 
 ## Recent Changes
 - 2024-12: Initial implementation of all core modules
 - 2024-12: Added OpenAI integration via Replit AI Integrations
-- 2024-12: Added Flask web server wrapper (server.py) for Autoscale deployment
-- 2024-12: Enhanced risk_engine.py with critical safety checks:
-  - Blocks all trades if portfolio equity is zero/unavailable (missing API credentials)
-  - Validates spot holdings before allowing covered call opens (prevents naked calls)
-  - Added spot_positions field to PortfolioState model
-  - Updated state_builder to populate spot_positions from account balances
+- 2024-12: Enhanced risk_engine.py with critical safety checks
+- 2024-12: Refactored to FastAPI web dashboard with:
+  - `/` - Live dashboard with status cards and chat interface
+  - `/status` - JSON endpoint for current agent state
+  - `/chat` - POST endpoint for natural language queries
+  - `/health` - Health check for deployments
+  - Background agent loop running in separate thread
+  - In-memory status store for real-time updates
 
 ## Architecture
 
@@ -31,9 +34,13 @@ A modular Python framework for automated BTC/ETH covered call trading on Deribit
 - `agent_brain_llm.py` - LLM-based decisions via OpenAI Chat API
 - `execution.py` - Order translation with dry-run support
 - `logging_utils.py` - Structured JSONL logging
+- `chat_with_agent.py` - Natural language query interface
+- `status_store.py` - Thread-safe status storage
+- `web_app.py` - FastAPI web application
 
-### Entry Point
-- `agent_loop.py` - Main CLI orchestration script
+### Entry Points
+- `agent_loop.py` - Standalone CLI orchestration script
+- `src/web_app.py` - FastAPI web app with background agent
 
 ### Future Development
 - `backtest/env_simulator.py` - RL environment stub
@@ -66,7 +73,19 @@ Optional settings:
 - httpx for HTTP
 - Clarity over cleverness
 
-## Running the Agent
+## Running the Web Dashboard
+```bash
+uvicorn src.web_app:app --host 0.0.0.0 --port 5000
+```
+
+The dashboard shows:
+- Live BTC/ETH prices
+- Portfolio value and positions
+- Last action taken
+- Full status JSON (expandable)
+- Chat interface for querying agent decisions
+
+## Running the Agent (CLI)
 ```bash
 python agent_loop.py
 ```
@@ -75,9 +94,7 @@ The agent runs in dry-run mode by default (no real orders placed).
 
 ## Chatting with the Agent
 
-You can ask the agent why it took certain actions using the `chat_with_agent` tool.
-It reads recent entries from `logs/agent_decisions_*.jsonl` and uses OpenAI to
-generate explanations.
+You can ask the agent why it took certain actions using the chat interface on the web dashboard, or via CLI:
 
 ```bash
 python -m src.chat_with_agent "Why do you keep choosing the 97k call?"
@@ -85,8 +102,42 @@ python -m src.chat_with_agent "Summarize your last 10 decisions" --limit 10
 python -m src.chat_with_agent "What would you likely do right now?"
 ```
 
+## API Endpoints
+
+### GET /
+HTML dashboard with live status updates and chat interface.
+
+### GET /status
+Returns the latest agent status snapshot as JSON:
+```json
+{
+  "log_timestamp": "...",
+  "state": {
+    "spot": {"BTC": 92310, "ETH": 3135},
+    "portfolio": {...},
+    "top_candidates": [...]
+  },
+  "final_action": {...},
+  "execution": {...}
+}
+```
+
+### POST /chat
+Send a question about agent behavior:
+```json
+{"question": "Why did you pick the 97k call?"}
+```
+Returns:
+```json
+{"question": "...", "answer": "..."}
+```
+
+### GET /health
+Health check endpoint for deployment monitoring.
+
 ## Key Decisions
 - Uses Replit AI Integrations for OpenAI access (no API key needed)
 - All trades are testnet-only for safety
 - Structured JSONL logging for future ML/RL training
 - Risk engine validates all decisions before execution
+- FastAPI with background thread for non-blocking web + agent

@@ -119,8 +119,10 @@ def run_agent_loop_forever(
     """
     global shutdown_requested
     
-    signal.signal(signal.SIGINT, signal_handler)
-    signal.signal(signal.SIGTERM, signal_handler)
+    import threading
+    if threading.current_thread() is threading.main_thread():
+        signal.signal(signal.SIGINT, signal_handler)
+        signal.signal(signal.SIGTERM, signal_handler)
     
     print("=" * 60)
     print("Options Trading Agent - Deribit Testnet")
