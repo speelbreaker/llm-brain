@@ -23,13 +23,22 @@ args = "Options Trading Agent"
 name = "Options Trading Agent"
 author = "agent"
 
+[workflows.workflow.metadata]
+outputType = "webview"
+
 [[workflows.workflow.tasks]]
 task = "shell.exec"
-args = "python agent_loop.py"
-
-[workflows.workflow.metadata]
-outputType = "console"
+args = "python server.py"
+waitForPort = 5000
 
 [deployment]
-deploymentTarget = "vm"
-run = ["python", "agent_loop.py"]
+deploymentTarget = "autoscale"
+run = ["python", "server.py"]
+
+[[ports]]
+localPort = 5000
+externalPort = 80
+
+[[ports]]
+localPort = 34441
+externalPort = 3000

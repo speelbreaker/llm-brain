@@ -12,6 +12,7 @@ A modular Python framework for automated BTC/ETH covered call trading on Deribit
 ## Recent Changes
 - 2024-12: Initial implementation of all core modules
 - 2024-12: Added OpenAI integration via Replit AI Integrations
+- 2024-12: Added Flask web server wrapper (server.py) for Autoscale deployment
 
 ## Architecture
 
