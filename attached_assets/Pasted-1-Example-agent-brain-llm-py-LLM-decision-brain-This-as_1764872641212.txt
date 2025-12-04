@@ -1,0 +1,214 @@
+1. Example agent_brain_llm.py (LLM decision brain)
+
+This assumes:
+
+You’re using the OpenAI Python client (pip install openai). 
+platform.openai.com
++1
+
+You have an OPENAI_API_KEY in your environment.
+
+You already have:
+
+AgentState model
+
+CandidateOption model
+
+A simple ProposedAction model or dict schema.
+
+You can adjust type imports to match whatever Windsurf generates in models.py.
+
+# === agent_brain_llm.py ===
+from __future__ import annotations
+
+from typing import Any, Dict, List, Tuple
+import json
+
+from openai import OpenAI
+
+from config import settings  # or whatever your config is called
+from models import AgentState, CandidateOption  # adapt to your actual names
+
+
+client = OpenAI()  # uses OPENAI_API_KEY from env by default
+
+
+def _compress_state_for_llm(state: AgentState) -> Dict[str, Any]:
+    """
+    Create a compact, LLM-friendly snapshot of the current environment.
+    Avoid huge lists; stick to what matters for decisions.
+    """
+    return {
+        "timestamp": state.timestamp.isoformat(),
+        "underlyings": state.underlyings,  # e.g. ["BTC", "ETH"]
+        "spot": state.spot,               # {"BTC": 90000, "ETH": 3800}
+        "portfolio": {
+            "balances": state.portfolio.balances,
+            "margin_used_pct": state.portfolio.margin_used_pct,
+            "net_delta": state.portfolio.net_delta,
+            "open_positions_summary": [
+                {
+                    "underlying": p.underlying,
+                    "symbol": p.symbol,
+                    "side": p.side,
+                    "size": p.size,
+                    "strike": p.strike,
+                    "expiry_dte": p.expiry_dte,
+                    "moneyness": p.moneyness,
+                    "unrealized_pnl": p.unrealized_pnl,
+                }
+                for p in state.portfolio.option_positions
+            ],
+        },
+        "vol_state": state.vol_state,  # dict with iv/rv/skew/term-structure
+        "risk_limits": {
+            "max_margin_used_pct": settings.max_margin_used_pct,
+            "max_net_delta_abs": settings.max_net_delta_abs,
+            "max_expiry_exposure": settings.max_expiry_exposure,
+        },
+    }
+
+
+def _compress_candidates_for_llm(
+    candidates: List[CandidateOption],
+) -> List[Dict[str, Any]]:
+    """
+    Reduce each candidate to the key decision features.
+    """
+    return [
+        {
+            "symbol": c.symbol,
+            "underlying": c.underlying,
+            "dte": c.dte,
+            "delta": c.delta,
+            "otm_pct": c.otm_pct,
+            "premium_usd": c.premium_usd,
+            "iv": c.iv,
+            "ivrv": c.ivrv,
+            "bid": c.bid,
+            "ask": c.ask,
+        }
+        for c in candidates
+    ]
+
+
+def choose_action_with_llm(
+    state: AgentState,
+    candidates: List[CandidateOption],
+) -> Dict[str, Any]:
+    """
+    Call the OpenAI API to choose an action.
+
+    Returns a dict with at least:
+      {
+        "action": "DO_NOTHING" | "OPEN_COVERED_CALL" | "ROLL_COVERED_CALL" | "CLOSE_COVERED_CALL",
+        "params": {...},
+        "reasoning": "short explanation"
+      }
+
+    The risk engine will still validate this before executing.
+    """
+    compact_state = _compress_state_for_llm(state)
+    compact_candidates = _compress_candidates_for_llm(candidates)
+
+    system_prompt = (
+        "You are an options trading agent managing BTC/ETH covered calls for a single user.\n"
+        "Your job is to choose a single action from a small, discrete set and explain it briefly.\n"
+        "You must obey the user's risk constraints.\n"
+        "Never invent symbols or sizes that are not in the provided candidates or positions.\n"
+        "Return ONLY valid JSON matching the requested schema."
+    )
+
+    # High-level rules you want the agent to follow
+    high_level_rules = {
+        "objective": "Sell weekly covered calls to collect premium while controlling drawdowns.",
+        "preferences": {
+            "ivrv_min": settings.ivrv_min,
+            "delta_range": [settings.delta_min, settings.delta_max],
+            "dte_range": [settings.dte_min, settings.dte_max],
+            "premium_min_usd": settings.premium_min_usd,
+        },
+        "avoid": [
+            "opening new shorts immediately after large downside crashes",
+            "overusing margin",
+            "rolling into extremely ITM calls with huge assignment risk",
+        ],
+    }
+
+    user_instruction = {
+        "instruction": (
+            "Given the current state and candidate options, choose exactly ONE action:\n"
+            "- DO_NOTHING\n"
+            "- OPEN_COVERED_CALL (on one candidate)\n"
+            "- ROLL_COVERED_CALL (from an existing position into one candidate)\n"
+            "- CLOSE_COVERED_CALL (on an existing position)\n\n"
+            "Constraints:\n"
+            "- Respect the risk limits.\n"
+            "- Prefer actions consistent with the objective and preferences.\n"
+            "- If nothing looks good, choose DO_NOTHING.\n\n"
+            "Output format (JSON only):\n"
+            "{\n"
+            '  \"action\": \"...\",\n'
+            '  \"params\": { ... },\n'
+            '  \"reasoning\": \"short explanation\"\n"
+            "}"
+        ),
+        "state": compact_state,
+        "candidates": compact_candidates,
+        "rules": high_level_rules,
+    }
+
+    # Use the Responses API and ask for JSON output. :contentReference[oaicite:1]{index=1}
+    response = client.responses.create(
+        model=settings.llm_model_name,  # e.g. "gpt-4.1-mini" or "gpt-5-mini"
+        input=[
+            {
+                "role": "system",
+                "content": [{"type": "text", "text": system_prompt}],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": json.dumps(user_instruction),
+                    }
+                ],
+            },
+        ],
+        response_format={"type": "json_object"},
+    )
+
+    # Extract JSON from the response
+    # (shape may differ slightly depending on SDK version; adjust as needed)
+    model_output = response.output[0].content[0].text  # type: ignore[attr-defined]
+    try:
+        decision = json.loads(model_output)
+    except json.JSONDecodeError:
+        # Fallback: if model misbehaves, default to DO_NOTHING
+        decision = {
+            "action": "DO_NOTHING",
+            "params": {},
+            "reasoning": "Failed to parse model JSON; defaulting to no action.",
+        }
+
+    # Very basic sanity enforcement
+    if "action" not in decision:
+        decision["action"] = "DO_NOTHING"
+    if "params" not in decision:
+        decision["params"] = {}
+    if "reasoning" not in decision:
+        decision["reasoning"] = "no reasoning provided"
+
+    return decision
+
+
+Notes:
+
+settings.llm_model_name lets you configure "gpt-4.1-mini" / "gpt-5-mini" etc. without changing code. 
+platform.openai.com
++1
+
+The risk engine still has final veto; this LLM is advisory + high-level choice.
+
+You can start by calling this in “advisor mode” (just log its decisions) and only later let it influence real trades.

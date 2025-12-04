@@ -1,0 +1,356 @@
+You are a senior Python backend engineer and quantitative developer.
+
+I want you to build a prototype options trading agent framework for BTC/ETH covered calls on Deribit testnet. This is a RESEARCH/EXPERIMENTATION system, not production nor financial advice.
+
+High-level goals
+
+Use Python 3.11.
+
+Build a modular project that can:
+
+Connect to Deribit testnet (public + private APIs).
+
+Fetch market data & my positions.
+
+Build a state object suitable for both:
+
+a rule-based policy, and
+
+future ML/RL training.
+
+Run a simple decision loop:
+
+Decide between actions: DO_NOTHING, OPEN_COVERED_CALL, ROLL_COVERED_CALL, CLOSE_COVERED_CALL.
+
+Execute trades ONLY on testnet.
+
+Log all decisions and states for later training.
+
+I do NOT need a web UI yet, just a CLI / script-based prototype.
+
+Technology constraints
+
+Use pydantic for configs and data models.
+
+Use httpx (async) or requests (sync) for HTTP calls.
+
+Use pandas and numpy for data handling.
+
+Use a simple local SQLite or just CSV/JSON logs to store decisions & states.
+
+Use .env file for credentials; access via python-dotenv or similar.
+
+Project structure
+
+Create a project structure like:
+
+config.py
+
+deribit_client.py
+
+models.py
+
+state_builder.py
+
+risk_engine.py
+
+policy_rule_based.py
+
+execution.py
+
+logging_utils.py
+
+agent_loop.py
+
+backtest/ (folder for future backtesting code; create minimal scaffolding)
+
+data/ (placeholder)
+
+logs/ (JSON or CSV logs)
+
+requirements.txt
+
+README.md
+
+Detailed requirements
+1. config.py
+
+Use pydantic BaseSettings style config:
+
+Deribit testnet URL.
+
+API key / secret from env vars.
+
+Risk limits (max margin %, max net delta, max per-expiry exposure).
+
+Strategy parameters:
+
+ivrv_min
+
+delta_min, delta_max
+
+dte_min, dte_max
+
+premium_min_usd
+
+Include both BTC and ETH config sections (even if BTC only is used v1).
+
+2. deribit_client.py
+
+Minimal wrapper for Deribit testnet:
+
+Public:
+
+get orderbook / ticker
+
+get instruments (options list for BTC & ETH)
+
+Private:
+
+get positions
+
+get account summary (balances, margin)
+
+place order (limit), cancel order
+
+Keep it simple, but write clean, typed Python.
+
+Handle API errors gracefully and raise clear exceptions.
+
+3. models.py
+
+Define pydantic models (or dataclasses) for:
+
+OptionInstrument (symbol, underlying, strike, expiry, option_type, etc.)
+
+PortfolioState (balances, margin, existing positions, etc.)
+
+OptionPosition (symbol, size, avg_price, side, etc.)
+
+CandidateOption (for options that the agent might trade)
+
+AgentState:
+
+market snapshot (spot, ivs, rvs, skew placeholders)
+
+portfolio
+
+candidate options list
+
+timestamp
+
+You can leave IV/RV/skew as numeric fields with placeholder computation; they can be stubbed or approximated.
+
+4. state_builder.py
+
+Implement:
+
+build_agent_state(deribit_client, config) -> AgentState
+
+This should:
+
+Pull:
+
+spot price for BTC and ETH
+
+current BTC/ETH positions (spot + options)
+
+account summary (margin usage, balances)
+
+instruments list for near-dated options
+
+Apply pre-filters for “candidate covered calls”, e.g.:
+
+expiry within config.dte_min–config.dte_max days,
+
+delta ~ config.delta_min–config.delta_max (you can approximate delta or leave a TODO),
+
+OTM calls only,
+
+premium >= config.premium_min_usd.
+
+Return an AgentState with:
+
+portfolio info
+
+basic risk metrics (margin %, net delta)
+
+a small list (3–5) of CandidateOption for BTC (and ETH if easy).
+
+If you need to approximate IV/RV/skew, you can just put placeholders or basic stub functions, but keep the interfaces ready so I can later plug in better calculations.
+
+5. risk_engine.py
+
+Implement:
+
+check_action_allowed(agent_state, proposed_action, config) -> bool, list[str]
+
+Where proposed_action is a typed object or simple dict with:
+
+type: "DO_NOTHING" | "OPEN_COVERED_CALL" | "ROLL_COVERED_CALL" | "CLOSE_COVERED_CALL"
+
+underlying (BTC/ETH)
+
+symbol(s)
+
+size
+
+The risk engine should enforce hard rules, such as:
+
+No trades if margin_used_pct would go above configured max.
+
+No trades if net_delta would exceed limits.
+
+No new short options if:
+
+margin_used_pct already above a threshold (e.g. 90% of max).
+
+Return (False, reasons) if blocked.
+
+6. policy_rule_based.py
+
+Implement a simple rule-based policy function:
+
+decide_action(agent_state, config) -> dict (or a typed ProposedAction)
+
+Logic v1:
+
+If there is no open BTC covered call and there is at least one BTC CandidateOption, choose the “best” one (e.g. highest premium / good DTE) and propose OPEN_COVERED_CALL.
+
+If there is an open BTC covered call:
+
+If DTE < 1 day and the call is ITM or IV is still high, propose ROLL_COVERED_CALL to a new candidate.
+
+Else, DO_NOTHING.
+
+For now, keep it simple. The goal is to have a clean place where the policy logic lives, so later this can be replaced or augmented by an ML/RL/LLM decision.
+
+7. execution.py
+
+Implement:
+
+execute_action(deribit_client, action, config) -> dict
+
+This should:
+
+Translate the abstract action into one or more Deribit orders.
+
+For OPEN_COVERED_CALL: submit a limit sell on the selected option.
+
+For ROLL_COVERED_CALL: close the old one, open the new one.
+
+For CLOSE_COVERED_CALL: buy back.
+
+Use a simple pricing rule like: limit price = current mid price (or last traded).
+
+Print/log what it is doing.
+
+8. logging_utils.py
+
+Implement logging to structured JSON files (in logs/):
+
+Each decision loop iteration should log a JSON object with:
+
+timestamp
+
+agent_state (or a compact representation)
+
+proposed_action from policy
+
+risk_engine_result
+
+executed_action (if any)
+
+any Deribit API responses
+
+portfolio value before/after if available
+
+This log will later be used for training.
+
+9. agent_loop.py
+
+Create an executable script (e.g. python agent_loop.py) that:
+
+Loads config.
+
+Instantiates DeribitClient.
+
+Runs an infinite loop with a sleep interval (configurable, e.g. 5–15 minutes):
+
+state = build_agent_state(...)
+
+proposed_action = decide_action(state, config)
+
+allowed, reasons = check_action_allowed(state, proposed_action, config)
+
+If not allowed → set action to DO_NOTHING and log reasons.
+
+If allowed and not DO_NOTHING → call execute_action(...).
+
+Log everything via logging_utils.
+
+For now, print key decisions to the console as well.
+
+Add an option in config to run in “dry-run” mode where orders are NOT actually sent, only simulated/logged.
+
+10. backtest/ scaffolding
+
+I don’t need a full backtester yet, but please:
+
+Create backtest/env_simulator.py with a minimal class stub:
+
+class CoveredCallEnv:
+
+reset() -> state
+
+step(action) -> (new_state, reward, done, info)
+
+Add a short TODO docstring explaining what will go here.
+
+11. requirements.txt
+
+Include everything used:
+
+pydantic
+
+python-dotenv
+
+httpx or requests
+
+pandas
+
+numpy
+
+Any others you actually use.
+
+12. README.md
+
+Document briefly:
+
+What this prototype does.
+
+How to set up:
+
+Python version
+
+pip install -r requirements.txt
+
+.env variables needed (Deribit testnet key/secret, etc.)
+
+How to run:
+
+python agent_loop.py (testnet only)
+
+Explain that this is experimental, for research and testnet only, and not financial advice.
+
+General style
+
+Use type hints everywhere.
+
+Keep functions small and composable.
+
+Add short comments/docstrings where logic might be non-obvious.
+
+Prefer clarity over cleverness; I’m going to read and tweak this.
+
+Please now generate the full codebase according to the above spec in one response, with clear file separators (e.g. # === config.py ===) so that I can copy-paste each file into my project.

@@ -1,0 +1,145 @@
+LLM integration (agent_brain_llm.py)
+
+In addition to everything above, add a new module:
+
+agent_brain_llm.py
+
+New config fields
+
+Extend config.py to include:
+
+llm_enabled: bool = False – global toggle.
+
+llm_model_name: str = "gpt-4.1-mini" – default LLM model for decisions.
+
+Optional: llm_max_decision_tokens, llm_timeout_seconds.
+
+Make sure the config reads OPENAI_API_KEY from .env (but do not log it).
+
+New dependencies
+
+In requirements.txt, add:
+
+openai (official OpenAI Python client) 
+platform.openai.com
++1
+
+agent_brain_llm.py requirements
+
+Create a file agent_brain_llm.py with:
+
+Import of OpenAI from openai.
+
+Import of the main settings/config object.
+
+Import of AgentState and CandidateOption models from models.py.
+
+Implement:
+
+def choose_action_with_llm(
+    state: AgentState,
+    candidates: list[CandidateOption],
+) -> dict:
+    """
+    Use the OpenAI Responses API to choose an action.
+
+    Returns a dict:
+      {
+        "action": "DO_NOTHING" | "OPEN_COVERED_CALL" | "ROLL_COVERED_CALL" | "CLOSE_COVERED_CALL",
+        "params": {...},
+        "reasoning": "short explanation"
+      }
+    """
+    ...
+
+
+The function must:
+
+Build a compact JSON-like summary of:
+
+Current portfolio (balances, margin usage, net delta, open CCs).
+
+Vol state (IV/RV/skew/term-structure, even if stubbed).
+
+Configured risk limits (margin, delta, etc.).
+
+A short list of candidate options (3–5) from the scanner.
+
+Construct a system message that:
+
+Describes the agent’s role (BTC/ETH covered call manager).
+
+Emphasizes:
+
+Respect risk limits.
+
+Prefer weekly covered calls with IVRV above threshold.
+
+Only use symbols/sizes provided in state / candidates.
+
+Instructs it to output JSON only with keys action, params, reasoning.
+
+Construct a user message that contains:
+
+The compact state and candidates as JSON.
+
+A reminder of the allowed actions:
+
+DO_NOTHING
+
+OPEN_COVERED_CALL
+
+ROLL_COVERED_CALL
+
+CLOSE_COVERED_CALL
+
+Call the OpenAI Responses API using the official Python client, with:
+
+model=settings.llm_model_name
+
+response_format={"type": "json_object"} so that the SDK returns valid JSON. 
+platform.openai.com
++1
+
+Parse the JSON response into a Python dict and:
+
+Ensure action is present; if missing or invalid, default to "DO_NOTHING".
+
+Ensure params and reasoning keys exist.
+
+On JSON parse errors, return a safe fallback:
+
+{"action": "DO_NOTHING", "params": {}, "reasoning": "Failed to parse model output"}.
+
+Changes to agent_loop.py
+
+Update the main loop to support either rule-based or LLM-based decision-making:
+
+After building agent_state and the list of CandidateOption:
+
+from policy_rule_based import decide_action as rule_decide_action
+from agent_brain_llm import choose_action_with_llm
+
+if settings.llm_enabled:
+    proposed_action = choose_action_with_llm(agent_state, agent_state.candidate_options)
+else:
+    proposed_action = rule_decide_action(agent_state, config)
+
+
+The rest of the flow stays the same:
+
+Pass proposed_action to risk_engine.check_action_allowed.
+
+If not allowed → override to DO_NOTHING, log reasons.
+
+If allowed and not DO_NOTHING → execution.execute_action(...).
+
+Log proposed_action and, when LLM is enabled, the reasoning string.
+
+Document in README.md:
+
+That LLM mode is optional and controlled via config.
+
+That it uses the OpenAI API with the model name from config.
+
+That for now this is experimental, for testnet and research only, not financial advice.

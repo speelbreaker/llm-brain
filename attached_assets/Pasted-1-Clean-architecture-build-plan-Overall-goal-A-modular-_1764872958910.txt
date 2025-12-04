@@ -1,0 +1,545 @@
+1. Clean architecture & build plan
+Overall goal
+
+A modular Python options trading agent framework for BTC/ETH covered calls on Deribit testnet, with:
+
+Rule-based decision mode (MVP).
+
+Optional LLM decision mode via OpenAI (Replit-managed key).
+
+Full logging so you can later do ML/RL on the decisions.
+
+Core components
+1. Config & infrastructure
+
+Pydantic-based config (config.py)
+
+Deribit testnet URL, credentials (from .env).
+
+Risk limits (max margin%, max net delta, per-expiry exposure).
+
+Strategy parameters:
+
+ivrv_min
+
+delta_min, delta_max
+
+dte_min, dte_max
+
+premium_min_usd
+
+LLM settings:
+
+llm_enabled: bool
+
+llm_model_name (e.g. "gpt-4.1-mini" / "gpt-5-mini")
+
+Requirements:
+
+httpx
+
+pydantic
+
+python-dotenv
+
+pandas, numpy
+
+openai (for LLM)
+
+plus stdlibs (logging, dataclasses or pydantic models, etc.)
+
+2. Deribit testnet API client (deribit_client.py)
+
+Using httpx (sync or async).
+
+Public endpoints:
+
+List instruments (BTC/ETH options).
+
+Get ticker/mark price / orderbook.
+
+Private endpoints:
+
+Get account summary, positions.
+
+Place/cancel limit orders.
+
+Must be clearly separated from strategy logic, with typed methods.
+
+3. Models (models.py)
+
+Pydantic (or dataclasses) for:
+
+OptionInstrument – symbol, underlying, strike, expiry, type, etc.
+
+OptionPosition – side, size, avg price, symbol, moneyness, DTE, etc.
+
+PortfolioState – balances, margin used%, net delta, positions list.
+
+CandidateOption – symbol, DTE, delta, OTM%, premium, IV, IVRV, bid/ask.
+
+AgentState – timestamp, underlyings, spot, vol_state (iv/rv/skew), portfolio, candidate options.
+
+This becomes the single source of truth passed around the agent.
+
+4. State builder (state_builder.py)
+
+build_agent_state(client, config) -> AgentState:
+
+Fetch:
+
+BTC/ETH spot.
+
+Positions, balances, margin usage.
+
+Relevant option instruments.
+
+Compute:
+
+Basic vol_state (stubbed IV/RV/skew is fine as placeholders).
+
+Simple moneyness & DTE.
+
+Filter & construct:
+
+A small list of CandidateOption for covered calls:
+
+DTE in [dte_min, dte_max]
+
+Delta in [delta_min, delta_max] (approximate if needed).
+
+OTM calls only.
+
+Premium USD ≥ premium_min_usd.
+
+5. Risk engine (risk_engine.py)
+
+check_action_allowed(agent_state, proposed_action, config) -> (bool, list[str])
+
+Enforce:
+
+Max margin_used_pct.
+
+Max absolute net_delta.
+
+Per-expiry exposure caps.
+
+Optional “no new shorts in crash/low IV” rules later.
+
+If blocked → False, ["reason1", "reason2", ...].
+
+Risk engine is the firewall in front of any execution (rule-based OR LLM).
+
+6. Rule-based policy (policy_rule_based.py)
+
+decide_action(agent_state, config) -> dict (or ProposedAction model):
+
+Logic v1 ideas:
+
+If no open CC and at least one good candidate:
+
+Choose best candidate (highest premium, close to ideal delta/DTE).
+
+Propose OPEN_COVERED_CALL.
+
+If CC open:
+
+If DTE < 1 day or very ITM and IV still rich:
+
+Propose ROLL_COVERED_CALL into a new candidate.
+
+Else:
+
+DO_NOTHING.
+
+Keep it simple; this is your baseline policy and fallback if LLM is disabled.
+
+7. LLM-based decision module (agent_brain_llm.py)
+
+Uses OpenAI Responses API through openai client.
+
+choose_action_with_llm(agent_state, candidates) -> dict returning:
+
+{
+  "action": "DO_NOTHING" | "OPEN_COVERED_CALL" | "ROLL_COVERED_CALL" | "CLOSE_COVERED_CALL",
+  "params": { ... },
+  "reasoning": "brief explanation"
+}
+
+
+It should:
+
+Build compact JSON of:
+
+Portfolio summary.
+
+Vol_state.
+
+Risk limits.
+
+Candidate options.
+
+Use a system prompt that:
+
+Defines role: BTC/ETH covered call manager.
+
+States objectives and constraints.
+
+Forbids inventing symbols/sizes.
+
+Requests strict JSON output.
+
+If parse fails → safe fallback: DO_NOTHING.
+
+Toggle via config.llm_enabled.
+
+8. Execution module (execution.py)
+
+execute_action(client, action_dict, config) -> dict:
+
+For OPEN_COVERED_CALL:
+
+Place limit sell at mid or slightly inside spread.
+
+For ROLL_COVERED_CALL:
+
+Close old position, open new one.
+
+For CLOSE_COVERED_CALL:
+
+Buy to close.
+
+Support dry-run mode:
+
+If enabled, just log what would be done, no real orders.
+
+9. Logging (logging_utils.py)
+
+Log every loop iteration to JSON in logs/:
+
+Each record contains:
+
+Timestamp.
+
+AgentState (or compressed version).
+
+Proposed action (from rule/LLM).
+
+Risk engine result.
+
+Execution result (orders, errors).
+
+LLM reasoning (if used).
+
+This is the future training dataset for ML/RL.
+
+10. Agent loop CLI (agent_loop.py)
+
+Load config, init Deribit client.
+
+Loop:
+
+while True:
+    state = build_agent_state(...)
+    candidates = state.candidate_options
+
+    if settings.llm_enabled:
+        proposed = choose_action_with_llm(state, candidates)
+    else:
+        proposed = rule_decide_action(state, settings)
+
+    allowed, reasons = check_action_allowed(state, proposed, settings)
+
+    if not allowed:
+        final_action = {"action": "DO_NOTHING", "params": {}, "reasoning": "; ".join(reasons)}
+    else:
+        final_action = proposed
+
+    if final_action["action"] != "DO_NOTHING" and not settings.dry_run:
+        exec_result = execute_action(client, final_action, settings)
+    else:
+        exec_result = {"status": "skipped (dry-run or DO_NOTHING)"}
+
+    log_decision(state, proposed, final_action, allowed, reasons, exec_result)
+
+    sleep(config.loop_interval_sec)
+
+
+Good console logging so you see what it’s deciding and doing.
+
+11. Backtesting scaffolding (backtest/)
+
+backtest/env_simulator.py with a stub:
+
+class CoveredCallEnv:
+    def reset(self):
+        ...
+
+    def step(self, action):
+        ...
+
+
+Just enough structure so you can later plug in:
+
+Historical price/option data.
+
+Reward function.
+
+RL agent.
+
+Suggested build order (MVP → LLM)
+
+Config + Deribit client (+ .env).
+
+Models + state_builder (get AgentState working).
+
+Risk engine.
+
+Rule-based policy.
+
+Execution (dry-run + testnet).
+
+Logging.
+
+Agent loop (rule-based only first).
+
+Then add agent_brain_llm.py + LLM toggle.
+
+Finally, backtest scaffolding.
+
+2. Ready-to-paste Replit agent prompt
+
+Here’s a compact version you can paste directly into Replit’s AI (or similar) as your “spec”:
+
+PROMPT TO REPLIT (or other dev agent):
+
+You are a senior Python engineer.
+Build a modular Python options trading agent framework for BTC/ETH covered calls on Deribit testnet with both rule-based and LLM decision-making.
+
+Tech stack & dependencies
+
+Python 3.11
+
+httpx for HTTP
+
+pydantic for config/models
+
+python-dotenv for .env
+
+pandas, numpy for data
+
+openai for LLM (OpenAI integration is managed by Replit)
+
+Features to implement
+
+Pydantic config (config.py)
+
+Reads from .env:
+
+Deribit testnet URL, client id/secret.
+
+OPENAI_API_KEY (for openai client).
+
+Strategy parameters:
+
+ivrv_min, delta_min, delta_max, dte_min, dte_max, premium_min_usd.
+
+Risk limits:
+
+max_margin_used_pct, max_net_delta_abs, max_expiry_exposure.
+
+LLM options:
+
+llm_enabled: bool
+
+llm_model_name: str (default "gpt-4.1-mini" or "gpt-5-mini").
+
+dry_run: bool
+
+loop_interval_sec: int.
+
+Deribit testnet client (deribit_client.py)
+
+Using httpx.
+
+Public:
+
+List BTC/ETH option instruments.
+
+Get ticker/mark price/spot.
+
+Private:
+
+Get account summary (balances, margin).
+
+Get positions.
+
+Place limit order, cancel order.
+
+Clean typed interface, basic error handling.
+
+Models (models.py)
+
+OptionInstrument, OptionPosition, PortfolioState, CandidateOption, AgentState.
+
+Use pydantic models with type hints.
+
+State builder (state_builder.py)
+
+build_agent_state(client, settings) -> AgentState:
+
+Fetch BTC/ETH spot, positions, balances, margin.
+
+Pull near-dated option instruments.
+
+Compute simple moneyness & DTE.
+
+Build vol_state dict (IV/RV/skew can be dummy for now but typed).
+
+Filter a small list of CandidateOption for covered calls:
+
+DTE within [dte_min, dte_max].
+
+Delta within [delta_min, delta_max] (approx OK).
+
+OTM calls only.
+
+Premium ≥ premium_min_usd.
+
+Risk engine (risk_engine.py)
+
+check_action_allowed(agent_state, proposed_action, settings) -> (bool, list[str]).
+
+Enforce:
+
+Max margin_used_pct.
+
+Max absolute net_delta.
+
+Per-expiry exposure limit.
+
+Return False with reasons if blocked.
+
+Rule-based policy (policy_rule_based.py)
+
+decide_action(agent_state, settings) -> dict with keys:
+
+action: "DO_NOTHING" | "OPEN_COVERED_CALL" | "ROLL_COVERED_CALL" | "CLOSE_COVERED_CALL".
+
+params: dict (symbol, size, from_symbol/to_symbol for rolls).
+
+reasoning: short explanation.
+
+Simple logic:
+
+If no CC open and at least one candidate → propose OPEN_COVERED_CALL on best candidate.
+
+If CC open and near expiry or significantly ITM → propose ROLL_COVERED_CALL into candidate.
+
+Else → DO_NOTHING.
+
+LLM decision module (agent_brain_llm.py)
+
+Uses openai client and the OpenAI Responses API.
+
+choose_action_with_llm(agent_state, candidates) -> dict (same schema as above).
+
+Build a compact JSON with:
+
+Portfolio (balances, margin_used_pct, net_delta, open CCs summary).
+
+vol_state.
+
+Risk limits from config.
+
+Candidate options (3–5).
+
+System prompt: describe agent as BTC/ETH covered call manager, must respect risk/limits, only use provided symbols/sizes, output JSON only.
+
+User content: JSON state + candidates + allowed actions list.
+
+Use response_format={"type": "json_object"} so output is valid JSON.
+
+On parse error or missing keys → fallback to {"action": "DO_NOTHING", "params": {}, "reasoning": "fallback"}.
+
+Execution module (execution.py)
+
+execute_action(client, action_dict, settings) -> dict.
+
+For:
+
+OPEN_COVERED_CALL: sell limit at mid (or simple rule).
+
+ROLL_COVERED_CALL: close old, open new.
+
+CLOSE_COVERED_CALL: buy to close.
+
+If settings.dry_run is True, do not send orders, just log.
+
+Logging (logging_utils.py)
+
+Write structured JSON logs to logs/agent_decisions_YYYYMMDD.jsonl.
+
+Each entry includes:
+
+Timestamp.
+
+Compressed AgentState.
+
+Proposed action (rule or LLM).
+
+Risk engine result.
+
+Final action (after risk filter).
+
+Execution result.
+
+LLM reasoning (if used).
+
+Main loop (agent_loop.py)
+
+Load config, init Deribit client.
+
+Loop:
+
+state = build_agent_state(...).
+
+candidates = state.candidate_options.
+
+If settings.llm_enabled:
+
+proposed = choose_action_with_llm(state, candidates).
+
+Else: proposed = decide_action(state, settings).
+
+Run allowed, reasons = check_action_allowed(state, proposed, settings).
+
+If not allowed → override action to DO_NOTHING, append reasons to reasoning.
+
+If allowed and not DO_NOTHING and not dry-run → call execute_action.
+
+Log everything.
+
+Sleep settings.loop_interval_sec.
+
+Print concise summaries to console each loop.
+
+Backtesting scaffolding (backtest/env_simulator.py)
+
+Create a stub:
+
+class CoveredCallEnv: reset(self) -> state, step(self, action) -> (state, reward, done, info).
+
+Just a placeholder with TODO comments explaining it will later use historical data and the same action space.
+
+README
+
+How to install dependencies.
+
+How to configure .env.
+
+How to run python agent_loop.py in dry-run mode.
+
+Clear note: testnet & research only, not financial advice, not for live trading yet.
+
+Use clear, well-typed Python with docstrings and comments where needed. Keep modules focused and composable.
