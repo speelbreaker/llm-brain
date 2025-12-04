@@ -1,3 +1,24 @@
+1. Small but important upgrades to risk_engine.py
+
+Here’s what we want to add:
+
+If portfolio data is missing / zero equity → block all trades
+Right now, when private API fails, the portfolio shows equity_usd = 0, margin_used_pct = 0, etc., and the risk engine still says “PASSED”. We want:
+
+“If we don’t know the portfolio or it looks like a blank stub, do NOT allow anything except DO_NOTHING.”
+
+Basic coverage check for OPEN_COVERED_CALL
+Only allow opening a “covered” call if we can see that you actually hold enough underlying (BTC/ETH).
+Because I don’t see your PortfolioState definition in this snippet, I’ll use a safe pattern:
+
+Try to read portfolio.spot_positions (a dict like {"BTC": 0.3, "ETH": 5.0}).
+
+If that exists and you don’t have enough, we block.
+
+If it doesn’t exist yet, the check defaults to “you have 0”, so it will block OPEN_COVERED_CALL until we wire holdings into the portfolio model. That’s safe for now.
+
+Here’s your file with these checks added (you can copy-paste over the old risk_engine.py):
+
 """
 Risk engine module.
 Validates proposed actions against risk limits before execution.
@@ -7,7 +28,7 @@ from __future__ import annotations
 from typing import Any
 
 from src.config import Settings, settings
-from src.models import ActionType, AgentState, OptionType, Side
+from src.models import ActionType, AgentState, Side
 
 
 def check_action_allowed(
@@ -41,6 +62,7 @@ def check_action_allowed(
             reasons.append(f"Invalid action type: {action_str}")
             return False, reasons
     
+    # DO_NOTHING is always safe
     if action_type == ActionType.DO_NOTHING:
         return True, []
     
@@ -51,6 +73,7 @@ def check_action_allowed(
     # 1) Block trading if portfolio state incomplete
     #    (e.g. private API not configured or no funds)
     # ──────────────────────────────────────────────
+    # If equity is zero/None, we probably failed to fetch private data
     equity = getattr(portfolio, "equity_usd", None)
     if equity is None or equity <= 0:
         reasons.append(
@@ -86,8 +109,8 @@ def check_action_allowed(
     if action_type == ActionType.OPEN_COVERED_CALL:
         symbol = params.get("symbol", "")
         
+        # Per-expiry exposure check
         if symbol:
-            # Per-expiry exposure check
             try:
                 expiry_str = symbol.split("-")[1] if "-" in symbol else ""
             except (IndexError, ValueError):
@@ -108,10 +131,13 @@ def check_action_allowed(
                     f"({cfg.max_expiry_exposure:.2f})"
                 )
 
-            # Basic "covered call" requirement:
-            # Only allow opening a covered call if we have enough underlying spot
+        # Basic "covered call" requirement:
+        # We try to read a dict-like spot_positions from portfolio:
+        #   {"BTC": <amount>, "ETH": <amount>, ...}
+        if symbol:
             underlying = symbol.split("-")[0]  # e.g. "BTC" from "BTC-19DEC25-96000-C"
-            
+            size = params.get("size", cfg.default_order_size)
+
             spot_positions = getattr(portfolio, "spot_positions", {}) or {}
             underlying_spot = 0.0
             if isinstance(spot_positions, dict):
@@ -218,3 +244,12 @@ def estimate_margin_impact(
         return 1.0
     
     return 0.0
+
+
+This keeps all of your existing logic, just adds:
+
+Early return if equity is 0 / missing.
+
+Simple coverage check based on portfolio.spot_positions (once you add that to your portfolio model). 
+
+risk_engine

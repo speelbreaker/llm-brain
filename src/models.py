@@ -74,6 +74,10 @@ class PortfolioState(BaseModel):
         default_factory=dict,
         description="Balances by currency, e.g. {'BTC': 1.5, 'ETH': 10.0}",
     )
+    spot_positions: dict[str, float] = Field(
+        default_factory=dict,
+        description="Spot holdings by asset for covered call verification, e.g. {'BTC': 0.3, 'ETH': 5.0}",
+    )
     equity_usd: float = Field(default=0.0, description="Total equity in USD")
     margin_used_usd: float = Field(default=0.0, description="Used margin in USD")
     margin_available_usd: float = Field(default=0.0, description="Available margin in USD")

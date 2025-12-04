@@ -13,6 +13,10 @@ A modular Python framework for automated BTC/ETH covered call trading on Deribit
 - 2024-12: Initial implementation of all core modules
 - 2024-12: Added OpenAI integration via Replit AI Integrations
 - 2024-12: Added Flask web server wrapper (server.py) for Autoscale deployment
+- 2024-12: Enhanced risk_engine.py with critical safety checks:
+  - Blocks all trades if portfolio equity is zero/unavailable (missing API credentials)
+  - Validates spot holdings before allowing covered call opens (prevents naked calls)
+  - Added spot_positions field to PortfolioState model
 
 ## Architecture
 
