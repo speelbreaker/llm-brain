@@ -1,0 +1,142 @@
+Option 1 – Keep it as a bot (no web UI): change deployment type
+
+If you just want an always-running background bot and don’t care about a web page:
+
+Don’t use Cloud Run / Autoscale.
+That mode is for web servers only.
+
+In Replit (or whatever platform you’re on), pick the deployment type that supports workers/background processes / Reserved compute:
+
+On Replit: use a “Reserved VM / Background Worker / Always on” deployment (naming may vary, but it’s the non-web option).
+
+Set the start/run command to something like:
+
+python agent_loop.py
+
+
+Remove $file from the command; that’s for editor “Run” button, not for deployments.
+
+Make sure agent_loop.py has a long-running loop, e.g.:
+
+# agent_loop.py
+import time
+
+def main():
+    while True:
+        # your trading logic here
+        run_one_iteration()
+        time.sleep(300)  # 5 minutes, or whatever
+
+if __name__ == "__main__":
+    main()
+
+
+Deploy that as a worker, not a web app.
+The platform will then just run it and keep it alive; no HTTP health checks.
+
+If the platform you’re using only supports web deployments (like some autoscale tiers), then you need Option 2.
+
+Option 2 – Wrap the bot in a tiny web server (pass health checks)
+
+If you must use Cloud Run / Autoscale, you can keep your trading bot but wrap it in a FastAPI/Flask server so the platform sees an HTTP app.
+
+1. Refactor agent_loop.py a bit
+
+Change it so it exposes a function that runs the loop, instead of doing everything on import:
+
+# agent_loop.py
+import time
+import logging
+
+logger = logging.getLogger(__name__)
+
+def run_agent_loop():
+    logger.info("Starting agent loop...")
+    while True:
+        try:
+            # Your existing trading iteration logic
+            run_one_iteration()
+        except Exception as e:
+            logger.exception("Error in agent loop: %s", e)
+        time.sleep(300)  # 5 minutes or whatever
+
+
+Remove any if __name__ == "__main__": block (we’ll control it from another file).
+
+2. Create main.py that starts both web server and bot
+# main.py
+import threading
+import logging
+
+from fastapi import FastAPI
+from agent_loop import run_agent_loop
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+app = FastAPI()
+
+agent_started = False
+
+def start_agent_thread():
+    global agent_started
+    if not agent_started:
+        logger.info("Launching agent loop in background thread...")
+        t = threading.Thread(target=run_agent_loop, daemon=True)
+        t.start()
+        agent_started = True
+
+@app.on_event("startup")
+async def on_startup():
+    start_agent_thread()
+
+@app.get("/")
+async def root():
+    return {"status": "ok", "message": "OptionBot is running"}
+
+@app.get("/health")
+async def health():
+    return {"status": "healthy"}
+
+3. Change the deployment run command
+
+In your deployment settings, change the run command from something like:
+
+python $file
+# or
+python agent_loop.py
+
+
+to:
+
+uvicorn main:app --host 0.0.0.0 --port $PORT
+
+
+Key points:
+
+main:app → points to the FastAPI instance in main.py.
+
+--port $PORT → most Cloud Run / Autoscale platforms set PORT env var; you must bind to it.
+
+Your bot loop runs in the background thread started on app startup, while the HTTP server responds to health checks and keeps the process alive.
+
+Now health checks like GET / or GET /health will succeed, and your trading loop still runs.
+
+How to “debug” again
+
+Right now “it can’t debug it” because the platform thinks the app is broken before it even runs your code.
+
+Once you apply either Option 1 or 2, you can:
+
+Run locally/replit shell:
+
+python agent_loop.py  # for worker style
+# or
+uvicorn main:app --reload
+
+
+Check logs for your bot:
+
+Make sure your logging is clear (INFO logs for normal iterations, WARNING/ERROR for issues).
+
+Add a dry_run mode in your config (looks like you already have that in this project) so you can test without hitting real Deribit orders.

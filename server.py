@@ -98,17 +98,25 @@ def health_check():
     return jsonify({"status": "ok"})
 
 
+def start_agent_thread():
+    """Start the agent loop in a background thread."""
+    global agent_status
+    if not agent_status["running"]:
+        print("=" * 60)
+        print("IMPORTANT: This is a RESEARCH/EXPERIMENTATION system")
+        print("Running on Deribit TESTNET only")
+        print("This is NOT financial advice")
+        print("=" * 60)
+        
+        agent_thread = threading.Thread(target=run_agent_loop, daemon=True)
+        agent_thread.start()
+        print("Agent loop started in background thread")
+
+
+start_agent_thread()
+
+
 if __name__ == "__main__":
-    print("=" * 60)
-    print("IMPORTANT: This is a RESEARCH/EXPERIMENTATION system")
-    print("Running on Deribit TESTNET only")
-    print("This is NOT financial advice")
-    print("=" * 60)
-    
-    agent_thread = threading.Thread(target=run_agent_loop, daemon=True)
-    agent_thread.start()
-    print("Agent loop started in background thread")
-    
     port = int(os.environ.get("PORT", 5000))
     print(f"Starting web server on port {port}")
     app.run(host="0.0.0.0", port=port)

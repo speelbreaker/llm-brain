@@ -33,12 +33,8 @@ waitForPort = 5000
 
 [deployment]
 deploymentTarget = "autoscale"
-run = ["python", "server.py"]
+run = ["gunicorn", "--bind", "0.0.0.0:5000", "server:app"]
 
 [[ports]]
 localPort = 5000
 externalPort = 80
-
-[[ports]]
-localPort = 34441
-externalPort = 3000
