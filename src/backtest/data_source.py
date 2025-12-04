@@ -5,8 +5,11 @@ Implementations can be live Deribit API, offline CSV, Tardis, etc.
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Protocol, Literal, Any, List
+from typing import Protocol, Literal, List, TYPE_CHECKING
 import pandas as pd
+
+if TYPE_CHECKING:
+    from .types import OptionSnapshot
 
 Timeframe = Literal["1m", "5m", "15m", "1h", "4h", "1d"]
 
@@ -35,10 +38,10 @@ class MarketDataSource(Protocol):
         self,
         underlying: str,
         as_of: datetime,
-    ) -> List[Any]:
+    ) -> "List[OptionSnapshot]":
         """
         Return option chain snapshot for underlying at (or near) 'as_of'.
-        Exact return type is implementation-specific; for DeribitDataSource it will be List[OptionSnapshot].
+        Returns List[OptionSnapshot] - the generic option snapshot type.
         """
         ...
 

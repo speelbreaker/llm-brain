@@ -9,8 +9,8 @@ from typing import Optional, List, Dict, Callable, Any
 
 import pandas as pd
 
-from .deribit_data_source import DeribitDataSource, OptionSnapshot
-from .types import CallSimulationConfig, SimulatedTrade, SimulationResult, TrainingExample
+from .data_source import MarketDataSource
+from .types import CallSimulationConfig, SimulatedTrade, SimulationResult, TrainingExample, OptionSnapshot
 
 State = Dict[str, Any]
 PolicyFn = Callable[[State], bool]
@@ -23,9 +23,11 @@ class CoveredCallSimulator:
     - simulate_single_call: 'what if I sold a 7DTE ~0.25delta call at this time?'
     - simulate_policy: loop over many decision times and apply a policy
     - generate_training_data: emit (state, action, reward) tuples for ML
+
+    Works with any MarketDataSource implementation (Deribit, CSV, Tardis, etc.)
     """
 
-    def __init__(self, data_source: DeribitDataSource, config: CallSimulationConfig):
+    def __init__(self, data_source: MarketDataSource, config: CallSimulationConfig):
         self.ds = data_source
         self.cfg = config
 

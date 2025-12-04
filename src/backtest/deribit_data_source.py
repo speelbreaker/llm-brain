@@ -5,29 +5,14 @@ For bulk historical backtest, cache this or use offline data.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import List, Literal, Optional
 
 import pandas as pd
 
 from .data_source import MarketDataSource, Timeframe
+from .types import OptionSnapshot
 from .deribit_client import DeribitPublicClient
-
-
-@dataclass
-class OptionSnapshot:
-    """
-    A point-in-time snapshot of an option contract.
-    """
-    instrument_name: str
-    underlying: str
-    kind: Literal["call", "put"]
-    strike: float
-    expiry: datetime
-    delta: Optional[float]
-    iv: Optional[float]
-    mark_price: Optional[float]
 
 
 class DeribitDataSource(MarketDataSource):

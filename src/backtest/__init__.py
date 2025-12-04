@@ -2,10 +2,16 @@
 Backtesting and simulation module for covered call strategies.
 Provides historical data analysis and ML training data generation.
 """
-from .types import CallSimulationConfig, SimulatedTrade, SimulationResult, TrainingExample
+from .types import (
+    CallSimulationConfig,
+    SimulatedTrade,
+    SimulationResult,
+    TrainingExample,
+    OptionSnapshot,
+)
 from .data_source import MarketDataSource, Timeframe
 from .deribit_client import DeribitPublicClient
-from .deribit_data_source import DeribitDataSource, OptionSnapshot
+from .deribit_data_source import DeribitDataSource
 from .covered_call_simulator import (
     CoveredCallSimulator,
     always_trade_policy,
@@ -24,11 +30,11 @@ __all__ = [
     "SimulatedTrade",
     "SimulationResult",
     "TrainingExample",
+    "OptionSnapshot",
     "MarketDataSource",
     "Timeframe",
     "DeribitPublicClient",
     "DeribitDataSource",
-    "OptionSnapshot",
     "CoveredCallSimulator",
     "always_trade_policy",
     "never_trade_policy",

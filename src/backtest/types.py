@@ -5,9 +5,25 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Literal, Dict, List, Any
+from typing import Literal, Dict, List, Any, Optional
 
 from .data_source import Timeframe
+
+
+@dataclass
+class OptionSnapshot:
+    """
+    Generic point-in-time snapshot of an option contract.
+    Source-agnostic: can be populated from Deribit, CSV, Tardis, etc.
+    """
+    instrument_name: str
+    underlying: str
+    kind: Literal["call", "put"]
+    strike: float
+    expiry: datetime
+    delta: Optional[float] = None
+    iv: Optional[float] = None
+    mark_price: Optional[float] = None
 
 
 @dataclass
