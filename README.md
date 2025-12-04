@@ -162,7 +162,7 @@ Each entry contains:
 
 ## LLM Mode
 
-When `LLM_ENABLED=true`, the agent uses OpenAI's Responses API to make decisions. The LLM receives:
+When `LLM_ENABLED=true`, the agent uses OpenAI's Chat Completions API to make decisions. The LLM receives:
 - Portfolio state (balances, margin, positions)
 - Volatility snapshot (IV/RV/skew)
 - Risk limits
@@ -171,6 +171,15 @@ When `LLM_ENABLED=true`, the agent uses OpenAI's Responses API to make decisions
 The LLM returns a structured JSON decision that is then validated by the risk engine.
 
 Note: LLM mode uses Replit AI Integrations for OpenAI access.
+
+### Troubleshooting LLM Mode
+
+If LLM mode returns `DO_NOTHING` with a configuration error message, check:
+1. The Replit AI Integrations OpenAI extension is properly installed
+2. The `AI_INTEGRATIONS_OPENAI_API_KEY` and `AI_INTEGRATIONS_OPENAI_BASE_URL` environment variables are set
+3. If integration is unavailable, disable LLM mode with `LLM_ENABLED=false`
+
+The agent gracefully falls back to `DO_NOTHING` when LLM mode encounters errors, preventing crashes while logging the issue.
 
 ## Future Development
 

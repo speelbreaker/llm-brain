@@ -14,13 +14,32 @@ from openai import OpenAI
 from src.config import settings
 from src.models import AgentState, CandidateOption
 
-AI_INTEGRATIONS_OPENAI_API_KEY = os.environ.get("AI_INTEGRATIONS_OPENAI_API_KEY")
-AI_INTEGRATIONS_OPENAI_BASE_URL = os.environ.get("AI_INTEGRATIONS_OPENAI_BASE_URL")
+_client: OpenAI | None = None
 
-client = OpenAI(
-    api_key=AI_INTEGRATIONS_OPENAI_API_KEY,
-    base_url=AI_INTEGRATIONS_OPENAI_BASE_URL
-)
+
+def _get_openai_client() -> OpenAI:
+    """
+    Lazily initialize the OpenAI client.
+    Only creates the client when LLM mode is actually used.
+    Raises RuntimeError if the required environment variables are not set.
+    """
+    global _client
+    if _client is not None:
+        return _client
+    
+    api_key = os.environ.get("AI_INTEGRATIONS_OPENAI_API_KEY")
+    base_url = os.environ.get("AI_INTEGRATIONS_OPENAI_BASE_URL")
+    
+    if not api_key or not base_url:
+        raise RuntimeError(
+            "LLM mode requires Replit AI Integrations to be configured. "
+            "The AI_INTEGRATIONS_OPENAI_API_KEY and AI_INTEGRATIONS_OPENAI_BASE_URL "
+            "environment variables are not set. Please ensure the OpenAI integration "
+            "is properly installed, or disable LLM mode by setting LLM_ENABLED=false."
+        )
+    
+    _client = OpenAI(api_key=api_key, base_url=base_url)
+    return _client
 
 
 def _compress_state_for_llm(state: AgentState) -> dict[str, Any]:
@@ -154,6 +173,7 @@ Return ONLY valid JSON matching the requested schema."""
     }
 
     try:
+        client = _get_openai_client()
         response = client.chat.completions.create(
             model=settings.llm_model_name,
             messages=[
@@ -172,6 +192,12 @@ Return ONLY valid JSON matching the requested schema."""
             "action": "DO_NOTHING",
             "params": {},
             "reasoning": "Failed to parse model JSON; defaulting to no action.",
+        }
+    except RuntimeError as e:
+        decision = {
+            "action": "DO_NOTHING",
+            "params": {},
+            "reasoning": f"LLM configuration error: {str(e)}; defaulting to no action.",
         }
     except Exception as e:
         decision = {
