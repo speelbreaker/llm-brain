@@ -89,6 +89,10 @@ class Settings(BaseSettings):
         default="gpt-4.1-mini",
         description="OpenAI model name for LLM decisions",
     )
+    llm_chat_model_name: str = Field(
+        default="gpt-4.1-mini",
+        description="OpenAI model name for chat_with_agent (can be same or larger)",
+    )
     llm_max_decision_tokens: int = Field(
         default=1024,
         description="Maximum tokens for LLM decision output",

@@ -73,6 +73,18 @@ python agent_loop.py
 
 The agent runs in dry-run mode by default (no real orders placed).
 
+## Chatting with the Agent
+
+You can ask the agent why it took certain actions using the `chat_with_agent` tool.
+It reads recent entries from `logs/agent_decisions_*.jsonl` and uses OpenAI to
+generate explanations.
+
+```bash
+python -m src.chat_with_agent "Why do you keep choosing the 97k call?"
+python -m src.chat_with_agent "Summarize your last 10 decisions" --limit 10
+python -m src.chat_with_agent "What would you likely do right now?"
+```
+
 ## Key Decisions
 - Uses Replit AI Integrations for OpenAI access (no API key needed)
 - All trades are testnet-only for safety
