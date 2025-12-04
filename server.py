@@ -2,6 +2,7 @@
 Web server wrapper for the Options Trading Agent.
 Provides health check endpoint for Autoscale deployment while running the agent in background.
 """
+import os
 import threading
 import time
 from flask import Flask, jsonify
@@ -108,4 +109,6 @@ if __name__ == "__main__":
     agent_thread.start()
     print("Agent loop started in background thread")
     
-    app.run(host="0.0.0.0", port=5000)
+    port = int(os.environ.get("PORT", 5000))
+    print(f"Starting web server on port {port}")
+    app.run(host="0.0.0.0", port=port)
