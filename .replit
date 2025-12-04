@@ -32,8 +32,8 @@ args = "python server.py"
 waitForPort = 5000
 
 [deployment]
-deploymentTarget = "autoscale"
-run = ["gunicorn", "--bind", "0.0.0.0:5000", "server:app"]
+deploymentTarget = "vm"
+run = ["python", "agent_loop.py"]
 
 [[ports]]
 localPort = 5000
