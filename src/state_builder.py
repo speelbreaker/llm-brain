@@ -224,6 +224,7 @@ def build_agent_state(
     
     portfolio = PortfolioState(
         balances=balances,
+        spot_positions=balances.copy(),
         equity_usd=equity_usd,
         margin_used_usd=margin_used_usd,
         margin_available_usd=margin_available_usd,

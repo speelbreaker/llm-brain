@@ -17,6 +17,7 @@ A modular Python framework for automated BTC/ETH covered call trading on Deribit
   - Blocks all trades if portfolio equity is zero/unavailable (missing API credentials)
   - Validates spot holdings before allowing covered call opens (prevents naked calls)
   - Added spot_positions field to PortfolioState model
+  - Updated state_builder to populate spot_positions from account balances
 
 ## Architecture
 
