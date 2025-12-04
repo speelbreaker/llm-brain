@@ -1,0 +1,342 @@
+You are a senior Python backend engineer.
+I already have a background worker that runs an options trading agent loop on Deribit testnet and writes structured JSON logs to logs/agent_decisions_*.jsonl.
+I now want to turn this into a FastAPI web app that:
+
+Runs the agent loop in a background thread on startup, and
+
+Exposes three endpoints: /status, /chat, and / (minimal HTML UI).
+
+Please implement the following in my existing project, using the src/ package and FastAPI.
+
+1. Refactor agent loop into a reusable function
+
+Currently, the agent loop likely runs directly in agent_loop.py with a while True in if __name__ == "__main__".
+
+Refactor so that:
+
+There is a function:
+
+# src/agent_loop.py (or src/agent_core.py if you prefer)
+
+from typing import Callable, Any
+
+StatusCallback = Callable[[dict[str, Any]], None]
+
+def run_agent_loop_forever(
+    status_callback: StatusCallback | None = None,
+) -> None:
+    """
+    Main agent loop. Runs forever (or until process dies).
+    On each iteration:
+      - builds AgentState,
+      - decides action (rule-based or LLM),
+      - checks risk,
+      - executes or simulates,
+      - logs to JSONL,
+      - if status_callback is provided, calls it with a compact snapshot of the decision.
+    """
+    # Existing logic goes here, but instead of printing only to console, also:
+    # 1) Build a `snapshot` dict with keys like:
+    #    - log_timestamp
+    #    - state (spot, portfolio summary, candidates_count)
+    #    - proposed_action
+    #    - risk_check
+    #    - final_action
+    #    - execution
+    #    - config_snapshot
+    # 2) Write this snapshot to the log (as you already do).
+    # 3) If status_callback is not None, call `status_callback(snapshot)`.
+
+    ...
+
+
+The “old” CLI entry-point can stay as:
+
+if __name__ == "__main__":
+    run_agent_loop_forever()
+
+
+So the loop logic is reusable from other modules.
+
+2. Add a simple in-memory status store
+
+Create a new module:
+
+# src/status_store.py
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from threading import Lock
+from typing import Any, Dict, Optional
+
+
+@dataclass
+class StatusStore:
+    _lock: Lock = field(default_factory=Lock, init=False, repr=False)
+    _data: Optional[Dict[str, Any]] = field(default=None, init=False, repr=False)
+
+    def update(self, snapshot: Dict[str, Any]) -> None:
+        with self._lock:
+            self._data = snapshot
+
+    def get(self) -> Dict[str, Any]:
+        with self._lock:
+            return self._data.copy() if self._data is not None else {
+                "status": "starting",
+                "message": "Agent has not produced a status snapshot yet."
+            }
+
+
+# Create a global instance
+status_store = StatusStore()
+
+
+The agent loop will call status_store.update(snapshot) each iteration.
+
+The /status endpoint will call status_store.get().
+
+3. FastAPI app with background agent and endpoints
+
+Create a new module:
+
+# src/web_app.py
+from __future__ import annotations
+
+import threading
+from typing import Any, Dict
+
+from fastapi import FastAPI, Body
+from fastapi.responses import HTMLResponse, JSONResponse
+
+from src.agent_loop import run_agent_loop_forever
+from src.status_store import status_store
+from src.chat_with_agent import chat_with_agent  # reuse the earlier function
+from src.config import settings
+
+
+Implement:
+
+3.1. Create the FastAPI app
+app = FastAPI(
+    title="Options Trading Agent Dashboard",
+    description="Deribit testnet covered-call agent with live status and chat.",
+    version="0.1.0",
+)
+
+3.2. Startup event: run agent loop in background
+
+Use a background thread so the FastAPI event loop stays responsive:
+
+def _agent_thread_target() -> None:
+    # Run the loop forever, updating status_store each iteration
+    def status_callback(snapshot: Dict[str, Any]) -> None:
+        status_store.update(snapshot)
+
+    run_agent_loop_forever(status_callback=status_callback)
+
+
+@app.on_event("startup")
+def start_background_agent() -> None:
+    thread = threading.Thread(target=_agent_thread_target, daemon=True)
+    thread.start()
+
+
+This means that when FastAPI starts, it spawns a daemon thread running the agent loop.
+
+The loop uses status_callback to keep status_store updated.
+
+3.3. /status endpoint (GET)
+
+Return the latest snapshot in JSON:
+
+@app.get("/status")
+def get_status() -> JSONResponse:
+    """
+    Return the latest agent status snapshot.
+    """
+    data = status_store.get()
+    return JSONResponse(content=data)
+
+
+The snapshot structure can be roughly the same as your log entries (but compact), for example:
+
+snapshot = {
+    "log_timestamp": "...",
+    "state": {
+        "spot": {"BTC": 92490, "ETH": 3147},
+        "portfolio": {
+            "equity_usd": 12_400_000,
+            "margin_used_pct": 1.2,
+            "net_delta": 5.1,
+        },
+        "candidates_count": 5,
+    },
+    "proposed_action": {...},
+    "risk_check": {...},
+    "final_action": {...},
+    "execution": {...},
+    "config_snapshot": {...},
+}
+
+3.4. /chat endpoint (POST)
+
+Use the existing chat_with_agent helper that reads logs and asks OpenAI:
+
+@app.post("/chat")
+def chat_endpoint(
+    payload: Dict[str, Any] = Body(..., example={"question": "Why did you pick the 97k call?"}),
+) -> JSONResponse:
+    """
+    Ask the agent a question about its recent behavior.
+    Uses log files + OpenAI to generate an answer.
+    """
+    question = payload.get("question", "").strip()
+    if not question:
+        return JSONResponse(
+            status_code=400,
+            content={"error": "Missing 'question' field in request body."},
+        )
+
+    # You can decide how many recent entries to use; 20 is a good default.
+    answer = chat_with_agent(question, log_limit=20)
+    return JSONResponse(content={"question": question, "answer": answer})
+
+
+Make sure chat_with_agent is adjusted, if necessary, to live in src/chat_with_agent.py and to be importable as shown.
+
+3.5. / endpoint (GET) – minimal HTML UI
+
+Serve a basic HTML dashboard with:
+
+Live status table (auto-refresh from /status every few seconds).
+
+Chat form that POSTs to /chat and shows the response.
+
+Example:
+
+@app.get("/", response_class=HTMLResponse)
+def index() -> str:
+    """
+    Minimal HTML dashboard for live status + chat.
+    """
+    return """
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Options Agent Dashboard</title>
+  <style>
+    body { font-family: sans-serif; max-width: 900px; margin: 2rem auto; }
+    h1 { margin-bottom: 0.25rem; }
+    .section { margin: 1.5rem 0; padding: 1rem; border: 1px solid #ccc; border-radius: 8px; }
+    pre { background: #f5f5f5; padding: 0.75rem; border-radius: 4px; max-height: 300px; overflow: auto; }
+    label { font-weight: bold; }
+    textarea { width: 100%; height: 80px; }
+    button { margin-top: 0.5rem; padding: 0.5rem 1rem; }
+  </style>
+</head>
+<body>
+  <h1>Options Trading Agent - Deribit Testnet</h1>
+  <p><strong>Mode:</strong> {mode} | <strong>Dry Run:</strong> {dry_run}</p>
+
+  <div class="section">
+    <h2>Live Status</h2>
+    <pre id="status-box">Loading...</pre>
+  </div>
+
+  <div class="section">
+    <h2>Chat with Agent</h2>
+    <label for="question">Question:</label><br />
+    <textarea id="question" placeholder="Why did you pick the 97k call?"></textarea><br />
+    <button onclick="sendQuestion()">Ask</button>
+    <h3>Answer</h3>
+    <pre id="answer-box"></pre>
+  </div>
+
+  <script>
+    async function fetchStatus() {
+      try {
+        const res = await fetch('/status');
+        const data = await res.json();
+        document.getElementById('status-box').innerText = JSON.stringify(data, null, 2);
+      } catch (err) {
+        document.getElementById('status-box').innerText = 'Error fetching status: ' + err;
+      }
+    }
+
+    async function sendQuestion() {
+      const q = document.getElementById('question').value;
+      if (!q.trim()) {
+        alert('Please enter a question first.');
+        return;
+      }
+      document.getElementById('answer-box').innerText = 'Thinking...';
+
+      try {
+        const res = await fetch('/chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ question: q })
+        });
+        const data = await res.json();
+        if (data.error) {
+          document.getElementById('answer-box').innerText = 'Error: ' + data.error;
+        } else {
+          document.getElementById('answer-box').innerText = data.answer;
+        }
+      } catch (err) {
+        document.getElementById('answer-box').innerText = 'Error sending question: ' + err;
+      }
+    }
+
+    // Poll status every 5 seconds
+    fetchStatus();
+    setInterval(fetchStatus, 5000);
+  </script>
+</body>
+</html>
+""".format(
+        mode="LLM" if settings.llm_enabled else "Rule-based",
+        dry_run="True" if settings.dry_run else "False",
+    )
+
+
+This uses the settings object from src/config.py to show mode/dry_run at the top.
+
+4. Dependencies & deployment
+
+requirements.txt
+
+Make sure you have:
+
+fastapi
+uvicorn[standard]
+openai
+
+
+(plus your existing deps: httpx, pydantic, pandas, numpy, etc.)
+
+Run command
+
+The main entrypoint for the web deployment should be something like:
+
+uvicorn src.web_app:app --host 0.0.0.0 --port 8000
+
+
+This will:
+
+Start FastAPI,
+
+Run the agent loop in a background thread (startup event),
+
+Serve /, /status, and /chat.
+
+Environment
+
+The web app still needs the same env vars as before:
+
+Deribit testnet keys (DERIBIT_CLIENT_ID, DERIBIT_CLIENT_SECRET, DERIBIT_BASE_URL).
+
+OPENAI_API_KEY for chat_with_agent and (optionally) LLM decision mode.
+
+Any config for dry_run, etc.

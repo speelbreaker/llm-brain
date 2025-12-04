@@ -10,6 +10,7 @@ import sys
 import time
 import traceback
 from datetime import datetime
+from typing import Any, Callable, Dict, Optional
 
 from src.config import settings
 from src.deribit_client import DeribitClient, DeribitAPIError
@@ -21,6 +22,7 @@ from src.execution import execute_action
 from src.logging_utils import log_decision, log_error, print_decision_summary
 from src.models import ActionType
 
+StatusCallback = Callable[[Dict[str, Any]], None]
 
 shutdown_requested = False
 
@@ -32,10 +34,88 @@ def signal_handler(signum: int, frame: object) -> None:
     shutdown_requested = True
 
 
-def run_agent_loop() -> None:
+def _build_status_snapshot(
+    agent_state: Any,
+    proposed_action: Dict[str, Any],
+    final_action: Dict[str, Any],
+    risk_allowed: bool,
+    risk_reasons: list,
+    execution_result: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Build a compact status snapshot for the status store and logging."""
+    return {
+        "log_timestamp": datetime.utcnow().isoformat(),
+        "state": {
+            "timestamp": agent_state.timestamp.isoformat() if agent_state else None,
+            "underlyings": agent_state.underlyings if agent_state else [],
+            "spot": agent_state.spot if agent_state else {},
+            "portfolio": {
+                "balances": agent_state.portfolio.balances if agent_state else {},
+                "equity_usd": agent_state.portfolio.equity_usd if agent_state else 0,
+                "margin_used_pct": agent_state.portfolio.margin_used_pct if agent_state else 0,
+                "margin_available_usd": agent_state.portfolio.margin_available_usd if agent_state else 0,
+                "net_delta": agent_state.portfolio.net_delta if agent_state else 0,
+                "positions_count": len(agent_state.portfolio.option_positions) if agent_state else 0,
+                "positions": [
+                    {
+                        "symbol": p.symbol,
+                        "side": p.side.value,
+                        "size": p.size,
+                        "strike": p.strike,
+                        "expiry_dte": p.expiry_dte,
+                    }
+                    for p in (agent_state.portfolio.option_positions if agent_state else [])
+                ],
+            },
+            "vol_state": {
+                "btc_iv": agent_state.vol_state.btc_iv if agent_state else 0,
+                "btc_ivrv": agent_state.vol_state.btc_ivrv if agent_state else 1,
+                "eth_iv": agent_state.vol_state.eth_iv if agent_state else 0,
+                "eth_ivrv": agent_state.vol_state.eth_ivrv if agent_state else 1,
+            },
+            "candidates_count": len(agent_state.candidate_options) if agent_state else 0,
+            "top_candidates": [
+                {
+                    "symbol": c.symbol,
+                    "dte": c.dte,
+                    "delta": round(c.delta, 3),
+                    "premium_usd": round(c.premium_usd, 2),
+                    "ivrv": round(c.ivrv, 2),
+                }
+                for c in (agent_state.candidate_options[:3] if agent_state else [])
+            ],
+        },
+        "proposed_action": proposed_action,
+        "risk_check": {
+            "allowed": risk_allowed,
+            "reasons": risk_reasons,
+        },
+        "final_action": final_action,
+        "execution": execution_result,
+        "config_snapshot": {
+            "dry_run": settings.dry_run,
+            "llm_enabled": settings.llm_enabled,
+            "max_margin_used_pct": settings.max_margin_used_pct,
+            "max_net_delta_abs": settings.max_net_delta_abs,
+        },
+    }
+
+
+def run_agent_loop_forever(
+    status_callback: Optional[StatusCallback] = None,
+) -> None:
     """
-    Main agent loop.
-    Continuously fetches state, makes decisions, and executes actions.
+    Main agent loop. Runs forever (or until process dies).
+    On each iteration:
+      - builds AgentState,
+      - decides action (rule-based or LLM),
+      - checks risk,
+      - executes or simulates,
+      - logs to JSONL,
+      - if status_callback is provided, calls it with a compact snapshot.
+    
+    Args:
+        status_callback: Optional callback to receive status updates each iteration.
     """
     global shutdown_requested
     
@@ -67,6 +147,17 @@ def run_agent_loop() -> None:
             print(f"\n{'='*60}")
             print(f"Iteration {iteration} - {datetime.utcnow().isoformat()}")
             print(f"{'='*60}")
+            
+            agent_state = None
+            proposed_action = {
+                "action": ActionType.DO_NOTHING.value,
+                "params": {},
+                "reasoning": "Initializing",
+            }
+            final_action = proposed_action.copy()
+            allowed = False
+            reasons: list = []
+            execution_result: Dict[str, Any] = {"status": "pending"}
             
             try:
                 print("Fetching agent state...")
@@ -131,7 +222,7 @@ def run_agent_loop() -> None:
                     final_action = {
                         "action": ActionType.DO_NOTHING.value,
                         "params": {},
-                        "reasoning": f"Blocked by risk engine: {'; '.join(reasons)}",
+                        "reasoning": f"Blocked by risk engine: {reasons}",
                     }
                 else:
                     final_action = proposed_action
@@ -170,6 +261,15 @@ def run_agent_loop() -> None:
                     "message": error_msg,
                 }
             
+            snapshot = _build_status_snapshot(
+                agent_state=agent_state,
+                proposed_action=proposed_action,
+                final_action=final_action,
+                risk_allowed=allowed,
+                risk_reasons=reasons,
+                execution_result=execution_result,
+            )
+            
             try:
                 log_decision(
                     agent_state=agent_state,
@@ -181,6 +281,12 @@ def run_agent_loop() -> None:
                 )
             except Exception as e:
                 print(f"Warning: Failed to log decision: {e}")
+            
+            if status_callback is not None:
+                try:
+                    status_callback(snapshot)
+                except Exception as e:
+                    print(f"Warning: Status callback failed: {e}")
             
             print_decision_summary(
                 proposed_action=proposed_action,
@@ -212,6 +318,11 @@ def run_agent_loop() -> None:
         print("Agent stopped.")
 
 
+def run_agent_loop() -> None:
+    """Backward-compatible wrapper for the agent loop."""
+    run_agent_loop_forever(status_callback=None)
+
+
 def main() -> None:
     """Entry point for the agent."""
     print("\n" + "=" * 60)
@@ -220,7 +331,7 @@ def main() -> None:
     print("This is NOT financial advice")
     print("=" * 60 + "\n")
     
-    run_agent_loop()
+    run_agent_loop_forever()
 
 
 if __name__ == "__main__":

@@ -28,12 +28,12 @@ outputType = "webview"
 
 [[workflows.workflow.tasks]]
 task = "shell.exec"
-args = "python server.py"
+args = "uvicorn src.web_app:app --host 0.0.0.0 --port 5000"
 waitForPort = 5000
 
 [deployment]
-deploymentTarget = "gce"
-run = ["python", "agent_loop.py"]
+deploymentTarget = "autoscale"
+run = ["uvicorn", "src.web_app:app", "--host", "0.0.0.0", "--port", "5000"]
 ignorePorts = true
 
 [[ports]]
