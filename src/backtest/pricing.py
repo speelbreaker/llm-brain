@@ -175,3 +175,50 @@ def price_option_synthetic(
     delta = bs_call_delta(spot, strike, t_years, sigma, r)
     
     return price, delta
+
+
+def compute_synthetic_iv_with_skew(
+    underlying: str,
+    option_type: str,
+    abs_delta: float,
+    rv_annualized: float,
+    iv_multiplier: float = 1.0,
+    skew_enabled: bool = True,
+    skew_min_dte: float = 3.0,
+    skew_max_dte: float = 14.0,
+) -> float:
+    """
+    Compute synthetic annualized IV for the synthetic universe with skew.
+
+    Formula:
+        base_iv = rv_annualized * iv_multiplier
+        skew_factor = get_skew_factor(underlying, option_type, abs_delta, ...)
+        sigma = base_iv * skew_factor
+
+    Args:
+        underlying: "BTC" or "ETH"
+        option_type: "call" or "put"
+        abs_delta: Absolute delta of the option (0 to 1)
+        rv_annualized: Realized volatility (annualized)
+        iv_multiplier: Multiplier for the base IV
+        skew_enabled: Whether to apply skew
+        skew_min_dte: Min DTE for skew estimation
+        skew_max_dte: Max DTE for skew estimation
+
+    Returns:
+        sigma (annualized volatility) to plug into Black-Scholes
+    """
+    from src.synthetic_skew import get_skew_factor
+
+    base_iv = max(1e-6, rv_annualized * iv_multiplier)
+    
+    skew_factor = get_skew_factor(
+        underlying=underlying,
+        option_type=option_type,
+        abs_delta=abs_delta,
+        skew_enabled=skew_enabled,
+        min_dte=skew_min_dte,
+        max_dte=skew_max_dte,
+    )
+    
+    return max(1e-6, base_iv * skew_factor)
