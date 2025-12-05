@@ -1,182 +1,7 @@
 # Options Trading Agent - Deribit Testnet
 
 ## Overview
-A modular Python framework for automated BTC/ETH covered call trading on Deribit testnet. This is a research/experimentation system with both rule-based and LLM-powered decision modes, featuring exploration-based learning for testnet experimentation.
-
-## Project Status
-- Core framework: Complete
-- Rule-based policy: Implemented with scoring and exploration
-- LLM decision mode: Implemented (uses Replit AI Integrations for OpenAI)
-- FastAPI web dashboard: Complete with live status and chat
-- Research/Production mode: Implemented with mode-specific parameters
-- Backtesting framework: Complete with scoring, exit styles, and state builder
-
-## Recent Changes
-- 2024-12: Initial implementation of all core modules
-- 2024-12: Added OpenAI integration via Replit AI Integrations
-- 2024-12: Enhanced risk_engine.py with critical safety checks
-- 2024-12: Refactored to FastAPI web dashboard
-- 2024-12: Added research vs production mode system:
-  - Research mode: Wider delta/DTE/IVRV ranges for testnet exploration
-  - Exploration: 25% probability of picking non-best candidate (epsilon-greedy)
-  - Scoring function for candidate ranking
-  - Mode and policy_version tracked in all decisions
-- 2024-12: LLM decision mode enabled:
-  - LLM brain uses OpenAI via Replit AI Integrations
-  - Sandboxed to only allow valid actions (DO_NOTHING, OPEN/ROLL/CLOSE)
-  - Uses effective_* parameters for mode-aware decision making
-  - decision_source field tracks "llm" vs "rule_based" in all outputs
-  - Risk engine still validates all LLM proposals before execution
-- 2024-12: Backtesting framework implemented:
-  - CoveredCallSimulator for historical "what if" analysis
-  - MarketDataSource abstraction for pluggable data sources
-  - DeribitDataSource using mainnet public API for historical data
-  - Training data generation for ML/RL (state, action, reward tuples)
-  - CSV/JSONL export and grid search utilities
-- 2024-12: MarketContext integration for chart-aware LLM decisions:
-  - MarketContext model with regime, returns, realized vol, MA distances
-  - compute_market_context() fetches 60-day daily OHLC for regime detection
-  - Regime classification: bull/sideways/bear based on 200d MA and 30d returns
-  - Enhanced LLM system prompt with regime-aware decision rules
-  - LLM reasoning now explicitly references market conditions
-- 2024-12: Enhanced web dashboard with Live Agent and Backtesting Lab:
-  - Live Agent tab: Market overview, latest decision card, recent decisions table
-  - Backtesting Lab tab: Configure backtests, view equity curves, get AI insights
-  - In-memory decisions buffer for dashboard (last 50 decisions)
-  - /api/agent/decisions endpoint for live dashboard data
-  - /api/backtest/run endpoint for running backtests
-  - /api/backtest/insights endpoint for LLM analysis of results
-- 2024-12: Enhanced backtesting with scoring and exit styles:
-  - Scoring function `_score_candidate()` rates options 0-10 based on IVRV, delta, DTE, premium, regime
-  - Feature extraction `_extract_candidate_features()` builds numeric feature dict from market context
-  - Two exit styles: `hold_to_expiry` (baseline) vs `tp_and_roll` (take-profit at 80%)
-  - `state_builder` constructs historical state dicts matching live AgentState
-  - `compute_market_context_from_ds()` for backtest market regime detection
-  - Default to USDC linear options on BTC/ETH (option_margin_type="linear", option_settlement_ccy="USDC")
-  - `simulate_policy_with_scoring()` for scoring-based backtests
-- 2024-12: Training mode for multi-profile data collection:
-  - Three strategy profiles: conservative, moderate, aggressive with non-overlapping delta/DTE ranges
-  - Simultaneous position opening across profiles for diverse training data
-  - Batch execution with per-action result tracking
-  - Web dashboard training mode badge display
-  - All training positions are dry-run only for safety
-- 2024-12: Enhanced Backtesting Lab UI:
-  - Pause/Resume controls for long-running backtests
-  - Configurable DTE range (min_dte, max_dte) and delta range (delta_min, delta_max)
-  - "Both (compare)" exit style runs hold_to_expiry and tp_and_roll in parallel
-  - Error display and phase indicator in Live Progress section
-  - Decision filtering collapses consecutive DO_NOTHING entries to latest only
-- 2024-12: Multi-roll call chain for backtests:
-  - New config params: min_dte_to_roll, defend_near_strike_pct, max_rolls_per_chain
-  - Two roll triggers: Take-profit (80% premium captured) and Defensive (spot near strike)
-  - Rolls to best-scored candidate excluding current position
-  - Chain-level PnL aggregation across all legs
-  - Notes include leg count, rolls used, and trigger thresholds
-- 2024-12: Historical option type support for backtests:
-  - Added margin_type selector: "inverse" (coin-settled, pre-2025) vs "linear" (USDC-settled, Aug 2025+)
-  - Added settlement_ccy selector: "ANY", "USDC", "BTC", or "ETH"
-  - Defaults to inverse/ANY for historical compatibility (USDC options only exist after Aug 2025)
-  - UI dropdowns in Backtesting Lab for easy selection
-- 2024-12: Multi-leg chain visualization for backtests:
-  - ChainData and ChainLeg dataclasses track leg-by-leg roll history
-  - Recent Chains table in Backtesting Lab shows all tp_and_roll chains
-  - Modal popup displays leg details: open/close times, strike, DTE, PnL, trigger type
-  - Color-coded triggers: tp_roll (green), defensive_roll (orange), expiry (gray)
-  - BacktestManager._append_chain_summary extracts chain data from trades
-  - Bulk API optimization: replaced 704 individual calls with 1 bulk call (~2s vs timeout)
-  - Local Black-Scholes delta calculation avoids API overhead for greeks
-
-## Architecture
-
-### Core Modules (src/)
-- `config.py` - Pydantic settings with mode selection and effective parameters
-- `models.py` - Type-safe data models for instruments, positions, state, MarketContext
-- `deribit_client.py` - httpx-based API wrapper for Deribit testnet
-- `state_builder.py` - Market data aggregation, candidate filtering, market context attachment
-- `market_context.py` - Compute trend/regime, returns, realized vol from OHLC data
-- `risk_engine.py` - Pre-trade validation (margin, delta, exposure)
-- `policy_rule_based.py` - Decision logic with scoring and exploration
-- `agent_brain_llm.py` - LLM-based decisions with regime-aware system prompt
-- `training_profiles.py` - Strategy profile definitions (conservative, moderate, aggressive)
-- `training_policy.py` - Multi-action builder for training mode data collection
-- `execution.py` - Order translation with dry-run support, batch execution
-- `logging_utils.py` - Structured JSONL logging
-- `chat_with_agent.py` - Natural language query interface
-- `status_store.py` - Thread-safe status storage
-- `web_app.py` - FastAPI web application
-
-### Entry Points
-- `agent_loop.py` - Standalone CLI orchestration script
-- `src/web_app.py` - FastAPI web app with background agent
-
-### Backtesting Module (src/backtest/)
-- `data_source.py` - Generic MarketDataSource protocol interface
-- `deribit_client.py` - Deribit mainnet public API wrapper for historical data
-- `deribit_data_source.py` - MarketDataSource implementation with USDC option filtering
-- `types.py` - CallSimulationConfig, SimulatedTrade, SimulationResult, TrainingExample, ExitStyle
-- `covered_call_simulator.py` - Core simulation engine with:
-  - `_extract_candidate_features()` - Build numeric feature dict for scoring
-  - `_score_candidate()` - Score options 0-10 based on IVRV, delta, DTE, premium, regime
-  - `simulate_single_call()` - "What if I sold this call here?"
-  - `simulate_policy()` - Run policy across multiple decision times
-  - `simulate_policy_with_scoring()` - Scoring-based backtest with exit styles
-  - `_simulate_call_hold_to_expiry()` - Hold option to expiry exit style
-  - `_simulate_call_tp_and_roll()` - Take-profit exit style (80% threshold)
-  - `generate_training_data()` - Emit (state, action, reward) tuples
-- `market_context_backtest.py` - Compute market context from DeribitDataSource
-- `state_builder.py` - Build historical state dicts matching live AgentState
-- `training_dataset.py` - Export training data to CSV/JSONL, grid search
-- `backtest_example.py` - Example usage script with scoring-based backtest
-
-### Future Development
-- RL environment wrapper around CoveredCallSimulator
-- Roll logic in tp_and_roll exit style (currently TP-only)
-
-## Configuration
-
-### Mode Selection
-- `MODE=research` - Research mode (default, wider ranges, exploration enabled)
-- `MODE=production` - Production mode (stricter ranges, no exploration)
-
-### Environment Variables
-Required for live trading (testnet):
-- `DERIBIT_CLIENT_ID` - Deribit testnet API client ID
-- `DERIBIT_CLIENT_SECRET` - Deribit testnet API secret
-
-Optional settings:
-- `DRY_RUN=true` - Simulate orders without placing them (default: true for safety)
-- `LLM_ENABLED=true` - Toggle LLM decision mode (currently enabled)
-- `LLM_MODEL_NAME=gpt-4.1-mini` - OpenAI model for LLM mode
-- `LOOP_INTERVAL_SEC=300` - Sleep between iterations
-
-### Research Mode Parameters (wider ranges for testnet)
-- `RESEARCH_DELTA_MIN=0.10`, `RESEARCH_DELTA_MAX=0.40` - Delta range
-- `RESEARCH_DTE_MIN=1`, `RESEARCH_DTE_MAX=21` - Days to expiry range
-- `RESEARCH_IVRV_MIN=1.0` - Minimum IV/RV ratio
-- `RESEARCH_MAX_EXPIRY_EXPOSURE=1.0` - Higher per-expiry limit
-- `EXPLORE_PROB=0.25` - 25% chance of exploration
-- `EXPLORE_TOP_K=3` - Explore among top 3 candidates
-
-### Production Mode Parameters (stricter for mainnet)
-- `DELTA_MIN=0.20`, `DELTA_MAX=0.30` - Delta range
-- `DTE_MIN=5`, `DTE_MAX=10` - Days to expiry range
-- `IVRV_MIN=1.2` - Minimum IV/RV ratio
-- `MAX_EXPIRY_EXPOSURE=0.3` - Conservative per-expiry limit
-
-### Risk Parameters
-- `MAX_MARGIN_USED_PCT=80` - Maximum margin usage
-- `MAX_NET_DELTA_ABS=5.0` - Maximum absolute delta
-- `PREMIUM_MIN_USD=50` - Minimum premium in USD
-
-### Training Mode Parameters
-- `TRAINING_MODE=false` - Enable training mode for multi-profile data collection
-- `TRAINING_STRATEGIES=conservative,moderate,aggressive` - Comma-separated list of profiles to use
-- `MAX_CALLS_PER_UNDERLYING_TRAINING=3` - Max simultaneous calls per underlying in training mode
-
-#### Training Strategy Profiles (non-overlapping ranges):
-- **Conservative**: delta 0.15-0.25, DTE 7-14, description "Low delta, longer DTE"
-- **Moderate**: delta 0.25-0.35, DTE 5-10, description "Mid-range delta and DTE"
-- **Aggressive**: delta 0.35-0.45, DTE 3-7, description "Higher delta, shorter DTE"
+This project is a modular Python framework for automated BTC/ETH covered call trading on the Deribit testnet. It serves as a research and experimentation system, supporting both rule-based and LLM-powered decision-making, with a focus on exploration-based learning. The system aims to provide a robust platform for testing trading strategies, generating training data, and analyzing performance through a comprehensive web dashboard and backtesting suite.
 
 ## User Preferences
 - Python 3.11
@@ -185,123 +10,28 @@ Optional settings:
 - httpx for HTTP
 - Clarity over cleverness
 
-## Running the Web Dashboard
-```bash
-uvicorn src.web_app:app --host 0.0.0.0 --port 5000
-```
+## System Architecture
 
-The dashboard shows:
-- Live BTC/ETH prices
-- Portfolio value and positions
-- Current mode (Research/Production) with exploration percentage
-- Last action taken
-- Full status JSON (expandable)
-- Chat interface for querying agent decisions
+### Core Design
+The agent is built with a clear separation of concerns, featuring modules for configuration, data modeling, API interaction, market context generation, risk management, policy decisions (rule-based and LLM), execution, and logging. It supports distinct "research" and "production" modes, allowing for broader exploration on the testnet and stricter, more conservative parameters for potential mainnet deployment. A FastAPI web application provides a real-time dashboard for monitoring, interaction, and backtesting.
 
-## Running the Agent (CLI)
-```bash
-python agent_loop.py
-```
+### Key Features
+- **Decision Policies**: Supports rule-based strategies with a scoring function and epsilon-greedy exploration, and an LLM-powered decision mode (using OpenAI) that proposes actions validated by a risk engine.
+- **Market Context**: Integrates `MarketContext` to provide regime detection (bull/sideways/bear), returns, and realized volatility for informed decision-making.
+- **Risk Management**: A `risk_engine` module performs pre-trade validation, checking margin, delta, and exposure limits.
+- **Backtesting Framework**: Includes a `CoveredCallSimulator` for historical analysis, supporting various exit styles (hold-to-expiry, take-profit and roll), a scoring function for candidate options, multi-leg chain visualization, and training data generation.
+- **Training Mode**: Allows for multi-profile data collection (conservative, moderate, aggressive strategies) to generate diverse datasets for ML/RL.
+- **Training Data Export**: Captures (state, action, reward) tuples and exports to CSV/JSONL. Note: Historical backtests use live option data from Deribit's public API; for meaningful training data, use live agent trading or integrate a paid historical options data source.
+- **Web Dashboard**: A FastAPI application offers a "Live Agent" view with real-time status and recent decisions, a "Backtesting Lab" for configuring and analyzing simulations, and a "Chat" interface for natural language interaction with the agent.
+- **Structured Logging**: Uses JSONL for structured logging of all decisions and actions, facilitating future analysis and ML/RL training.
 
-## Chatting with the Agent
+### Technical Implementations
+- **Configuration**: Pydantic settings are used for managing application configuration and switching between research/production modes.
+- **API Wrapper**: `deribit_client.py` provides an `httpx`-based wrapper for the Deribit testnet API.
+- **State Management**: `state_builder.py` aggregates market data and `status_store.py` manages thread-safe status updates.
+- **Order Execution**: `execution.py` handles order translation, supporting dry-run simulations.
+- **UI/UX**: The web dashboard provides a user-friendly interface for monitoring and interaction, with specific tabs for live agent status, backtesting, and chat.
 
-You can ask the agent why it took certain actions using the chat interface on the web dashboard, or via CLI:
-
-```bash
-python -m src.chat_with_agent "Why do you keep choosing the 97k call?"
-python -m src.chat_with_agent "Summarize your last 10 decisions" --limit 10
-python -m src.chat_with_agent "What would you likely do right now?"
-```
-
-## API Endpoints
-
-### GET /
-Full HTML dashboard with three tabs:
-- **Live Agent**: Real-time market overview, latest decision card, recent decisions table
-- **Backtesting Lab**: Configure and run backtests, view equity curves and AI insights
-- **Chat**: Natural language query interface for agent behavior
-
-### GET /status
-Returns the latest agent status snapshot as JSON:
-```json
-{
-  "log_timestamp": "...",
-  "state": {
-    "spot": {"BTC": 92310, "ETH": 3135},
-    "portfolio": {...},
-    "top_candidates": [...]
-  },
-  "final_action": {
-    "action": "...",
-    "mode": "research",
-    "policy_version": "rb_v1_explore"
-  },
-  "config_snapshot": {
-    "mode": "research",
-    "explore_prob": 0.25,
-    "effective_delta_range": [0.1, 0.4],
-    "effective_dte_range": [1, 21]
-  }
-}
-```
-
-### POST /chat
-Send a question about agent behavior:
-```json
-{"question": "Why did you pick the 97k call?"}
-```
-Returns:
-```json
-{"question": "...", "answer": "..."}
-```
-
-### GET /api/agent/decisions
-Returns recent agent decisions for the Live Agent dashboard:
-```json
-{
-  "mode": "llm",
-  "llm_enabled": true,
-  "dry_run": true,
-  "last_update": "2024-12-05T00:13:00.000Z",
-  "decisions": [
-    {
-      "timestamp": "...",
-      "decision_source": "llm",
-      "proposed_action": {"action": "...", "params": {...}, "reasoning": "..."},
-      "final_action": {"action": "...", "params": {...}},
-      "risk_check": {"allowed": true, "reasons": []},
-      "execution": {"status": "simulated"},
-      "config_snapshot": {...}
-    }
-  ]
-}
-```
-
-### POST /api/backtest/run
-Run a covered call backtest:
-```json
-{
-  "underlying": "BTC",
-  "start": "2024-09-01T00:00:00Z",
-  "end": "2024-11-01T00:00:00Z",
-  "timeframe": "1d",
-  "decision_interval_bars": 1,
-  "target_dte": 7,
-  "target_delta": 0.25
-}
-```
-Returns metrics, equity curve, and sample trades.
-
-### POST /api/backtest/insights
-Generate LLM insights from backtest results. Sends backtest metrics to OpenAI for analysis.
-
-### GET /health
-Health check endpoint for deployment monitoring.
-
-## Key Decisions
-- Uses Replit AI Integrations for OpenAI access (no API key needed)
-- All trades are testnet-only for safety
-- Structured JSONL logging for future ML/RL training
-- Risk engine validates all decisions before execution
-- FastAPI with background thread for non-blocking web + agent
-- Research mode with epsilon-greedy exploration for data collection
+## External Dependencies
+- **Deribit API**: Used for fetching real-time market data (testnet) and historical data (mainnet public API for backtesting).
+- **OpenAI**: Integrated via Replit AI Integrations for the LLM-powered decision mode and for generating insights from backtest results.
