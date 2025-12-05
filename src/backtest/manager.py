@@ -500,6 +500,65 @@ class BacktestManager:
             import traceback
             traceback.print_exc()
             print(f"[TrainingExport] Error exporting training data: {e}")
+    
+    def _export_candidate_level_data_if_enabled(
+        self,
+        underlying: str,
+        start_date: datetime,
+        end_date: datetime,
+        exit_style: str,
+        decision_steps: List[Any],
+    ) -> None:
+        """Export candidate-level training data if SAVE_TRAINING_DATA is enabled."""
+        try:
+            from src.config import settings
+            if not settings.save_training_data:
+                return
+            
+            from pathlib import Path
+            from .training_dataset import (
+                build_candidate_level_examples,
+                export_candidate_level_csv,
+                export_candidate_level_jsonl,
+                compute_candidate_dataset_stats,
+            )
+            
+            if not decision_steps:
+                print(f"[CandidateExport] No decision steps collected for {underlying}")
+                return
+            
+            timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+            data_dir = Path(settings.training_data_dir)
+            data_dir.mkdir(parents=True, exist_ok=True)
+            
+            styles_to_export = []
+            if exit_style == "both":
+                styles_to_export = ["hold_to_expiry", "tp_and_roll"]
+            else:
+                styles_to_export = [exit_style]
+            
+            for style in styles_to_export:
+                examples = build_candidate_level_examples(decision_steps, style)
+                
+                if not examples:
+                    print(f"[CandidateExport] No candidate examples for {underlying} ({style})")
+                    continue
+                
+                base_name = f"training_candidates_{underlying}_{start_date.strftime('%Y%m%d')}_{end_date.strftime('%Y%m%d')}_{style}_{timestamp}"
+                csv_path = data_dir / f"{base_name}.csv"
+                jsonl_path = data_dir / f"{base_name}.jsonl"
+                
+                export_candidate_level_csv(examples, csv_path)
+                export_candidate_level_jsonl(examples, jsonl_path)
+                
+                stats = compute_candidate_dataset_stats(examples)
+                print(f"[CandidateExport] Saved {stats['total_examples']} candidate examples to {csv_path}")
+                print(f"[CandidateExport] Stats: {stats}")
+            
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            print(f"[CandidateExport] Error exporting candidate-level data: {e}")
 
     def start(
         self,
@@ -612,6 +671,9 @@ class BacktestManager:
                 all_equity_curves: Dict[str, List[EquityCurvePoint]] = {}
                 position_size = config.initial_spot_position
                 
+                from .types import DecisionStepData
+                decision_step_data: Dict[datetime, DecisionStepData] = {}
+                
                 for phase_idx, current_exit_style in enumerate(styles_to_run):
                     steps_buffer: List[BacktestProgressStep] = []
                     trades: List[Any] = []
@@ -659,11 +721,13 @@ class BacktestManager:
                             continue
 
                         scored = []
+                        scored_with_feats = []
                         for opt in options:
                             try:
                                 feats = sim._extract_candidate_features(state, opt)
                                 s = sim._score_candidate(feats)
                                 scored.append((s, opt))
+                                scored_with_feats.append((s, opt, feats))
                             except Exception:
                                 continue
 
@@ -682,7 +746,28 @@ class BacktestManager:
                             continue
 
                         scored.sort(key=lambda x: x[0], reverse=True)
+                        scored_with_feats.sort(key=lambda x: x[0], reverse=True)
                         best_score, best_opt = scored[0]
+                        
+                        if t not in decision_step_data:
+                            candidates_list = []
+                            for sc, opt, feats in scored_with_feats:
+                                dte_days = (opt.expiry - t).total_seconds() / 86400.0 if opt.expiry else 0.0
+                                candidates_list.append({
+                                    "instrument": opt.instrument_name,
+                                    "strike": float(opt.strike),
+                                    "dte": dte_days,
+                                    "delta": float(opt.delta) if opt.delta else 0.0,
+                                    "score": sc,
+                                    "iv": float(opt.iv) if opt.iv else None,
+                                    "ivrv_ratio": feats.get("ivrv"),
+                                })
+                            decision_step_data[t] = DecisionStepData(
+                                decision_time=t,
+                                underlying=underlying,
+                                spot=float(spot),
+                                candidates=candidates_list,
+                            )
 
                         traded = False
                         trade = None
@@ -703,6 +788,20 @@ class BacktestManager:
                             cumulative_pnl_vs_hodl += trade.pnl_vs_hodl
                             traded = True
                             self._append_chain_summary(trade, current_exit_style)
+                            
+                            step_data = decision_step_data.get(t)
+                            if step_data:
+                                trade_result = {
+                                    "reward": trade.pnl,
+                                    "pnl_vs_hodl": trade.pnl_vs_hodl,
+                                    "max_drawdown_pct": trade.max_drawdown_pct,
+                                }
+                                if current_exit_style == "hold_to_expiry":
+                                    step_data.chosen_hold_to_expiry = best_opt.instrument_name
+                                    step_data.trade_result_hold = trade_result
+                                else:
+                                    step_data.chosen_tp_and_roll = best_opt.instrument_name
+                                    step_data.trade_result_tp = trade_result
                             
                             all_training_examples.append(TrainingExample(
                                 decision_time=t,
@@ -775,6 +874,14 @@ class BacktestManager:
                     end_date=end_date,
                     exit_style=exit_style,
                     examples=all_training_examples,
+                )
+                
+                self._export_candidate_level_data_if_enabled(
+                    underlying=underlying,
+                    start_date=start_date,
+                    end_date=end_date,
+                    exit_style=exit_style,
+                    decision_steps=list(decision_step_data.values()),
                 )
 
                 primary_equity_curve: List[EquityCurvePoint] = []
