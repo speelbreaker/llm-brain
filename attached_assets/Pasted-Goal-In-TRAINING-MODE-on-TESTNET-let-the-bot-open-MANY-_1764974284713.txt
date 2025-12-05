@@ -1,0 +1,108 @@
+Goal: In TRAINING MODE on TESTNET, let the bot open MANY covered calls (ladders),
+not just one. Right now it sells one call and then does DO_NOTHING, even though
+margin and delta are fine.
+
+We already have a "training_mode on testnet: risk checks skipped" path in the
+risk engine, but the decision policy is still acting conservatively.
+
+Please implement the following:
+
+1) Central helper
+-----------------
+Add a helper on the config/settings object:
+
+    def is_training_enabled(self) -> bool:
+        """
+        Returns True when we are in the special training mode intended for
+        Deribit TESTNET experimentation (research/learning).
+        """
+        # You can base this on existing fields, e.g.:
+        # return self.mode == "research" and self.training_mode and self.deribit_env == "testnet"
+        ...
+
+We will use this everywhere below.
+
+2) Risk Engine: bypass all exposure limits in training mode on TESTNET
+----------------------------------------------------------------------
+In the risk check function (e.g. check_action_allowed / run_risk_checks):
+
+- At the very top, BEFORE any per-expiry / per-underlying / margin checks, add:
+
+    if settings.is_training_enabled():
+        return RiskCheck(
+            allowed=True,
+            reasons=["training_mode on testnet: risk checks skipped"]
+        )
+
+- This must skip:
+    - per-expiry exposure limits (e.g. max_per_expiry_exposure = 0.10),
+    - total positions count limits,
+    - any "has too many calls open" style checks.
+
+On MAINNET or when is_training_enabled() is False, the risk logic must behave
+exactly as it does today.
+
+3) Policy layer: don't block new calls in training mode
+-------------------------------------------------------
+Find the logic that decides DO_NOTHING when there is already a call in the
+same expiry or when per-expiry exposure is high. Typical patterns might be:
+
+    if has_open_call_for(underlying, expiry):
+        return DO_NOTHING, "already have call for this expiry"
+
+    if per_expiry_exposure >= settings.max_per_expiry_exposure:
+        return DO_NOTHING, "per-expiry exposure exceeded"
+
+Wrap such checks so that THEY ONLY APPLY when NOT in training mode.
+
+For example, change:
+
+    if per_expiry_exposure >= settings.max_per_expiry_exposure:
+        return DO_NOTHING, "per-expiry exposure exceeded"
+
+to:
+
+    if (not settings.is_training_enabled()
+        and per_expiry_exposure >= settings.max_per_expiry_exposure):
+        return DO_NOTHING, "per-expiry exposure exceeded"
+
+And change:
+
+    if has_open_call_for(underlying, expiry):
+        return DO_NOTHING, "already have call for this expiry"
+
+to:
+
+    if (not settings.is_training_enabled()
+        and has_open_call_for(underlying, expiry)):
+        return DO_NOTHING, "already have call for this expiry"
+
+The idea: in training mode, having an existing call must NOT be a reason to do nothing.
+
+4) Allow multiple calls per underlying in training mode
+-------------------------------------------------------
+If there is a "max_positions_per_underlying" or equivalent limit on the
+decision side, gate it the same way:
+
+    if (not settings.is_training_enabled()
+        and positions_for_underlying >= settings.max_positions_per_underlying):
+        return DO_NOTHING, "max positions per underlying reached"
+
+This way, training mode is free to open many positions (we still log exposure,
+P&L etc., but we don't prevent the trade).
+
+5) Keep "explore" behavior but more active in training mode (optional)
+----------------------------------------------------------------------
+If there is an exploration wrapper (policy_version = "rb_v1_explore", explore_prob, etc.),
+please ensure that in training mode:
+
+- explore_prob is effectively higher (e.g. 0.75–1.0) so more candidates are tried.
+- The bot is not artificially limited to at most one candidate per run because
+  of "we already opened a call here" policy reasons (those should be covered
+  by steps 3 and 4).
+
+Summary:
+- On TESTNET + training_mode, risk engine always returns allowed=True.
+- On TESTNET + training_mode, the policy must NOT block additional calls due to
+  existing positions or per-expiry exposure caps.
+- On MAINNET or when training_mode is off, behavior must remain exactly as it is now.

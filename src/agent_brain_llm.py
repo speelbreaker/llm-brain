@@ -132,6 +132,29 @@ def _compress_candidates_for_llm(
     ]
 
 
+def _get_training_mode_instructions() -> str:
+    """Get additional instructions for training mode on testnet."""
+    return """
+
+TRAINING MODE ACTIVE - SPECIAL INSTRUCTIONS:
+You are in TRAINING MODE on the TESTNET. The goal is to COLLECT DIVERSE TRADE DATA, not to maximize profits.
+
+In training mode:
+- DO NOT be conservative. We WANT to open multiple positions.
+- Existing positions should NOT prevent you from opening new ones.
+- Try to build a LADDER of calls at different deltas (low, mid, high).
+- Ignore per-expiry exposure limits - risk engine has already bypassed them.
+- Prefer OPEN_COVERED_CALL over DO_NOTHING when candidates are available.
+- If you already have low-delta calls, consider a mid-delta call next.
+- If you have both low and mid, consider a higher-delta call.
+- The only reason to DO_NOTHING is if:
+  1. No candidates meet basic filters (DTE, IVRV), OR
+  2. Max positions per underlying is already reached.
+
+OBJECTIVE: Generate labeled training data by opening diverse positions across different deltas and strikes.
+"""
+
+
 def choose_action_with_llm(
     state: AgentState,
     candidates: list[CandidateOption],
@@ -151,7 +174,13 @@ def choose_action_with_llm(
     compact_state = _compress_state_for_llm(state)
     compact_candidates = _compress_candidates_for_llm(candidates)
     
-    system_prompt = """You are an options trading agent managing covered calls on Deribit (testnet for now) for BTC and ETH.
+    # Add training mode flag to state
+    is_training = settings.is_training_on_testnet
+    compact_state["training_mode"] = is_training
+    if is_training:
+        compact_state["max_calls_per_underlying"] = settings.max_calls_per_underlying_training
+    
+    base_system_prompt = """You are an options trading agent managing covered calls on Deribit (testnet for now) for BTC and ETH.
 
 You receive a JSON input with:
 - portfolio: holdings, equity, margin usage.
@@ -159,6 +188,7 @@ You receive a JSON input with:
 - candidates: possible options to trade (symbol, strike, DTE, delta, IV, IVRV, premium, etc.).
 - risk_limits: hard constraints (max margin usage, max net delta, max expiry exposure).
 - config: default order size and minimum IVRV.
+- training_mode: whether training mode is active (if true, be aggressive about opening positions).
 
 Your job:
 1. Propose ONE of the following actions:
@@ -174,7 +204,7 @@ Your job:
      "reasoning": "short explanation referencing the data you used"
    }
 
-3. Respect risk limits strictly:
+3. Respect risk limits strictly (unless training_mode is true):
    - Never suggest a trade that would violate max_expiry_exposure, max_margin_used_pct, or max_net_delta_abs.
    - Never invent instrument symbols. Only use candidates or existing open positions.
 
@@ -205,6 +235,12 @@ Be concise in reasoning but explicitly mention:
 - Why you picked this particular candidate or chose DO_NOTHING.
 
 Return ONLY valid JSON matching the requested schema."""
+    
+    # Add training mode instructions if active
+    if is_training:
+        system_prompt = base_system_prompt + _get_training_mode_instructions()
+    else:
+        system_prompt = base_system_prompt
 
     high_level_rules = {
         "objective": "Sell weekly covered calls to collect premium while controlling drawdowns.",

@@ -1,0 +1,80 @@
+In the previous prompt I suggested:
+
+if cfg.is_training_enabled() and cfg.dry_run:
+    return RiskCheck(
+        allowed=True,
+        reasons=["training_mode: risk checks skipped"]
+    )
+
+
+Let’s update that idea to explicitly check we’re on testnet, not just dry_run.
+
+Assuming your Settings has something like use_testnet: bool or deribit_env: Literal["testnet", "mainnet"], the builder should implement something like:
+
+def check_action_allowed(...):
+    cfg = config or settings
+
+    # NEW: short-circuit in training mode on TESTNET
+    if cfg.is_training_enabled() and cfg.deribit_env == "testnet":
+        return RiskCheck(
+            allowed=True,
+            reasons=["training_mode on testnet: risk checks skipped"]
+        )
+
+    # existing risk logic for everything else (including live mainnet)
+    ...
+
+
+Then you can set:
+
+mode = "research"
+
+training_mode = true
+
+deribit_env = "testnet" (or use_testnet = True, whatever your config uses)
+
+dry_run = False
+
+With that:
+
+The bot will actually place trades on testnet (you’ll see positions on Deribit UI).
+
+Risk engine will stand down in that regime so it can spray multiple calls/ladders.
+
+On mainnet, even if you forget to flip dry_run back, the training override won’t trigger because deribit_env != "testnet".
+
+Text you can add to the builder prompt
+
+You can paste this add-on at the end of the previous prompt:
+
+Important adjustment regarding dry_run and testnet
+=================================================
+In training mode I want to actually SEE the trades on Deribit TESTNET.
+
+So please:
+- Assume I will run training with:
+  - mode = "research"
+  - training_mode = true
+  - deribit_env (or equivalent) = "testnet"
+  - dry_run = False
+
+Update the earlier risk-bypass condition accordingly:
+
+- DO NOT require cfg.dry_run to be True.
+- Instead, bypass risk checks only when BOTH:
+  - cfg.is_training_enabled() is True, AND
+  - we are connected to the Deribit TESTNET environment 
+    (e.g. cfg.deribit_env == "testnet" or cfg.use_testnet is True).
+
+In that case, return allowed=True immediately with a reason like:
+"training_mode on testnet: risk checks skipped".
+
+On MAINNET, or when training_mode is False, the risk engine must behave exactly
+as it does now, regardless of the dry_run flag.
+
+
+That gives you:
+
+Full “go wild” training on testnet (real orders, multiple positions).
+
+Strong guardrails so this behavior can’t accidentally hit mainnet.

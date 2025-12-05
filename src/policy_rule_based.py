@@ -255,11 +255,25 @@ def decide_action(
     
     for underlying in cfg.underlyings:
         covered_calls = _get_open_covered_calls(agent_state, underlying)
+        existing_symbols = {cc.symbol for cc in covered_calls}
         
-        if not covered_calls:
+        # In training mode on testnet: allow multiple calls per underlying
+        # In normal mode: only open if no existing calls
+        can_open_new = (
+            cfg.is_training_on_testnet
+            or not covered_calls
+        )
+        
+        # In training mode, check against max_calls_per_underlying_training
+        if cfg.is_training_on_testnet and covered_calls:
+            if len(covered_calls) >= cfg.max_calls_per_underlying_training:
+                can_open_new = False
+        
+        if can_open_new:
+            # Exclude already-open symbols to avoid duplicates
             candidates = [
                 c for c in agent_state.candidate_options
-                if c.underlying == underlying
+                if c.underlying == underlying and c.symbol not in existing_symbols
             ]
             
             if candidates:
@@ -267,6 +281,8 @@ def decide_action(
                 
                 if chosen:
                     explore_tag = "Exploratory " if was_exploration else ""
+                    training_tag = "[TRAINING] " if cfg.is_training_on_testnet else ""
+                    existing_count = len(covered_calls)
                     return {
                         "action": ActionType.OPEN_COVERED_CALL.value,
                         "params": {
@@ -274,9 +290,10 @@ def decide_action(
                             "symbol": chosen.symbol,
                             "size": cfg.default_order_size,
                         },
-                        "reasoning": f"{explore_tag}OPEN_COVERED_CALL on {chosen.symbol}: "
+                        "reasoning": f"{training_tag}{explore_tag}OPEN_COVERED_CALL on {chosen.symbol}: "
                                    f"DTE={chosen.dte}, delta={chosen.delta:.2f}, "
                                    f"premium=${chosen.premium_usd:.2f}, IVRV={chosen.ivrv:.2f}. "
+                                   f"Existing calls for {underlying}: {existing_count}. "
                                    f"Mode={cfg.mode}, policy={cfg.policy_version}.",
                         "mode": cfg.mode,
                         "policy_version": cfg.policy_version,
@@ -289,7 +306,14 @@ def decide_action(
         existing_positions.extend([cc.symbol for cc in ccs])
     
     if existing_positions:
-        reasoning = f"Existing positions: {', '.join(existing_positions)}. No action needed."
+        if cfg.is_training_on_testnet:
+            # In training mode, reaching max positions is the only valid "done" state
+            reasoning = (
+                f"Training mode: max positions reached for all underlyings. "
+                f"Existing: {', '.join(existing_positions)}."
+            )
+        else:
+            reasoning = f"Existing positions: {', '.join(existing_positions)}. No action needed."
     elif not agent_state.candidate_options:
         reasoning = "No candidate options available that meet criteria."
     else:
