@@ -154,13 +154,16 @@ class BacktestStartRequest(BaseModel):
     exit_style: str = "hold_to_expiry"
     target_dte: int = 7
     target_delta: float = 0.25
+    min_dte: int = 3
+    max_dte: int = 21
+    delta_min: float = 0.15
+    delta_max: float = 0.35
 
 
 @app.post("/api/backtest/start")
 def start_backtest(req: BacktestStartRequest) -> JSONResponse:
     """Start a new backtest in the background."""
-    from src.backtest.manager import backtest_manager, ExitStyle
-    from typing import cast
+    from src.backtest.manager import backtest_manager
     
     try:
         start_dt = datetime.fromisoformat(req.start.replace("Z", "+00:00"))
@@ -176,11 +179,9 @@ def start_backtest(req: BacktestStartRequest) -> JSONResponse:
     if start_dt >= end_dt:
         raise HTTPException(status_code=400, detail="Start date must be before end date")
     
-    valid_exit_styles = ["hold_to_expiry", "tp_and_roll"]
+    valid_exit_styles = ["hold_to_expiry", "tp_and_roll", "both"]
     if req.exit_style not in valid_exit_styles:
         raise HTTPException(status_code=400, detail=f"Invalid exit_style. Must be one of: {valid_exit_styles}")
-    
-    exit_style: ExitStyle = cast(ExitStyle, req.exit_style)
     
     started = backtest_manager.start(
         underlying=req.underlying,
@@ -188,9 +189,13 @@ def start_backtest(req: BacktestStartRequest) -> JSONResponse:
         end_date=end_dt,
         timeframe=req.timeframe,
         decision_interval_hours=req.decision_interval_hours,
-        exit_style=exit_style,
+        exit_style=req.exit_style,
         target_dte=req.target_dte,
         target_delta=req.target_delta,
+        min_dte=req.min_dte,
+        max_dte=req.max_dte,
+        delta_min=req.delta_min,
+        delta_max=req.delta_max,
     )
     
     if not started:
@@ -215,6 +220,22 @@ def stop_backtest() -> JSONResponse:
     from src.backtest.manager import backtest_manager
     backtest_manager.stop()
     return JSONResponse(content={"stopping": True})
+
+
+@app.post("/api/backtest/pause")
+def pause_backtest() -> JSONResponse:
+    """Pause the currently running backtest."""
+    from src.backtest.manager import backtest_manager
+    backtest_manager.pause()
+    return JSONResponse(content={"paused": True})
+
+
+@app.post("/api/backtest/resume")
+def resume_backtest() -> JSONResponse:
+    """Resume the paused backtest."""
+    from src.backtest.manager import backtest_manager
+    backtest_manager.resume()
+    return JSONResponse(content={"resumed": True})
 
 
 @app.post("/api/backtest/run")
@@ -510,6 +531,17 @@ def index() -> str:
     .steps-table tr:hover {{ background: #f8f9fa; }}
     .traded-yes {{ color: #2e7d32; font-weight: 600; }}
     .traded-no {{ color: #666; }}
+    
+    .error-text {{
+      color: #c62828;
+      background: #ffebee;
+      padding: 0.75rem;
+      border-radius: 6px;
+      margin: 0.5rem 0;
+      font-size: 0.9rem;
+    }}
+    
+    .bt-status-paused {{ background: #fff3e0; color: #e65100; }}
     
     .tabs {{
       display: flex;
@@ -892,7 +924,26 @@ def index() -> str:
           <select id="bt-exit-style">
             <option value="hold_to_expiry">Hold to Expiry</option>
             <option value="tp_and_roll">Take Profit &amp; Roll</option>
+            <option value="both">Both (compare)</option>
           </select>
+        </div>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label>DTE Range (days)</label>
+          <div style="display:flex;gap:0.5rem;align-items:center;">
+            <input type="number" id="bt-min-dte" value="3" min="1" max="365" style="width:70px;">
+            <span>to</span>
+            <input type="number" id="bt-max-dte" value="21" min="1" max="365" style="width:70px;">
+          </div>
+        </div>
+        <div class="form-group">
+          <label>Delta Range</label>
+          <div style="display:flex;gap:0.5rem;align-items:center;">
+            <input type="number" id="bt-delta-min" value="0.15" min="0.05" max="0.9" step="0.05" style="width:70px;">
+            <span>to</span>
+            <input type="number" id="bt-delta-max" value="0.35" min="0.05" max="0.9" step="0.05" style="width:70px;">
+          </div>
         </div>
       </div>
       <div class="form-row">
@@ -905,7 +956,10 @@ def index() -> str:
           <input type="number" id="bt-delta" value="0.25" min="0.05" max="0.5" step="0.05">
         </div>
       </div>
-      <button id="bt-start-stop-btn" onclick="startBacktest()">Start Backtest</button>
+      <div style="display:flex;gap:0.5rem;">
+        <button id="bt-start-stop-btn" onclick="startBacktest()">Start Backtest</button>
+        <button id="bt-pause-resume-btn" class="secondary" onclick="togglePause()" style="display:none;">Pause</button>
+      </div>
     </div>
 
     <div class="section">
@@ -913,9 +967,12 @@ def index() -> str:
       <div class="bt-status-header">
         <span>Status:</span>
         <span class="bt-status-indicator bt-status-idle" id="bt-status-text">IDLE</span>
+        <span id="bt-phase-label" style="display:none;">Phase:</span>
+        <span id="bt-current-phase" style="display:none;font-weight:600;"></span>
         <span>Decisions:</span>
         <span id="bt-decisions">0 / 0</span>
       </div>
+      <div id="bt-error" class="error-text" style="display:none;"></div>
       <div class="progress-bar">
         <div class="progress-bar-inner" id="bt-progress-inner" style="width:0%">0%</div>
       </div>
@@ -1089,7 +1146,21 @@ def index() -> str:
         if (decisions.length === 0) {{
           tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:#666;">No decisions yet</td></tr>';
         }} else {{
-          tbody.innerHTML = decisions.slice(0, 20).map(d => {{
+          const filteredDecisions = [];
+          let lastWasDoNothing = false;
+          for (const d of decisions) {{
+            const final = d.final_action || {{}};
+            const action = final.action || (d.proposed_action || {{}}).action || '';
+            const isDoNothing = action === 'DO_NOTHING';
+            
+            if (isDoNothing && lastWasDoNothing) {{
+              continue;
+            }}
+            filteredDecisions.push(d);
+            lastWasDoNothing = isDoNothing;
+          }}
+          
+          tbody.innerHTML = filteredDecisions.slice(0, 20).map(d => {{
             const proposed = d.proposed_action || {{}};
             const final = d.final_action || {{}};
             const risk = d.risk_check || {{}};
@@ -1167,7 +1238,7 @@ def index() -> str:
     }}
     
     function setBacktestInputsDisabled(disabled) {{
-      const inputs = ['bt-underlying', 'bt-start', 'bt-end', 'bt-timeframe', 'bt-interval', 'bt-exit-style', 'bt-dte', 'bt-delta'];
+      const inputs = ['bt-underlying', 'bt-start', 'bt-end', 'bt-timeframe', 'bt-interval', 'bt-exit-style', 'bt-dte', 'bt-delta', 'bt-min-dte', 'bt-max-dte', 'bt-delta-min', 'bt-delta-max'];
       inputs.forEach(id => {{
         const el = document.getElementById(id);
         if (el) el.disabled = disabled;
@@ -1183,6 +1254,10 @@ def index() -> str:
       const exitStyle = document.getElementById('bt-exit-style').value;
       const dte = parseInt(document.getElementById('bt-dte').value);
       const delta = parseFloat(document.getElementById('bt-delta').value);
+      const minDte = parseInt(document.getElementById('bt-min-dte').value, 10);
+      const maxDte = parseInt(document.getElementById('bt-max-dte').value, 10);
+      const deltaMin = parseFloat(document.getElementById('bt-delta-min').value);
+      const deltaMax = parseFloat(document.getElementById('bt-delta-max').value);
       
       const payload = {{
         underlying,
@@ -1193,7 +1268,13 @@ def index() -> str:
         exit_style: exitStyle,
         target_dte: dte,
         target_delta: delta,
+        min_dte: minDte,
+        max_dte: maxDte,
+        delta_min: deltaMin,
+        delta_max: deltaMax,
       }};
+      
+      document.getElementById('bt-error').style.display = 'none';
       
       try {{
         const res = await fetch('/api/backtest/start', {{
@@ -1207,6 +1288,21 @@ def index() -> str:
         }}
       }} catch (err) {{
         alert('Backtest start error: ' + err.message);
+      }}
+    }}
+    
+    async function togglePause() {{
+      const btn = document.getElementById('bt-pause-resume-btn');
+      const isPaused = btn.textContent === 'Resume';
+      
+      try {{
+        if (isPaused) {{
+          await fetch('/api/backtest/resume', {{ method: 'POST' }});
+        }} else {{
+          await fetch('/api/backtest/pause', {{ method: 'POST' }});
+        }}
+      }} catch (err) {{
+        console.error('Pause/Resume error:', err);
       }}
     }}
     
@@ -1227,20 +1323,41 @@ def index() -> str:
         const statusTextEl = document.getElementById('bt-status-text');
         const progressBarInner = document.getElementById('bt-progress-inner');
         const button = document.getElementById('bt-start-stop-btn');
+        const pauseBtn = document.getElementById('bt-pause-resume-btn');
+        const errorEl = document.getElementById('bt-error');
+        const phaseLabel = document.getElementById('bt-phase-label');
+        const phaseEl = document.getElementById('bt-current-phase');
         
         statusTextEl.className = 'bt-status-indicator';
         if (st.error) {{
           statusTextEl.textContent = 'ERROR';
           statusTextEl.classList.add('bt-status-error');
-        }} else if (st.running) {{
-          statusTextEl.textContent = 'RUNNING';
-          statusTextEl.classList.add('bt-status-running');
-        }} else if (st.finished_at) {{
-          statusTextEl.textContent = 'FINISHED';
-          statusTextEl.classList.add('bt-status-finished');
+          errorEl.textContent = st.error;
+          errorEl.style.display = 'block';
         }} else {{
-          statusTextEl.textContent = 'IDLE';
-          statusTextEl.classList.add('bt-status-idle');
+          errorEl.style.display = 'none';
+          if (st.paused) {{
+            statusTextEl.textContent = 'PAUSED';
+            statusTextEl.classList.add('bt-status-paused');
+          }} else if (st.running) {{
+            statusTextEl.textContent = 'RUNNING';
+            statusTextEl.classList.add('bt-status-running');
+          }} else if (st.finished_at) {{
+            statusTextEl.textContent = 'FINISHED';
+            statusTextEl.classList.add('bt-status-finished');
+          }} else {{
+            statusTextEl.textContent = 'IDLE';
+            statusTextEl.classList.add('bt-status-idle');
+          }}
+        }}
+        
+        if (st.current_phase) {{
+          phaseLabel.style.display = 'inline';
+          phaseEl.style.display = 'inline';
+          phaseEl.textContent = st.current_phase;
+        }} else {{
+          phaseLabel.style.display = 'none';
+          phaseEl.style.display = 'none';
         }}
         
         const pct = Math.round((st.progress_pct || 0) * 100);
@@ -1251,10 +1368,13 @@ def index() -> str:
           button.textContent = 'Stop Backtest';
           button.onclick = stopBacktest;
           setBacktestInputsDisabled(true);
+          pauseBtn.style.display = 'inline-block';
+          pauseBtn.textContent = st.paused ? 'Resume' : 'Pause';
         }} else {{
           button.textContent = 'Start Backtest';
           button.onclick = startBacktest;
           setBacktestInputsDisabled(false);
+          pauseBtn.style.display = 'none';
         }}
         
         document.getElementById('bt-decisions').textContent =

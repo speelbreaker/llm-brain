@@ -1,0 +1,256 @@
+We already have:
+
+Backtesting Lab UI with:
+
+underlying, start/end, timeframe, decision interval, exit_style, target_dte, target_delta.
+
+Backend:
+
+BacktestStartRequest in src/web_app.py.
+
+backtest_manager.start(...) in src/backtest/manager.py, which builds CallSimulationConfig.
+
+CallSimulationConfig (in src/backtest/types.py) with:
+
+min_dte, max_dte, delta_min, delta_max,
+
+target_dte, target_delta.
+
+build_historical_state(...) uses min_dte/max_dte and delta_min/delta_max to filter options.
+
+Please implement the following improvements:
+
+1) Expose DTE and Delta ranges in the UI and backend
+
+Goal: Backtesting Lab should let me configure:
+
+DTE range: [min_dte, max_dte]
+
+Delta range: [delta_min, delta_max]
+
+and pass these into CallSimulationConfig instead of relying on defaults.
+
+Backend changes
+
+In src/web_app.py, extend BacktestStartRequest:
+
+class BacktestStartRequest(BaseModel):
+    underlying: str = "BTC"
+    start: str
+    end: str
+    timeframe: str = "1h"
+    decision_interval_hours: int = 24
+    exit_style: str = "hold_to_expiry"
+    target_dte: int = 7
+    target_delta: float = 0.25
+
+    # NEW: DTE and delta ranges for candidate filtering
+    min_dte: int = 3
+    max_dte: int = 21
+    delta_min: float = 0.15
+    delta_max: float = 0.35
+
+
+In /api/backtest/start, when building CallSimulationConfig in BacktestManager.start(...), pass these new fields through:
+
+In backtest_manager.start(...) signature: add parameters:
+
+def start(
+    self,
+    underlying: str,
+    start_date: datetime,
+    end_date: datetime,
+    timeframe: str,
+    decision_interval_hours: int,
+    exit_style: ExitStyle,
+    target_dte: int = 7,
+    target_delta: float = 0.25,
+    min_dte: int = 3,
+    max_dte: int = 21,
+    delta_min: float = 0.15,
+    delta_max: float = 0.35,
+) -> bool:
+
+
+In web_app.start_backtest, pass them:
+
+started = backtest_manager.start(
+    underlying=req.underlying,
+    start_date=start_dt,
+    end_date=end_dt,
+    timeframe=req.timeframe,
+    decision_interval_hours=req.decision_interval_hours,
+    exit_style=exit_style,
+    target_dte=req.target_dte,
+    target_delta=req.target_delta,
+    min_dte=req.min_dte,
+    max_dte=req.max_dte,
+    delta_min=req.delta_min,
+    delta_max=req.delta_max,
+)
+
+
+When constructing CallSimulationConfig in manager.py, set:
+
+config = CallSimulationConfig(
+    underlying=underlying,
+    start=start_date,
+    end=end_date,
+    timeframe=tf,
+    decision_interval_bars=interval_bars,
+    initial_spot_position=1.0,
+    contract_size=1.0,
+    fee_rate=0.0005,
+    target_dte=target_dte,
+    dte_tolerance=3,
+    target_delta=target_delta,
+    delta_tolerance=0.15,
+    min_dte=min_dte,
+    max_dte=max_dte,
+    delta_min=delta_min,
+    delta_max=delta_max,
+)
+
+
+build_historical_state already uses cfg.min_dte/max_dte and cfg.delta_min/max_delta, so no changes needed there.
+
+Frontend changes
+
+In the Backtesting Lab HTML (inside web_app.py):
+
+Replace single Target DTE input with two inputs:
+
+<div class="form-group">
+  <label>DTE Range (days)</label>
+  <div class="inline-inputs">
+    <input type="number" id="bt-min-dte" value="3" min="1" max="365">
+    <span>to</span>
+    <input type="number" id="bt-max-dte" value="21" min="1" max="365">
+  </div>
+</div>
+
+
+Replace single Target Delta input with two inputs:
+
+<div class="form-group">
+  <label>Delta Range</label>
+  <div class="inline-inputs">
+    <input type="number" id="bt-delta-min" value="0.15" min="0.05" max="0.9" step="0.05">
+    <span>to</span>
+    <input type="number" id="bt-delta-max" value="0.35" min="0.05" max="0.9" step="0.05">
+  </div>
+</div>
+
+
+Keep Target DTE and Target Delta as optional (for scoring) if you want, or just reuse the mid-point of the ranges as target_dte/target_delta.
+
+Update startBacktest() JS to read and send these:
+
+const minDte = parseInt(document.getElementById('bt-min-dte').value, 10);
+const maxDte = parseInt(document.getElementById('bt-max-dte').value, 10);
+const deltaMin = parseFloat(document.getElementById('bt-delta-min').value);
+const deltaMax = parseFloat(document.getElementById('bt-delta-max').value);
+
+const payload = {
+  underlying,
+  start: start + 'T00:00:00Z',
+  end: end + 'T00:00:00Z',
+  timeframe,
+  decision_interval_hours: intervalHours,
+  exit_style: exitStyle,
+  target_dte: dte,
+  target_delta: delta,
+  min_dte: minDte,
+  max_dte: maxDte,
+  delta_min: deltaMin,
+  delta_max: deltaMax,
+};
+
+2) Exit Style “Both” (run two variants back-to-back)
+
+Goal: Allow Exit Style dropdown to have a Both (compare) option that runs:
+
+one pass with hold_to_expiry
+
+then one pass with tp_and_roll
+
+over the same config, and returns both metrics.
+
+Simplest implementation:
+
+In the UI, add a third option:
+
+<select id="bt-exit-style">
+  <option value="hold_to_expiry">Hold to Expiry</option>
+  <option value="tp_and_roll">Take Profit &amp; Roll</option>
+  <option value="both">Both (compare)</option>
+</select>
+
+
+In /api/backtest/start, accept "both" in valid_exit_styles, and when exit_style == "both":
+
+Inside BacktestManager.start, in the worker function:
+
+Run one full loop with exit_style="hold_to_expiry", collect metrics into metrics["hold_to_expiry"].
+
+Then re-initialise decision_times/buffers and run again with exit_style="tp_and_roll", collect into metrics["tp_and_roll"].
+
+Progress can be scaled as:
+
+progress_pct = (phase_index + inner_progress) / 2.0 where phase_index is 0 for first style, 1 for second.
+
+Optionally track a current_exit_style field in BacktestStatus so the UI can show which phase we’re in.
+
+Update BacktestStatus.metrics type to allow:
+
+metrics: Dict[str, Any] = field(default_factory=dict)
+# e.g.
+# {
+#   "hold_to_expiry": {...},
+#   "tp_and_roll": {...}
+# }
+
+
+In the UI, when st.metrics contains both keys, render a small comparison table:
+
+Strategy
+
+num_trades
+
+final_pnl
+
+maybe final_pnl_vs_hodl / win_rate (if available).
+
+3) Show backtest error messages in the UI
+
+Currently BacktestStatus has an error string, and the UI shows only “Status: ERROR”.
+
+Please:
+
+In refreshBacktestStatus() JS:
+
+If st.error is not null/empty, display it in a red text element under the status bar (e.g. <div id="bt-error" class="error-text"></div>).
+
+Example:
+
+const errorEl = document.getElementById('bt-error');
+if (st.error) {
+  errorEl.textContent = st.error;
+  errorEl.style.display = 'block';
+} else {
+  errorEl.textContent = '';
+  errorEl.style.display = 'none';
+}
+
+
+Add minimal CSS for .error-text (red font, small margin).
+
+This will make “Status: ERROR” actually informative (e.g., “Deribit historical API error” or “invalid timeframe”).
+
+That’s it. With these changes:
+
+You’ll be able to tune DTE/delta ranges directly from the Backtesting Lab,
+
+Run both exit styles in one go to compare them,
+
+And see clear error messages in the UI when a backtest fails.
