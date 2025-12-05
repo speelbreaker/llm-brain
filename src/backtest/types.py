@@ -215,12 +215,18 @@ class SimulationResult:
 class TrainingExample:
     """
     A single (state, action, reward) tuple for ML training.
+    
+    The strategy field indicates which training profile was used:
+    - "conservative", "moderate", "aggressive" for profile-based selection
+    - "fallback" when no profile matched
+    - "ladder_N" for ladder mode positions
     """
     decision_time: datetime
     underlying: str
     spot: float
     action: str
     reward: float
+    strategy: str = ""
     extra: Dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:
@@ -231,6 +237,7 @@ class TrainingExample:
             "spot": self.spot,
             "action": self.action,
             "reward": self.reward,
+            "strategy": self.strategy,
             **self.extra,
         }
 
@@ -243,6 +250,8 @@ class CandidateLevelExample:
     One row per candidate per decision time step.
     For trade steps: exactly one candidate has chosen=1, action="SELL_CALL"
     For no-trade steps: all candidates have chosen=0, action="SKIP"
+    
+    The strategy field indicates which training profile was used for chosen candidates.
     """
     decision_time: datetime
     underlying: str
@@ -260,6 +269,7 @@ class CandidateLevelExample:
     trade_executed: bool = False
     chosen: bool = False
     action: str = "SKIP"
+    strategy: str = ""
     
     reward: float = 0.0
     pnl_vs_hodl: float = 0.0
@@ -282,6 +292,7 @@ class CandidateLevelExample:
             "trade_executed": int(self.trade_executed),
             "chosen": int(self.chosen),
             "action": self.action,
+            "strategy": self.strategy,
             "reward": self.reward,
             "pnl_vs_hodl": self.pnl_vs_hodl,
             "max_drawdown_pct": self.max_drawdown_pct,

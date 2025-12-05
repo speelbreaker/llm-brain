@@ -230,7 +230,13 @@ def run_agent_loop_forever(
                     if training_actions:
                         print(f"Training mode: {len(training_actions)} actions across profiles")
                         for ta in training_actions:
-                            print(f"  [{ta.get('strategy', '?')}] {ta.get('params', {}).get('symbol', '?')}")
+                            strat = ta.get("strategy", "?")
+                            sym = ta.get("params", {}).get("symbol", "?")
+                            diag = ta.get("diagnostics", {})
+                            delta = diag.get("delta", 0)
+                            dte = diag.get("dte", 0)
+                            premium = diag.get("premium_usd", 0)
+                            print(f"  [{strat}] {sym} Δ={delta:.3f} DTE={dte} ${premium:.2f}")
                         proposed_action = training_actions[0]
                     else:
                         proposed_action = rule_decide_action(agent_state, settings)

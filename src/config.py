@@ -134,6 +134,10 @@ class Settings(BaseSettings):
         default=6,
         description="Maximum covered calls per underlying in training mode",
     )
+    training_max_calls_per_expiry: int = Field(
+        default=3,
+        description="Soft cap per expiry in training ladders (per underlying)",
+    )
     training_strategies: list[str] = Field(
         default=["conservative", "moderate", "aggressive"],
         description="Strategy profiles to test in training mode",

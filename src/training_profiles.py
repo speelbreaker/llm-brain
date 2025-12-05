@@ -16,6 +16,8 @@ TRAINING_PROFILES: dict[str, dict[str, Any]] = {
         "delta_max": 0.25,
         "min_dte": 1,
         "max_dte": 21,
+        "max_legs": 2,
+        "enabled": True,
         "description": "Low delta - lower assignment risk, steadier premium",
     },
     "moderate": {
@@ -24,6 +26,8 @@ TRAINING_PROFILES: dict[str, dict[str, Any]] = {
         "delta_max": 0.35,
         "min_dte": 1,
         "max_dte": 21,
+        "max_legs": 2,
+        "enabled": True,
         "description": "Mid-range delta - balanced risk/reward",
     },
     "aggressive": {
@@ -32,6 +36,8 @@ TRAINING_PROFILES: dict[str, dict[str, Any]] = {
         "delta_max": 0.50,
         "min_dte": 1,
         "max_dte": 21,
+        "max_legs": 2,
+        "enabled": True,
         "description": "Higher delta - higher premium but more assignment risk",
     },
 }
@@ -138,9 +144,100 @@ def pick_candidate_for_profile(
 def pick_candidates_for_all_profiles(
     candidates: list[CandidateOption] | list[dict[str, Any]],
     profile_names: list[str],
+    max_calls_per_expiry: int = 3,
+) -> dict[str, list[CandidateOption | dict[str, Any]]]:
+    """
+    Pick multiple candidates for each profile (for training ladders).
+    
+    Each profile can return up to `max_legs` candidates, subject to:
+    - Per-expiry limits (max_calls_per_expiry) - keyed by expiry date, not DTE
+    - Profile delta/DTE filtering
+    - Sorted by premium (highest first)
+    
+    Args:
+        candidates: List of candidate options
+        profile_names: List of profile names to select for
+        max_calls_per_expiry: Maximum calls per expiry date across all profiles
+    
+    Returns:
+        Dict mapping profile_name -> list of candidates (may be empty)
+    """
+    result: dict[str, list[CandidateOption | dict[str, Any]]] = {
+        name: [] for name in profile_names
+    }
+    
+    per_expiry_counts: dict[str, int] = {}
+    used_symbols: set[str] = set()
+    
+    for name in profile_names:
+        profile = TRAINING_PROFILES.get(name)
+        if not profile:
+            continue
+        
+        if not profile.get("enabled", True):
+            continue
+        
+        delta_min = profile["delta_min"]
+        delta_max = profile["delta_max"]
+        min_dte = profile["min_dte"]
+        max_dte = profile["max_dte"]
+        max_legs = profile.get("max_legs", 2)
+        
+        profile_candidates = []
+        for c in candidates:
+            if isinstance(c, dict):
+                delta = c.get("delta", 0.0)
+                dte = c.get("dte", 0)
+                symbol = c.get("symbol", "")
+            else:
+                delta = c.delta
+                dte = c.dte
+                symbol = c.symbol
+            
+            if symbol in used_symbols:
+                continue
+            
+            if not (delta_min <= delta <= delta_max):
+                continue
+            if not (min_dte <= dte <= max_dte):
+                continue
+            
+            profile_candidates.append(c)
+        
+        profile_candidates.sort(
+            key=lambda x: x.get("premium_usd", 0) if isinstance(x, dict) else x.premium_usd,
+            reverse=True
+        )
+        
+        for c in profile_candidates:
+            if len(result[name]) >= max_legs:
+                break
+            
+            if isinstance(c, dict):
+                expiry = c.get("expiry")
+                symbol = c.get("symbol", "")
+            else:
+                expiry = c.expiry
+                symbol = c.symbol
+            
+            expiry_key = expiry.date().isoformat() if hasattr(expiry, 'date') else str(expiry)
+            
+            if per_expiry_counts.get(expiry_key, 0) >= max_calls_per_expiry:
+                continue
+            
+            result[name].append(c)
+            used_symbols.add(symbol)
+            per_expiry_counts[expiry_key] = per_expiry_counts.get(expiry_key, 0) + 1
+    
+    return result
+
+
+def pick_single_candidate_for_all_profiles(
+    candidates: list[CandidateOption] | list[dict[str, Any]],
+    profile_names: list[str],
 ) -> dict[str, Optional[CandidateOption | dict[str, Any]]]:
     """
-    Pick best candidates for multiple profiles at once.
+    Pick single best candidate for each profile (legacy behavior).
     
     Args:
         candidates: List of candidate options
