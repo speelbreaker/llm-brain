@@ -6,6 +6,7 @@ For bulk historical backtest, cache this or use offline data.
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from math import erf, log, sqrt
 from typing import List, Literal, Optional
 
 import pandas as pd
@@ -13,6 +14,33 @@ import pandas as pd
 from .data_source import MarketDataSource, Timeframe
 from .types import OptionSnapshot
 from .deribit_client import DeribitPublicClient
+
+
+def _norm_cdf(x: float) -> float:
+    """Standard normal cumulative distribution function."""
+    return 0.5 * (1.0 + erf(x / sqrt(2.0)))
+
+
+def _bs_call_delta(
+    spot: float, strike: float, t_years: float, iv: float, r: float = 0.0
+) -> float:
+    """
+    Compute Black-Scholes call delta.
+    
+    Args:
+        spot: Underlying price
+        strike: Option strike price
+        t_years: Time to expiry in years
+        iv: Implied volatility (as decimal, e.g., 0.80 for 80%)
+        r: Risk-free rate (default 0)
+    
+    Returns:
+        Call delta between 0 and 1
+    """
+    if spot <= 0 or strike <= 0 or t_years <= 0 or iv <= 0:
+        return 0.0
+    d1 = (log(spot / strike) + (r + 0.5 * iv * iv) * t_years) / (iv * sqrt(t_years))
+    return _norm_cdf(d1)
 
 
 class DeribitDataSource(MarketDataSource):
@@ -100,22 +128,28 @@ class DeribitDataSource(MarketDataSource):
         """
         Chain snapshot at ~as_of:
         - list non-expired options for underlying
-        - attach delta/IV/mark via ticker
+        - attach delta/IV/mark via bulk book summary (1 API call instead of 704)
+        - compute delta locally using Black-Scholes
         - filter by settlement currency and margin type
         
         Args:
             underlying: "BTC" or "ETH"
             as_of: Timestamp for filtering expired options
-            settlement_ccy: Settlement currency ("USDC" for linear, "BTC"/"ETH" for inverse)
-            margin_type: "linear" or "inverse"
+            settlement_ccy: Settlement currency filter ("ANY", "USDC", "BTC", "ETH")
+            margin_type: "linear" (USDC-settled) or "inverse" (coin-settled)
         """
         instruments = self.client.get_instruments(currency=underlying, kind="option")
+        
+        summaries = self.client.get_book_summary_by_currency(underlying, kind="option")
+        summary_by_name = {s["instrument_name"]: s for s in summaries}
+        
         snapshots: List[OptionSnapshot] = []
         
         total = 0
         after_expiry_filter = 0
         after_margin_filter = 0
         after_settlement_filter = 0
+        after_summary_filter = 0
 
         for inst in instruments:
             name = inst["instrument_name"]
@@ -137,7 +171,7 @@ class DeribitDataSource(MarketDataSource):
             after_expiry_filter += 1
             
             inst_settlement = inst.get("settlement_currency", "").upper()
-            is_linear = inst_settlement == "USDC" or inst_settlement == "USD"
+            is_linear = inst_settlement in ("USDC", "USD")
             
             if margin_type == "linear" and not is_linear:
                 continue
@@ -147,9 +181,7 @@ class DeribitDataSource(MarketDataSource):
             after_margin_filter += 1
             
             if settlement_ccy.upper() != "ANY":
-                if is_linear and inst_settlement not in ["USDC", "USD"]:
-                    continue
-                if not is_linear and inst_settlement.upper() != cur.upper():
+                if inst_settlement.upper() != settlement_ccy.upper():
                     continue
             
             after_settlement_filter += 1
@@ -163,35 +195,46 @@ class DeribitDataSource(MarketDataSource):
             except ValueError:
                 continue
 
-            try:
-                ticker = self.client.get_ticker(name)
-                greeks = ticker.get("greeks") or {}
-                delta = greeks.get("delta")
-                iv = ticker.get("mark_iv")
-                mark = ticker.get("mark_price")
-
-                snapshots.append(
-                    OptionSnapshot(
-                        instrument_name=name,
-                        underlying=cur,
-                        kind=kind,
-                        strike=strike,
-                        expiry=expiry,
-                        delta=float(delta) if delta is not None else None,
-                        iv=float(iv) if iv is not None else None,
-                        mark_price=float(mark) if mark is not None else None,
-                        settlement_ccy=inst_settlement if inst_settlement else "USDC",
-                        margin_type="linear" if is_linear else "inverse",
-                    )
-                )
-            except Exception:
+            summary = summary_by_name.get(name)
+            if not summary:
                 continue
+            
+            after_summary_filter += 1
+            
+            mark = summary.get("mark_price")
+            iv_pct = summary.get("mark_iv")
+            underlying_price = summary.get("underlying_price")
+            
+            iv = iv_pct / 100.0 if iv_pct else None
+            
+            delta = None
+            if underlying_price and iv and iv > 0:
+                t_years = max((expiry - as_of).total_seconds(), 1) / (365.0 * 24 * 3600)
+                if kind == "call":
+                    delta = _bs_call_delta(underlying_price, strike, t_years, iv)
+                else:
+                    delta = _bs_call_delta(underlying_price, strike, t_years, iv) - 1.0
+
+            snapshots.append(
+                OptionSnapshot(
+                    instrument_name=name,
+                    underlying=cur,
+                    kind=kind,
+                    strike=strike,
+                    expiry=expiry,
+                    delta=delta,
+                    iv=iv_pct,
+                    mark_price=float(mark) if mark is not None else None,
+                    settlement_ccy=inst_settlement if inst_settlement else underlying,
+                    margin_type="linear" if is_linear else "inverse",
+                )
+            )
 
         print(
             f"[BACKTEST] {underlying} @ {as_of} (margin={margin_type}, settle={settlement_ccy}) - "
             f"total={total}, after_expiry={after_expiry_filter}, "
             f"after_margin={after_margin_filter}, after_settlement={after_settlement_filter}, "
-            f"snapshots={len(snapshots)}",
+            f"with_summary={after_summary_filter}, snapshots={len(snapshots)}",
             flush=True
         )
         return snapshots

@@ -1,0 +1,181 @@
+Nice, that debug dump is super helpful – it tells us exactly what’s going on.
+
+What the debug output really means
+
+Total instruments: 704
+
+settlement_currency: BTC for all of them
+
+So:
+
+All BTC options on mainnet are inverse BTC-settled (which matches Deribit reality).
+
+When you run the backtest with margin_type="inverse" and settlement_ccy="ANY" those 704 instruments do pass the settlement filters.
+
+The real bottleneck is this loop in list_option_chain:
+
+for inst in instruments:
+    ...
+    ticker = self.client.get_ticker(name)  # <-- 704 HTTP calls
+    greeks = ticker.get("greeks") or {}
+    delta = greeks.get("delta")
+    iv = ticker.get("mark_iv")
+    mark = ticker.get("mark_price")
+
+
+On each decision time, the backtester makes hundreds of public/ticker calls, which:
+
+hits Deribit rate limits / latency,
+
+often times out on Replit,
+
+and leaves you with “0 candidates” at that step because most of the get_ticker calls fail or are never reached in time.
+
+So your intuition is correct: the data selection logic is OK, but the per-instrument API calls are killing it.
+
+The fix I’d suggest
+
+Replace 704× get_ticker calls with 1× bulk call to get_book_summary_by_currency, and compute delta yourself.
+
+Deribit now exposes mark_price and mark_iv in the response of public/get_book_summary_by_currency for options.
+
+That means:
+
+You can pull all option marks + IVs for BTC in one request.
+
+You already know expiry & strike from get_instruments.
+
+You can compute delta via Black-Scholes locally using mark_iv + underlying index price.
+
+No more 704 ticker calls per step.
+
+High-level design
+
+Add a new method to DeribitPublicClient:
+
+def get_book_summary_by_currency(self, currency: str, kind: str = "option") -> list[dict]:
+    return self._get(
+        "get_book_summary_by_currency",
+        {"currency": currency, "kind": kind},
+    )
+
+
+In DeribitDataSource.list_option_chain(...):
+
+Call get_instruments(currency=underlying, kind="option") as you do now.
+
+Call once per decision time:
+
+summaries = self.client.get_book_summary_by_currency(underlying, kind="option")
+summary_by_name = {s["instrument_name"]: s for s in summaries}
+
+
+For each instrument that passes:
+
+expiry>as_of
+
+margin_type / settlement_ccy filters
+
+look up its summary:
+
+summary = summary_by_name.get(name)
+if not summary:
+    continue
+
+mark = summary.get("mark_price")
+iv = summary.get("mark_iv")       # new field on Deribit
+underlying_price = summary.get("underlying_price")
+
+
+Compute DTE and delta locally:
+
+from math import log, sqrt, erf
+
+def _norm_cdf(x: float) -> float:
+    return 0.5 * (1.0 + erf(x / (2 ** 0.5)))
+
+def _bs_call_delta(spot: float, strike: float, t: float, iv: float, r: float = 0.0) -> float:
+    if spot <= 0 or strike <= 0 or t <= 0 or iv <= 0:
+        return 0.0
+    from math import log, sqrt
+    d1 = (log(spot / strike) + 0.5 * iv * iv * t) / (iv * sqrt(t))
+    return _norm_cdf(d1)
+
+
+Then:
+
+t_years = max((expiry - as_of).total_seconds(), 1) / (365.0 * 24 * 3600)
+delta = _bs_call_delta(underlying_price, strike, t_years, iv) if underlying_price and iv else None
+
+
+Finally, create OptionSnapshot from these values (no get_ticker needed):
+
+snapshots.append(
+    OptionSnapshot(
+        instrument_name=name,
+        underlying=cur,
+        kind=kind,
+        strike=strike,
+        expiry=expiry,
+        delta=delta,
+        iv=iv,
+        mark_price=mark,
+        settlement_ccy=inst_settlement,
+        margin_type="inverse",   # for BTC options today
+    )
+)
+
+
+This changes your per decision time call pattern from:
+
+get_instruments + 704× ticker
+
+to:
+
+get_instruments + 1× get_book_summary_by_currency
+
+which is massively cheaper and is exactly what Deribit intends for scanning whole chains.
+
+Extra small improvements
+
+While you’re at it, I’d also:
+
+Use inverse options for historical BTC/ETH by default:
+
+For backtests, set option_margin_type="inverse", option_settlement_ccy="ANY" (or "BTC" for BTC underlying).
+
+Keep linear/USDC only for live agent and when Deribit eventually exposes a long history of USDC options.
+
+Optional caching:
+
+For a given date window, the instruments list doesn’t change that often.
+
+You can keep a simple in-memory cache {(underlying, as_of_day): summaries} to reuse between nearby decision times.
+
+Short “prompt” you can give your AI builder
+
+If you want something you can paste straight into the builder, you can say:
+
+In src/backtest/deribit_client.py, add get_book_summary_by_currency(currency, kind="option") wrapping public/get_book_summary_by_currency.
+
+In src/backtest/deribit_data_source.py::list_option_chain:
+
+Remove the per-instrument get_ticker calls.
+
+Call get_book_summary_by_currency(underlying, kind="option") once, build a dict by instrument_name.
+
+For each instrument that passes expiry + margin_type + settlement filters, use the summary’s mark_price, mark_iv, and underlying_price.
+
+Implement a local Black-Scholes bs_call_delta helper to compute delta from underlying_price, strike, time_to_expiry, and mark_iv.
+
+Fill OptionSnapshot using these values.
+
+For BTC/ETH backtests, configure option_margin_type="inverse" and option_settlement_ccy="ANY" so all 704 BTC options pass the settlement filters.
+
+Once that’s in, your backtests should:
+
+stop timing out,
+
+show non-zero candidates and non-zero scores, and
+
+still respect DTE / delta filters, but now driven by one bulk API call per decision instead of hundreds.

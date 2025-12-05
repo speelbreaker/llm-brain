@@ -98,3 +98,16 @@ class DeribitPublicClient:
         index_name examples: 'btc_usd', 'eth_usd'
         """
         return self._get("get_index_price", {"index_name": index_name})
+
+    def get_book_summary_by_currency(
+        self, currency: str, kind: str = "option"
+    ) -> List[Dict[str, Any]]:
+        """
+        Get book summary for all instruments of a currency in one bulk call.
+        Returns mark_price, mark_iv, underlying_price, etc. for each instrument.
+        Much more efficient than calling get_ticker for each instrument.
+        """
+        return self._get(
+            "get_book_summary_by_currency",
+            {"currency": currency, "kind": kind},
+        )

@@ -4,10 +4,38 @@ Only one active backtest at a time. Supports pause/resume and "both" exit style 
 """
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from datetime import datetime
 from threading import Thread, Lock, Event
 from typing import Any, Dict, List, Literal, Optional
+
+
+def _sanitize_float(val: float) -> float:
+    """Replace inf/nan with JSON-safe values."""
+    if math.isnan(val) or math.isinf(val):
+        return 0.0
+    return val
+
+
+def _sanitize_dict(d: Dict[str, Any]) -> Dict[str, Any]:
+    """Recursively sanitize dict values for JSON serialization."""
+    result = {}
+    for k, v in d.items():
+        if isinstance(v, float):
+            result[k] = _sanitize_float(v)
+        elif isinstance(v, dict):
+            result[k] = _sanitize_dict(v)
+        elif isinstance(v, list):
+            result[k] = [
+                _sanitize_float(x) if isinstance(x, float) else 
+                (_sanitize_dict(x) if isinstance(x, dict) else x)
+                for x in v
+            ]
+        else:
+            result[k] = v
+    return result
+
 
 MarginType = Literal["linear", "inverse"]
 SettlementCcy = Literal["ANY", "USDC", "BTC", "ETH"]
@@ -60,7 +88,7 @@ class BacktestManager:
                 "paused": self._status.paused,
                 "started_at": self._status.started_at.isoformat() if self._status.started_at else None,
                 "finished_at": self._status.finished_at.isoformat() if self._status.finished_at else None,
-                "progress_pct": self._status.progress_pct,
+                "progress_pct": _sanitize_float(self._status.progress_pct),
                 "current_time": self._status.current_time.isoformat() if self._status.current_time else None,
                 "decisions_processed": self._status.decisions_processed,
                 "total_decisions": self._status.total_decisions,
@@ -69,12 +97,12 @@ class BacktestManager:
                 "underlying": self._status.underlying,
                 "start_date": self._status.start_date.isoformat() if self._status.start_date else None,
                 "end_date": self._status.end_date.isoformat() if self._status.end_date else None,
-                "metrics": self._status.metrics,
+                "metrics": _sanitize_dict(self._status.metrics) if self._status.metrics else {},
                 "recent_steps": [
                     {
                         "time": step.time.isoformat(),
                         "candidates": step.candidates,
-                        "best_score": step.best_score,
+                        "best_score": _sanitize_float(step.best_score),
                         "traded": step.traded,
                         "exit_style": step.exit_style,
                     }
