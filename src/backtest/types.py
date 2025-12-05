@@ -233,3 +233,74 @@ class TrainingExample:
             "reward": self.reward,
             **self.extra,
         }
+
+
+@dataclass
+class CandidateLevelExample:
+    """
+    A single candidate-level training example for ML policy learning.
+    
+    One row per candidate per decision time step.
+    For trade steps: exactly one candidate has chosen=1, action="SELL_CALL"
+    For no-trade steps: all candidates have chosen=0, action="SKIP"
+    """
+    decision_time: datetime
+    underlying: str
+    spot: float
+    
+    instrument: str
+    strike: float
+    dte: float
+    delta: float
+    score: float
+    iv: Optional[float] = None
+    ivrv_ratio: Optional[float] = None
+    
+    exit_style: str = "hold_to_expiry"
+    trade_executed: bool = False
+    chosen: bool = False
+    action: str = "SKIP"
+    
+    reward: float = 0.0
+    pnl_vs_hodl: float = 0.0
+    max_drawdown_pct: float = 0.0
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dictionary for CSV/JSON serialization."""
+        return {
+            "decision_time": self.decision_time.isoformat(),
+            "underlying": self.underlying,
+            "spot": self.spot,
+            "instrument": self.instrument,
+            "strike": self.strike,
+            "dte": self.dte,
+            "delta": self.delta,
+            "score": self.score,
+            "iv": self.iv,
+            "ivrv_ratio": self.ivrv_ratio,
+            "exit_style": self.exit_style,
+            "trade_executed": int(self.trade_executed),
+            "chosen": int(self.chosen),
+            "action": self.action,
+            "reward": self.reward,
+            "pnl_vs_hodl": self.pnl_vs_hodl,
+            "max_drawdown_pct": self.max_drawdown_pct,
+        }
+
+
+@dataclass
+class DecisionStepData:
+    """
+    Per-step data collected during backtest for candidate-level export.
+    
+    Stores all candidates evaluated at a decision time along with
+    which one (if any) was chosen for each exit style.
+    """
+    decision_time: datetime
+    underlying: str
+    spot: float
+    candidates: List[Dict[str, Any]] = field(default_factory=list)
+    chosen_hold_to_expiry: Optional[str] = None
+    chosen_tp_and_roll: Optional[str] = None
+    trade_result_hold: Optional[Dict[str, float]] = None
+    trade_result_tp: Optional[Dict[str, float]] = None
