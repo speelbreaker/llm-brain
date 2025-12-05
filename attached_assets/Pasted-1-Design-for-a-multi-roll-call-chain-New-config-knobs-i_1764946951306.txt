@@ -1,0 +1,360 @@
+1. Design for a multi-roll call chain
+New config knobs (in CallSimulationConfig)
+
+Add a few parameters so we can tune roll behavior per backtest:
+
+@dataclass
+class CallSimulationConfig:
+    ...
+    tp_threshold_pct: float = 0.80        # Take profit when 80% of premium captured
+    min_dte_to_roll: int = 2              # Don’t roll if option has ≤ 2 days left
+    defend_near_strike_pct: float = 0.98  # Start “defensive” roll when spot/strike ≥ 0.98
+    max_rolls_per_chain: int = 3          # Max rolls for a single decision time
+    min_score_to_trade: float = 3.0       # Already used by manager; keep here
+
+
+Manager already passes min_dte / max_dte / delta_min / delta_max into CallSimulationConfig, so no change needed there. 
+
+manager
+
+Conceptual behavior
+
+For a given decision time t0 and chosen option best_opt:
+
+Open leg 0 at t0 (sell covered call).
+
+Step forward bar-by-bar until either:
+
+the leg expires, or
+
+one of the roll triggers fires and we still have rolls left.
+
+When a roll happens:
+
+close current leg at that bar (realize PnL),
+
+ask the same scoring engine for a new best candidate at that bar,
+
+if found, open next leg immediately and continue.
+
+The chain ends when:
+
+the last leg expires, or
+
+max rolls reached, or
+
+no valid replacement candidate at roll time.
+
+No look-ahead: every decision only uses data up to the current bar and historical state at that timestamp.
+
+Roll triggers
+
+On each bar for current leg:
+
+Let:
+
+premium_open = call_price_at_open
+
+premium_now = call_price_now
+
+premium_captured = premium_open - premium_now
+
+capture_frac = premium_captured / premium_open
+
+spot_now, strike, dte_now (days to expiry)
+
+We use two independent triggers:
+
+Take-profit roll (good move in our favor):
+
+tp_trigger = (
+    capture_frac >= cfg.tp_threshold_pct
+    and dte_now > cfg.min_dte_to_roll
+)
+
+
+Defensive roll (spot too close / through strike):
+
+defensive_trigger = (
+    (spot_now / strike) >= cfg.defend_near_strike_pct
+    and dte_now > cfg.min_dte_to_roll
+)
+
+
+And only roll if:
+
+rolls_used < cfg.max_rolls_per_chain
+
+
+If either trigger is true, we close this leg and attempt to open a new one.
+
+Choosing the next leg when rolling
+
+At a roll time t_roll:
+
+Call your historical state builder again:
+
+state_roll = build_historical_state(ds, config, t_roll)
+candidates = state_roll.get("candidate_options") or []
+
+
+Score each candidate with the existing feature extractor and score function:
+
+scored = []
+for opt in candidates:
+    feats = self._extract_candidate_features(state_roll, opt)
+    s = self._score_candidate(feats)
+    scored.append((s, opt))
+
+scored.sort(key=lambda x: x[0], reverse=True)
+
+
+Take the best candidate whose score ≥ config.min_score_to_trade and whose symbol != current leg (so we don’t “roll” to the same strike/expiry).
+
+If no such candidate exists → stop rolling, just let the current leg run to expiry (or end of backtest).
+
+PnL and “no cheating”
+
+We keep a running chain-level state:
+
+realized_pnl and realized_pnl_vs_hodl (sum over legs that are already closed),
+
+equity_over_time and hodl_equity_over_time arrays (for max drawdown etc.),
+
+list of legs for debugging / future visualizations.
+
+At each bar:
+
+compute portfolio value = value of spot + value of current short call + realized PnL from previous legs,
+
+compute hodl value = spot value only (no calls),
+
+update max drawdown based on equity_over_time.
+
+Because we only ever use prices at or before the current bar plus build_historical_state at the current timestamp, there is no look-ahead.
+
+At the end, we build one SimulatedTrade representing the entire chain:
+
+open_time = time of first leg open,
+
+close_time = time last leg is closed,
+
+pnl / pnl_vs_hodl = realized sums,
+
+max_drawdown_pct computed from equity curve,
+
+notes can include a short description like "multi_roll: 3 legs, tp_threshold=0.8, defend=0.98".
+
+Manager code doesn’t need to change: it still just sees one trade object per decision time.
+
+2. Prompt for your AI builder (implements multi-roll chain)
+
+You can paste this as-is:
+
+PROMPT FOR AI BUILDER
+
+We already have a backtesting module under src/backtest/ with:
+
+DeribitDataSource
+
+CallSimulationConfig
+
+CoveredCallSimulator
+
+build_historical_state
+
+BacktestManager in src/backtest/manager.py calling:
+
+if current_exit_style == "hold_to_expiry":
+    trade = sim._simulate_call_hold_to_expiry(t, best_opt)
+else:
+    trade = sim._simulate_call_tp_and_roll(t, best_opt)
+
+
+The goal: upgrade _simulate_call_tp_and_roll to support a multi-roll call chain for backtests, without changing BacktestManager.
+
+1. Extend CallSimulationConfig
+
+In src/backtest/types.py (or wherever CallSimulationConfig lives), add these fields with defaults:
+
+@dataclass
+class CallSimulationConfig:
+    ...
+    tp_threshold_pct: float = 0.80          # Take profit when 80% of premium captured
+    min_dte_to_roll: int = 2                # Only roll if > 2 days to expiry
+    defend_near_strike_pct: float = 0.98    # Defensive roll when spot/strike ≥ 0.98
+    max_rolls_per_chain: int = 3            # Max number of rolls for a single decision
+    min_score_to_trade: float = 3.0         # Used as current filter
+
+
+Make sure any existing references to tp_threshold_pct or min_score_to_trade still work.
+
+2. New internal “leg” structure
+
+In src/backtest/covered_call_simulator.py, inside CoveredCallSimulator, define a small internal dataclass to describe a single leg in a multi-roll chain:
+
+@dataclass
+class CallLegResult:
+    instrument_name: str
+    open_time: datetime
+    close_time: datetime
+    open_price: float
+    close_price: float
+    pnl: float
+    pnl_vs_hodl: float
+    max_drawdown_pct: float
+
+
+We will not expose this outside for now – it’s just to keep the implementation tidy.
+
+3. Implement multi-roll in _simulate_call_tp_and_roll
+
+Replace the current implementation of _simulate_call_tp_and_roll(self, decision_time, opt) with a new version that:
+
+Reads relevant config values:
+
+cfg = self.config
+max_rolls = cfg.max_rolls_per_chain
+tp_frac = cfg.tp_threshold_pct
+defend_thresh = cfg.defend_near_strike_pct
+min_dte_roll = cfg.min_dte_to_roll
+min_score = cfg.min_score_to_trade
+
+
+For the initial leg:
+
+Determine expiry and strike from opt.
+
+Fetch option and spot OHLC data from decision_time until expiry (or the global backtest config.end, whichever is earlier).
+
+Determine the sell price at decision_time (e.g. from option OHLC or a mark price helper).
+
+Maintain chain-level state:
+
+realized_pnl = 0.0
+realized_pnl_vs_hodl = 0.0
+equity_curve: list[float] = []
+hodl_curve: list[float] = []
+legs: list[CallLegResult] = []
+rolls_used = 0
+
+
+Loop over bars for the current leg:
+
+For each bar at time ts with spot spot_now and option price opt_now:
+
+Compute DTE in days (dte_now).
+
+Compute premium capture fraction:
+
+premium_open = leg_open_price
+premium_now = opt_now
+premium_captured = premium_open - premium_now
+capture_frac = premium_captured / premium_open if premium_open > 0 else 0.0
+
+
+Compute chain equity and hodl value at this bar:
+
+portfolio_val = (
+    cfg.contract_size * spot_now
+    + realized_pnl
+    + (premium_open - opt_now) * cfg.contract_size
+)
+hodl_val = cfg.contract_size * spot_now
+equity_curve.append(portfolio_val)
+hodl_curve.append(hodl_val)
+
+
+Check for expiry:
+
+If dte_now <= 0, close this leg at opt_now, add a CallLegResult, update realized_pnl / realized_pnl_vs_hodl, and end the chain.
+
+Check roll triggers only if rolls_used < max_rolls and dte_now > min_dte_roll:
+
+tp_trigger = capture_frac >= tp_frac
+defensive_trigger = (spot_now / strike) >= defend_thresh if strike > 0 else False
+
+
+If no trigger → continue to next bar.
+
+If trigger fires:
+
+Close current leg at this bar:
+
+compute leg pnl and pnl_vs_hodl,
+
+append CallLegResult,
+
+update realized_pnl and realized_pnl_vs_hodl,
+
+increment rolls_used.
+
+Build a new state at ts using build_historical_state(self.data_source, self.config, ts) and get candidate_options.
+
+Score candidates using _extract_candidate_features and _score_candidate, sort descending, and choose the first with:
+
+score >= min_score, and
+
+candidate.symbol != current_leg_symbol.
+
+If no such candidate:
+
+stop rolling; end the chain at this bar (don’t open a new leg).
+
+Otherwise:
+
+open a new leg at ts on the chosen candidate:
+
+fetch its option price at ts for open_price,
+
+set strike, expiry, leg_open_time, leg_open_price,
+
+continue main bar loop but now tracking this new instrument.
+
+Make sure we don’t rewind time; the next bar processed should be strictly after ts.
+
+After the loop ends (either via final expiry or no more rolls), compute chain-level metrics:
+
+total_pnl = realized_pnl + (any remaining intrinsic value if needed; likely realized only)
+
+total_pnl_vs_hodl = realized_pnl_vs_hodl
+
+max_drawdown_pct from equity_curve
+
+open_time = first leg’s open_time
+
+close_time = last leg’s close_time
+
+Return a SimulatedTrade (or equivalent object you already use) with:
+
+.pnl = total_pnl
+
+.pnl_vs_hodl = total_pnl_vs_hodl
+
+.max_drawdown_pct = computed_drawdown
+
+.instrument_name = first leg’s instrument
+
+.notes including something like:
+"multi_roll: {len(legs)} legs, tp={tp_frac}, defend={defend_thresh}, max_rolls={max_rolls}"
+
+4. Safety and performance
+
+Do not use any price information from after the current bar when making roll decisions.
+
+Reuse existing data-access helpers from DeribitDataSource; do not introduce new network calls per bar if you can reuse cached OHLC frames.
+
+Keep method private (still _simulate_call_tp_and_roll), so the rest of the code doesn’t change.
+
+After implementing this, run:
+
+python -m src.backtest.backtest_example
+
+
+and also start a longer backtest via the Backtesting Lab UI with Exit Style = Take Profit & Roll to verify:
+
+num_trades increases (more activity),
+
+win-rate and PnL metrics look reasonable,
+
+UI “Recent Steps” still updates correctly for all phases.

@@ -598,99 +598,187 @@ class CoveredCallSimulator:
         size: Optional[float] = None,
     ) -> Optional[SimulatedTrade]:
         """
-        Simulate a call option with take-profit exit.
-        Exit early if option loses TP_THRESHOLD_PCT of its value (e.g., 80%).
+        Simulate a multi-roll call chain with TP and defensive roll triggers.
         
-        This is TP-only for now; roll logic can be added later.
+        Roll triggers:
+        1. Take-profit: When capture_frac >= tp_threshold_pct (e.g., 80%)
+        2. Defensive: When spot/strike >= defend_near_strike_pct (e.g., 98%)
+        
+        Only rolls if DTE > min_dte_to_roll and rolls_used < max_rolls_per_chain.
         """
+        from .state_builder import build_historical_state
+        
         cfg = self.cfg
         ds = self.ds
         
         size = size if size is not None else cfg.initial_spot_position
-        instrument_name = option_snapshot.instrument_name
-        open_price = float(option_snapshot.mark_price or 0.0)
-        if open_price <= 0:
-            return None
         
-        expiry = option_snapshot.expiry
-        tp_threshold = cfg.tp_threshold_pct / 100.0
-        tp_target_price = open_price * (1.0 - tp_threshold)
+        max_rolls = cfg.max_rolls_per_chain
+        tp_frac = cfg.tp_threshold_pct / 100.0
+        defend_thresh = cfg.defend_near_strike_pct
+        min_dte_roll = cfg.min_dte_to_roll
+        min_score = cfg.min_score_to_trade
         
-        spot_df = ds.get_spot_ohlc(
-            underlying=cfg.underlying,
-            start=decision_time,
-            end=expiry,
-            timeframe=cfg.timeframe,
-        )
-        if spot_df.empty:
-            return None
+        realized_pnl = 0.0
+        realized_pnl_vs_hodl = 0.0
+        equity_curve: List[float] = []
+        hodl_curve: List[float] = []
+        legs_count = 0
+        rolls_used = 0
         
-        opt_df = ds.get_option_ohlc(
-            instrument_name=instrument_name,
-            start=decision_time,
-            end=expiry,
-            timeframe=cfg.timeframe,
-        )
-        if opt_df.empty:
-            return None
+        first_open_time = decision_time
+        last_close_time = decision_time
+        first_instrument = option_snapshot.instrument_name
         
-        idx = spot_df.index.union(opt_df.index).sort_values()
-        spot = spot_df.reindex(idx).ffill()["close"]
-        opt_price = opt_df.reindex(idx).ffill()["close"]
+        current_opt = option_snapshot
+        current_leg_open_time = decision_time
         
-        portfolio_values: List[float] = []
-        hodl_values: List[float] = []
-        close_time = expiry
-        close_price = open_price
-        
-        for ts in idx:
-            s = float(spot.loc[ts])
-            c = float(opt_price.loc[ts])
-            
-            hodl_val = size * s
-            cc_val = size * s + size * (open_price - c)
-            portfolio_values.append(cc_val)
-            hodl_values.append(hodl_val)
-            
-            if c <= tp_target_price and ts < expiry:
-                close_time = ts
-                close_price = c
+        while current_opt is not None:
+            instrument_name = current_opt.instrument_name
+            strike = current_opt.strike
+            open_price = float(current_opt.mark_price or 0.0)
+            if open_price <= 0:
                 break
+            
+            expiry = current_opt.expiry
+            backtest_end = cfg.end
+            sim_end = min(expiry, backtest_end)
+            
+            spot_df = ds.get_spot_ohlc(
+                underlying=cfg.underlying,
+                start=current_leg_open_time,
+                end=sim_end,
+                timeframe=cfg.timeframe,
+            )
+            if spot_df.empty:
+                break
+            
+            opt_df = ds.get_option_ohlc(
+                instrument_name=instrument_name,
+                start=current_leg_open_time,
+                end=sim_end,
+                timeframe=cfg.timeframe,
+            )
+            if opt_df.empty:
+                break
+            
+            idx = spot_df.index.union(opt_df.index).sort_values()
+            spot_series = spot_df.reindex(idx).ffill()["close"]
+            opt_price_series = opt_df.reindex(idx).ffill()["close"]
+            
+            leg_close_time = sim_end
+            leg_close_price = open_price
+            roll_triggered = False
+            roll_time: Optional[datetime] = None
+            
+            for ts in idx:
+                if ts <= current_leg_open_time:
+                    continue
+                    
+                spot_now = float(spot_series.loc[ts])
+                opt_now = float(opt_price_series.loc[ts])
+                
+                dte_now = (expiry - ts).total_seconds() / 86400.0
+                
+                premium_captured = open_price - opt_now
+                capture_frac = premium_captured / open_price if open_price > 0 else 0.0
+                
+                portfolio_val = (
+                    size * spot_now
+                    + realized_pnl
+                    + size * (open_price - opt_now)
+                )
+                hodl_val = size * spot_now
+                equity_curve.append(portfolio_val)
+                hodl_curve.append(hodl_val)
+                
+                if dte_now <= 0:
+                    leg_close_time = ts
+                    leg_close_price = opt_now
+                    break
+                
+                if rolls_used < max_rolls and dte_now > min_dte_roll:
+                    tp_trigger = capture_frac >= tp_frac
+                    defensive_trigger = (spot_now / strike) >= defend_thresh if strike > 0 else False
+                    
+                    if tp_trigger or defensive_trigger:
+                        leg_close_time = ts
+                        leg_close_price = opt_now
+                        roll_triggered = True
+                        roll_time = ts
+                        break
+            
+            leg_pnl = size * (open_price - leg_close_price)
+            leg_hodl_at_close = hodl_curve[-1] if hodl_curve else size * float(spot_series.iloc[-1])
+            leg_portfolio_at_close = equity_curve[-1] if equity_curve else leg_pnl
+            leg_pnl_vs_hodl = leg_portfolio_at_close - leg_hodl_at_close
+            
+            realized_pnl += leg_pnl
+            realized_pnl_vs_hodl = leg_portfolio_at_close - leg_hodl_at_close if hodl_curve else 0.0
+            legs_count += 1
+            last_close_time = leg_close_time
+            
+            if roll_triggered and roll_time is not None:
+                rolls_used += 1
+                
+                try:
+                    state_roll = build_historical_state(ds, cfg, roll_time)
+                    candidates = state_roll.get("candidate_options") or []
+                except Exception:
+                    candidates = []
+                
+                scored = []
+                for opt in candidates:
+                    if opt.instrument_name == instrument_name:
+                        continue
+                    try:
+                        feats = self._extract_candidate_features(state_roll, opt)
+                        s = self._score_candidate(feats)
+                        if s >= min_score:
+                            scored.append((s, opt))
+                    except Exception:
+                        continue
+                
+                if scored:
+                    scored.sort(key=lambda x: x[0], reverse=True)
+                    _, next_opt = scored[0]
+                    current_opt = next_opt
+                    current_leg_open_time = roll_time
+                else:
+                    current_opt = None
+            else:
+                current_opt = None
         
-        if not portfolio_values:
+        if not equity_curve:
             return None
         
-        start_portfolio = portfolio_values[0]
-        final_cc = portfolio_values[-1]
-        final_hodl = hodl_values[-1]
-        
-        pnl = final_cc - start_portfolio
-        pnl_vs_hodl = final_cc - final_hodl
-        
-        peak = portfolio_values[0]
+        peak = equity_curve[0]
         max_dd_pct = 0.0
-        for v in portfolio_values:
+        for v in equity_curve:
             if v > peak:
                 peak = v
             dd = (peak - v) / peak if peak > 0 else 0.0
             if dd > max_dd_pct:
                 max_dd_pct = dd
         
-        exit_note = "TP_HIT" if close_time < expiry else "EXPIRY"
+        notes = (
+            f"multi_roll: {legs_count} legs, rolls_used={rolls_used}, "
+            f"tp={tp_frac*100:.0f}%, defend={defend_thresh*100:.0f}%, max_rolls={max_rolls}"
+        )
         
         return SimulatedTrade(
-            instrument_name=instrument_name,
+            instrument_name=first_instrument,
             underlying=cfg.underlying,
             side="SHORT_CALL",
             size=size,
-            open_time=decision_time,
-            close_time=close_time,
-            open_price=open_price,
-            close_price=close_price,
-            pnl=pnl,
-            pnl_vs_hodl=pnl_vs_hodl,
+            open_time=first_open_time,
+            close_time=last_close_time,
+            open_price=float(option_snapshot.mark_price or 0.0),
+            close_price=0.0,
+            pnl=realized_pnl,
+            pnl_vs_hodl=realized_pnl_vs_hodl,
             max_drawdown_pct=max_dd_pct * 100.0,
-            notes=f"exit_style=tp_and_roll; exit={exit_note}; tp_threshold={cfg.tp_threshold_pct}%",
+            notes=notes,
         )
     
     def simulate_policy_with_scoring(

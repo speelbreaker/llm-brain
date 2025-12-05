@@ -68,6 +68,9 @@ class CallSimulationConfig:
     option_settlement_ccy: str = "USDC"
     
     tp_threshold_pct: float = 80.0
+    min_dte_to_roll: int = 2
+    defend_near_strike_pct: float = 0.98
+    max_rolls_per_chain: int = 3
     min_score_to_trade: float = 3.0
 
 
