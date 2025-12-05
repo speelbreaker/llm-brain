@@ -205,26 +205,23 @@ def get_call_chain(
     return quotes
 
 
-def synthetic_iv(
-    quote: OptionQuote,
-    default_iv: float,
+def synthetic_iv_from_rv(
+    base_iv: float,
     iv_multiplier: float,
 ) -> float:
     """
-    Compute synthetic IV for calibration.
-    
-    If quote.mark_iv is present and > 0:
-        base_iv = quote.mark_iv / 100 (Deribit returns percentage)
-    else:
-        base_iv = default_iv
-    
-    Returns max(1e-6, base_iv * iv_multiplier).
-    """
-    if quote.mark_iv is not None and quote.mark_iv > 0:
-        base_iv = quote.mark_iv / 100.0
-    else:
-        base_iv = default_iv
+    Synthetic IV model for calibration using realized volatility.
 
+    This matches the synthetic backtester's pricing model:
+        sigma_synth = realized_vol(window_days) * synthetic_iv_multiplier
+
+    Args:
+        base_iv: An annualized realized volatility (e.g. 0.70 for 70%)
+        iv_multiplier: Scales the base IV, same as CallSimulationConfig.synthetic_iv_multiplier
+
+    Returns:
+        sigma to plug into Black-Scholes
+    """
     return max(1e-6, base_iv * iv_multiplier)
 
 
