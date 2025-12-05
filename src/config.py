@@ -114,6 +114,23 @@ class Settings(BaseSettings):
         description="Policy version identifier for logging",
     )
 
+    training_mode: bool = Field(
+        default=False,
+        description="Enable training mode for multi-strategy experimentation (research only)",
+    )
+    max_calls_per_underlying_live: int = Field(
+        default=1,
+        description="Maximum covered calls per underlying in live mode",
+    )
+    max_calls_per_underlying_training: int = Field(
+        default=5,
+        description="Maximum covered calls per underlying in training mode",
+    )
+    training_strategies: list[str] = Field(
+        default=["conservative", "moderate", "aggressive"],
+        description="Strategy profiles to test in training mode",
+    )
+
     default_order_size: float = Field(
         default=0.1,
         description="Default order size in BTC/ETH",
@@ -172,6 +189,18 @@ class Settings(BaseSettings):
     def is_research(self) -> bool:
         """Check if running in research mode."""
         return self.mode == "research"
+
+    @property
+    def is_training_enabled(self) -> bool:
+        """Check if training mode is active (research + training_mode)."""
+        return self.is_research and self.training_mode and self.dry_run
+
+    @property
+    def max_calls_per_underlying(self) -> int:
+        """Get the maximum calls per underlying based on mode."""
+        if self.is_training_enabled:
+            return self.max_calls_per_underlying_training
+        return self.max_calls_per_underlying_live
 
     @property
     def effective_ivrv_min(self) -> float:

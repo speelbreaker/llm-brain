@@ -1,0 +1,314 @@
+Let’s design it so:
+
+Live mode = behaves conservative, 1 slot per underlying, strict risk.
+
+Research + Training ON = can open multiple simulated positions and test several profiles in parallel.
+
+Below is a concrete way to wire this into your bot.
+
+1. Add a training / learning switch to config
+
+In your settings / config (where mode, dry_run, etc. live), add:
+
+from typing import Literal
+from dataclasses import dataclass, field
+
+@dataclass
+class AgentConfig:
+    mode: Literal["live", "paper", "research"] = "research"
+    dry_run: bool = True
+
+    # NEW: training / learning mode
+    training_mode: bool = False  # set True when you want “go crazy” research runs
+
+    # Live constraints
+    max_calls_per_underlying_live: int = 1
+
+    # Research constraints (still capped so it doesn’t explode)
+    max_calls_per_underlying_training: int = 5
+
+    # Profiles to experiment with
+    training_strategies: list[str] = field(
+        default_factory=lambda: ["conservative", "moderate", "aggressive"]
+    )
+
+
+In your real code this may be a Pydantic Settings class instead of dataclass, but the idea is the same:
+
+Turn training mode ON via env or config:
+
+MODE=research, DRY_RUN=true, TRAINING_MODE=true.
+
+2. Define three research profiles (conservative / moderate / aggressive)
+
+We can define simple target zones for each profile using just what your candidates already have (delta, dte, premium_usd, ivrv):
+
+TRAINING_PROFILES = {
+    "conservative": {
+        "target_delta": 0.18,
+        "delta_min": 0.10,
+        "delta_max": 0.25,
+        "min_dte": 10,
+        "max_dte": 30,
+    },
+    "moderate": {
+        "target_delta": 0.25,
+        "delta_min": 0.18,
+        "delta_max": 0.35,
+        "min_dte": 7,
+        "max_dte": 21,
+    },
+    "aggressive": {
+        "target_delta": 0.32,
+        "delta_min": 0.25,
+        "delta_max": 0.45,
+        "min_dte": 3,
+        "max_dte": 21,
+    },
+}
+
+
+You can tweak those numbers later, but this gives you three distinct behaviors using the same candidate list.
+
+3. A helper to pick the “best” candidate per profile
+
+We’ll use a simple scoring rule:
+
+penalize distance from the target delta
+
+reward higher premium
+
+optionally prefer IVRV that’s high
+
+from typing import Optional, Dict, Any, List
+
+def pick_candidate_for_profile(
+    candidates: List[dict],
+    profile: dict,
+) -> Optional[dict]:
+    best = None
+    best_score = float("-inf")
+
+    for c in candidates:
+        delta = c["delta"]
+        dte = c["dte"]
+        premium = c["premium_usd"]
+        ivrv = c.get("ivrv", 1.0)
+
+        # Filter by delta & DTE bands
+        if not (profile["delta_min"] <= delta <= profile["delta_max"]):
+            continue
+        if not (profile["min_dte"] <= dte <= profile["max_dte"]):
+            continue
+
+        # Simple scoring heuristic
+        delta_distance = abs(delta - profile["target_delta"])
+        score = (
+            premium / 100.0       # scale premium
+            - delta_distance * 10 # penalize being far from target delta
+            + (ivrv - 1.0) * 5    # reward IVRV > 1
+        )
+
+        if score > best_score:
+            best_score = score
+            best = c
+
+    return best
+
+
+This keeps things easy to reason about but still gives you different choices across profiles.
+
+4. Build research / training actions instead of a single “one call” action
+
+In your agent’s main decision logic (where you currently decide OPEN_COVERED_CALL or ROLL_COVERED_CALL), add a branch like:
+
+def build_actions(
+    state: dict,
+    config: AgentConfig,
+) -> list[dict]:
+    """
+    Returns a list of proposed actions.
+    In live mode usually returns length 0 or 1.
+    In research+training mode can return multiple actions
+    for different profiles.
+    """
+    underlyings = state["underlyings"]
+    top_candidates = state["top_candidates"]  # from your JSON
+
+    if config.mode == "research" and config.training_mode:
+        return build_training_actions(underlyings, top_candidates, state, config)
+    else:
+        return [build_production_action(underlyings, top_candidates, state, config)]
+
+
+And then:
+
+def build_training_actions(
+    underlyings: list[str],
+    top_candidates: list[dict],
+    state: dict,
+    config: AgentConfig,
+) -> list[dict]:
+    """
+    For each underlying, pick up to one candidate per profile
+    (conservative / moderate / aggressive) and create a simulated
+    OPEN_COVERED_CALL action.
+    """
+    actions: list[dict] = []
+
+    # group candidates by underlying from symbol prefix
+    by_underlying: Dict[str, List[dict]] = {u: [] for u in underlyings}
+    for c in top_candidates:
+        symbol = c["symbol"]  # e.g. "BTC-19DEC25-94000-C"
+        for u in underlyings:
+            if symbol.startswith(u):
+                by_underlying[u].append(c)
+
+    for underlying in underlyings:
+        cands = by_underlying.get(underlying, [])
+        if not cands:
+            continue
+
+        opened_for_this_underlying = 0
+
+        for profile_name in config.training_strategies:
+            profile = TRAINING_PROFILES[profile_name]
+            candidate = pick_candidate_for_profile(cands, profile)
+            if candidate is None:
+                continue
+
+            if opened_for_this_underlying >= config.max_calls_per_underlying_training:
+                break
+
+            actions.append(
+                {
+                    "strategy": profile_name,
+                    "underlying": underlying,
+                    "action": "OPEN_COVERED_CALL",
+                    "params": {
+                        "symbol": candidate["symbol"],
+                        "size": 0.1,  # or dynamic based on your rules
+                    },
+                    "reasoning": (
+                        f"[training:{profile_name}] "
+                        f"Selected {candidate['symbol']} with delta={candidate['delta']:.3f}, "
+                        f"dte={candidate['dte']}, premium_usd={candidate['premium_usd']:.2f}, "
+                        f"ivrv={candidate.get('ivrv', 1.0):.2f}"
+                    ),
+                }
+            )
+
+            opened_for_this_underlying += 1
+
+    return actions
+
+
+So in training mode, a single iteration might propose:
+
+Conservative BTC covered call
+
+Moderate BTC covered call
+
+Aggressive BTC covered call
+
+(and the same for ETH if there are candidates)
+
+All of these are just simulated actions as long as dry_run=True.
+
+5. Execution: log them as simulated “experiments”
+
+In your execution layer, you probably have something like (pseudo):
+
+def execute_action(action: dict, state: dict, config: AgentConfig) -> dict:
+    if config.dry_run:
+        return {
+            "status": "simulated",
+            "dry_run": True,
+            "action": action["action"],
+            "params": action["params"],
+            "orders": [
+                {
+                    "type": "SELL",
+                    "symbol": action["params"]["symbol"],
+                    "size": action["params"]["size"],
+                    "simulated": True,
+                    "leg": "open"
+                }
+            ],
+            "message": f"Would {action['action']} {action['params']['symbol']} "
+                       f"({action['params']['size']})"
+        }
+    # else: real Deribit API calls...
+
+
+Turn that into multi-action execution for training mode:
+
+def execute_actions(actions: list[dict], state: dict, config: AgentConfig) -> list[dict]:
+    results = []
+
+    for action in actions:
+        result = execute_action(action, state, config)
+        # tag result with strategy if present
+        if "strategy" in action:
+            result["strategy"] = action["strategy"]
+        results.append(result)
+
+    return results
+
+
+The log entry for training mode might then look like:
+
+"execution": {
+  "status": "simulated_batch",
+  "dry_run": true,
+  "results": [
+    {
+      "strategy": "conservative",
+      "action": "OPEN_COVERED_CALL",
+      "params": {"symbol": "BTC-19DEC25-97000-C", "size": 0.1},
+      "orders": [...],
+      "message": "Would OPEN_COVERED_CALL BTC-19DEC25-97000-C (0.1)"
+    },
+    {
+      "strategy": "aggressive",
+      "action": "OPEN_COVERED_CALL",
+      "params": {"symbol": "BTC-19DEC25-94000-C", "size": 0.1},
+      ...
+    }
+  ]
+}
+
+
+Later we can add per-strategy PnL tracking if you want.
+
+6. How you’d actually use this
+
+For learning / experimentation runs:
+
+Set:
+
+mode = "research"
+
+dry_run = true
+
+training_mode = true
+
+Let it run 12–24 hours.
+
+Then inspect logs:
+
+Which profile picked which strikes?
+
+How would those have done vs price changes?
+
+Does the aggressive ladder get too close? Does conservative leave too much on the table?
+
+For real trading:
+
+Set:
+
+training_mode = false
+
+mode = "live" or "paper"
+
+And keep your current “one slot per underlying” behavior.
