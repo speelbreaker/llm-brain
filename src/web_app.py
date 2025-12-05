@@ -736,6 +736,55 @@ def index() -> str:
       line-height: 1.5;
     }}
     
+    .modal {{
+      position: fixed;
+      z-index: 1000;
+      left: 0;
+      top: 0;
+      width: 100%;
+      height: 100%;
+      background: rgba(0,0,0,0.5);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }}
+    .modal-content {{
+      background: #fff;
+      padding: 1.5rem;
+      border-radius: 8px;
+      max-width: 700px;
+      max-height: 80vh;
+      overflow-y: auto;
+      box-shadow: 0 4px 20px rgba(0,0,0,0.2);
+      position: relative;
+    }}
+    .modal-close {{
+      position: absolute;
+      top: 0.5rem;
+      right: 1rem;
+      font-size: 1.5rem;
+      cursor: pointer;
+      color: #666;
+    }}
+    .modal-close:hover {{
+      color: #333;
+    }}
+    .view-btn {{
+      background: #2196f3;
+      color: #fff;
+      border: none;
+      padding: 0.25rem 0.5rem;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 0.75rem;
+    }}
+    .view-btn:hover {{
+      background: #1976d2;
+    }}
+    .trigger-tp {{ color: #4caf50; font-weight: 600; }}
+    .trigger-defensive {{ color: #ff9800; font-weight: 600; }}
+    .trigger-expiry {{ color: #9e9e9e; }}
+    
     .answer-box {{
       background: #e8f5e9;
       border-left: 4px solid #4caf50;
@@ -1022,6 +1071,52 @@ def index() -> str:
             <tr><td colspan="5" style="text-align:center;color:#666;">No steps yet</td></tr>
           </tbody>
         </table>
+      </div>
+      
+      <h3>Recent Chains (TP &amp; Roll)</h3>
+      <div style="overflow-x: auto; max-height: 300px; overflow-y: auto;">
+        <table class="steps-table">
+          <thead>
+            <tr>
+              <th>Decision Time</th>
+              <th>Underlying</th>
+              <th>Legs</th>
+              <th>Rolls</th>
+              <th>Total PnL</th>
+              <th>Max DD%</th>
+              <th>Details</th>
+            </tr>
+          </thead>
+          <tbody id="bt-chains-body">
+            <tr><td colspan="7" style="text-align:center;color:#666;">No chains yet</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+    
+    <!-- Chain Details Modal -->
+    <div id="chain-modal" class="modal" style="display:none;">
+      <div class="modal-content">
+        <span class="modal-close" onclick="closeChainModal()">&times;</span>
+        <h2>Chain Details</h2>
+        <div id="chain-modal-summary"></div>
+        <h3>Legs</h3>
+        <div style="overflow-x:auto;">
+          <table class="decisions-table">
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>Open</th>
+                <th>Close</th>
+                <th>Strike</th>
+                <th>DTE</th>
+                <th>PnL</th>
+                <th>Trigger</th>
+              </tr>
+            </thead>
+            <tbody id="chain-legs-body"></tbody>
+          </table>
+        </div>
       </div>
     </div>
 
@@ -1434,9 +1529,71 @@ def index() -> str:
             </tr>`;
           }}).join('');
         }}
+        
+        const chainsBody = document.getElementById('bt-chains-body');
+        const chains = st.recent_chains || [];
+        window.__recentChains = chains;
+        if (chains.length === 0) {{
+          chainsBody.innerHTML = '<tr><td colspan="7" style="text-align:center;color:#666;">No chains yet</td></tr>';
+        }} else {{
+          chainsBody.innerHTML = chains.slice(-20).reverse().map((chain, idx) => {{
+            const t = new Date(chain.decision_time).toISOString().replace('T', ' ').slice(0, 19);
+            const pnlClass = chain.total_pnl >= 0 ? 'traded-yes' : 'traded-no';
+            const realIdx = chains.length - 1 - idx;
+            return `<tr>
+              <td>${{t}}</td>
+              <td>${{chain.underlying}}</td>
+              <td>${{chain.num_legs}}</td>
+              <td>${{chain.num_rolls}}</td>
+              <td class="${{pnlClass}}">${{chain.total_pnl.toFixed(4)}}</td>
+              <td>${{chain.max_drawdown_pct.toFixed(2)}}%</td>
+              <td><button class="view-btn" onclick="showChainDetails(${{realIdx}})">View</button></td>
+            </tr>`;
+          }}).join('');
+        }}
       }} catch (err) {{
         console.error('Backtest status fetch error:', err);
       }}
+    }}
+    
+    function showChainDetails(idx) {{
+      const chains = window.__recentChains || [];
+      if (idx < 0 || idx >= chains.length) return;
+      const chain = chains[idx];
+      
+      const summaryEl = document.getElementById('chain-modal-summary');
+      summaryEl.innerHTML = `
+        <p><strong>Decision Time:</strong> ${{new Date(chain.decision_time).toISOString().replace('T', ' ').slice(0, 19)}}</p>
+        <p><strong>Underlying:</strong> ${{chain.underlying}} | <strong>Legs:</strong> ${{chain.num_legs}} | <strong>Rolls:</strong> ${{chain.num_rolls}}</p>
+        <p><strong>Total PnL:</strong> <span class="${{chain.total_pnl >= 0 ? 'traded-yes' : 'traded-no'}}">${{chain.total_pnl.toFixed(4)}}</span> | <strong>Max DD:</strong> ${{chain.max_drawdown_pct.toFixed(2)}}%</p>
+      `;
+      
+      const legsBody = document.getElementById('chain-legs-body');
+      const legs = chain.legs || [];
+      legsBody.innerHTML = legs.map(leg => {{
+        const openT = new Date(leg.open_time).toISOString().replace('T', ' ').slice(0, 16);
+        const closeT = new Date(leg.close_time).toISOString().replace('T', ' ').slice(0, 16);
+        const pnlClass = leg.pnl >= 0 ? 'traded-yes' : 'traded-no';
+        let triggerClass = '';
+        if (leg.trigger === 'tp_roll') triggerClass = 'trigger-tp';
+        else if (leg.trigger === 'defensive_roll') triggerClass = 'trigger-defensive';
+        else if (leg.trigger === 'expiry') triggerClass = 'trigger-expiry';
+        return `<tr>
+          <td>${{leg.index + 1}}</td>
+          <td>${{openT}}</td>
+          <td>${{closeT}}</td>
+          <td>${{leg.strike.toLocaleString()}}</td>
+          <td>${{leg.dte_open.toFixed(1)}}</td>
+          <td class="${{pnlClass}}">${{leg.pnl.toFixed(4)}}</td>
+          <td class="${{triggerClass}}">${{leg.trigger.replace('_', ' ')}}</td>
+        </tr>`;
+      }}).join('');
+      
+      document.getElementById('chain-modal').style.display = 'flex';
+    }}
+    
+    function closeChainModal() {{
+      document.getElementById('chain-modal').style.display = 'none';
     }}
     
     async function runBacktest() {{
