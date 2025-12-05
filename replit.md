@@ -20,9 +20,12 @@ The agent is built with a clear separation of concerns, featuring modules for co
 - **Market Context**: Integrates `MarketContext` to provide regime detection (bull/sideways/bear), returns, and realized volatility for informed decision-making.
 - **Risk Management**: A `risk_engine` module performs pre-trade validation, checking margin, delta, and exposure limits.
 - **Backtesting Framework**: Includes a `CoveredCallSimulator` for historical analysis, supporting various exit styles (hold-to-expiry, take-profit and roll), a scoring function for candidate options, multi-leg chain visualization, and training data generation.
+- **Synthetic Pricing Mode**: Black-Scholes based option pricing for self-consistent historical backtests without requiring live Deribit option data. Uses realized volatility computed from spot history to avoid look-ahead bias.
+- **TradingView-style Metrics**: Enhanced backtest summary with net profit, max drawdown, profit factor, Sharpe ratio, Sortino ratio, win rate, and gross profit/loss calculations.
+- **Equity Curve Visualization**: Interactive chart comparing Strategy returns vs HODL benchmark with dual-line display.
 - **Training Mode**: Allows for multi-profile data collection (conservative, moderate, aggressive strategies) to generate diverse datasets for ML/RL.
-- **Training Data Export**: Captures (state, action, reward) tuples and exports to CSV/JSONL. Note: Historical backtests use live option data from Deribit's public API; for meaningful training data, use live agent trading or integrate a paid historical options data source.
-- **Web Dashboard**: A FastAPI application offers a "Live Agent" view with real-time status and recent decisions, a "Backtesting Lab" for configuring and analyzing simulations, and a "Chat" interface for natural language interaction with the agent.
+- **Training Data Export**: Captures (state, action, reward) tuples and exports to CSV/JSONL. Note: Historical backtests can use synthetic pricing for self-consistent option prices or live option data from Deribit's public API.
+- **Web Dashboard**: A FastAPI application offers a "Live Agent" view with real-time status and recent decisions, a "Backtesting Lab" with TradingView-style summary panel, equity curve charts, and a "Chat" interface for natural language interaction with the agent.
 - **Structured Logging**: Uses JSONL for structured logging of all decisions and actions, facilitating future analysis and ML/RL training.
 
 ### Technical Implementations

@@ -100,6 +100,8 @@ class CoveredCallSimulator:
         """
         Generate synthetic option prices for an entire spot time series.
         
+        Uses IV computed at each timestamp to avoid look-ahead bias.
+        
         Args:
             spot_series: Pandas Series with datetime index and spot prices
             strike: Option strike price
@@ -108,7 +110,6 @@ class CoveredCallSimulator:
         Returns:
             Pandas Series with synthetic option prices
         """
-        sigma = self._get_synthetic_iv(expiry)
         r = self.cfg.risk_free_rate
         
         prices = []
@@ -120,6 +121,8 @@ class CoveredCallSimulator:
                 ts_dt = ts
             else:
                 ts_dt = datetime.utcnow()
+            
+            sigma = self._get_synthetic_iv(ts_dt)
             
             t_years = max((expiry - ts_dt).total_seconds() / (365.0 * 24 * 3600), 1e-6)
             price = bs_call_price(float(spot_val), strike, t_years, sigma, r)

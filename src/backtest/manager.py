@@ -189,21 +189,28 @@ def _compute_enhanced_metrics(
     
     total_pnl_vs_hodl = sum(t.pnl_vs_hodl for t in trades)
     
-    returns = [t.pnl for t in trades] if trades else []
+    pct_returns = []
+    if len(equity_curve) > 1:
+        for i in range(1, len(equity_curve)):
+            prev_equity = equity_curve[i - 1].equity
+            curr_equity = equity_curve[i].equity
+            if prev_equity > 0:
+                ret = (curr_equity - prev_equity) / prev_equity
+                pct_returns.append(ret)
     
-    mean_return = sum(returns) / len(returns) if returns else 0.0
+    mean_return = sum(pct_returns) / len(pct_returns) if pct_returns else 0.0
     
     std_return = 0.0
-    if len(returns) > 1:
-        variance = sum((r - mean_return) ** 2 for r in returns) / len(returns)
+    if len(pct_returns) > 1:
+        variance = sum((r - mean_return) ** 2 for r in pct_returns) / (len(pct_returns) - 1)
         std_return = math.sqrt(variance)
     
     sharpe_ratio = (mean_return / std_return) if std_return > 0 else 0.0
     
-    downside_returns = [r for r in returns if r < 0]
+    downside_returns = [r for r in pct_returns if r < 0]
     downside_std = 0.0
     if len(downside_returns) > 1:
-        downside_variance = sum(r ** 2 for r in downside_returns) / len(downside_returns)
+        downside_variance = sum(r ** 2 for r in downside_returns) / (len(downside_returns) - 1)
         downside_std = math.sqrt(downside_variance)
     elif len(downside_returns) == 1:
         downside_std = abs(downside_returns[0])
