@@ -145,6 +145,8 @@ class BacktestRequest(BaseModel):
     initial_position: float = 1.0
 
 
+from typing import Literal as TypingLiteral
+
 class BacktestStartRequest(BaseModel):
     underlying: str = "BTC"
     start: str
@@ -158,8 +160,8 @@ class BacktestStartRequest(BaseModel):
     max_dte: int = 21
     delta_min: float = 0.15
     delta_max: float = 0.35
-    margin_type: str = "inverse"
-    settlement_ccy: str = "ANY"
+    margin_type: TypingLiteral["inverse", "linear"] = "inverse"
+    settlement_ccy: TypingLiteral["ANY", "USDC", "BTC", "ETH"] = "ANY"
 
 
 @app.post("/api/backtest/start")

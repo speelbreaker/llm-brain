@@ -72,6 +72,11 @@ A modular Python framework for automated BTC/ETH covered call trading on Deribit
   - Rolls to best-scored candidate excluding current position
   - Chain-level PnL aggregation across all legs
   - Notes include leg count, rolls used, and trigger thresholds
+- 2024-12: Historical option type support for backtests:
+  - Added margin_type selector: "inverse" (coin-settled, pre-2025) vs "linear" (USDC-settled, Aug 2025+)
+  - Added settlement_ccy selector: "ANY", "USDC", "BTC", or "ETH"
+  - Defaults to inverse/ANY for historical compatibility (USDC options only exist after Aug 2025)
+  - UI dropdowns in Backtesting Lab for easy selection
 
 ## Architecture
 

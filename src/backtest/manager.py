@@ -9,6 +9,9 @@ from datetime import datetime
 from threading import Thread, Lock, Event
 from typing import Any, Dict, List, Literal, Optional
 
+MarginType = Literal["linear", "inverse"]
+SettlementCcy = Literal["ANY", "USDC", "BTC", "ETH"]
+
 ExitStyle = Literal["hold_to_expiry", "tp_and_roll", "both"]
 
 
@@ -137,8 +140,8 @@ class BacktestManager:
         max_dte: int = 21,
         delta_min: float = 0.15,
         delta_max: float = 0.35,
-        margin_type: str = "inverse",
-        settlement_ccy: str = "ANY",
+        margin_type: MarginType = "inverse",
+        settlement_ccy: SettlementCcy = "ANY",
     ) -> bool:
         with self._lock:
             if self._status.running:
@@ -171,11 +174,10 @@ class BacktestManager:
                 from src.backtest.covered_call_simulator import CoveredCallSimulator
                 from src.backtest.state_builder import build_historical_state
                 from datetime import timedelta
-                from typing import cast, Literal
+                from typing import cast
                 from src.backtest.data_source import Timeframe
 
                 tf: Timeframe = cast(Timeframe, timeframe)
-                mt: Literal["linear", "inverse"] = cast(Literal["linear", "inverse"], margin_type)
                 
                 hours_per_bar = {"1m": 1/60, "5m": 5/60, "15m": 0.25, "1h": 1, "4h": 4, "1d": 24}
                 bar_duration_hours = hours_per_bar.get(timeframe, 1)
@@ -199,7 +201,7 @@ class BacktestManager:
                     max_dte=max_dte,
                     delta_min=delta_min,
                     delta_max=delta_max,
-                    option_margin_type=mt,
+                    option_margin_type=margin_type,
                     option_settlement_ccy=settlement_ccy,
                 )
 
