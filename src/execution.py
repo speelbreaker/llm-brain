@@ -1,6 +1,7 @@
 """
 Execution module.
 Translates abstract actions into Deribit orders.
+Supports batch execution for training mode experimentation.
 """
 from __future__ import annotations
 
@@ -323,3 +324,77 @@ def _execute_real(
             result["errors"].append(f"Open leg failed: {e}")
     
     return result
+
+
+def execute_actions(
+    client: DeribitClient,
+    actions: list[dict[str, Any]],
+    config: Settings | None = None,
+) -> dict[str, Any]:
+    """
+    Execute multiple actions (for training mode batch execution).
+    
+    Args:
+        client: Deribit API client
+        actions: List of action dicts with keys: action, params, reasoning
+        config: Settings configuration
+    
+    Returns:
+        Dict with batch execution results
+    """
+    cfg = config or settings
+    
+    if not actions:
+        return {
+            "status": "skipped",
+            "message": "No actions to execute",
+            "results": [],
+        }
+    
+    if len(actions) == 1:
+        result = execute_action(client, actions[0], cfg)
+        if "strategy" in actions[0]:
+            result["strategy"] = actions[0]["strategy"]
+        return {
+            "status": result.get("status", "unknown"),
+            "dry_run": result.get("dry_run", cfg.dry_run),
+            "results": [result],
+        }
+    
+    results = []
+    for action in actions:
+        result = execute_action(client, action, cfg)
+        
+        if "strategy" in action:
+            result["strategy"] = action["strategy"]
+        if "underlying" in action:
+            result["underlying"] = action["underlying"]
+        
+        results.append(result)
+    
+    all_simulated = all(r.get("status") == "simulated" for r in results)
+    any_error = any(r.get("status") == "error" for r in results)
+    
+    if all_simulated:
+        status = "simulated_batch"
+    elif any_error:
+        status = "partial_error"
+    else:
+        status = "executed_batch"
+    
+    by_strategy = {}
+    by_underlying = {}
+    for r in results:
+        s = r.get("strategy", "unknown")
+        u = r.get("underlying", "unknown")
+        by_strategy[s] = by_strategy.get(s, 0) + 1
+        by_underlying[u] = by_underlying.get(u, 0) + 1
+    
+    return {
+        "status": status,
+        "dry_run": cfg.dry_run,
+        "total_actions": len(results),
+        "by_strategy": by_strategy,
+        "by_underlying": by_underlying,
+        "results": results,
+    }
