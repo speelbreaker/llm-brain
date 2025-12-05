@@ -21,6 +21,7 @@ from src.agent_brain_llm import choose_action_with_llm
 from src.execution import execute_action
 from src.logging_utils import log_decision, log_error, print_decision_summary
 from src.models import ActionType
+from src.decisions_store import decisions_store
 
 StatusCallback = Callable[[Dict[str, Any]], None]
 
@@ -282,6 +283,21 @@ def run_agent_loop_forever(
                 risk_reasons=reasons,
                 execution_result=execution_result,
             )
+            
+            decision_entry = {
+                "timestamp": datetime.utcnow().isoformat(),
+                "decision_source": proposed_action.get("decision_source", "llm" if settings.llm_enabled else "rule_based"),
+                "proposed_action": proposed_action,
+                "final_action": final_action,
+                "risk_check": {"allowed": allowed, "reasons": reasons},
+                "execution": execution_result,
+                "config_snapshot": {
+                    "mode": settings.mode,
+                    "llm_enabled": settings.llm_enabled,
+                    "dry_run": settings.dry_run,
+                },
+            }
+            decisions_store.add(decision_entry)
             
             try:
                 log_decision(

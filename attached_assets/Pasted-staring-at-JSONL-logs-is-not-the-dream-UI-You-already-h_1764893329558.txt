@@ -1,0 +1,399 @@
+staring at JSONL logs is not the dream UI 😅
+You already have a web app and a chat panel, so the nicest move is to:
+
+keep everything in the same app,
+
+add a “Live Agent” dashboard + a “Backtesting Lab” view,
+
+and a small “Insights” panel where the LLM explains what it’s learning / seeing.
+
+I’ll first describe what it will look like in plain language, then give you a copy-paste prompt for your AI builder.
+
+What the nicer UI would show
+1. Live Agent Dashboard (real-time view)
+
+On the main page (or a “Live” tab):
+
+Agent status bar
+
+Mode: LLM (research) or Rule-based
+
+Dry-run: True/False
+
+Underlyings: BTC, ETH, ...
+
+Next loop in: (not required, but nice)
+
+Last decision card
+
+Timestamp
+
+Proposed action: OPEN_COVERED_CALL / ROLL_COVERED_CALL / DO_NOTHING
+
+Final action (after risk engine)
+
+Instrument, size, DTE, delta, IVRV
+
+Short reasoning sentence from the LLM (“Bull regime, strong 30d returns, choosing further OTM 97k strike”)
+
+Recent decisions table (last 20–50 entries)
+
+Time
+
+Source: LLM vs Rule-based
+
+Proposed vs Final action
+
+Risk: PASS / BLOCKED
+
+Execution: simulated / submitted / filled
+
+Basically a friendly view over the same data you’re already logging to agent_decisions_*.jsonl.
+
+2. Backtesting Lab (run + visualize backtests)
+
+On another section/tab:
+
+Backtest controls
+
+Underlying: BTC / ETH / SOL (later)
+
+Date range: start / end
+
+Target DTE, delta, tolerances
+
+Timeframe, decision interval, etc.
+
+Run Backtest button
+
+Calls a /api/backtest/run endpoint, which:
+
+Uses CoveredCallSimulator.simulate_policy(...)
+
+Returns summary: num_trades, final_pnl, max_drawdown, equity_curve points
+
+Results panel
+
+Summary stats:
+
+Number of trades
+
+Final PnL
+
+Max drawdown %
+
+Equity curve chart (just a simple line chart using JS or a small chart lib)
+
+Top trades table:
+
+Instrument, open/close time, PnL, max drawdown, notes
+
+“Backtest Insights” (LLM summary)
+
+When a backtest completes, an /api/backtest/insights endpoint calls the OpenAI API with the backtest result and returns:
+
+“Most trades in bull regimes performed well with 7DTE, 0.25Δ calls, but performance degraded in strong downtrends. Consider reducing size or skipping trades when 30d return < –15% and regime = bear.”
+
+So you can literally click a button, run a backtest, and read the agent’s “conclusions” on the same page.
+
+Prompt for your AI builder (UI + endpoints)
+
+Here’s a prompt you can send directly to your Replit AI builder (or whatever agent is editing the repo):
+
+PROMPT FOR REPLIT AI BUILDER – ADD DASHBOARD + BACKTEST UI
+
+I have a Deribit options trading agent project with:
+
+A FastAPI (or similar) web server that already exposes:
+
+A main HTML page with status + “Chat with Agent” UI.
+
+Endpoints for /status and /chat.
+
+A background worker loop that runs the agent using:
+
+AgentState,
+
+agent_decisions_*.jsonl logs (flight recorder),
+
+An LLM decision brain (LLM mode already running in “research, dry-run”).
+
+A backtesting module in src/backtest/ with:
+
+CoveredCallSimulator,
+
+simulate_single_call(...),
+
+simulate_policy(...),
+
+generate_training_data(...).
+
+I want to add a nicer UI to monitor the live agent and to inspect backtesting runs, without creating a separate app. Please keep everything in this repo and reuse the existing FastAPI app and templates.
+
+GOAL OVERVIEW
+
+Add:
+
+A Live Agent Dashboard section on the main page that:
+
+Shows current mode (rule-based vs LLM), dry-run status, and basic stats.
+
+Displays the latest decision (proposed & final action, symbol, size, reasoning).
+
+Shows a small table of recent decisions (e.g. last 20–50).
+
+A Backtesting Lab section/tab that:
+
+Lets me configure a simple backtest,
+
+Runs it via the existing CoveredCallSimulator.simulate_policy(...),
+
+Displays metrics, an equity curve, and a top trades table,
+
+Optionally calls an LLM endpoint to generate a plain-language “insight” summary.
+
+Use simple HTML/CSS (reuse any existing styling) and JSON endpoints to avoid overcomplication.
+
+1. Live Agent Dashboard – Backend
+
+a) Add an in-memory “recent decisions” buffer
+
+In the module where the agent loop runs and writes to the JSONL flight recorder, please:
+
+Also maintain an in-memory deque (e.g. collections.deque) of the most recent N decisions (e.g. 50).
+
+Each entry should be a simplified dict:
+
+{
+  "timestamp": "...",
+  "decision_source": "llm" | "rule_based",
+  "proposed_action": { "action": "...", "params": {...}, "reasoning": "..." },
+  "final_action": { "action": "...", "params": {...} },
+  "risk_check": { "allowed": bool, "reasons": [...] },
+  "execution": { "status": "...", "dry_run": bool },
+  "config_snapshot": { "mode": "...", "llm_enabled": bool, "dry_run": bool },
+}
+
+
+Each time the agent loop logs an entry, also push it into this deque.
+
+b) Add an API endpoint /api/agent/decisions
+
+Method: GET
+
+Response: JSON with:
+
+{
+  "mode": "rule_based" or "llm",
+  "llm_enabled": true/false,
+  "dry_run": true/false,
+  "decisions": [ ... up to last N ... ]
+}
+
+
+The first decision in the list should be the most recent.
+
+Keep this endpoint read-only and lightweight.
+
+2. Live Agent Dashboard – Frontend
+
+On the main HTML template (the one that currently shows status + chat), please add a “Live Agent” section, for example above or next to the chat.
+
+a) Agent status bar
+
+Show:
+
+Mode: LLM (research) or Mode: Rule-based
+
+Dry run: True/False
+
+Maybe a small green dot if the agent has produced a decision in the last X minutes.
+
+b) Latest decision card
+
+Render the most recent decision from /api/agent/decisions as a card:
+
+Title: Last Decision – <timestamp>
+
+Contents:
+
+Source: LLM or Source: Rule-based
+
+Proposed: <action> (e.g. OPEN_COVERED_CALL BTC-19DEC25-97000-C x0.1)
+
+Final: <action> (after risk engine)
+
+Risk: PASS / BLOCKED (reasons if blocked)
+
+Execution: simulated / submitted / filled
+
+Reasoning (truncated to 2–3 lines)
+
+c) Recent decisions table
+
+Below the card, show a small table with ~20 rows:
+
+Columns:
+
+Time
+
+Source (LLM vs Rule)
+
+Proposed action
+
+Final action
+
+Risk (PASS or BLOCKED)
+
+Execution status
+
+Use a small JS snippet to periodically (e.g. every 10–20 seconds) refresh /api/agent/decisions and update the DOM so the dashboard feels “live” without page reloads.
+
+3. Backtesting Lab – Backend
+
+Add two new endpoints for backtesting:
+
+a) POST /api/backtest/run
+
+Request body: JSON with basic config, e.g.:
+
+{
+  "underlying": "BTC",
+  "start": "2024-01-01T00:00:00Z",
+  "end": "2024-06-01T00:00:00Z",
+  "timeframe": "1h",
+  "decision_interval_bars": 24,
+  "target_dte": 7,
+  "target_delta": 0.25
+}
+
+
+Steps:
+
+Construct a CallSimulationConfig based on the request.
+
+Instantiate CoveredCallSimulator with the existing DeribitDataSource from src/backtest/.
+
+Use a simple policy like “always_trade_policy” (sell a call at each decision time if a candidate exists).
+
+Call simulate_policy(...) to get a SimulationResult.
+
+Response JSON:
+
+{
+  "config": { ...echo of inputs... },
+  "metrics": {
+    "num_trades": 123,
+    "final_pnl": 456.78,
+    "max_drawdown_pct": 12.34
+  },
+  "equity_curve": [
+    ["2024-02-01T00:00:00Z", 10.0],
+    ["2024-02-10T00:00:00Z", 25.0],
+    ...
+  ],
+  "trades_sample": [
+    {
+      "instrument_name": "BTC-19DEC25-97000-C",
+      "open_time": "...",
+      "close_time": "...",
+      "pnl": 12.34,
+      "max_drawdown_pct": 5.6,
+      "notes": "..."
+    },
+    ...
+  ]
+}
+
+
+For now, it’s okay if this runs synchronously and responds once the backtest is done (we’re starting simple).
+
+b) POST /api/backtest/insights
+
+Request body: the JSON we just returned from /api/backtest/run (or a subset).
+
+It should call the OpenAI Responses API (same client you’re already using) with:
+
+A system prompt like:
+“You are an options research analyst. You receive results from a covered-call backtest. Summarize what worked, what didn’t, and suggest simple rules based on regime (bull/bear/sideways) and IVRV. Be concise and concrete.”
+
+The backtest result JSON as input_json.
+
+Response JSON:
+
+{
+  "insights": "Short paragraph explaining main conclusions..."
+}
+
+
+This endpoint is optional but very helpful for the “what conclusions he’s making” part.
+
+4. Backtesting Lab – Frontend
+
+On the same main HTML page, add a “Backtesting Lab” tab or section.
+
+a) Controls
+
+A simple form:
+
+Underlying: dropdown (BTC, ETH)
+
+Start date, End date (simple text inputs or date pickers)
+
+Timeframe (1h, 4h, 1d)
+
+Target DTE (default 7)
+
+Target delta (default 0.25)
+
+A “Run Backtest” button that:
+
+Reads the form values
+
+Sends POST /api/backtest/run via fetch
+
+On success, sets a backtestResult JS variable and updates the UI.
+
+b) Results section
+
+When a result is present, show:
+
+Metrics (num_trades, final_pnl, max_drawdown_pct) in a small stats panel.
+
+A simple equity curve chart:
+
+You can use a minimal JavaScript chart library or just draw with <canvas>; line chart is fine.
+
+X axis: time; Y axis: equity.
+
+A small trades table (e.g. top 10 trades by absolute PnL).
+
+c) Insights section
+
+Add a “Get Insights” button next to the results that:
+
+Calls POST /api/backtest/insights with the backtest result JSON.
+
+On success, renders the insights text in a box, so I can read what the LLM thinks about this backtest.
+
+5. General requirements
+
+Reuse the existing web server (FastAPI, templates, etc.).
+
+Keep all existing functionality intact: /status, /chat, background agent loop.
+
+Do not introduce heavy JS frameworks; use minimal vanilla JS or whatever is already in the project.
+
+All new API endpoints should have basic error handling and return clear error messages if something goes wrong (e.g. invalid dates).
+
+After implementing this, I should be able to:
+
+Open the app in the browser,
+
+See a live dashboard of what the agent is doing (without reading logs),
+
+Run a backtest from the UI,
+
+See results (equity curve, stats, trades),
+
+And click a button to get a plain-language summary of the backtest from the LLM.
