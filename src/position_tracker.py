@@ -358,7 +358,19 @@ class PositionTracker:
             chain.unrealized_pnl_pct = (realized + unrealized) / base * 100.0
 
     def _chain_to_open_summary(self, chain: PositionChain) -> Dict[str, Any]:
-        dte = 0.0
+        if chain.expiry is not None:
+            now = _utc_now()
+            dte = (chain.expiry - now).total_seconds() / 86400.0
+            if dte < 0:
+                dte = 0.0
+            expiry_str = chain.expiry.isoformat()
+        else:
+            dte = 0.0
+            expiry_str = None
+
+        current_leg = chain.legs[-1] if chain.legs else None
+        mark = current_leg.mark_price if current_leg and current_leg.mark_price else (current_leg.entry_price if current_leg else 0.0)
+
         return {
             "position_id": chain.position_id,
             "underlying": chain.underlying,
@@ -366,13 +378,13 @@ class PositionTracker:
             "option_type": chain.option_type,
             "strategy_type": chain.strategy_type,
             "side": "SHORT",
-            "quantity": chain.legs[-1].quantity if chain.legs else 0.0,
+            "quantity": current_leg.quantity if current_leg else 0.0,
             "entry_price": chain.legs[0].entry_price if chain.legs else 0.0,
-            "mark_price": chain.legs[-1].entry_price if chain.legs else 0.0,
+            "mark_price": mark,
             "unrealized_pnl": chain.unrealized_pnl,
             "unrealized_pnl_pct": chain.unrealized_pnl_pct,
             "entry_time": chain.open_time.isoformat(),
-            "expiry": None,
+            "expiry": expiry_str,
             "dte": dte,
             "num_rolls": chain.num_rolls,
             "mode": chain.mode,
@@ -382,8 +394,12 @@ class PositionTracker:
     def _chain_to_closed_summary(self, chain: PositionChain) -> Dict[str, Any]:
         if chain.close_time is None:
             holding_days = 0.0
+            close_time = _utc_now()
         else:
-            holding_days = (chain.close_time - chain.open_time).total_seconds() / 86400.0
+            close_time = chain.close_time
+            holding_days = (close_time - chain.open_time).total_seconds() / 86400.0
+
+        expiry_str = chain.expiry.isoformat() if chain.expiry is not None else None
 
         return {
             "position_id": chain.position_id,
@@ -392,7 +408,7 @@ class PositionTracker:
             "option_type": chain.option_type,
             "strategy_type": chain.strategy_type,
             "open_time": chain.open_time.isoformat(),
-            "close_time": (chain.close_time or _utc_now()).isoformat(),
+            "close_time": close_time.isoformat(),
             "holding_days": holding_days,
             "num_legs": chain.num_legs,
             "num_rolls": chain.num_rolls,
@@ -402,6 +418,7 @@ class PositionTracker:
             "mode": chain.mode,
             "exit_style": chain.exit_style or "hold_to_expiry",
             "note": None,
+            "expiry": expiry_str,
         }
 
 
