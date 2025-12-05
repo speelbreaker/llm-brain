@@ -25,7 +25,8 @@ The agent is built with a clear separation of concerns, featuring modules for co
 - **Equity Curve Visualization**: Interactive chart comparing Strategy returns vs HODL benchmark with dual-line display.
 - **Training Mode**: Allows for multi-profile data collection (conservative, moderate, aggressive strategies) to generate diverse datasets for ML/RL.
 - **Training Data Export**: Captures (state, action, reward) tuples and exports to CSV/JSONL. Note: Historical backtests can use synthetic pricing for self-consistent option prices or live option data from Deribit's public API.
-- **Web Dashboard**: A FastAPI application offers a "Live Agent" view with real-time status and recent decisions, a "Backtesting Lab" with TradingView-style summary panel, equity curve charts, and a "Chat" interface for natural language interaction with the agent.
+- **Web Dashboard**: A FastAPI application offers a "Live Agent" view with real-time status and recent decisions, a "Backtesting Lab" with TradingView-style summary panel, equity curve charts, a "Calibration" tab for comparing synthetic BS prices vs live Deribit marks, and a "Chat" interface for natural language interaction with the agent.
+- **Calibration vs Deribit**: Compares synthetic Black-Scholes option prices against live Deribit mark prices. Fetches real-time option chains from Deribit public API, computes BS prices using Deribit's mark_iv, and reports Mean Absolute Error (MAE) and bias. Handles both inverse (BTC/ETH-settled) and linear (USDC-settled) contracts correctly.
 - **Structured Logging**: Uses JSONL for structured logging of all decisions and actions, facilitating future analysis and ML/RL training.
 
 ### Technical Implementations
