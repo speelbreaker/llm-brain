@@ -186,7 +186,8 @@ def get_call_chain(
             )
             mark_price = float(ticker.get("mark_price", 0.0) or 0.0)
             mark_iv = ticker.get("mark_iv", None)
-            delta = ticker.get("delta", None)
+            greeks = ticker.get("greeks") or {}
+            delta = greeks.get("delta", None)
             
             if mark_price <= 0.0:
                 continue
@@ -259,6 +260,8 @@ class CalibrationResult:
     timestamp: datetime
     rows: List[CalibrationRow]
     rv_annualized: Optional[float] = None
+    atm_iv: Optional[float] = None
+    recommended_iv_multiplier: Optional[float] = None
 
 
 def run_calibration(
@@ -327,6 +330,23 @@ def run_calibration(
             rows=[],
             rv_annualized=rv_annualized,
         )
+
+    atm_iv: Optional[float] = None
+    best_delta_diff: Optional[float] = None
+    for q in quotes:
+        if q.mark_iv is None or q.mark_iv <= 0:
+            continue
+        if q.delta is None:
+            continue
+        delta_val = float(q.delta)
+        diff = abs(delta_val - 0.5)
+        if best_delta_diff is None or diff < best_delta_diff:
+            best_delta_diff = diff
+            atm_iv = float(q.mark_iv) / 100.0
+
+    recommended_iv_multiplier: Optional[float] = None
+    if rv_annualized and rv_annualized > 0.0 and atm_iv and atm_iv > 0.0:
+        recommended_iv_multiplier = atm_iv / rv_annualized
 
     if len(quotes) > max_samples:
         step = max(1, len(quotes) // max_samples)
@@ -410,4 +430,6 @@ def run_calibration(
         timestamp=now,
         rows=rows,
         rv_annualized=rv_annualized,
+        atm_iv=atm_iv,
+        recommended_iv_multiplier=recommended_iv_multiplier,
     )

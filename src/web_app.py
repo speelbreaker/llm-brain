@@ -178,6 +178,8 @@ def get_calibration(
             "iv_multiplier": result.iv_multiplier,
             "default_iv": result.default_iv,
             "rv_annualized": result.rv_annualized,
+            "atm_iv": result.atm_iv,
+            "recommended_iv_multiplier": result.recommended_iv_multiplier,
             "count": result.count,
             "mae_pct": result.mae_pct,
             "bias_pct": result.bias_pct,
@@ -1802,13 +1804,35 @@ def index() -> str:
         const bias = (data.bias_pct ?? 0).toFixed(2);
         const count = data.count ?? 0;
         const spot = data.spot ?? 0;
-        const rv = data.rv_annualized ? (data.rv_annualized * 100).toFixed(1) : 'N/A';
+        const rv = data.rv_annualized;
+        const atmIv = data.atm_iv;
+        const recMult = data.recommended_iv_multiplier;
 
-        summaryEl.textContent =
+        let line1 =
           `Underlying ${{data.underlying}} @ ${{spot.toFixed ? spot.toFixed(2) : spot}} USD - ` +
-          `RV_7d = ${{rv}}% - ` +
           `${{count}} options in [${{data.min_dte}}d, ${{data.max_dte}}d], ` +
           `MAE ~ ${{mae}}% of mark, bias ~ ${{bias}}%.`;
+
+        let line2 = '';
+
+        if (rv && rv > 0) {{
+          const rvPct = (rv * 100).toFixed(1);
+          line2 += `RV_7d = ${{rvPct}}%`;
+        }}
+
+        if (atmIv && atmIv > 0) {{
+          const atmIvPct = (atmIv * 100).toFixed(1);
+          line2 += (line2 ? ' | ' : '') + `ATM IV = ${{atmIvPct}}%`;
+        }}
+
+        if (recMult && recMult > 0) {{
+          const recStr = recMult.toFixed(3);
+          line2 += (line2 ? ' | ' : '') + `Recommended iv_multiplier = ${{recStr}}`;
+        }}
+
+        summaryEl.innerHTML = line2
+          ? `${{line1}}<br><span style="font-size:0.85rem;color:#666;">${{line2}}</span>`
+          : line1;
 
         const rows = (data.rows || []).slice(0, 50);
         if (rows.length === 0) {{

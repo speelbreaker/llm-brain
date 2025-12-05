@@ -1,0 +1,245 @@
+You are working inside the LLMAgentBrain repo.
+
+Goal
+=====
+
+Enhance the existing “Calibration vs Deribit” feature so the backend computes and returns a:
+
+    recommended_iv_multiplier = mark_iv_atm / RV_7d
+
+and the frontend shows it on the calibration card, along with RV_7d.
+
+Definitions:
+
+- RV_7d: the annualized realized volatility you already compute in `run_calibration` using 7-day index history.
+- mark_iv_atm: the implied volatility of the "ATM" call (δ ≈ 0.5) from Deribit for the options used in calibration.
+
+If either RV_7d or mark_iv_atm is missing/invalid, recommended_iv_multiplier should be null and the UI should handle that gracefully.
+
+Keep all existing behavior the same; this is an additive change.
+
+────────────────────────────────────────
+A. Backend: extend CalibrationResult
+────────────────────────────────────────
+
+1) Open `src/calibration.py`.
+
+2) Find the `CalibrationResult` dataclass. Extend it with two new optional fields:
+
+   ```python
+   @dataclass
+   class CalibrationResult:
+       underlying: str
+       spot: float
+       min_dte: float
+       max_dte: float
+       iv_multiplier: float
+       default_iv: float
+       count: int
+       mae_pct: float
+       bias_pct: float
+       timestamp: datetime
+       rows: list[CalibrationRow]
+       rv_annualized: float | None = None
+       atm_iv: float | None = None
+       recommended_iv_multiplier: float | None = None
+Use float | None (or Optional[float] depending on the existing style) and default to None.
+
+────────────────────────────────────────
+B. Backend: compute ATM IV and recommended multiplier
+────────────────────────────────────────
+
+In run_calibration(...):
+
+After you compute rv_annualized and before you construct the CalibrationResult, add logic to find the ATM IV from the quotes.
+
+You already have a list of OptionQuote objects named quotes, each with mark_iv and (optionally) delta.
+
+Add:
+
+python
+Copy code
+atm_iv: float | None = None
+
+# Find ATM call: mark_iv at delta closest to +0.5
+best_delta_diff = None
+for q in quotes:
+    if q.mark_iv is None:
+        continue
+    if q.delta is None:
+        continue
+    # For calls, ATM ~ delta ≈ +0.5
+    delta_val = float(q.delta)
+    diff = abs(delta_val - 0.5)
+    if best_delta_diff is None or diff < best_delta_diff:
+        best_delta_diff = diff
+        atm_iv = float(q.mark_iv)
+Place this after quotes is finalized (after any subsampling) and before you create CalibrationResult.
+
+Compute recommended_iv_multiplier:
+
+python
+Copy code
+recommended_iv_multiplier: float | None = None
+if rv_annualized and rv_annualized > 0.0 and atm_iv and atm_iv > 0.0:
+    recommended_iv_multiplier = atm_iv / rv_annualized
+When you construct and return the CalibrationResult, populate the new fields:
+
+python
+Copy code
+return CalibrationResult(
+    underlying=underlying,
+    spot=spot,
+    min_dte=min_dte,
+    max_dte=max_dte,
+    iv_multiplier=iv_multiplier,
+    default_iv=default_iv,
+    count=len(rows),
+    mae_pct=mae_pct,
+    bias_pct=bias_pct,
+    timestamp=now,
+    rows=rows,
+    rv_annualized=rv_annualized,
+    atm_iv=atm_iv,
+    recommended_iv_multiplier=recommended_iv_multiplier,
+)
+────────────────────────────────────────
+C. Backend: expose the new fields via /api/calibration
+────────────────────────────────────────
+
+In src/web_app.py (or wherever the FastAPI app and /api/calibration endpoint is defined):
+
+In the get_calibration handler, after calling run_calibration(...), extend the JSON payload with the new fields:
+
+python
+Copy code
+payload = {
+    "underlying": result.underlying,
+    "spot": result.spot,
+    "min_dte": result.min_dte,
+    "max_dte": result.max_dte,
+    "iv_multiplier": result.iv_multiplier,
+    "default_iv": result.default_iv,
+    "count": result.count,
+    "mae_pct": result.mae_pct,
+    "bias_pct": result.bias_pct,
+    "timestamp": result.timestamp.isoformat(),
+    "rv_annualized": result.rv_annualized,
+    "atm_iv": result.atm_iv,
+    "recommended_iv_multiplier": result.recommended_iv_multiplier,
+    "rows": [
+        {
+            "instrument": r.instrument,
+            "dte": r.dte,
+            "strike": r.strike,
+            "mark_price": r.mark_price,
+            "syn_price": r.syn_price,
+            "diff": r.diff,
+            "diff_pct": r.diff_pct,
+            "mark_iv": r.mark_iv,
+            "syn_iv": r.syn_iv,
+        }
+        for r in result.rows
+    ],
+}
+Keep the existing fields unchanged; just add the three new ones.
+
+────────────────────────────────────────
+D. Frontend: show RV_7d and recommended multiplier
+────────────────────────────────────────
+
+In the main HTML template (likely src/web/templates/index.html), update the Calibration card script.
+
+Locate the runCalibration() JS function and the block that builds summaryEl.textContent. It probably looks similar to:
+
+javascript
+Copy code
+const mae = (data.mae_pct ?? 0).toFixed(2);
+const bias = (data.bias_pct ?? 0).toFixed(2);
+const count = data.count ?? 0;
+const spot = data.spot ?? 0;
+
+summaryEl.textContent =
+  `Underlying ${data.underlying} @ ${spot.toFixed ? spot.toFixed(2) : spot} USD – ` +
+  `${count} options in [${data.min_dte}d, ${data.max_dte}d], ` +
+  `MAE ~ ${mae}% of mark, bias ~ ${bias}%.`;
+Extend it to incorporate:
+
+RV_7d (as a percentage), and
+
+Recommended iv_multiplier, if available.
+
+For example:
+
+javascript
+Copy code
+const rv = data.rv_annualized;
+const atmIv = data.atm_iv;
+const recMult = data.recommended_iv_multiplier;
+
+let line1 =
+  `Underlying ${data.underlying} @ ${spot.toFixed ? spot.toFixed(2) : spot} USD – ` +
+  `${count} options in [${data.min_dte}d, ${data.max_dte}d], ` +
+  `MAE ~ ${mae}% of mark, bias ~ ${bias}%.`;
+
+let line2 = '';
+
+if (rv && rv > 0) {
+  const rvPct = (rv * 100).toFixed(1);
+  line2 += `RV_7d ≈ ${rvPct}%`;
+}
+
+if (atmIv && atmIv > 0) {
+  const atmIvPct = (atmIv * 100).toFixed(1);
+  line2 += (line2 ? ' · ' : '') + `ATM IV ≈ ${atmIvPct}%`;
+}
+
+if (recMult && recMult > 0) {
+  const recStr = recMult.toFixed(3);
+  line2 += (line2 ? ' · ' : '') + `Recommended iv_multiplier ≈ ${recStr}`;
+}
+
+summaryEl.innerHTML = line2
+  ? `${line1}<br><span style="font-size:0.85rem;color:#666;">${line2}</span>`
+  : line1;
+Do NOT change the HTML structure of the card; just update the JS so the summary element now shows two lines:
+
+Line 1: existing MAE / bias summary.
+
+Line 2 (smaller text): RV_7d, ATM IV, and recommended iv_multiplier when available.
+
+If rv_annualized or recommended_iv_multiplier is null, the second line should simply omit those parts and still render cleanly.
+
+────────────────────────────────────────
+E. Sanity check
+────────────────────────────────────────
+
+After implementing:
+
+Run the app and open the Calibration card.
+
+Click “Run Calibration” for BTC with DTE range 3–14 days.
+
+Confirm:
+
+The card still shows MAE and bias.
+
+Below that, it now shows something like:
+
+RV_7d ≈ 78.0% · ATM IV ≈ 55.2% · Recommended iv_multiplier ≈ 0.708
+
+Changing market conditions will change these numbers, but they should be sensible and non-zero when Deribit returns valid IV and RV_7d.
+
+Do not change any other behavior of the backtests or live agent in this task.
+
+yaml
+Copy code
+
+---
+
+Once Builder applies this, you’ll be able to:
+
+- Click the calibration button,
+- See RV_7d and ATM IV,
+- And get a **concrete recommended `synthetic_iv_multiplier`** to plug into your config before you regenerate training data and train the model.
+::contentReference[oaicite:0]{index=0}

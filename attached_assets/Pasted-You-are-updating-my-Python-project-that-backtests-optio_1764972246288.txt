@@ -1,0 +1,685 @@
+You are updating my Python project that backtests options strategies (BTC/ETH, chains of rolls, etc.) and exports training data.
+
+High-level goal
+
+Add a robust evaluation & risk layer based on:
+
+Expectancy (win rate, avg win, avg loss)
+
+Monte Carlo variance (drawdowns & losing streaks)
+
+A “psychology friendliness” score (how smooth & human-tolerable the strategy is)
+
+A risk manager enforcing:
+
+max risk per trade (~1% of equity),
+
+max correlated risk per underlying (~3%),
+
+max new trades per day (1–2).
+
+Then integrate these into the existing backtest summary and (where appropriate) live / paper trading loop.
+
+Use the module layout below. Adapt imports/package names to this repo if needed.
+
+1. Add psychology_metrics.py
+
+Create a new file (or module) in the analytics/backtest area, e.g.:
+
+app/analytics/psychology_metrics.py
+(If my project uses a different structure, pick the closest equivalent.)
+
+Implement this code (fix package paths if needed):
+
+from __future__ import annotations
+from dataclasses import dataclass
+from typing import List, Sequence, Dict, Tuple, Optional
+from datetime import datetime
+import math
+import random
+
+
+@dataclass
+class TradeResult:
+    """
+    Generic trade or chain result.
+    Treat one "trade" as one completed options chain if that fits better.
+    """
+    timestamp: datetime
+    pnl_pct: float        # return as fraction of equity, e.g. +0.01 = +1%
+    is_win: bool
+    underlying: str       # "BTC", "ETH", etc.
+    chain_id: Optional[str] = None
+
+
+@dataclass
+class StrategyStats:
+    n_trades: int
+    win_rate: float
+    avg_win: float
+    avg_loss: float
+    expectancy_per_trade: float
+    max_consec_losses: int
+    max_consec_wins: int
+    max_drawdown_pct: float
+    years_covered: float
+
+
+@dataclass
+class VarianceProfile:
+    sims: int
+    trades_per_sim: int
+    median_final_return: float
+    worst_final_return: float
+    best_final_return: float
+    median_max_dd: float
+    worst_max_dd: float
+    median_max_loss_streak: int
+    worst_max_loss_streak: int
+
+
+@dataclass
+class PsychologyScore:
+    score: float
+    components: Dict[str, float]
+
+
+def compute_strategy_stats(
+    trades: Sequence[TradeResult],
+    initial_equity: float = 1.0,
+) -> StrategyStats:
+    if not trades:
+        raise ValueError("No trades provided")
+
+    n = len(trades)
+    wins = [t.pnl_pct for t in trades if t.pnl_pct > 0]
+    losses = [t.pnl_pct for t in trades if t.pnl_pct < 0]
+
+    win_rate = len(wins) / n if n > 0 else 0.0
+    avg_win = sum(wins) / len(wins) if wins else 0.0
+    avg_loss = sum(losses) / len(losses) if losses else 0.0
+
+    expectancy = win_rate * avg_win + (1 - win_rate) * avg_loss
+
+    equity = initial_equity
+    peak = initial_equity
+    max_dd = 0.0
+    max_consec_losses = 0
+    max_consec_wins = 0
+    cur_losses = 0
+    cur_wins = 0
+
+    for t in trades:
+        equity *= (1 + t.pnl_pct)
+        peak = max(peak, equity)
+        dd = (equity - peak) / peak  # negative number
+        max_dd = min(max_dd, dd)
+
+        if t.pnl_pct > 0:
+            cur_wins += 1
+            cur_losses = 0
+        elif t.pnl_pct < 0:
+            cur_losses += 1
+            cur_wins = 0
+
+        max_consec_losses = max(max_consec_losses, cur_losses)
+        max_consec_wins = max(max_consec_wins, cur_wins)
+
+    sorted_trades = sorted(trades, key=lambda x: x.timestamp)
+    span_days = (sorted_trades[-1].timestamp - sorted_trades[0].timestamp).days or 1
+    years_covered = span_days / 365.25
+
+    return StrategyStats(
+        n_trades=n,
+        win_rate=win_rate,
+        avg_win=avg_win,
+        avg_loss=avg_loss,
+        expectancy_per_trade=expectancy,
+        max_consec_losses=max_consec_losses,
+        max_consec_wins=max_consec_wins,
+        max_drawdown_pct=max_dd,  # negative number
+        years_covered=years_covered,
+    )
+
+
+def _simulate_equity(
+    returns: Sequence[float],
+    initial_equity: float = 1.0,
+) -> tuple[float, float, int]:
+    equity = initial_equity
+    peak = initial_equity
+    max_dd = 0.0
+    max_loss_streak = 0
+    cur_loss_streak = 0
+
+    for r in returns:
+        equity *= (1 + r)
+        peak = max(peak, equity)
+        dd = (equity - peak) / peak
+        max_dd = min(max_dd, dd)
+
+        if r < 0:
+            cur_loss_streak += 1
+        else:
+            cur_loss_streak = 0
+
+        max_loss_streak = max(max_loss_streak, cur_loss_streak)
+
+    return equity, max_dd, max_loss_streak
+
+
+def run_monte_carlo(
+    trades: Sequence[TradeResult],
+    sims: int = 1000,
+    trades_per_sim: Optional[int] = None,
+    bootstrap: bool = True,
+    seed: Optional[int] = None,
+) -> VarianceProfile:
+    if not trades:
+        raise ValueError("No trades provided")
+
+    rng = random.Random(seed)
+    returns = [t.pnl_pct for t in trades]
+    n = len(returns)
+    trades_per_sim = trades_per_sim or n
+
+    final_eqs: list[float] = []
+    max_dds: list[float] = []
+    max_streaks: list[int] = []
+
+    for _ in range(sims):
+        if bootstrap:
+            path = [rng.choice(returns) for _ in range(trades_per_sim)]
+        else:
+            path = returns.copy()
+            rng.shuffle(path)
+            if trades_per_sim < n:
+                path = path[:trades_per_sim]
+
+        final_eq, max_dd, max_streak = _simulate_equity(path)
+        final_eqs.append(final_eq)
+        max_dds.append(max_dd)
+        max_streaks.append(max_streak)
+
+    def _percentile(data: list[float], p: float) -> float:
+        if not data:
+            return 0.0
+        data = sorted(data)
+        k = (len(data) - 1) * p
+        f = math.floor(k)
+        c = math.ceil(k)
+        if f == c:
+            return data[int(k)]
+        d0 = data[f] * (c - k)
+        d1 = data[c] * (k - f)
+        return d0 + d1
+
+    median_final = _percentile(final_eqs, 0.5) - 1.0
+    worst_final = min(final_eqs) - 1.0
+    best_final = max(final_eqs) - 1.0
+
+    median_dd = _percentile(max_dds, 0.5)
+    worst_dd = min(max_dds)
+
+    median_streak = int(round(_percentile(max_streaks, 0.5)))
+    worst_streak = max(max_streaks)
+
+    return VarianceProfile(
+        sims=sims,
+        trades_per_sim=trades_per_sim,
+        median_final_return=median_final,
+        worst_final_return=worst_final,
+        best_final_return=best_final,
+        median_max_dd=median_dd,
+        worst_max_dd=worst_dd,
+        median_max_loss_streak=median_streak,
+        worst_max_loss_streak=worst_streak,
+    )
+
+
+def compute_psychology_score(
+    stats: StrategyStats,
+    variance: VarianceProfile,
+    target_expectancy_per_trade: float = 0.001,  # +0.1% / trade
+) -> PsychologyScore:
+    # win rate: 40%→0, 80%→1
+    win_rate_score = min(max((stats.win_rate - 0.4) / 0.4, 0.0), 1.0)
+    exp_score = min(max(stats.expectancy_per_trade / target_expectancy_per_trade, 0.0), 1.5)
+
+    streak_penalty = min(variance.worst_max_loss_streak / 10.0, 2.0)  # 10-loss streak ~ 1.0
+    dd_penalty = min(abs(variance.worst_max_dd) / 0.3, 2.0)          # 30% worst DD ~ 1.0
+
+    raw_score = (
+        0.4 * win_rate_score +
+        0.3 * exp_score -
+        0.2 * streak_penalty -
+        0.1 * dd_penalty
+    )
+
+    final_score = max(raw_score, -2.0) + 2.0
+    final_score *= 25.0  # scale to ~0–100
+
+    components = {
+        "win_rate_score": win_rate_score,
+        "expectancy_score": exp_score,
+        "streak_penalty": streak_penalty,
+        "dd_penalty": dd_penalty,
+    }
+    return PsychologyScore(score=final_score, components=components)
+
+2. Add risk_manager.py
+
+Create a risk module, e.g. app/risk/risk_manager.py:
+
+from __future__ import annotations
+from dataclasses import dataclass
+from datetime import datetime, date
+from typing import Sequence, Dict, Optional
+from collections import defaultdict
+
+
+@dataclass
+class OpenPosition:
+    position_id: str
+    underlying: str
+    estimated_max_loss_pct: float  # max possible loss as fraction of equity
+    opened_at: datetime
+
+
+@dataclass
+class CandidateTrade:
+    underlying: str
+    estimated_max_loss_pct: float
+    opened_at: datetime
+    strategy_id: str
+
+
+@dataclass
+class RiskConfig:
+    max_risk_per_trade: float = 0.01          # 1%
+    max_risk_per_underlying: float = 0.03     # 3%
+    max_new_trades_per_day: int = 2           # 1–2 trades/day
+    enabled: bool = True
+
+
+class RiskManager:
+    def __init__(self, config: RiskConfig):
+        self.config = config
+        self._new_trades_by_day: Dict[tuple[str, date], int] = defaultdict(int)
+
+    def reset_daily_counter(self):
+        self._new_trades_by_day.clear()
+
+    def _count_trades_today(self, strategy_id: str, now: datetime) -> int:
+        key = (strategy_id, now.date())
+        return self._new_trades_by_day.get(key, 0)
+
+    def _record_trade_today(self, strategy_id: str, now: datetime):
+        key = (strategy_id, now.date())
+        self._new_trades_by_day[key] += 1
+
+    def check_trade(
+        self,
+        candidate: CandidateTrade,
+        open_positions: Sequence[OpenPosition],
+    ) -> tuple[bool, Optional[str]]:
+        if not self.config.enabled:
+            return True, None
+
+        cfg = self.config
+        now = candidate.opened_at
+
+        if candidate.estimated_max_loss_pct > cfg.max_risk_per_trade:
+            return False, (
+                f"per-trade risk {candidate.estimated_max_loss_pct:.2%} "
+                f"exceeds limit {cfg.max_risk_per_trade:.2%}"
+            )
+
+        total_underlying_risk = sum(
+            p.estimated_max_loss_pct
+            for p in open_positions
+            if p.underlying == candidate.underlying
+        ) + candidate.estimated_max_loss_pct
+
+        if total_underlying_risk > cfg.max_risk_per_underlying:
+            return False, (
+                f"correlated risk on {candidate.underlying} would be "
+                f"{total_underlying_risk:.2%} > limit {cfg.max_risk_per_underlying:.2%}"
+            )
+
+        trades_today = self._count_trades_today(candidate.strategy_id, now)
+        if trades_today >= cfg.max_new_trades_per_day:
+            return False, (
+                f"daily trade cap reached for strategy {candidate.strategy_id} "
+                f"({trades_today}/{cfg.max_new_trades_per_day})"
+            )
+
+        self._record_trade_today(candidate.strategy_id, now)
+        return True, None
+
+
+Integrate this into the live/paper-trading decision loop:
+
+Wherever the agent decides “open a new position”, construct a CandidateTrade with:
+
+underlying = BTC / ETH etc.
+
+estimated_max_loss_pct = worst-case loss vs equity for this chain (conservative).
+
+strategy_id = name of this strategy/config.
+
+Collect current open positions into OpenPosition list.
+
+Call risk_manager.check_trade(...).
+
+If ok is False, log and skip placing orders.
+
+3. Add strategy_approval.py
+
+Create e.g. app/analytics/strategy_approval.py:
+
+from __future__ import annotations
+from dataclasses import dataclass
+from typing import Optional
+
+from app.analytics.psychology_metrics import StrategyStats, VarianceProfile, PsychologyScore
+
+
+@dataclass
+class ApprovalConfig:
+    min_trades: int = 200
+    min_years: float = 3.0
+    require_bull_bear_chop: bool = True
+
+    max_worst_dd_research: float = 0.50   # allow up to -50% DD for research
+    max_worst_dd_pilot: float = 0.35
+    max_worst_dd_prod: float = 0.25
+
+    max_loss_streak_pilot: int = 8
+    max_loss_streak_prod: int = 6
+
+    min_psych_score_pilot: float = 40.0   # out of ~100
+    min_psych_score_prod: float = 60.0
+
+    require_param_sensitivity_ok: bool = True
+    require_walk_forward_ok: bool = True
+    require_stress_test_ok: bool = True
+
+
+@dataclass
+class RegimeCoverage:
+    bull: bool
+    bear: bool
+    chop: bool
+
+
+@dataclass
+class ApprovalResult:
+    stage: str  # "RESEARCH", "PILOT", "PRODUCTION"
+    reason: str
+    stats: StrategyStats
+    variance: VarianceProfile
+    psych: PsychologyScore
+
+
+def evaluate_strategy(
+    stats: StrategyStats,
+    variance: VarianceProfile,
+    psych: PsychologyScore,
+    regimes: RegimeCoverage,
+    param_sensitivity_ok: bool,
+    walk_forward_ok: bool,
+    stress_test_ok: bool,
+    cfg: Optional[ApprovalConfig] = None,
+) -> ApprovalResult:
+    cfg = cfg or ApprovalConfig()
+
+    if stats.n_trades < cfg.min_trades:
+        return ApprovalResult(
+            stage="RESEARCH",
+            reason=f"Insufficient sample size ({stats.n_trades} < {cfg.min_trades})",
+            stats=stats,
+            variance=variance,
+            psych=psych,
+        )
+
+    if stats.years_covered < cfg.min_years:
+        return ApprovalResult(
+            stage="RESEARCH",
+            reason=f"Insufficient history ({stats.years_covered:.1f}y < {cfg.min_years:.1f}y)",
+            stats=stats,
+            variance=variance,
+            psych=psych,
+        )
+
+    if cfg.require_bull_bear_chop and not (regimes.bull and regimes.bear and regimes.chop):
+        return ApprovalResult(
+            stage="RESEARCH",
+            reason="Missing one or more market regimes (bull/bear/chop)",
+            stats=stats,
+            variance=variance,
+            psych=psych,
+        )
+
+    if cfg.require_param_sensitivity_ok and not param_sensitivity_ok:
+        return ApprovalResult(
+            stage="RESEARCH",
+            reason="Parameter sensitivity / heatmap indicates overfitting",
+            stats=stats,
+            variance=variance,
+            psych=psych,
+        )
+
+    if cfg.require_walk_forward_ok and not walk_forward_ok:
+        return ApprovalResult(
+            stage="RESEARCH",
+            reason="Walk-forward optimization failed (out-of-sample too weak)",
+            stats=stats,
+            variance=variance,
+            psych=psych,
+        )
+
+    if cfg.require_stress_test_ok and not stress_test_ok:
+        return ApprovalResult(
+            stage="RESEARCH",
+            reason="Stress tests (fees, slippage, delays) too fragile",
+            stats=stats,
+            variance=variance,
+            psych=psych,
+        )
+
+    worst_dd = abs(variance.worst_max_dd)
+    worst_streak = variance.worst_max_loss_streak
+
+    if worst_dd > cfg.max_worst_dd_research:
+        return ApprovalResult(
+            stage="RESEARCH",
+            reason=f"Worst Monte Carlo DD {worst_dd:.1%} exceeds research limit {cfg.max_worst_dd_research:.1%}",
+            stats=stats,
+            variance=variance,
+            psych=psych,
+        )
+
+    if (
+        worst_dd <= cfg.max_worst_dd_prod
+        and worst_streak <= cfg.max_loss_streak_prod
+        and psych.score >= cfg.min_psych_score_prod
+    ):
+        return ApprovalResult(
+            stage="PRODUCTION",
+            reason="Meets production thresholds (DD, streak, psychology score)",
+            stats=stats,
+            variance=variance,
+            psych=psych,
+        )
+
+    if (
+        worst_dd <= cfg.max_worst_dd_pilot
+        and worst_streak <= cfg.max_loss_streak_pilot
+        and psych.score >= cfg.min_psych_score_pilot
+    ):
+        return ApprovalResult(
+            stage="PILOT",
+            reason="Suitable for small-size pilot (fails at least one production threshold)",
+            stats=stats,
+            variance=variance,
+            psych=psych,
+        )
+
+    return ApprovalResult(
+        stage="RESEARCH",
+        reason="Fails pilot thresholds (DD, streak or psychology)",
+        stats=stats,
+        variance=variance,
+        psych=psych,
+    )
+
+4. Build TradeResult list from existing backtests
+
+Find the part of the code where backtest results are aggregated (it already computes things like num_trades, win_rate, max_drawdown_pct, etc.).
+
+Add a helper there, something like:
+
+from app.analytics.psychology_metrics import TradeResult
+
+def build_trades_from_backtest(raw_trades) -> list[TradeResult]:
+    """
+    raw_trades: existing list/dicts representing completed trades or chains.
+    Map the existing fields to TradeResult.
+    """
+    trades: list[TradeResult] = []
+    for row in raw_trades:
+        # TODO: adapt these field names to the actual schema:
+        # Example:
+        # - row["decision_time"] or row["exit_time"]
+        # - row["pnl_pct"] (fraction) or pnl_usd / equity
+        # - row["underlying"]
+        ts = row["decision_time"]   # or whatever timestamp exists
+        pnl_pct = row["pnl_pct"]    # MUST be a fraction like +0.01, not %
+        underlying = row.get("underlying", "BTC")
+        is_win = pnl_pct > 0
+
+        trades.append(
+            TradeResult(
+                timestamp=ts,
+                pnl_pct=pnl_pct,
+                is_win=is_win,
+                underlying=underlying,
+                chain_id=row.get("chain_id"),
+            )
+        )
+    return trades
+
+
+You must adjust the field names and timestamp parsing for this project; detect whether pnl_pct is stored as e.g. 0.12 or 12.0 and normalize accordingly.
+
+Then, after each backtest run:
+
+Build trades = build_trades_from_backtest(...).
+
+Call:
+
+from app.analytics.psychology_metrics import (
+    compute_strategy_stats,
+    run_monte_carlo,
+    compute_psychology_score,
+)
+from app.analytics.strategy_approval import (
+    evaluate_strategy,
+    RegimeCoverage,
+)
+
+stats = compute_strategy_stats(trades)
+variance = run_monte_carlo(trades, sims=500)
+psych = compute_psychology_score(stats, variance)
+
+regimes = RegimeCoverage(
+    bull=...,  # mark from existing regime tags
+    bear=...,
+    chop=...,
+)
+
+approval = evaluate_strategy(
+    stats=stats,
+    variance=variance,
+    psych=psych,
+    regimes=regimes,
+    param_sensitivity_ok=True,  # or derive from actual tests
+    walk_forward_ok=True,
+    stress_test_ok=True,
+)
+
+
+Include these in the backtest output JSON / UI:
+
+stats.expectancy_per_trade
+
+stats.win_rate, stats.avg_win, stats.avg_loss
+
+variance.worst_max_dd, variance.worst_max_loss_streak
+
+psych.score (and its components)
+
+approval.stage, approval.reason
+
+Add a helper to print a human-readable summary to the console or HTML:
+
+def render_strategy_summary(approval: ApprovalResult) -> dict:
+    s = approval.stats
+    v = approval.variance
+    p = approval.psych
+
+    # Optionally print to console
+    print("=== Strategy Evaluation ===")
+    print(f"Stage: {approval.stage} – {approval.reason}")
+    print(f"Trades: {s.n_trades} over ~{s.years_covered:.1f} years")
+    print(f"Win rate: {s.win_rate:.1%}")
+    print(f"Avg win: {s.avg_win:.2%}, Avg loss: {s.avg_loss:.2%}")
+    print(f"Expectancy/trade: {s.expectancy_per_trade:.3%}")
+    print(f"Max DD (backtest): {s.max_drawdown_pct:.1%}")
+    print(f"MC worst DD: {v.worst_max_dd:.1%}, worst loss streak: {v.worst_max_loss_streak}")
+    print(f"Psychology score: {p.score:.1f} / 100")
+
+    # Return a dict so the web UI can include it in JSON
+    return {
+        "stage": approval.stage,
+        "reason": approval.reason,
+        "win_rate": s.win_rate,
+        "avg_win": s.avg_win,
+        "avg_loss": s.avg_loss,
+        "expectancy_per_trade": s.expectancy_per_trade,
+        "backtest_max_dd": s.max_drawdown_pct,
+        "mc_worst_max_dd": v.worst_max_dd,
+        "mc_worst_loss_streak": v.worst_max_loss_streak,
+        "psychology_score": p.score,
+        "psychology_components": p.components,
+    }
+
+
+Wire this summary into whatever API/HTML endpoint currently returns backtest results so that the front-end “Chain Details / Strategy Details” window shows these new metrics.
+
+5. Acceptance criteria
+
+New modules compile and have tests or at least basic sanity checks.
+
+After running a backtest, the JSON / UI response includes:
+
+Expectancy per trade
+
+Win rate & average win/loss
+
+Monte Carlo worst DD and worst loss streak
+
+Psychology score (0–100) and components
+
+Strategy stage: RESEARCH / PILOT / PRODUCTION with explanation
+
+Before placing real/paper trades, the RiskManager is called and can veto trades that exceed:
+
+1% per-trade risk
+
+3% correlated risk per underlying
+
+2 new trades per day per strategy
+
+Please implement all of this, fix imports to match the existing project structure, and keep the code clean and documented.
