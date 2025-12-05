@@ -1,0 +1,193 @@
+Conceptual change
+
+Right now we’ve been a bit agnostic between:
+
+Inverse options (collateral = BTC/ETH, PnL naturally in coin), and
+
+Linear options (collateral = USDC, PnL naturally in USD).
+
+Your requirement:
+
+“By default, trade only linear options on BTC & ETH, USDC-settled.”
+
+So:
+
+We treat underlying as BTC / ETH (for spot/index).
+
+We treat option products as “those whose settlement/margin currency is USDC”.
+
+Everything (prices, PnL, equity) is in USD / USDC.
+
+What needs to change (high level)
+1. Config: declare “linear USDC” as default
+
+Have a couple of config fields in both live + backtest config:
+
+option_margin_type: Literal["linear", "inverse"] = "linear"
+option_settlement_ccy: str = "USDC"
+underlyings: list[str] = ["BTC", "ETH"]
+
+
+Set those defaults to "linear" / "USDC" and ["BTC","ETH"].
+
+Everything downstream should filter the option universe based on these.
+
+2. Live Deribit client: only fetch USDC options
+
+Where the live client fetches instruments / positions / candidates:
+
+When calling Deribit’s “get instruments / option chain”, filter so we only see USDC-settled options on BTC and ETH.
+
+To your AI builder you can phrase it like:
+
+Whenever we build candidate options or inspect positions for the agent, make sure we:
+
+restrict to kind = option,
+
+underlying in ["BTC", "ETH"],
+
+settlement / margin currency = USDC (linear options).
+
+Implementation detail will depend on their Deribit client wrapper, but the spirit is:
+
+No BTC-margined options in the candidate list.
+
+Risk engine & PnL calculations assume USD.
+
+3. Backtest data source: get_option_chain → USDC options only
+
+In the backtest world (DeribitDataSource / MarketDataSource):
+
+get_option_chain(underlying, as_of) should return only linear USDC options.
+
+Something like:
+
+all_options = ds.get_option_chain(
+    underlying=underlying,
+    as_of=t,
+    settlement_ccy=cfg.option_settlement_ccy,  # "USDC"
+    margin_type=cfg.option_margin_type,        # "linear"
+)
+
+
+Then our existing state_builder filters by:
+
+option_type == "call"
+
+DTE window
+
+delta window
+
+But now we’re guaranteed all those options are USDC-settled, so:
+
+mark_price is already in USD,
+
+spot is in USD,
+
+PnL is in USD.
+
+4. Simulator PnL & equity: all in USD
+
+The good news: the simulator formulas we wrote already behave like USD-linear logic if:
+
+spot is in USD,
+
+option price is in USD, and
+
+size is in units of BTC/ETH.
+
+We’re doing:
+
+hodl_val = size * s
+cc_val   = size * s + size * (open_price - c)
+pnl      = final_cc - start_cc
+
+
+If s and the option price c are in USD, then:
+
+hodl_val is USD,
+
+cc_val is USD,
+
+PnL is USD.
+
+So all we really need is to ensure:
+
+Backtest DeribitDataSource is using the USDC option series,
+
+Live DeribitClient is also using USDC options.
+
+And then we can treat initial_capital and all equity curves as USD by design.
+
+Prompt snippet you can send to the AI builder
+
+You don’t need a giant new prompt here; a small follow-up like this is enough:
+
+Update: default to linear USDC options on BTC & ETH
+
+Going forward, I want the whole system (live agent + backtests) to only trade linear USDC-settled options by default, and only on BTC and ETH.
+
+Please adjust the code so that:
+
+Config
+
+Add fields like:
+
+option_margin_type: Literal["linear", "inverse"] = "linear"
+option_settlement_ccy: str = "USDC"
+underlyings: list[str] = ["BTC", "ETH"]
+
+
+Use these values as the defaults for both live agent and backtests.
+
+Live Deribit client
+
+Wherever we fetch instruments / positions / candidate options, filter so that:
+
+underlying is in settings.underlyings (["BTC","ETH"]),
+
+we only include linear USDC options (USDC-settled),
+
+we exclude inverse BTC/ETH options.
+
+Ensure the candidate list the agent sees is composed of USDC options only.
+
+Backtest DeribitDataSource.get_option_chain
+
+Ensure it has parameters (or uses config) to restrict to:
+
+underlying in cfg.underlying / cfg.underlyings,
+
+settlement_ccy == cfg.option_settlement_ccy (USDC),
+
+option_margin_type == cfg.option_margin_type ("linear").
+
+state_builder(...) should call get_option_chain in this USDC-linear mode so that all OptionSnapshot objects represent USD-settled calls.
+
+PnL / equity semantics
+
+Confirm that:
+
+spot is in USD,
+
+option mark_price is in USD,
+
+PnL in SimulatedTrade and SimulationResult is interpreted as USD.
+
+Add a small comment somewhere (e.g. in CallSimulationConfig or SimulationResult) that all amounts are assumed to be in USD/USDC when option_margin_type="linear" and option_settlement_ccy="USDC".
+
+No need to change the scoring logic or exit styles; they can treat inverse and linear identically as long as all prices are in USD. Just make sure the universe of options the simulator and the live agent see is USDC linear options only by default.
+
+Later, if you want to experiment with:
+
+inverse options,
+
+or SOL / DOGE options,
+
+we can just:
+
+flip the config (option_margin_type="inverse" / different option_settlement_ccy),
+
+or extend underlyings to ["BTC","ETH","SOL","DOGE"].
+
+But your default research + live mode stays nice and clean: linear BTC/ETH covered calls in USD.

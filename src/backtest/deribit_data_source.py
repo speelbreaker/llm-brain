@@ -94,11 +94,20 @@ class DeribitDataSource(MarketDataSource):
         self,
         underlying: str,
         as_of: datetime,
+        settlement_ccy: str = "USDC",
+        margin_type: Literal["linear", "inverse"] = "linear",
     ) -> List[OptionSnapshot]:
         """
         Chain snapshot at ~as_of:
         - list non-expired options for underlying
         - attach delta/IV/mark via ticker
+        - filter by settlement currency and margin type
+        
+        Args:
+            underlying: "BTC" or "ETH"
+            as_of: Timestamp for filtering expired options
+            settlement_ccy: Settlement currency ("USDC" for linear, "BTC"/"ETH" for inverse)
+            margin_type: "linear" or "inverse"
         """
         instruments = self.client.get_instruments(currency=underlying, kind="option")
         snapshots: List[OptionSnapshot] = []
@@ -117,6 +126,20 @@ class DeribitDataSource(MarketDataSource):
 
             if expiry <= as_of:
                 continue
+            
+            inst_settlement = inst.get("settlement_currency", "").upper()
+            is_linear = inst_settlement == "USDC" or inst_settlement == "USD"
+            
+            if margin_type == "linear" and not is_linear:
+                continue
+            if margin_type == "inverse" and is_linear:
+                continue
+            
+            if settlement_ccy.upper() != "ANY":
+                if is_linear and inst_settlement not in ["USDC", "USD"]:
+                    continue
+                if not is_linear and inst_settlement.upper() != cur.upper():
+                    continue
 
             strike_str = parts[2]
             cp_flag = parts[3].upper()
@@ -144,6 +167,8 @@ class DeribitDataSource(MarketDataSource):
                         delta=float(delta) if delta is not None else None,
                         iv=float(iv) if iv is not None else None,
                         mark_price=float(mark) if mark is not None else None,
+                        settlement_ccy=inst_settlement if inst_settlement else "USDC",
+                        margin_type="linear" if is_linear else "inverse",
                     )
                 )
             except Exception:

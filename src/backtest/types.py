@@ -1,5 +1,8 @@
 """
 Configuration and result models for covered call simulation.
+
+NOTE: When option_margin_type="linear" and option_settlement_ccy="USDC" (defaults),
+all prices (spot, option mark_price) and PnL are in USD/USDC.
 """
 from __future__ import annotations
 
@@ -8,6 +11,8 @@ from datetime import datetime
 from typing import Literal, Dict, List, Any, Optional
 
 from .data_source import Timeframe
+
+ExitStyle = Literal["hold_to_expiry", "tp_and_roll"]
 
 
 @dataclass
@@ -24,12 +29,17 @@ class OptionSnapshot:
     delta: Optional[float] = None
     iv: Optional[float] = None
     mark_price: Optional[float] = None
+    settlement_ccy: str = "USDC"
+    margin_type: Literal["linear", "inverse"] = "linear"
 
 
 @dataclass
 class CallSimulationConfig:
     """
     Configuration for a simple covered-call simulation on a single underlying.
+    
+    When option_margin_type="linear" and option_settlement_ccy="USDC",
+    all amounts (PnL, equity) are in USD/USDC.
     """
     underlying: str
     start: datetime
@@ -46,8 +56,19 @@ class CallSimulationConfig:
     dte_tolerance: int = 2
     target_delta: float = 0.25
     delta_tolerance: float = 0.05
+    
+    min_dte: int = 1
+    max_dte: int = 21
+    delta_min: float = 0.10
+    delta_max: float = 0.40
 
     hold_to_expiry: bool = True
+    
+    option_margin_type: Literal["linear", "inverse"] = "linear"
+    option_settlement_ccy: str = "USDC"
+    
+    tp_threshold_pct: float = 80.0
+    min_score_to_trade: float = 3.0
 
 
 @dataclass

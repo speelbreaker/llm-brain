@@ -1,0 +1,400 @@
+1. What state_builder should do (high level)
+
+For each historical decision time t, state_builder(t) must construct a state that looks like a historical version of the live AgentState:
+
+It should return a dict like:
+
+state = {
+    "time": t,
+    "spot": spot_price_at_t,
+    "market_context": { ... },        # same keys as live market_context
+    "candidate_options": [ ... ],     # list[OptionSnapshot] for calls
+    "portfolio": { ... optional ... } # simple portfolio context (e.g. 1 BTC)
+}
+
+
+Specifically:
+
+Spot price at time t
+
+Use your DeribitDataSource to get OHLC up to time t and take the last close.
+
+Market context (market_context)
+
+Same idea as compute_market_context for live agent, but using DeribitDataSource instead of a live HTTP client.
+
+Includes regime, returns, realized vol, distance from MAs, etc.
+
+Stored as a plain dict so the scorer can do mc.get(...).
+
+Candidate options (candidate_options)
+
+Get an options chain snapshot (calls only) for the underlying at time t.
+
+Filter for:
+
+option_type = call,
+
+DTE near your target (e.g. within min/max bounds),
+
+delta in a reasonable range (e.g. around 0.25).
+
+Return as a list of OptionSnapshot objects with attributes like:
+
+instrument_name, expiry, strike, mark_price, delta, iv.
+
+Portfolio (optional for now)
+
+For backtests, we can assume:
+
+“We hold 1 BTC”, or whatever is in cfg.initial_spot_position.
+
+Put it in state["portfolio"] if you want; the scoring currently doesn’t use it heavily, but it’s good future-proofing.
+
+simulate_policy(...) will then:
+
+Call state_builder(t),
+
+Score each candidate with _score_candidate(features),
+
+Pick the best one (if score high enough),
+
+Simulate the trade with either hold-to-expiry or TP-only exit style.
+
+2. Prompt for your AI builder – implement state_builder for backtests
+
+Here’s the prompt you can send:
+
+PROMPT FOR AI BUILDER – IMPLEMENT state_builder FOR BACKTESTS
+
+We’ve already added:
+
+A scoring function _score_candidate(features) -> 0..10 inside CoveredCallSimulator.
+
+Two exit styles wired into simulate_policy(...):
+
+"hold_to_expiry"
+
+"tp_and_roll" (currently TP-only, no second-leg roll yet).
+
+Now I want to implement a historical state_builder(t) so that:
+
+simulate_policy(...) can run over many historical decision times, and
+
+The historical state looks as close as possible to the live AgentState the LLM sees.
+
+Please do the following.
+
+1. Ensure market_context is dict-shaped
+
+In CoveredCallSimulator._extract_candidate_features, we previously did:
+
+mc = state.get("market_context") or {}
+
+
+We are using MarketContext dataclass in some places, and a plain dict in others. Please update this to handle both:
+
+from dataclasses import asdict
+from .models import MarketContext
+
+# ...
+
+def _extract_candidate_features(self, state: dict, option) -> dict:
+    mc_raw = state.get("market_context") or {}
+    if isinstance(mc_raw, MarketContext):
+        mc = asdict(mc_raw)
+    else:
+        mc = mc_raw
+
+    spot = state.get("spot")
+    # ... rest of feature extraction using mc.get(...)
+
+
+This way, market_context can safely be a MarketContext instance or a dict; inside the scorer it’s always treated as a dict.
+
+If you prefer, you can instead standardize that state_builder always sets market_context to a dict (asdict(market_ctx)), and skip the type check.
+
+2. Implement compute_market_context_from_ds for backtests
+
+We already have a live compute_market_context that uses DeribitClient and live API calls. For backtests we use DeribitDataSource (implements MarketDataSource).
+
+Create a new function in src/backtest/market_context_backtest.py (or another appropriate module) that mirrors the live version but uses the backtest data source:
+
+# src/backtest/market_context_backtest.py
+
+from __future__ import annotations
+
+from datetime import datetime, timedelta
+from typing import Optional
+
+import numpy as np
+import pandas as pd
+
+from src.models import MarketContext
+from src.backtest.data_source import DeribitDataSource  # adjust import path as needed
+
+
+def compute_market_context_from_ds(
+    ds: DeribitDataSource,
+    underlying: str,
+    as_of: datetime,
+    lookback_days: int = 60,
+) -> Optional[MarketContext]:
+    """
+    Build a compact market context summary for backtests using DeribitDataSource.
+    Uses daily candles (or whatever timeframe is convenient) over the last ~60 days.
+    """
+
+    start = as_of - timedelta(days=lookback_days)
+
+    # Use data source's OHLC method for spot/index
+    # Pick a daily timeframe ("1d" or whatever your ds supports).
+    df = ds.get_spot_ohlc(
+        underlying=underlying,
+        start=start,
+        end=as_of,
+        timeframe="1d",  # or ds.timeframe_daily if you have a constant
+    )
+    if df.empty:
+        return None
+
+    close = df["close"].sort_index()
+    if len(close) < 30:
+        return None
+
+    def pct_return(days: int) -> float:
+        if len(close) < days + 1:
+            return 0.0
+        c_now = close.iloc[-1]
+        c_prev = close.iloc[-(days + 1)]
+        return float((c_now / c_prev - 1.0) * 100.0)
+
+    return_1d_pct = pct_return(1)
+    return_7d_pct = pct_return(7)
+    return_30d_pct = pct_return(30)
+
+    log_ret = np.log(close / close.shift(1)).dropna()
+
+    def realized_vol(days: int) -> float:
+        window = log_ret[-days:]
+        if window.empty:
+            return 0.0
+        daily_vol = float(window.std())
+        return float(daily_vol * np.sqrt(365.0))
+
+    realized_vol_7d = realized_vol(7)
+    realized_vol_30d = realized_vol(30)
+
+    ma_50 = float(close.rolling(window=50).mean().iloc[-1])
+    if len(close) >= 200:
+        ma_200 = float(close.rolling(window=200).mean().iloc[-1])
+    else:
+        ma_200 = ma_50
+
+    last = float(close.iloc[-1])
+    pct_from_50d_ma = (last / ma_50 - 1.0) * 100.0 if ma_50 > 0 else 0.0
+    pct_from_200d_ma = (last / ma_200 - 1.0) * 100.0 if ma_200 > 0 else 0.0
+
+    # Simple regime classification
+    if pct_from_200d_ma > 5.0 and return_30d_pct > 10.0:
+        regime = "bull"
+    elif pct_from_200d_ma < -5.0 and return_30d_pct < -10.0:
+        regime = "bear"
+    else:
+        regime = "sideways"
+
+    return MarketContext(
+        underlying=underlying,
+        time=as_of,
+        regime=regime,
+        pct_from_50d_ma=pct_from_50d_ma,
+        pct_from_200d_ma=pct_from_200d_ma,
+        return_1d_pct=return_1d_pct,
+        return_7d_pct=return_7d_pct,
+        return_30d_pct=return_30d_pct,
+        realized_vol_7d=realized_vol_7d,
+        realized_vol_30d=realized_vol_30d,
+        support_level=None,
+        resistance_level=None,
+        distance_to_support_pct=None,
+        distance_to_resistance_pct=None,
+    )
+
+
+Adjust module paths (src.models, src.backtest.data_source) to match the repo.
+
+3. Implement state_builder(t) in backtest code
+
+In your backtest module (e.g. src/backtest/backtest_example.py or a new src/backtest/state_builder.py), add a function:
+
+from datetime import datetime, timedelta
+from typing import Dict, Any, List
+
+from src.backtest.data_source import DeribitDataSource
+from src.backtest.market_context_backtest import compute_market_context_from_ds
+from src.models import MarketContext, OptionSnapshot  # adjust imports
+from dataclasses import asdict
+
+
+def build_historical_state(
+    ds: DeribitDataSource,
+    cfg,
+    t: datetime,
+) -> Dict[str, Any]:
+    """
+    Build a historical state dict at time t for simulate_policy.
+
+    Returns a dict with:
+      {
+        "time": t,
+        "spot": <float>,
+        "market_context": { ... },
+        "candidate_options": [OptionSnapshot, ...],
+        "portfolio": { ... optional ... }
+      }
+    """
+
+    underlying = cfg.underlying
+
+    # 1) Spot price at t: use a small lookback window and take last close
+    spot_lookback = t - timedelta(hours=cfg.decision_interval_hours or 24)
+    spot_df = ds.get_spot_ohlc(
+        underlying=underlying,
+        start=spot_lookback,
+        end=t,
+        timeframe=cfg.timeframe,  # e.g. "1h"
+    )
+    if spot_df.empty:
+        spot = None
+    else:
+        spot = float(spot_df["close"].iloc[-1])
+
+    # 2) Market context (regime, returns, vol, etc.)
+    mc_obj = compute_market_context_from_ds(ds, underlying=underlying, as_of=t)
+    mc_dict: Dict[str, Any]
+    if mc_obj is None:
+        mc_dict = {}
+    else:
+        mc_dict = asdict(mc_obj)
+
+    # 3) Candidate options:
+    #    use the data source to get call options around our target DTE and delta.
+    #    This will depend on how DeribitDataSource exposes the chain.
+    #    Please find/implement a method like `ds.get_option_chain(underlying, as_of)`
+    #    or reuse existing functionality that returns a list[OptionSnapshot].
+    all_options: List[OptionSnapshot] = ds.get_option_chain(
+        underlying=underlying,
+        as_of=t,
+    )
+    candidates: List[OptionSnapshot] = []
+
+    target_dte = cfg.target_dte
+    min_dte = getattr(cfg, "min_dte", max(1, target_dte - 3))
+    max_dte = getattr(cfg, "max_dte", target_dte + 3)
+    delta_min = getattr(cfg, "delta_min", 0.15)
+    delta_max = getattr(cfg, "delta_max", 0.35)
+
+    for opt in all_options:
+        if opt.option_type.lower() != "call":
+            continue
+
+        expiry = opt.expiry
+        dte = (expiry - t).total_seconds() / 86400.0
+        if dte < min_dte or dte > max_dte:
+            continue
+
+        if opt.delta is None:
+            continue
+        delta_abs = abs(float(opt.delta))
+        if delta_abs < delta_min or delta_abs > delta_max:
+            continue
+
+        candidates.append(opt)
+
+    # 4) Simple portfolio context (optional)
+    portfolio = {
+        "spot_position": cfg.initial_spot_position,
+        "equity_usd": None,  # can be filled later if we want
+    }
+
+    return {
+        "time": t,
+        "spot": spot,
+        "market_context": mc_dict,
+        "candidate_options": candidates,
+        "portfolio": portfolio,
+    }
+
+
+Notes:
+
+If DeribitDataSource doesn’t yet have get_option_chain(underlying, as_of), either:
+
+implement it using the existing MarketDataSource API, or
+
+adapt to whatever function currently returns OptionSnapshots for a given time.
+
+Make sure OptionSnapshot exposes at least:
+
+instrument_name
+
+expiry (datetime)
+
+strike (float)
+
+mark_price (float)
+
+delta (float)
+
+iv (float)
+
+option_type (“call” / “put”)
+
+4. Use state_builder inside simulate_policy calls in backtest examples
+
+In src/backtest/backtest_example.py (or wherever you run backtests), wire it like:
+
+from datetime import datetime
+from src.backtest.data_source import DeribitDataSource
+from src.backtest.simulator import CoveredCallSimulator
+from src.backtest.state_builder import build_historical_state
+
+# setup ds, cfg, sim, decision_times...
+ds = DeribitDataSource(...)
+cfg = CallSimulationConfig(
+    underlying="BTC",
+    timeframe="1h",
+    target_dte=7,
+    # other fields...
+)
+sim = CoveredCallSimulator(ds, cfg)
+
+def state_builder(t: datetime) -> dict:
+    return build_historical_state(ds, cfg, t)
+
+# Example backtests:
+
+result_hold = sim.simulate_policy(
+    decision_times=decision_times,
+    state_builder=state_builder,
+    exit_style="hold_to_expiry",
+    min_score_to_trade=3.0,
+)
+
+result_tp = sim.simulate_policy(
+    decision_times=decision_times,
+    state_builder=state_builder,
+    exit_style="tp_and_roll",  # TP-only for now
+    min_score_to_trade=3.0,
+)
+
+
+Now:
+
+simulate_policy uses the same scoring and same feature schema as your live agent,
+
+But runs over historical data, with:
+
+exit_style="hold_to_expiry" vs "tp_and_roll" variants, and
+
+state_builder constructing a realistic, LLM-like state at each historical decision time.

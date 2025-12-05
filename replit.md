@@ -9,7 +9,7 @@ A modular Python framework for automated BTC/ETH covered call trading on Deribit
 - LLM decision mode: Implemented (uses Replit AI Integrations for OpenAI)
 - FastAPI web dashboard: Complete with live status and chat
 - Research/Production mode: Implemented with mode-specific parameters
-- Backtesting scaffold: Stub ready for future expansion
+- Backtesting framework: Complete with scoring, exit styles, and state builder
 
 ## Recent Changes
 - 2024-12: Initial implementation of all core modules
@@ -46,6 +46,14 @@ A modular Python framework for automated BTC/ETH covered call trading on Deribit
   - /api/agent/decisions endpoint for live dashboard data
   - /api/backtest/run endpoint for running backtests
   - /api/backtest/insights endpoint for LLM analysis of results
+- 2024-12: Enhanced backtesting with scoring and exit styles:
+  - Scoring function `_score_candidate()` rates options 0-10 based on IVRV, delta, DTE, premium, regime
+  - Feature extraction `_extract_candidate_features()` builds numeric feature dict from market context
+  - Two exit styles: `hold_to_expiry` (baseline) vs `tp_and_roll` (take-profit at 80%)
+  - `state_builder` constructs historical state dicts matching live AgentState
+  - `compute_market_context_from_ds()` for backtest market regime detection
+  - Default to USDC linear options on BTC/ETH (option_margin_type="linear", option_settlement_ccy="USDC")
+  - `simulate_policy_with_scoring()` for scoring-based backtests
 
 ## Architecture
 
@@ -71,17 +79,25 @@ A modular Python framework for automated BTC/ETH covered call trading on Deribit
 ### Backtesting Module (src/backtest/)
 - `data_source.py` - Generic MarketDataSource protocol interface
 - `deribit_client.py` - Deribit mainnet public API wrapper for historical data
-- `deribit_data_source.py` - MarketDataSource implementation using Deribit API
-- `types.py` - CallSimulationConfig, SimulatedTrade, SimulationResult, TrainingExample
+- `deribit_data_source.py` - MarketDataSource implementation with USDC option filtering
+- `types.py` - CallSimulationConfig, SimulatedTrade, SimulationResult, TrainingExample, ExitStyle
 - `covered_call_simulator.py` - Core simulation engine with:
+  - `_extract_candidate_features()` - Build numeric feature dict for scoring
+  - `_score_candidate()` - Score options 0-10 based on IVRV, delta, DTE, premium, regime
   - `simulate_single_call()` - "What if I sold this call here?"
   - `simulate_policy()` - Run policy across multiple decision times
+  - `simulate_policy_with_scoring()` - Scoring-based backtest with exit styles
+  - `_simulate_call_hold_to_expiry()` - Hold option to expiry exit style
+  - `_simulate_call_tp_and_roll()` - Take-profit exit style (80% threshold)
   - `generate_training_data()` - Emit (state, action, reward) tuples
+- `market_context_backtest.py` - Compute market context from DeribitDataSource
+- `state_builder.py` - Build historical state dicts matching live AgentState
 - `training_dataset.py` - Export training data to CSV/JSONL, grid search
-- `backtest_example.py` - Example usage script
+- `backtest_example.py` - Example usage script with scoring-based backtest
 
 ### Future Development
 - RL environment wrapper around CoveredCallSimulator
+- Roll logic in tp_and_roll exit style (currently TP-only)
 
 ## Configuration
 

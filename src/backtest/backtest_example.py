@@ -9,11 +9,13 @@ This script shows how to:
 1. Simulate a single "what if I sold this call?" trade
 2. Run a policy-based backtest across multiple decision times
 3. Generate training data for ML/RL
+4. Run scoring-based backtest with exit styles (NEW)
 """
 from __future__ import annotations
 
 import json
 from datetime import datetime, timezone, timedelta
+from typing import List
 
 from .deribit_client import DeribitPublicClient
 from .deribit_data_source import DeribitDataSource
@@ -24,6 +26,7 @@ from .training_dataset import (
     export_to_jsonl,
     compute_dataset_stats,
 )
+from .state_builder import create_state_builder
 
 
 def example_single_trade():
@@ -169,6 +172,98 @@ def example_training_data():
     ds.close()
 
 
+def example_scoring_backtest():
+    """
+    Example 4: Scoring-based backtest with exit styles.
+    Uses the new scoring function and state builder for more realistic backtests.
+    
+    Demonstrates:
+    - Feature extraction from market context
+    - Candidate scoring (0-10) 
+    - Two exit styles: hold_to_expiry vs tp_and_roll
+    - USDC linear options filtering
+    """
+    print("\n" + "=" * 60)
+    print("Example 4: Scoring-Based Backtest")
+    print("=" * 60)
+    
+    client = DeribitPublicClient()
+    ds = DeribitDataSource(client)
+    
+    now = datetime.now(timezone.utc)
+    
+    config = CallSimulationConfig(
+        underlying="BTC",
+        start=now - timedelta(days=30),
+        end=now,
+        timeframe="1h",
+        decision_interval_bars=24,
+        initial_spot_position=1.0,
+        contract_size=1.0,
+        fee_rate=0.0005,
+        target_dte=7,
+        dte_tolerance=2,
+        target_delta=0.25,
+        delta_tolerance=0.05,
+        min_dte=1,
+        max_dte=21,
+        delta_min=0.10,
+        delta_max=0.40,
+        option_margin_type="linear",
+        option_settlement_ccy="USDC",
+        tp_threshold_pct=80.0,
+        min_score_to_trade=3.0,
+    )
+    
+    sim = CoveredCallSimulator(ds, config)
+    
+    state_builder = create_state_builder(ds, config)
+    
+    decision_times: List[datetime] = []
+    t = config.start
+    step = timedelta(hours=24)
+    while t < config.end - timedelta(days=config.target_dte):
+        decision_times.append(t)
+        t += step
+    
+    print(f"\nRunning hold_to_expiry strategy...")
+    result_hold = sim.simulate_policy_with_scoring(
+        decision_times=decision_times,
+        state_builder=state_builder,
+        exit_style="hold_to_expiry",
+        min_score_to_trade=3.0,
+    )
+    
+    print(f"\nHold-to-Expiry Results:")
+    print(f"  Total Trades: {result_hold.metrics['num_trades']}")
+    print(f"  Final PnL: ${result_hold.metrics['final_pnl']:,.2f}")
+    print(f"  Avg PnL: ${result_hold.metrics.get('avg_pnl', 0):,.2f}")
+    print(f"  Max Drawdown: {result_hold.metrics['max_drawdown_pct']:.2f}%")
+    print(f"  Win Rate: {result_hold.metrics.get('win_rate', 0) * 100:.1f}%")
+    
+    print(f"\nRunning tp_and_roll strategy...")
+    result_tp = sim.simulate_policy_with_scoring(
+        decision_times=decision_times,
+        state_builder=state_builder,
+        exit_style="tp_and_roll",
+        min_score_to_trade=3.0,
+    )
+    
+    print(f"\nTP-and-Roll Results:")
+    print(f"  Total Trades: {result_tp.metrics['num_trades']}")
+    print(f"  Final PnL: ${result_tp.metrics['final_pnl']:,.2f}")
+    print(f"  Avg PnL: ${result_tp.metrics.get('avg_pnl', 0):,.2f}")
+    print(f"  Max Drawdown: {result_tp.metrics['max_drawdown_pct']:.2f}%")
+    print(f"  Win Rate: {result_tp.metrics.get('win_rate', 0) * 100:.1f}%")
+    
+    if result_hold.trades:
+        print(f"\nSample trades (hold_to_expiry):")
+        for t in result_hold.trades[:3]:
+            print(f"  - {t.instrument_name}: PnL=${t.pnl:,.2f}, notes={t.notes[:50]}...")
+    
+    ds.close()
+
+
 def main():
     """Run all examples."""
     print("\n" + "=" * 60)
@@ -189,6 +284,11 @@ def main():
         example_training_data()
     except Exception as e:
         print(f"Example 3 failed: {e}")
+    
+    try:
+        example_scoring_backtest()
+    except Exception as e:
+        print(f"Example 4 failed: {e}")
 
 
 if __name__ == "__main__":

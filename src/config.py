@@ -123,6 +123,15 @@ class Settings(BaseSettings):
         default=["BTC", "ETH"],
         description="List of underlyings to trade",
     )
+    
+    option_margin_type: Literal["linear", "inverse"] = Field(
+        default="linear",
+        description="Option margin type: 'linear' for USDC-settled, 'inverse' for coin-margined",
+    )
+    option_settlement_ccy: str = Field(
+        default="USDC",
+        description="Settlement currency for options (USDC for linear)",
+    )
 
     llm_enabled: bool = Field(
         default=False,

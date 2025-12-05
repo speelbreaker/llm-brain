@@ -1,0 +1,597 @@
+1. Scoring: score_candidate(features) -> 0…10
+
+We’ll add a helper inside covered_call_simulator.py that:
+
+Takes a dict of features (delta, dte, ivrv, etc.).
+
+Computes sub-scores.
+
+Combines them into a 0–10 score.
+
+1.1 Feature extraction helper
+
+Inside CoveredCallSimulator, add something like:
+
+from math import exp
+
+# ...
+
+class CoveredCallSimulator:
+    # ... existing __init__ etc.
+
+    # ---------- Feature extraction per candidate ----------
+
+    def _extract_candidate_features(self, state: dict, option) -> dict:
+        """
+        Build a numeric feature dict for scoring from:
+        - option snapshot (delta, dte, iv, ivrv, strike, mark, etc.)
+        - market context (regime, returns, vol, distance from MAs)
+        - spot price from state
+        """
+        cfg = self.cfg
+        mc = state.get("market_context") or {}
+        spot = state.get("spot")  # we’ll assume state packs spot here
+
+        expiry = option.expiry
+        as_of = state["time"]
+        dte = (expiry - as_of).total_seconds() / 86400.0
+
+        strike = option.strike
+        mark = option.mark_price or 0.0
+        delta = float(option.delta) if option.delta is not None else 0.0
+        iv = float(option.iv) if option.iv is not None else 0.0
+
+        if spot is None or spot <= 0:
+            otm_pct = 0.0
+            premium_pct = 0.0
+        else:
+            otm_pct = (strike / spot - 1.0) * 100.0
+            premium_pct = (mark / spot) * 100.0
+
+        # IVRV (just IV / RV30 if we have it, else 1.0)
+        rv30 = mc.get("realized_vol_30d") or mc.get("realized_vol_30") or 0.0
+        ivrv = (iv / rv30) if (iv > 0 and rv30 > 0) else 1.0
+
+        # Regime numeric encoding: bull=1, sideways=0, bear=-1
+        regime_label = mc.get("regime", "sideways")
+        if regime_label == "bull":
+            regime_num = 1
+        elif regime_label == "bear":
+            regime_num = -1
+        else:
+            regime_num = 0
+
+        return {
+            "delta": delta,
+            "dte": dte,
+            "iv": iv,
+            "ivrv": ivrv,
+            "otm_pct": otm_pct,
+            "premium_pct": premium_pct,
+            "regime": regime_num,
+            "return_7d_pct": mc.get("return_7d_pct", 0.0),
+            "return_30d_pct": mc.get("return_30d_pct", 0.0),
+            "realized_vol_7d": mc.get("realized_vol_7d", 0.0),
+            "realized_vol_30d": rv30,
+            "pct_from_50d_ma": mc.get("pct_from_50d_ma", 0.0),
+            "pct_from_200d_ma": mc.get("pct_from_200d_ma", 0.0),
+        }
+
+
+This assumes your historical state looks similar to live AgentState:
+
+state = {
+  "time": decision_time,
+  "spot": spot_price,
+  "market_context": { ... same keys as live ... },
+}
+
+1.2 Concrete scoring function (0–10)
+
+Now the core:
+
+    # ---------- Scoring function: 0..10 ----------
+
+    def _score_candidate(self, features: dict) -> float:
+        """
+        Hand-crafted first scoring function.
+        Outputs a score in [0, 10].
+        Higher = more attractive to short.
+        """
+
+        delta = abs(features["delta"])
+        dte = features["dte"]
+        ivrv = features["ivrv"]
+        otm_pct = features["otm_pct"]
+        premium_pct = features["premium_pct"]
+        regime = features["regime"]
+        ret_7d = features["return_7d_pct"]
+        ret_30d = features["return_30d_pct"]
+        rv7 = features["realized_vol_7d"]
+        pct_from_200 = features["pct_from_200d_ma"]
+
+        score = 0.0
+
+        # 1) IVRV: reward juicy vol
+        # IVRV 1.0 -> 0, 1.5+ -> full 3 points
+        ivrv_clamped = max(1.0, min(ivrv, 1.5))
+        score += (ivrv_clamped - 1.0) / 0.5 * 3.0  # 0..3
+
+        # 2) Delta near target (e.g. 0.25)
+        target_delta = 0.25
+        delta_diff = abs(delta - target_delta)  # 0 is best
+        # within 0.05 of target -> up to +2 points
+        delta_score = max(0.0, 1.0 - delta_diff / 0.10) * 2.0  # 0..2
+        score += delta_score
+
+        # 3) DTE near 7 days
+        target_dte = self.cfg.target_dte
+        dte_diff = abs(dte - target_dte)
+        # within +/- 2 days: up to +1.5 points
+        dte_score = max(0.0, 1.0 - dte_diff / 2.0) * 1.5
+        score += dte_score
+
+        # 4) Premium richness: prefer at least some % of spot
+        # e.g. 0.5% -> ok, 1.5%+ -> full 2 points
+        prem_clamped = max(0.0, min(premium_pct, 1.5))
+        premium_score = (prem_clamped / 1.5) * 2.0
+        score += premium_score
+
+        # 5) Regime adjustments
+        # Bull regime: penalize too close strikes
+        if regime == 1:  # bull
+            if otm_pct < 5.0:
+                score -= 1.0  # too close in strong uptrend
+            # strong bull (30d return > 25%) => slight extra caution
+            if ret_30d > 25.0:
+                score -= 0.5
+        # Bear regime: cautious in general (could focus more on puts later)
+        elif regime == -1:
+            # if 7d return is very negative, penalize new calls a bit
+            if ret_7d < -10.0:
+                score -= 0.5
+
+        # 6) Vol regime: prefer selling when realized vol is not ultra-low
+        # If RV7 is almost zero, option can be cheap for a reason
+        if rv7 < 0.3:  # arbitrary low-vol cutoff
+            score -= 0.5
+
+        # 7) Distance from 200D MA: very extended conditions
+        if pct_from_200 > 20.0:
+            # far above 200D -> bit more cautious
+            score -= 0.5
+        elif pct_from_200 < -20.0:
+            # far below 200D in a dump: avoid aggressive calls
+            score -= 0.5
+
+        # Clamp and rescale to [0, 10]
+        score = max(0.0, min(score, 10.0))
+
+        return score
+
+
+Later, this formula can be:
+
+Tuned by hand (weights),
+
+Or replaced by a learnt model – but the output stays 0–10.
+
+2. Two exit styles plugged into simulate_policy
+
+We’ll give simulate_policy an argument:
+
+exit_style: Literal["hold_to_expiry", "tp_and_roll"]
+
+
+and a small min_score_to_trade to avoid garbage trades.
+
+2.1 Extend simulate_policy signature
+
+In CoveredCallSimulator:
+
+from typing import Literal, Callable, Optional
+
+ExitStyle = Literal["hold_to_expiry", "tp_and_roll"]
+
+
+Update method:
+
+    def simulate_policy(
+        self,
+        decision_times: list[datetime],
+        state_builder: Callable[[datetime], dict],
+        exit_style: ExitStyle = "hold_to_expiry",
+        min_score_to_trade: float = 3.0,
+    ) -> SimulationResult:
+        """
+        Run a scoring-based policy over many decision times.
+
+        - decision_times: list of datetimes at which we consider trades.
+        - state_builder(t): builds a historical state dict at time t
+          with at least:
+            {
+              "time": t,
+              "spot": <spot price>,
+              "market_context": { ... same schema as live },
+              "candidate_options": [OptionSnapshot, ...]
+            }
+        - exit_style:
+            "hold_to_expiry": no early TP or roll
+            "tp_and_roll": early TP + simple roll rules
+        - min_score_to_trade: don't trade if best score < this value (0..10)
+        """
+        trades: List[SimulatedTrade] = []
+        equity_curve: Dict[datetime, float] = {}
+        equity_vs_hodl: Dict[datetime, float] = {}
+
+        cumulative_pnl = 0.0
+        cumulative_pnl_vs_hodl = 0.0
+
+        for t in decision_times:
+            state = state_builder(t)
+            spot = state.get("spot")
+            if spot is None or spot <= 0:
+                continue
+
+            options = state.get("candidate_options") or []
+            if not options:
+                continue
+
+            # Score all candidates
+            scored = []
+            for opt in options:
+                feats = self._extract_candidate_features(state, opt)
+                s = self._score_candidate(feats)
+                scored.append((s, opt))
+
+            if not scored:
+                continue
+
+            # Pick best candidate
+            scored.sort(key=lambda x: x[0], reverse=True)
+            best_score, best_opt = scored[0]
+
+            if best_score < min_score_to_trade:
+                # nothing juicy enough
+                continue
+
+            # Simulate according to exit style
+            if exit_style == "hold_to_expiry":
+                trade = self._simulate_call_hold_to_expiry(t, best_opt)
+            else:
+                trade = self._simulate_call_tp_and_roll(t, best_opt)
+
+            if trade is None:
+                continue
+
+            trades.append(trade)
+            cumulative_pnl += trade.pnl
+            cumulative_pnl_vs_hodl += trade.pnl_vs_hodl
+
+            close_ts = trade.close_time
+            equity_curve[close_ts] = cumulative_pnl
+            equity_vs_hodl[close_ts] = cumulative_pnl_vs_hodl
+
+        # Summary metrics (same as before)
+        if equity_curve:
+            idx = pd.DatetimeIndex(sorted(equity_curve.keys()))
+            eq = pd.Series([equity_curve[t] for t in idx], index=idx)
+            peak = eq.cummax()
+            dd = (peak - eq) / peak.replace(0, float("nan"))
+            max_dd = float(dd.max() * 100.0)
+            final_equity = float(eq.iloc[-1])
+        else:
+            max_dd = 0.0
+            final_equity = 0.0
+
+        metrics = {
+            "num_trades": len(trades),
+            "final_pnl": final_equity,
+            "max_drawdown_pct": max_dd,
+        }
+
+        return SimulationResult(
+            trades=trades,
+            equity_curve=equity_curve,
+            equity_vs_hodl=equity_vs_hodl,
+            metrics=metrics,
+        )
+
+
+Note: state_builder is a function you (or the AI builder) implement that constructs the historical state at time t using your DeribitDataSource / OHLC data.
+
+2.2 Implement the two exit styles
+
+We’ll wrap your existing simulate_single_call and add a new _simulate_call_tp_and_roll.
+
+A) Hold to expiry (baseline)
+
+Assuming your current simulate_single_call(decision_time, size) expects to find its own option based on config, we need a version that uses a specific option (the one we scored).
+
+Add:
+
+    def _simulate_call_hold_to_expiry(
+        self,
+        decision_time: datetime,
+        option_snapshot,
+        size: float = None,
+    ) -> Optional[SimulatedTrade]:
+        """
+        Wrapper around simulate_single_call-style logic,
+        but using a specific option instrument.
+        """
+
+        cfg = self.cfg
+        ds = self.ds
+
+        size = size if size is not None else cfg.initial_spot_position
+        instrument_name = option_snapshot.instrument_name
+        open_price = float(option_snapshot.mark_price or 0.0)
+        if open_price <= 0:
+            return None
+
+        # Spot + option paths from decision -> expiry
+        expiry = option_snapshot.expiry
+        spot_df = ds.get_spot_ohlc(
+            underlying=cfg.underlying,
+            start=decision_time,
+            end=expiry,
+            timeframe=cfg.timeframe,
+        )
+        if spot_df.empty:
+            return None
+
+        opt_df = ds.get_option_ohlc(
+            instrument_name=instrument_name,
+            start=decision_time,
+            end=expiry,
+            timeframe=cfg.timeframe,
+        )
+        if opt_df.empty:
+            return None
+
+        idx = spot_df.index.union(opt_df.index).sort_values()
+        spot = spot_df.reindex(idx).ffill()["close"]
+        opt_price = opt_df.reindex(idx).ffill()["close"]
+
+        portfolio_values: List[float] = []
+        hodl_values: List[float] = []
+
+        for ts in idx:
+            s = float(spot.loc[ts])
+            c = float(opt_price.loc[ts])
+
+            hodl_val = size * s
+            cc_val = size * s + size * (open_price - c)
+            portfolio_values.append(cc_val)
+            hodl_values.append(hodl_val)
+
+        if not portfolio_values:
+            return None
+
+        start_portfolio = portfolio_values[0]
+        start_hodl = hodl_values[0]
+        final_cc = portfolio_values[-1]
+        final_hodl = hodl_values[-1]
+        final_opt_price = float(opt_price.iloc[-1])
+
+        pnl = final_cc - start_portfolio
+        pnl_vs_hodl = final_cc - final_hodl
+
+        peak = portfolio_values[0]
+        max_dd_pct = 0.0
+        for v in portfolio_values:
+            if v > peak:
+                peak = v
+            dd = (peak - v) / peak if peak > 0 else 0.0
+            if dd > max_dd_pct:
+                max_dd_pct = dd
+
+        return SimulatedTrade(
+            instrument_name=instrument_name,
+            underlying=cfg.underlying,
+            side="SHORT_CALL",
+            size=size,
+            open_time=decision_time,
+            close_time=expiry,
+            open_price=open_price,
+            close_price=final_opt_price,
+            pnl=pnl,
+            pnl_vs_hodl=pnl_vs_hodl,
+            max_drawdown_pct=max_dd_pct * 100.0,
+            notes=(
+                f"exit_style=hold_to_expiry; target_dte={cfg.target_dte}, "
+                f"actual_delta={option_snapshot.delta}, expiry={expiry.isoformat()}"
+            ),
+        )
+
+
+You can refactor this with your existing simulate_single_call code to avoid duplication.
+
+B) Take-profit + simple roll
+
+This is the slightly more complex one.
+
+We’ll:
+
+Step through the path bar-by-bar,
+
+At each step, check:
+
+TP condition (option_price ≤ 20% of open_price, with ≥ 2 days left),
+
+Roll condition (spot ≥ 98% of strike, with ≥ 2 days left),
+
+If TP: close and stop (no new trade in this function; or you can reopen, see comment).
+
+If Roll: close and open a new 7DTE call at this time using the same scoring logic (we treat the rolled trade as a new SimulatedTrade; to keep code simple we can treat only the first leg here, or log multiple legs in notes).
+
+To keep this answer from exploding, here’s a simplified version where:
+
+_simulate_call_tp_and_roll only handles a single leg but with early TP;
+
+rolling can be added as a second step once TP logic is stable.
+
+    def _simulate_call_tp_and_roll(
+        self,
+        decision_time: datetime,
+        option_snapshot,
+        size: float = None,
+    ) -> Optional[SimulatedTrade]:
+        """
+        Single-leg simulation with early take-profit.
+        For now:
+          - TP if option value <= 20% of open premium and > 2 days to expiry.
+          - Otherwise, hold to expiry (no multi-leg roll yet).
+        We can extend this later to actually open a new call at TP time (= roll).
+        """
+        cfg = self.cfg
+        ds = self.ds
+
+        size = size if size is not None else cfg.initial_spot_position
+        instrument_name = option_snapshot.instrument_name
+        open_price = float(option_snapshot.mark_price or 0.0)
+        if open_price <= 0:
+            return None
+
+        expiry = option_snapshot.expiry
+        spot_df = ds.get_spot_ohlc(
+            underlying=cfg.underlying,
+            start=decision_time,
+            end=expiry,
+            timeframe=cfg.timeframe,
+        )
+        if spot_df.empty:
+            return None
+
+        opt_df = ds.get_option_ohlc(
+            instrument_name=instrument_name,
+            start=decision_time,
+            end=expiry,
+            timeframe=cfg.timeframe,
+        )
+        if opt_df.empty:
+            return None
+
+        idx = spot_df.index.union(opt_df.index).sort_values()
+        spot = spot_df.reindex(idx).ffill()["close"]
+        opt_price = opt_df.reindex(idx).ffill()["close"]
+
+        portfolio_values: List[float] = []
+        hodl_values: List[float] = []
+
+        tp_triggered = False
+        close_time = expiry
+        close_opt_price = float(opt_price.iloc[-1])
+
+        for ts in idx:
+            s = float(spot.loc[ts])
+            c = float(opt_price.loc[ts])
+
+            hodl_val = size * s
+            cc_val = size * s + size * (open_price - c)
+            portfolio_values.append(cc_val)
+            hodl_values.append(hodl_val)
+
+            # check TP condition: <= 20% of open price and > 2 days left
+            dte_days = (expiry - ts).total_seconds() / 86400.0
+            if (not tp_triggered) and dte_days > 2.0 and c <= 0.2 * open_price:
+                tp_triggered = True
+                close_time = ts
+                close_opt_price = c
+                # stop updating after TP
+                break
+
+        if not portfolio_values:
+            return None
+
+        start_portfolio = portfolio_values[0]
+        start_hodl = hodl_values[0]
+        final_cc = portfolio_values[-1]
+        final_hodl = hodl_values[-1]
+
+        pnl = final_cc - start_portfolio
+        pnl_vs_hodl = final_cc - final_hodl
+
+        peak = portfolio_values[0]
+        max_dd_pct = 0.0
+        for v in portfolio_values:
+            if v > peak:
+                peak = v
+            dd = (peak - v) / peak if peak > 0 else 0.0
+            if dd > max_dd_pct:
+                max_dd_pct = dd
+
+        return SimulatedTrade(
+            instrument_name=instrument_name,
+            underlying=cfg.underlying,
+            side="SHORT_CALL",
+            size=size,
+            open_time=decision_time,
+            close_time=close_time,
+            open_price=open_price,
+            close_price=close_opt_price,
+            pnl=pnl,
+            pnl_vs_hodl=pnl_vs_hodl,
+            max_drawdown_pct=max_dd_pct * 100.0,
+            notes=(
+                "exit_style=tp_and_roll (TP-only for now, no second leg); "
+                f"target_dte={cfg.target_dte}, actual_delta={option_snapshot.delta}, "
+                f"expiry={expiry.isoformat()}, tp_triggered={tp_triggered}"
+            ),
+        )
+
+
+Later, to add actual roll, you’d:
+
+When TP or “near strike” condition hits:
+
+treat that as close of leg 1,
+
+immediately call the scoring engine again at that time to pick a new call,
+
+simulate leg 2 as another SimulatedTrade,
+
+either:
+
+log them separately, or
+
+combine them into a single “multi-leg” record.
+
+But for now, this gives you:
+
+Policy A: exit_style="hold_to_expiry"
+
+Policy B: exit_style="tp_and_roll" (TP-only in code, the “roll” part can be added when you’re ready).
+
+How you use it in practice
+
+In a backtest script:
+
+decision_times = ...  # list of datetimes (daily or 4h)
+sim = CoveredCallSimulator(ds, cfg)
+
+# You provide a state_builder for historical state:
+def build_state(t: datetime) -> dict:
+    # use DeribitDataSource to get spot, market_context, candidate options
+    # same shape as your live AgentState, but for time t
+    ...
+
+# Policy A: hold to expiry
+result_hold = sim.simulate_policy(
+    decision_times=decision_times,
+    state_builder=build_state,
+    exit_style="hold_to_expiry",
+    min_score_to_trade=3.0,
+)
+
+# Policy B: TP/roll
+result_tp = sim.simulate_policy(
+    decision_times=decision_times,
+    state_builder=build_state,
+    exit_style="tp_and_roll",
+    min_score_to_trade=3.0,
+)
+
+
+Then you compare result_hold.metrics vs result_tp.metrics and look at their trades, equity_curve, etc.
