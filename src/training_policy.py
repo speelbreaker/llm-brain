@@ -49,8 +49,19 @@ def build_training_actions(
         if not cands:
             continue
         
-        opened_for_this_underlying = 0
-        used_symbols: set[str] = set()
+        # Count existing open positions for this underlying
+        existing_positions = [
+            p for p in agent_state.portfolio.option_positions
+            if p.underlying == underlying and p.side.value == "sell"
+        ]
+        opened_for_this_underlying = len(existing_positions)
+        
+        # Initialize used_symbols with already-open symbols to avoid duplicates
+        used_symbols: set[str] = {p.symbol for p in existing_positions}
+        
+        # Skip if already at max positions for this underlying
+        if opened_for_this_underlying >= cfg.max_calls_per_underlying_training:
+            continue
         
         for profile_name in cfg.training_strategies:
             profile = TRAINING_PROFILES.get(profile_name)
