@@ -1,0 +1,440 @@
+1. Script: scripts/calibrate_synthetic_vs_deribit.py
+
+Create this file in your repo:
+
+# scripts/calibrate_synthetic_vs_deribit.py
+"""
+Compare our synthetic Black–Scholes universe to live Deribit prices.
+
+Usage examples:
+
+    python -m scripts.calibrate_synthetic_vs_deribit --underlying BTC --target-dte 7
+    python -m scripts.calibrate_synthetic_vs_deribit --underlying ETH --target-dte 7 --min-dte 3 --max-dte 10
+
+What it does:
+
+1. Fetches current index (spot) and full option chain from Deribit.
+2. Filters to CALLs within a DTE window (e.g. 3–10 days) around target_dte.
+3. For each option:
+   - Takes Deribit mark_price and mark_iv.
+   - Computes our synthetic price using Black–Scholes with a simple IV model.
+4. Prints error stats (absolute / relative) and a small table of sample rows.
+"""
+
+from __future__ import annotations
+
+import argparse
+import math
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from typing import List, Dict, Any, Optional
+
+import requests
+
+
+DERIBIT_API = "https://www.deribit.com/api/v2"
+
+
+# ──────────────────────────────────────────────────────────────
+# Basic Black–Scholes call pricing (risk-free ~ 0)
+# ──────────────────────────────────────────────────────────────
+
+def _norm_cdf(x: float) -> float:
+    """Standard normal CDF using math.erf."""
+    return 0.5 * (1.0 + math.erf(x / math.sqrt(2.0)))
+
+
+def black_scholes_call_price(
+    spot: float,
+    strike: float,
+    t_years: float,
+    sigma: float,
+    r: float = 0.0,
+) -> float:
+    """
+    Standard Black–Scholes call price.
+
+    Assumes:
+      - European call
+      - Continuous compounding, risk-free rate r
+    """
+    if t_years <= 0 or sigma <= 0 or spot <= 0 or strike <= 0:
+        # instantaneous expiry or degenerate inputs → intrinsic value
+        return max(0.0, spot - strike)
+
+    sqrt_t = math.sqrt(t_years)
+    d1 = (math.log(spot / strike) + (r + 0.5 * sigma ** 2) * t_years) / (sigma * sqrt_t)
+    d2 = d1 - sigma * sqrt_t
+
+    nd1 = _norm_cdf(d1)
+    nd2 = _norm_cdf(d2)
+
+    return spot * nd1 - strike * math.exp(-r * t_years) * nd2
+
+
+# ──────────────────────────────────────────────────────────────
+# Deribit helpers
+# ──────────────────────────────────────────────────────────────
+
+def deribit_get(path: str, params: Dict[str, Any]) -> Dict[str, Any]:
+    url = f"{DERIBIT_API}/{path}"
+    resp = requests.get(url, params=params, timeout=10)
+    resp.raise_for_status()
+    data = resp.json()
+    if "result" not in data:
+        raise RuntimeError(f"Unexpected Deribit response: {data}")
+    return data["result"]
+
+
+def get_index_price(underlying: str) -> float:
+    """
+    Get the current index price for underlying (BTC or ETH) in USD.
+    """
+    # Deribit index names: btc_usd, eth_usd
+    index_name = f"{underlying.lower()}_usd"
+    result = deribit_get("public/get_index_price", {"index_name": index_name})
+    return float(result["index_price"])
+
+
+@dataclass
+class OptionQuote:
+    instrument_name: str
+    kind: str
+    strike: float
+    expiration: datetime
+    mark_price: float
+    mark_iv: Optional[float]
+    delta: Optional[float]
+    dte_days: float
+
+
+def get_call_chain(
+    underlying: str,
+    min_dte: float,
+    max_dte: float,
+) -> List[OptionQuote]:
+    """
+    Fetch all CALL options for the given underlying and filter by DTE (days).
+    """
+    # Get all option instruments (both calls and puts)
+    result = deribit_get(
+        "public/get_instruments",
+        {
+            "currency": underlying,
+            "kind": "option",
+            "expired": False,
+        },
+    )
+    instruments = result
+
+    now = datetime.now(timezone.utc)
+    quotes: List[OptionQuote] = []
+
+    for inst in instruments:
+        if inst.get("option_type") != "call":
+            continue
+
+        instrument_name = inst["instrument_name"]
+        strike = float(inst["strike"])
+        expiration_ts_ms = inst["expiration_timestamp"]
+        expiration = datetime.fromtimestamp(expiration_ts_ms / 1000.0, tz=timezone.utc)
+
+        dte_days = (expiration - now).total_seconds() / 86400.0
+        if dte_days < min_dte or dte_days > max_dte:
+            continue
+
+        # Use ticker to get mark_price, mark_iv, delta
+        ticker = deribit_get(
+            "public/ticker",
+            {"instrument_name": instrument_name},
+        )
+        mark_price = float(ticker.get("mark_price", 0.0) or 0.0)
+        mark_iv = ticker.get("mark_iv", None)
+        delta = ticker.get("delta", None)
+        if mark_price <= 0.0:
+            continue
+
+        quotes.append(
+            OptionQuote(
+                instrument_name=instrument_name,
+                kind="call",
+                strike=strike,
+                expiration=expiration,
+                mark_price=mark_price,
+                mark_iv=float(mark_iv) if mark_iv is not None else None,
+                delta=float(delta) if delta is not None else None,
+                dte_days=dte_days,
+            )
+        )
+
+    return quotes
+
+
+# ──────────────────────────────────────────────────────────────
+# Synthetic IV model
+# ──────────────────────────────────────────────────────────────
+
+def synthetic_iv_from_deribit(
+    quote: OptionQuote,
+    default_iv: float,
+    iv_multiplier: float,
+) -> float:
+    """
+    Simple IV model:
+
+    - If Deribit gave us mark_iv, we can:
+        - either use it directly (iv_multiplier=1.0),
+        - or scale it by iv_multiplier.
+    - If mark_iv is missing, fall back to default_iv.
+    """
+    if quote.mark_iv is not None and quote.mark_iv > 0:
+        base_iv = quote.mark_iv
+    else:
+        base_iv = default_iv
+
+    return max(1e-6, base_iv * iv_multiplier)
+
+
+# ──────────────────────────────────────────────────────────────
+# Calibration logic
+# ──────────────────────────────────────────────────────────────
+
+def calibrate(
+    underlying: str,
+    target_dte: float,
+    min_dte: float,
+    max_dte: float,
+    iv_multiplier: float,
+    default_iv: float,
+    r: float = 0.0,
+    max_samples: int = 80,
+) -> None:
+    """
+    Compare synthetic vs Deribit mark_price for CALLs near target_dte.
+    """
+    print(f"=== Calibration for {underlying}, target_dte={target_dte} days ===")
+    spot = get_index_price(underlying)
+    print(f"Spot index price: {spot:.2f} USD")
+
+    quotes = get_call_chain(underlying, min_dte=min_dte, max_dte=max_dte)
+    quotes = sorted(quotes, key=lambda q: (q.dte_days, q.strike))
+    if not quotes:
+        print("No options found in the given DTE window.")
+        return
+
+    if len(quotes) > max_samples:
+        # sub-sample roughly evenly
+        step = max(1, len(quotes) // max_samples)
+        quotes = quotes[::step]
+
+    print(f"Using {len(quotes)} options in DTE range [{min_dte}, {max_dte}] days")
+
+    errors_abs = []
+    errors_pct = []
+    rows = []
+
+    for q in quotes:
+        t_years = max(0.0001, q.dte_days / 365.0)
+        sigma = synthetic_iv_from_deribit(q, default_iv=default_iv, iv_multiplier=iv_multiplier)
+
+        synthetic_price = black_scholes_call_price(
+            spot=spot,
+            strike=q.strike,
+            t_years=t_years,
+            sigma=sigma,
+            r=r,
+        )
+
+        diff = synthetic_price - q.mark_price
+        rel_diff = diff / q.mark_price
+
+        errors_abs.append(diff)
+        errors_pct.append(rel_diff)
+
+        rows.append(
+            {
+                "instrument": q.instrument_name,
+                "dte": q.dte_days,
+                "strike": q.strike,
+                "mark_price": q.mark_price,
+                "syn_price": synthetic_price,
+                "diff": diff,
+                "diff_pct": rel_diff * 100.0,
+                "mark_iv": q.mark_iv,
+                "syn_iv": sigma,
+            }
+        )
+
+    if not rows:
+        print("No rows to compare.")
+        return
+
+    mae_pct = sum(abs(x) for x in errors_pct) / len(errors_pct) * 100.0
+    bias_pct = sum(errors_pct) / len(errors_pct) * 100.0
+
+    print()
+    print(f"Mean absolute pricing error: {mae_pct:.2f}% of mark_price")
+    print(f"Average bias (synthetic - mark): {bias_pct:.2f}% of mark_price")
+
+    print()
+    print("Sample rows:")
+    print(f"{'instrument':<28} {'DTE':>5} {'K':>8} {'mark':>10} {'syn':>10} {'diff%':>8}")
+    for row in rows[:15]:
+        print(
+            f"{row['instrument']:<28} "
+            f"{row['dte']:5.2f} "
+            f"{row['strike']:8.0f} "
+            f"{row['mark_price']:10.4f} "
+            f"{row['syn_price']:10.4f} "
+            f"{row['diff_pct']:8.2f}"
+        )
+
+
+# ──────────────────────────────────────────────────────────────
+# CLI
+# ──────────────────────────────────────────────────────────────
+
+def main():
+    parser = argparse.ArgumentParser(description="Calibrate synthetic BS universe vs Deribit.")
+    parser.add_argument("--underlying", type=str, default="BTC", choices=["BTC", "ETH"])
+    parser.add_argument(
+        "--target-dte",
+        type=float,
+        default=7.0,
+        help="Target DTE bucket (for your own reference, not used directly in pricing).",
+    )
+    parser.add_argument(
+        "--min-dte",
+        type=float,
+        default=3.0,
+        help="Minimum DTE in days for options to include.",
+    )
+    parser.add_argument(
+        "--max-dte",
+        type=float,
+        default=10.0,
+        help="Maximum DTE in days for options to include.",
+    )
+    parser.add_argument(
+        "--iv-multiplier",
+        type=float,
+        default=1.0,
+        help="Multiply Deribit mark_iv by this factor to get synthetic iv.",
+    )
+    parser.add_argument(
+        "--default-iv",
+        type=float,
+        default=0.6,
+        help="Fallback IV (annualized, e.g. 0.6 = 60%%) if mark_iv is missing.",
+    )
+    parser.add_argument(
+        "--max-samples",
+        type=int,
+        default=80,
+        help="Max number of options to sample for comparison.",
+    )
+    args = parser.parse_args()
+
+    calibrate(
+        underlying=args.underlying,
+        target_dte=args.target_dte,
+        min_dte=args.min_dte,
+        max_dte=args.max_dte,
+        iv_multiplier=args.iv_multiplier,
+        default_iv=args.default_iv,
+        max_samples=args.max_samples,
+    )
+
+
+if __name__ == "__main__":
+    main()
+
+2. How to run it
+
+From your repo root (same level as src/ and scripts/):
+
+python -m scripts.calibrate_synthetic_vs_deribit --underlying BTC --target-dte 7 --min-dte 3 --max-dte 10
+
+
+You’ll see output like:
+
+=== Calibration for BTC, target_dte=7.0 days ===
+Spot index price: 90500.12 USD
+Using 42 options in DTE range [3.0, 10.0] days
+
+Mean absolute pricing error: 7.80% of mark_price
+Average bias (synthetic - mark): 2.10% of mark_price
+
+Sample rows:
+instrument                    DTE        K       mark        syn    diff%
+BTC-6DEC24-88000-C          5.32    88000     0.0450     0.0483     7.44
+BTC-6DEC24-90000-C          5.32    90000     0.0335     0.0341     1.79
+BTC-6DEC24-92000-C          5.32    92000     0.0252     0.0230    -8.82
+...
+
+Interpreting this
+
+Mean absolute pricing error
+→ average |synthetic − mark| / mark across the sampled options.
+
+< 10% for ATM / near-ATM is pretty decent for our use case.
+
+If you see 20–30%+, your synthetic config is off.
+
+Average bias
+→ whether synthetic prices are systematically too high (+) or too low (−).
+
+Per-option rows let you eyeball:
+
+Where errors are bigger: deep OTM, deep ITM, or across the board.
+
+Whether multiplying IV up/down would help.
+
+3. How this ties back to your Synthetic Universe
+
+Right now the script uses Deribit’s own mark_iv, scaled by iv_multiplier, as the synthetic volatility:
+
+if quote.mark_iv is not None:
+    base_iv = quote.mark_iv
+else:
+    base_iv = default_iv
+
+sigma = base_iv * iv_multiplier
+
+
+Your synthetic universe, though, is more like:
+
+sigma = realized_vol_7d * synthetic_iv_multiplier
+
+maybe plus some skew adjustments later.
+
+So once you’re happy this test harness works, you can change synthetic_iv_from_deribit() to match your config exactly, for example:
+
+def synthetic_iv_from_deribit(
+    quote: OptionQuote,
+    default_iv: float,
+    iv_multiplier: float,
+) -> float:
+    # Example: pretend our synthetic universe uses a flat IV = 7d RV * multiplier
+    rv_7d = 0.70  # hard-code for now or compute from historical data
+    base_iv = rv_7d
+    return max(1e-6, base_iv * iv_multiplier)
+
+
+Then:
+
+Use this script as a tuning tool for synthetic_iv_multiplier or any future skew function.
+
+You can run it periodically to check whether your synthetic assumptions are still roughly aligned with the current market environment.
+
+4. What this confirms / doesn’t confirm
+
+Confirms:
+
+That, for “now”, your synthetic engine isn’t wildly mispricing near-term calls vs Deribit.
+
+Doesn’t confirm:
+
+That the path over the last 30 days matches reality. For that we’d still need historical options data (Tardis, or recording Deribit continuously).
+
+But for our current goal — “Are backtest premiums at least in the right ballpark?” — this cross-section calibration is the right level of sanity check.

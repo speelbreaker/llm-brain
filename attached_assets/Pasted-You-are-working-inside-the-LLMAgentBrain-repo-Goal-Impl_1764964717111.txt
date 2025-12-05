@@ -1,0 +1,405 @@
+You are working inside the LLMAgentBrain repo.
+
+Goal: Implement a small “Calibration vs Deribit” feature so we can check whether our Synthetic Universe (Black–Scholes prices) roughly matches live Deribit option prices for near-dated calls.
+
+The feature has 3 parts:
+
+1) Backend calibration module (pure Python).
+2) FastAPI endpoint to trigger calibration and return JSON.
+3) A tiny UI card in the existing web app to run calibration and display the results.
+
+Please follow the instructions and naming exactly so the UI and backend line up.
+
+────────────────────────────────────────
+A. Backend: src/calibration.py
+────────────────────────────────────────
+
+Create a new module: src/calibration.py
+
+It should:
+
+1. Use the public Deribit HTTP API directly (via `requests`), **no auth** needed.
+
+   - Base URL: https://www.deribit.com/api/v2
+   - Helper function:
+
+     ```python
+     def deribit_get(path: str, params: Dict[str, Any]) -> Dict[str, Any]:
+         ...
+     ```
+
+2. Provide a simple Black–Scholes call pricer:
+
+   - Function:
+
+     ```python
+     def black_scholes_call_price(
+         spot: float,
+         strike: float,
+         t_years: float,
+         sigma: float,
+         r: float = 0.0,
+     ) -> float:
+         ...
+     ```
+
+     Use standard formulas with normal CDF (math.erf). If inputs are degenerate or T <= 0, return intrinsic value `max(0.0, spot - strike)`.
+
+3. Provide a dataclass for a Deribit quote:
+
+   ```python
+   @dataclass
+   class OptionQuote:
+       instrument_name: str
+       kind: str           # "call"
+       strike: float
+       expiration: datetime
+       mark_price: float
+       mark_iv: Optional[float]
+       delta: Optional[float]
+       dte_days: float
+Provide a function to fetch the current option chain for an underlying and filter by DTE:
+
+python
+Copy code
+def get_call_chain(
+    underlying: str,    # "BTC" or "ETH"
+    min_dte: float,
+    max_dte: float,
+) -> list[OptionQuote]:
+    """
+    Uses Deribit:
+      - public/get_instruments  (currency=underlying, kind=option, expired=false)
+      - public/ticker          (instrument_name=<option>)
+    Filters:
+      - Only calls.
+      - Only instruments with DTE between min_dte and max_dte days.
+      - Only options with positive mark_price.
+    """
+    ...
+DTE is (expiration - now_utc).total_seconds() / 86400.0.
+
+Provide a simple synthetic IV model:
+
+For now, we want to be able to:
+
+Use Deribit’s mark_iv scaled by a multiplier, or
+
+Fall back to a default_IV if mark_iv is missing.
+
+Implement:
+
+python
+Copy code
+def synthetic_iv(
+    quote: OptionQuote,
+    default_iv: float,
+    iv_multiplier: float,
+) -> float:
+    """
+    If quote.mark_iv is present and > 0:
+      base_iv = quote.mark_iv
+    else:
+      base_iv = default_iv
+
+    Returns max(1e-6, base_iv * iv_multiplier).
+    """
+    ...
+Later we may replace this with “RV * multiplier”, but for now it’s just a calibration harness.
+
+Main calibration function:
+
+python
+Copy code
+@dataclass
+class CalibrationRow:
+    instrument: str
+    dte: float
+    strike: float
+    mark_price: float
+    syn_price: float
+    diff: float
+    diff_pct: float
+    mark_iv: Optional[float]
+    syn_iv: float
+
+@dataclass
+class CalibrationResult:
+    underlying: str
+    spot: float
+    min_dte: float
+    max_dte: float
+    iv_multiplier: float
+    default_iv: float
+    count: int
+    mae_pct: float      # mean absolute percentage error vs mark_price
+    bias_pct: float     # mean signed percentage error vs mark_price
+    timestamp: datetime
+    rows: list[CalibrationRow]
+And a function:
+
+python
+Copy code
+def run_calibration(
+    underlying: str,
+    min_dte: float,
+    max_dte: float,
+    iv_multiplier: float = 1.0,
+    default_iv: float = 0.6,
+    r: float = 0.0,
+    max_samples: int = 80,
+) -> CalibrationResult:
+    """
+    1) Fetch current spot from Deribit (public/get_index_price, index_name: btc_usd or eth_usd).
+    2) Fetch call chain via get_call_chain().
+    3) Sub-sample to at most max_samples quotes (e.g. quotes[::step]).
+    4) For each quote:
+         - Compute t_years = dte_days / 365.0 (or at least a small epsilon).
+         - Compute sigma = synthetic_iv(...).
+         - Compute synthetic_price via Black–Scholes.
+         - diff = synthetic_price - mark_price
+         - diff_pct = diff / mark_price * 100.
+    5) Compute:
+         - mae_pct = mean(|diff_pct|).
+         - bias_pct = mean(diff_pct).
+    6) Return CalibrationResult with rows and aggregates.
+    """
+    ...
+Use timezone-aware UTC datetimes.
+
+────────────────────────────────────────
+B. FastAPI endpoint: src/web_app.py
+────────────────────────────────────────
+
+Wire the calibration into our existing FastAPI app.
+
+At the top of src/web_app.py, import:
+
+python
+Copy code
+from src.calibration import run_calibration
+Add a new GET endpoint:
+
+python
+Copy code
+@app.get("/api/calibration")
+def get_calibration(
+    underlying: str = Query("BTC", regex="^(BTC|ETH)$"),
+    min_dte: float = Query(3.0, ge=0.0),
+    max_dte: float = Query(10.0, ge=0.0),
+    iv_multiplier: float = Query(1.0, ge=0.0),
+    default_iv: float = Query(0.6, ge=0.0),
+) -> JSONResponse:
+    """
+    Run a quick synthetic-vs-Deribit calibration for near-dated calls.
+    Returns JSON with summary metrics and up to ~80 sample rows.
+    """
+    result = run_calibration(
+        underlying=underlying,
+        min_dte=min_dte,
+        max_dte=max_dte,
+        iv_multiplier=iv_multiplier,
+        default_iv=default_iv,
+    )
+
+    payload = {
+        "underlying": result.underlying,
+        "spot": result.spot,
+        "min_dte": result.min_dte,
+        "max_dte": result.max_dte,
+        "iv_multiplier": result.iv_multiplier,
+        "default_iv": result.default_iv,
+        "count": result.count,
+        "mae_pct": result.mae_pct,
+        "bias_pct": result.bias_pct,
+        "timestamp": result.timestamp.isoformat(),
+        "rows": [
+            {
+                "instrument": r.instrument,
+                "dte": r.dte,
+                "strike": r.strike,
+                "mark_price": r.mark_price,
+                "syn_price": r.syn_price,
+                "diff": r.diff,
+                "diff_pct": r.diff_pct,
+                "mark_iv": r.mark_iv,
+                "syn_iv": r.syn_iv,
+            }
+            for r in result.rows
+        ],
+    }
+    return JSONResponse(content=payload)
+If any exception occurs in run_calibration, return a 500 with a small JSON error (e.g. {"error": "calibration_failed"} and a message).
+
+────────────────────────────────────────
+C. UI card in index.html
+────────────────────────────────────────
+
+Update the existing HTML/JS frontend (src/web/templates/index.html or wherever the main page is) to add a tiny calibration card in the dashboard.
+
+In the HTML (near the Live Agent / Backtest sections), add:
+
+html
+Copy code
+<div class="section">
+  <h2>Calibration vs Deribit</h2>
+  <div class="card">
+    <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-bottom:8px;">
+      <label>
+        Underlying:
+        <select id="calib-underlying">
+          <option value="BTC">BTC</option>
+          <option value="ETH">ETH</option>
+        </select>
+      </label>
+      <label>
+        DTE Range:
+        <input id="calib-min-dte" type="number" value="3" style="width:60px;"> –
+        <input id="calib-max-dte" type="number" value="10" style="width:60px;"> days
+      </label>
+      <label>
+        IV Multiplier:
+        <input id="calib-iv-mult" type="number" step="0.1" value="1.0" style="width:70px;">
+      </label>
+      <button id="calib-run-btn">Run Calibration</button>
+    </div>
+
+    <div id="calib-summary" style="font-size:0.9rem; margin-bottom:8px; color:#555;">
+      <!-- Filled by JS -->
+    </div>
+
+    <div style="overflow-x:auto; max-height:220px; overflow-y:auto;">
+      <table class="steps-table">
+        <thead>
+          <tr>
+            <th>Instrument</th>
+            <th>DTE</th>
+            <th>Strike</th>
+            <th>Mark</th>
+            <th>Synthetic</th>
+            <th>Diff %</th>
+          </tr>
+        </thead>
+        <tbody id="calib-rows-body">
+          <tr><td colspan="6" style="text-align:center;color:#666;">No data</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+Reuse the existing styles .section, .card, .steps-table so it visually matches the rest of the app.
+
+Add JS to call /api/calibration and update the card.
+
+In the existing <script> block at the bottom of the page, add:
+
+javascript
+Copy code
+async function runCalibration() {
+  const btn = document.getElementById('calib-run-btn');
+  const underlying = document.getElementById('calib-underlying').value || 'BTC';
+  const minDte = parseFloat(document.getElementById('calib-min-dte').value || '3');
+  const maxDte = parseFloat(document.getElementById('calib-max-dte').value || '10');
+  const ivMult = parseFloat(document.getElementById('calib-iv-mult').value || '1.0');
+
+  const summaryEl = document.getElementById('calib-summary');
+  const tbody = document.getElementById('calib-rows-body');
+
+  summaryEl.textContent = 'Running calibration...';
+  tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:#666;">Loading...</td></tr>';
+  btn.disabled = true;
+
+  try {
+    const params = new URLSearchParams({
+      underlying,
+      min_dte: String(minDte),
+      max_dte: String(maxDte),
+      iv_multiplier: String(ivMult),
+    });
+
+    const res = await fetch(`/api/calibration?${params.toString()}`);
+    if (!res.ok) {
+      throw new Error(`HTTP ${res.status}`);
+    }
+    const data = await res.json();
+
+    const mae = (data.mae_pct ?? 0).toFixed(2);
+    const bias = (data.bias_pct ?? 0).toFixed(2);
+    const count = data.count ?? 0;
+    const spot = data.spot ?? 0;
+
+    summaryEl.textContent =
+      `Underlying ${data.underlying} @ ${spot.toFixed ? spot.toFixed(2) : spot} USD – ` +
+      `${count} options in [${data.min_dte}d, ${data.max_dte}d], ` +
+      `MAE ~ ${mae}% of mark, bias ~ ${bias}%.`;
+
+    const rows = (data.rows || []).slice(0, 30);
+    if (rows.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:#666;">No options found for this range</td></tr>';
+    } else {
+      tbody.innerHTML = rows.map(row => {
+        const diffClass = row.diff > 0 ? 'traded-yes' : 'traded-no';
+        return `<tr>
+          <td>${row.instrument}</td>
+          <td>${row.dte.toFixed(2)}</td>
+          <td>${row.strike.toFixed(0)}</td>
+          <td>${row.mark_price.toFixed(4)}</td>
+          <td>${row.syn_price.toFixed(4)}</td>
+          <td class="${diffClass}">${row.diff_pct.toFixed(2)}%</td>
+        </tr>`;
+      }).join('');
+    }
+  } catch (err) {
+    console.error('Calibration error:', err);
+    summaryEl.textContent = 'Calibration failed. Check console/logs.';
+    tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:#c00;">Error</td></tr>';
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+document.getElementById('calib-run-btn').addEventListener('click', runCalibration);
+Do NOT auto-run calibration on page load; it should only run when the user clicks the button, to avoid hitting Deribit too often.
+
+────────────────────────────────────────
+D. Behaviour & safety notes
+────────────────────────────────────────
+
+The calibration feature is read-only; it must:
+
+Only use public Deribit endpoints.
+
+Never place any orders.
+
+It is intended as a quick, approximate sanity-check that our synthetic prices (BS with synthetic_iv) are in the same ballpark as Deribit’s mark prices for near-dated calls.
+
+It is OK if the calibration fails occasionally due to network issues; just surface a friendly error in the UI.
+
+After implementing:
+
+Verify /api/calibration works by manually calling it (e.g. with curl or browser).
+
+Confirm the new Calibration card appears and shows:
+
+A summary line (“BTC @ spot … MAE … bias …”),
+
+A small table of instruments and pricing diffs.
+
+Keep existing functionality unchanged (backtests, live agent, training exports) while adding this feature.
+
+yaml
+Copy code
+
+---
+
+Once your Builder runs with that prompt, you should have:
+
+- A **Calibrate vs Deribit** card on the dashboard.
+- A button you can click to see how close your Synthetic Universe is to real Deribit weekly calls today.
+::contentReference[oaicite:0]{index=0}
+
+
+
+
+
+

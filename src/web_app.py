@@ -19,6 +19,7 @@ from src.decisions_store import decisions_store
 from src.chat_with_agent import chat_with_agent
 from src.config import settings
 from src.position_tracker import position_tracker
+from src.calibration import run_calibration
 
 
 app = FastAPI(
@@ -140,6 +141,67 @@ def get_closed_positions() -> JSONResponse:
     """Return closed bot-managed chains with realized PnL."""
     payload = position_tracker.get_closed_positions_payload()
     return JSONResponse(content=payload)
+
+
+@app.get("/api/calibration")
+def get_calibration(
+    underlying: str = "BTC",
+    min_dte: float = 3.0,
+    max_dte: float = 10.0,
+    iv_multiplier: float = 1.0,
+    default_iv: float = 0.6,
+) -> JSONResponse:
+    """
+    Run a quick synthetic-vs-Deribit calibration for near-dated calls.
+    Returns JSON with summary metrics and up to ~80 sample rows.
+    """
+    if underlying not in ("BTC", "ETH"):
+        return JSONResponse(
+            status_code=400,
+            content={"error": "underlying must be BTC or ETH"},
+        )
+    
+    try:
+        result = run_calibration(
+            underlying=underlying,
+            min_dte=min_dte,
+            max_dte=max_dte,
+            iv_multiplier=iv_multiplier,
+            default_iv=default_iv,
+        )
+
+        payload = {
+            "underlying": result.underlying,
+            "spot": result.spot,
+            "min_dte": result.min_dte,
+            "max_dte": result.max_dte,
+            "iv_multiplier": result.iv_multiplier,
+            "default_iv": result.default_iv,
+            "count": result.count,
+            "mae_pct": result.mae_pct,
+            "bias_pct": result.bias_pct,
+            "timestamp": result.timestamp.isoformat(),
+            "rows": [
+                {
+                    "instrument": r.instrument,
+                    "dte": r.dte,
+                    "strike": r.strike,
+                    "mark_price": r.mark_price,
+                    "syn_price": r.syn_price,
+                    "diff": r.diff,
+                    "diff_pct": r.diff_pct,
+                    "mark_iv": r.mark_iv,
+                    "syn_iv": r.syn_iv,
+                }
+                for r in result.rows
+            ],
+        }
+        return JSONResponse(content=payload)
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={"error": "calibration_failed", "message": str(e)},
+        )
 
 
 class BacktestRequest(BaseModel):
@@ -969,6 +1031,7 @@ def index() -> str:
   <div class="tabs">
     <button class="tab active" onclick="showTab('live')">Live Agent</button>
     <button class="tab" onclick="showTab('backtest')">Backtesting Lab</button>
+    <button class="tab" onclick="showTab('calibration')">Calibration</button>
     <button class="tab" onclick="showTab('chat')">Chat</button>
   </div>
 
@@ -1404,6 +1467,58 @@ def index() -> str:
     </div>
   </div>
 
+  <!-- CALIBRATION TAB -->
+  <div id="tab-calibration" class="tab-content">
+    <div class="section">
+      <h2>Calibration vs Deribit</h2>
+      <p style="color:#666;margin-bottom:1rem;">Compare synthetic Black-Scholes prices with live Deribit mark prices for near-dated calls.</p>
+      
+      <div class="card">
+        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:8px;">
+          <label>
+            Underlying:
+            <select id="calib-underlying" style="padding:0.3rem;">
+              <option value="BTC">BTC</option>
+              <option value="ETH">ETH</option>
+            </select>
+          </label>
+          <label>
+            DTE Range:
+            <input id="calib-min-dte" type="number" value="3" style="width:60px;padding:0.3rem;"> -
+            <input id="calib-max-dte" type="number" value="10" style="width:60px;padding:0.3rem;"> days
+          </label>
+          <label>
+            IV Multiplier:
+            <input id="calib-iv-mult" type="number" step="0.1" value="1.0" style="width:70px;padding:0.3rem;">
+          </label>
+          <button id="calib-run-btn" onclick="runCalibration()">Run Calibration</button>
+        </div>
+        
+        <div id="calib-summary" style="font-size:0.9rem;margin-bottom:8px;color:#555;">
+          Click "Run Calibration" to compare synthetic vs Deribit prices.
+        </div>
+        
+        <div style="overflow-x:auto;max-height:320px;overflow-y:auto;">
+          <table class="steps-table">
+            <thead>
+              <tr>
+                <th>Instrument</th>
+                <th>DTE</th>
+                <th>Strike</th>
+                <th>Mark Price</th>
+                <th>Synthetic</th>
+                <th>Diff %</th>
+              </tr>
+            </thead>
+            <tbody id="calib-rows-body">
+              <tr><td colspan="6" style="text-align:center;color:#666;">No data</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <!-- CHAT TAB -->
   <div id="tab-chat" class="tab-content">
     <div class="section">
@@ -1651,6 +1766,69 @@ def index() -> str:
       }} finally {{
         btn.disabled = false;
         btn.innerText = 'Ask Agent';
+      }}
+    }}
+    
+    async function runCalibration() {{
+      const btn = document.getElementById('calib-run-btn');
+      const underlying = document.getElementById('calib-underlying').value || 'BTC';
+      const minDte = parseFloat(document.getElementById('calib-min-dte').value || '3');
+      const maxDte = parseFloat(document.getElementById('calib-max-dte').value || '10');
+      const ivMult = parseFloat(document.getElementById('calib-iv-mult').value || '1.0');
+
+      const summaryEl = document.getElementById('calib-summary');
+      const tbody = document.getElementById('calib-rows-body');
+
+      summaryEl.textContent = 'Running calibration...';
+      tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:#666;">Loading...</td></tr>';
+      btn.disabled = true;
+
+      try {{
+        const params = new URLSearchParams({{
+          underlying,
+          min_dte: String(minDte),
+          max_dte: String(maxDte),
+          iv_multiplier: String(ivMult),
+        }});
+
+        const res = await fetch(`/api/calibration?${{params.toString()}}`);
+        if (!res.ok) {{
+          throw new Error(`HTTP ${{res.status}}`);
+        }}
+        const data = await res.json();
+
+        const mae = (data.mae_pct ?? 0).toFixed(2);
+        const bias = (data.bias_pct ?? 0).toFixed(2);
+        const count = data.count ?? 0;
+        const spot = data.spot ?? 0;
+
+        summaryEl.textContent =
+          `Underlying ${{data.underlying}} @ ${{spot.toFixed ? spot.toFixed(2) : spot}} USD - ` +
+          `${{count}} options in [${{data.min_dte}}d, ${{data.max_dte}}d], ` +
+          `MAE ~ ${{mae}}% of mark, bias ~ ${{bias}}%.`;
+
+        const rows = (data.rows || []).slice(0, 50);
+        if (rows.length === 0) {{
+          tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:#666;">No options found for this range</td></tr>';
+        }} else {{
+          tbody.innerHTML = rows.map(row => {{
+            const diffClass = row.diff_pct > 0 ? 'traded-yes' : 'traded-no';
+            return `<tr>
+              <td>${{row.instrument}}</td>
+              <td>${{row.dte.toFixed(2)}}</td>
+              <td>${{row.strike.toFixed(0)}}</td>
+              <td>${{row.mark_price.toFixed(4)}}</td>
+              <td>${{row.syn_price.toFixed(4)}}</td>
+              <td class="${{diffClass}}">${{row.diff_pct.toFixed(2)}}%</td>
+            </tr>`;
+          }}).join('');
+        }}
+      }} catch (err) {{
+        console.error('Calibration error:', err);
+        summaryEl.textContent = 'Calibration failed. Check console/logs.';
+        tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:#c00;">Error</td></tr>';
+      }} finally {{
+        btn.disabled = false;
       }}
     }}
     
