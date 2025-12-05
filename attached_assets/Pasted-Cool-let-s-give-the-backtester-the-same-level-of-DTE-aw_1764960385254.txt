@@ -1,0 +1,206 @@
+Cool, let’s give the backtester the same level of DTE awareness your live PnL dashboard now has.
+
+I’ll show you how to:
+
+Parse expiry from Deribit-style symbols in the backtest layer.
+
+Use that in state_builder for:
+
+deribit_live mode, and
+
+synthetic_bs mode (where we override expiry with target_dte).
+
+I’ll keep it self-contained (no need to refactor the tracker we just did).
+
+1. Add a symbol → expiry parser for the backtester
+
+In src/backtest/state_builder.py (or a tiny helper module if you prefer), add this near the top:
+
+import re
+from datetime import datetime, timezone, timedelta
+from dataclasses import replace   # if not already imported
+
+
+Then add the helper function (same logic as we used in the tracker, plus comments):
+
+MONTH_MAP = {
+    "JAN": 1, "FEB": 2, "MAR": 3, "APR": 4,
+    "MAY": 5, "JUN": 6, "JUL": 7, "AUG": 8,
+    "SEP": 9, "OCT": 10, "NOV": 11, "DEC": 12,
+}
+
+
+def parse_deribit_expiry(symbol: str) -> datetime | None:
+    """
+    Try to parse expiry from a Deribit-style option symbol.
+
+    Supports:
+      - BTC-2025-01-03-90000-C   (ISO style)
+      - BTC-6DEC24-90000-C       (classic Deribit style)
+
+    Returns a timezone-aware UTC datetime at 08:00:00 if possible, else None.
+    """
+    if not symbol:
+        return None
+
+    # 1) ISO style: UNDERLYING-YYYY-MM-DD-...
+    m = re.match(r"^[A-Z]+-(\d{4})-(\d{2})-(\d{2})-", symbol)
+    if m:
+        year, month, day = map(int, m.groups())
+        return datetime(year, month, day, 8, 0, 0, tzinfo=timezone.utc)
+
+    # 2) Classic: UNDERLYING-DMONYY-...
+    # Example: BTC-6DEC24-90000-C
+    m = re.match(r"^[A-Z]+-(\d{1,2})([A-Z]{3})(\d{2})-", symbol)
+    if m:
+        day_str, mon_str, year_2 = m.groups()
+        day = int(day_str)
+        mon_str = mon_str.upper()
+        month = MONTH_MAP.get(mon_str)
+        if month is None:
+            return None
+        year = 2000 + int(year_2)  # "24" -> 2024
+        return datetime(year, month, day, 8, 0, 0, tzinfo=timezone.utc)
+
+    return None
+
+
+If you later want to reuse this across files, you can move it into a tiny src/deribit_symbol.py, but no need right now.
+
+2. Use parsed / synthetic expiry when building candidates
+
+Now, inside build_historical_state (in the loop that builds candidates), we’ll:
+
+Decide which expiry to use based on pricing_mode.
+
+Compute DTE from that expiry.
+
+For synthetic_bs, override the option’s expiry so the simulator uses the synthetic one.
+
+Find the section that looks roughly like this today:
+
+all_options = ds.list_option_chain(...)
+candidates: list[OptionSnapshot] = []
+
+min_dte = cfg.min_dte
+max_dte = cfg.max_dte
+delta_min = cfg.delta_min
+delta_max = cfg.delta_max
+
+for opt in all_options:
+    if opt.kind != "call":
+        continue
+
+    expiry = opt.expiry
+    dte = (expiry - t).total_seconds() / 86400.0
+    if dte < min_dte or dte > max_dte:
+        continue
+
+    if opt.delta is None:
+        continue
+    delta_abs = abs(float(opt.delta))
+    if delta_abs < delta_min or delta_abs > delta_max:
+        continue
+
+    candidates.append(opt)
+
+
+Replace it with this version (commented):
+
+all_options = ds.list_option_chain(
+    underlying=underlying,
+    as_of=t,
+    settlement_ccy=cfg.option_settlement_ccy,
+    margin_type=cfg.option_margin_type,
+)
+
+candidates: list[OptionSnapshot] = []
+
+min_dte = cfg.min_dte
+max_dte = cfg.max_dte
+delta_min = cfg.delta_min
+delta_max = cfg.delta_max
+
+pricing_mode = getattr(cfg, "pricing_mode", "synthetic_bs")
+use_synthetic = pricing_mode == "synthetic_bs"
+target_dte = getattr(cfg, "target_dte", 7)  # days
+
+for opt in all_options:
+    if opt.kind != "call":   # still calls-only for now
+        continue
+
+    # --- decide which expiry to use ---------------------------------
+    if use_synthetic:
+        # Synthetic universe: pretend every option we sell at time t
+        # expires target_dte days later.
+        expiry = t + timedelta(days=target_dte)
+    else:
+        # Deribit-live mode: try opt.expiry first, then parse from symbol
+        expiry = getattr(opt, "expiry", None)
+        if expiry is None:
+            instrument = getattr(opt, "instrument_name", None) or getattr(opt, "symbol", "")
+            expiry = parse_deribit_expiry(str(instrument))
+
+        if expiry is None:
+            # If we still don't know expiry, skip this option
+            continue
+
+    # --- DTE filter -------------------------------------------------
+    dte = (expiry - t).total_seconds() / 86400.0
+    if dte < min_dte or dte > max_dte:
+        continue
+
+    # --- delta filter ------------------------------------------------
+    if opt.delta is None:
+        continue
+    delta_abs = abs(float(opt.delta))
+    if delta_abs < delta_min or delta_abs > delta_max:
+        continue
+
+    # --- override expiry for synthetic mode so simulator sees it ----
+    if use_synthetic:
+        opt_with_expiry = replace(opt, expiry=expiry)
+        candidates.append(opt_with_expiry)
+    else:
+        candidates.append(opt)
+
+
+Key effects:
+
+deribit_live mode
+
+Uses real opt.expiry if provided by DeribitDataSource.
+
+If that’s missing, tries to parse from the symbol (instrument_name or symbol) using the helper.
+
+DTE filter then works even if the underlying source only gave you instrument names.
+
+synthetic_bs mode
+
+Ignores the live chain’s real expiries.
+
+Sets a synthetic expiry at t + target_dte days.
+
+Writes that into the OptionSnapshot (via dataclasses.replace) so the simulator sees the synthetic DTE consistently.
+
+DTE range filter (min_dte/max_dte) is now satisfied, so you won’t get “0 candidates” unless your delta filter is too tight.
+
+If your OptionSnapshot type doesn’t have an expiry field yet, it almost certainly does already (you’re computing DTE from it now); if not, just add expiry: datetime there.
+
+3. Where this DTE shows up
+
+In the backtesting UI, you won’t directly see DTE per candidate, but:
+
+Your DTE filter (the “DTE Range” box in the screenshot) now actually controls what the synthetic universe generates.
+
+The synthetic options truly act like “7-day options sold at each decision time” (or whatever target_dte you set).
+
+In the simulator / summary metrics:
+
+Any logic that looks at option.expiry or (expiry - t) will now have the proper synthetic dates instead of weird real Deribit expiries.
+
+Together with the live PositionTracker DTE we added earlier, you now have:
+
+Realistic DTE in backtests (synthetic universe).
+
+Real DTE for live positions on the PnL dashboard, parsed from symbols like BTC-2025-01-03-90000-C or BTC-6DEC24-90000-C.
