@@ -250,7 +250,7 @@ class BacktestManager:
         start_date: datetime,
         end_date: datetime,
         exit_style: str,
-        config: Any,
+        examples: List[Any],
     ) -> None:
         """Export training data if SAVE_TRAINING_DATA is enabled."""
         try:
@@ -259,15 +259,7 @@ class BacktestManager:
                 return
             
             from pathlib import Path
-            from .deribit_data_source import DeribitDataSource
-            from .covered_call_simulator import CoveredCallSimulator
             from .training_dataset import export_to_csv, export_to_jsonl, compute_dataset_stats
-            
-            ds = DeribitDataSource()
-            sim = CoveredCallSimulator(data_source=ds, config=config)
-            
-            examples = sim.generate_training_data()
-            ds.close()
             
             if not examples:
                 print(f"[TrainingExport] No training examples generated for {underlying}")
@@ -290,6 +282,8 @@ class BacktestManager:
             print(f"[TrainingExport] Stats: {stats}")
             
         except Exception as e:
+            import traceback
+            traceback.print_exc()
             print(f"[TrainingExport] Error exporting training data: {e}")
 
     def start(
@@ -302,10 +296,10 @@ class BacktestManager:
         exit_style: str,
         target_dte: int = 7,
         target_delta: float = 0.25,
-        min_dte: int = 3,
-        max_dte: int = 21,
-        delta_min: float = 0.15,
-        delta_max: float = 0.35,
+        min_dte: int = 1,
+        max_dte: int = 30,
+        delta_min: float = 0.10,
+        delta_max: float = 0.45,
         margin_type: MarginType = "inverse",
         settlement_ccy: SettlementCcy = "ANY",
     ) -> bool:
@@ -398,6 +392,8 @@ class BacktestManager:
 
                 global_step_index = 0
 
+                all_training_examples: List[Any] = []
+                
                 for phase_idx, current_exit_style in enumerate(styles_to_run):
                     steps_buffer: List[BacktestProgressStep] = []
                     trades: List[Any] = []
@@ -479,12 +475,44 @@ class BacktestManager:
                             except Exception:
                                 trade = None
 
+                        from .types import TrainingExample
                         if trade is not None:
                             trades.append(trade)
                             cumulative_pnl += trade.pnl
                             cumulative_pnl_vs_hodl += trade.pnl_vs_hodl
                             traded = True
                             self._append_chain_summary(trade, current_exit_style)
+                            
+                            all_training_examples.append(TrainingExample(
+                                decision_time=t,
+                                underlying=underlying,
+                                spot=spot,
+                                action="SELL_CALL",
+                                reward=trade.pnl,
+                                extra={
+                                    "instrument": best_opt.instrument_name,
+                                    "delta": best_opt.delta,
+                                    "strike": best_opt.strike,
+                                    "dte": (best_opt.expiry - t).days,
+                                    "score": best_score,
+                                    "exit_style": current_exit_style,
+                                    "pnl_vs_hodl": trade.pnl_vs_hodl,
+                                    "max_drawdown_pct": trade.max_drawdown_pct,
+                                },
+                            ))
+                        else:
+                            all_training_examples.append(TrainingExample(
+                                decision_time=t,
+                                underlying=underlying,
+                                spot=spot if spot else 0.0,
+                                action="DO_NOTHING",
+                                reward=0.0,
+                                extra={
+                                    "best_score": best_score,
+                                    "candidates": len(options),
+                                    "reason": "score_below_threshold" if best_score < min_score else "trade_simulation_failed",
+                                },
+                            ))
 
                         step = BacktestProgressStep(
                             time=t,
@@ -519,7 +547,7 @@ class BacktestManager:
                     start_date=start_date,
                     end_date=end_date,
                     exit_style=exit_style,
-                    config=config,
+                    examples=all_training_examples,
                 )
 
                 with self._lock:
