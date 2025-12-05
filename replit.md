@@ -18,7 +18,7 @@ The agent is built with a clear separation of concerns, featuring modules for co
 ### Key Features
 - **Decision Policies**: Supports rule-based strategies with a scoring function and epsilon-greedy exploration, and an LLM-powered decision mode (using OpenAI) that proposes actions validated by a risk engine.
 - **Market Context**: Integrates `MarketContext` to provide regime detection (bull/sideways/bear), returns, and realized volatility for informed decision-making.
-- **Risk Management**: A `risk_engine` module performs pre-trade validation, checking margin, delta, and exposure limits.
+- **Risk Management**: A `risk_engine` module performs pre-trade validation, checking margin, delta, and exposure limits. Environment-aware training mode bypasses risk checks only when training on testnet (training_mode=True AND deribit_env="testnet"); mainnet always enforces full risk controls.
 - **Backtesting Framework**: Includes a `CoveredCallSimulator` for historical analysis, supporting various exit styles (hold-to-expiry, take-profit and roll), a scoring function for candidate options, multi-leg chain visualization, and training data generation.
 - **Synthetic Pricing Mode**: Black-Scholes based option pricing for self-consistent historical backtests without requiring live Deribit option data. Uses realized volatility computed from spot history to avoid look-ahead bias. Generates synthetic strikes around spot price with synthetic expiries (target_dte days from decision time) to ensure candidates are always available regardless of historical date range.
 - **TradingView-style Metrics**: Enhanced backtest summary with net profit, max drawdown, profit factor, Sharpe ratio, Sortino ratio, win rate, and gross profit/loss calculations.
