@@ -111,6 +111,11 @@ class DeribitDataSource(MarketDataSource):
         """
         instruments = self.client.get_instruments(currency=underlying, kind="option")
         snapshots: List[OptionSnapshot] = []
+        
+        total = 0
+        after_expiry_filter = 0
+        after_margin_filter = 0
+        after_settlement_filter = 0
 
         for inst in instruments:
             name = inst["instrument_name"]
@@ -118,6 +123,8 @@ class DeribitDataSource(MarketDataSource):
             if len(parts) < 4:
                 continue
 
+            total += 1
+            
             cur = parts[0]
             expiry_ts = inst.get("expiration_timestamp")
             if expiry_ts is None:
@@ -127,6 +134,8 @@ class DeribitDataSource(MarketDataSource):
             if expiry <= as_of:
                 continue
             
+            after_expiry_filter += 1
+            
             inst_settlement = inst.get("settlement_currency", "").upper()
             is_linear = inst_settlement == "USDC" or inst_settlement == "USD"
             
@@ -135,11 +144,15 @@ class DeribitDataSource(MarketDataSource):
             if margin_type == "inverse" and is_linear:
                 continue
             
+            after_margin_filter += 1
+            
             if settlement_ccy.upper() != "ANY":
                 if is_linear and inst_settlement not in ["USDC", "USD"]:
                     continue
                 if not is_linear and inst_settlement.upper() != cur.upper():
                     continue
+            
+            after_settlement_filter += 1
 
             strike_str = parts[2]
             cp_flag = parts[3].upper()
@@ -174,6 +187,13 @@ class DeribitDataSource(MarketDataSource):
             except Exception:
                 continue
 
+        print(
+            f"[BACKTEST] {underlying} @ {as_of} (margin={margin_type}, settle={settlement_ccy}) - "
+            f"total={total}, after_expiry={after_expiry_filter}, "
+            f"after_margin={after_margin_filter}, after_settlement={after_settlement_filter}, "
+            f"snapshots={len(snapshots)}",
+            flush=True
+        )
         return snapshots
 
     def get_option_ohlc(
