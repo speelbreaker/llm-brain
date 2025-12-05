@@ -39,6 +39,13 @@ A modular Python framework for automated BTC/ETH covered call trading on Deribit
   - Regime classification: bull/sideways/bear based on 200d MA and 30d returns
   - Enhanced LLM system prompt with regime-aware decision rules
   - LLM reasoning now explicitly references market conditions
+- 2024-12: Enhanced web dashboard with Live Agent and Backtesting Lab:
+  - Live Agent tab: Market overview, latest decision card, recent decisions table
+  - Backtesting Lab tab: Configure backtests, view equity curves, get AI insights
+  - In-memory decisions buffer for dashboard (last 50 decisions)
+  - /api/agent/decisions endpoint for live dashboard data
+  - /api/backtest/run endpoint for running backtests
+  - /api/backtest/insights endpoint for LLM analysis of results
 
 ## Architecture
 
@@ -150,7 +157,10 @@ python -m src.chat_with_agent "What would you likely do right now?"
 ## API Endpoints
 
 ### GET /
-HTML dashboard with live status updates and chat interface.
+Full HTML dashboard with three tabs:
+- **Live Agent**: Real-time market overview, latest decision card, recent decisions table
+- **Backtesting Lab**: Configure and run backtests, view equity curves and AI insights
+- **Chat**: Natural language query interface for agent behavior
 
 ### GET /status
 Returns the latest agent status snapshot as JSON:
@@ -185,6 +195,46 @@ Returns:
 ```json
 {"question": "...", "answer": "..."}
 ```
+
+### GET /api/agent/decisions
+Returns recent agent decisions for the Live Agent dashboard:
+```json
+{
+  "mode": "llm",
+  "llm_enabled": true,
+  "dry_run": true,
+  "last_update": "2024-12-05T00:13:00.000Z",
+  "decisions": [
+    {
+      "timestamp": "...",
+      "decision_source": "llm",
+      "proposed_action": {"action": "...", "params": {...}, "reasoning": "..."},
+      "final_action": {"action": "...", "params": {...}},
+      "risk_check": {"allowed": true, "reasons": []},
+      "execution": {"status": "simulated"},
+      "config_snapshot": {...}
+    }
+  ]
+}
+```
+
+### POST /api/backtest/run
+Run a covered call backtest:
+```json
+{
+  "underlying": "BTC",
+  "start": "2024-09-01T00:00:00Z",
+  "end": "2024-11-01T00:00:00Z",
+  "timeframe": "1d",
+  "decision_interval_bars": 1,
+  "target_dte": 7,
+  "target_delta": 0.25
+}
+```
+Returns metrics, equity curve, and sample trades.
+
+### POST /api/backtest/insights
+Generate LLM insights from backtest results. Sends backtest metrics to OpenAI for analysis.
 
 ### GET /health
 Health check endpoint for deployment monitoring.

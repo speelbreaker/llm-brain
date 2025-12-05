@@ -11,6 +11,7 @@ from typing import Any, Dict, List, Optional
 from fastapi import FastAPI, Body, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel
+from typing import cast
 
 from agent_loop import run_agent_loop_forever
 from src.status_store import status_store
@@ -114,82 +115,94 @@ class BacktestRequest(BaseModel):
 @app.post("/api/backtest/run")
 def run_backtest(req: BacktestRequest) -> JSONResponse:
     """Run a backtest using the CoveredCallSimulator."""
+    from src.backtest.types import CallSimulationConfig
+    from src.backtest.data_source import Timeframe
+    from src.backtest.covered_call_simulator import CoveredCallSimulator, always_trade_policy
+    from src.backtest.deribit_data_source import DeribitDataSource
+    
+    valid_timeframes = ["1m", "5m", "15m", "1h", "4h", "1d"]
+    if req.timeframe not in valid_timeframes:
+        raise HTTPException(status_code=400, detail=f"Invalid timeframe. Must be one of: {valid_timeframes}")
+    
     try:
-        from src.backtest.types import CallSimulationConfig
-        from src.backtest.covered_call_simulator import CoveredCallSimulator, always_trade_policy
-        from src.backtest.deribit_data_source import DeribitDataSource
-        
         start_dt = datetime.fromisoformat(req.start.replace("Z", "+00:00"))
         end_dt = datetime.fromisoformat(req.end.replace("Z", "+00:00"))
-        
-        if start_dt.tzinfo is None:
-            start_dt = start_dt.replace(tzinfo=timezone.utc)
-        if end_dt.tzinfo is None:
-            end_dt = end_dt.replace(tzinfo=timezone.utc)
-        
-        config = CallSimulationConfig(
-            underlying=req.underlying,
-            start=start_dt,
-            end=end_dt,
-            timeframe=req.timeframe,
-            decision_interval_bars=req.decision_interval_bars,
-            initial_spot_position=req.initial_position,
-            contract_size=1.0,
-            fee_rate=0.0005,
-            target_dte=req.target_dte,
-            dte_tolerance=req.dte_tolerance,
-            target_delta=req.target_delta,
-            delta_tolerance=req.delta_tolerance,
-        )
-        
-        ds = DeribitDataSource()
-        simulator = CoveredCallSimulator(data_source=ds, config=config)
-        
-        try:
-            result = simulator.simulate_policy(policy=always_trade_policy, size=req.initial_position)
-        finally:
-            ds.close()
-        
-        equity_curve = [
-            [ts.isoformat(), round(val, 4)]
-            for ts, val in sorted(result.equity_curve.items())
-        ]
-        
-        trades_sample = [
-            {
-                "instrument_name": t.instrument_name,
-                "open_time": t.open_time.isoformat(),
-                "close_time": t.close_time.isoformat(),
-                "pnl": round(t.pnl, 4),
-                "pnl_vs_hodl": round(t.pnl_vs_hodl, 4),
-                "max_drawdown_pct": round(t.max_drawdown_pct, 2),
-                "notes": t.notes,
-            }
-            for t in result.trades[:20]
-        ]
-        
-        return JSONResponse(content={
-            "config": {
-                "underlying": req.underlying,
-                "start": req.start,
-                "end": req.end,
-                "timeframe": req.timeframe,
-                "target_dte": req.target_dte,
-                "target_delta": req.target_delta,
-            },
-            "metrics": {
-                "num_trades": result.metrics.get("num_trades", 0),
-                "final_pnl": round(result.metrics.get("final_pnl", 0), 4),
-                "avg_pnl": round(result.metrics.get("avg_pnl", 0), 4),
-                "max_drawdown_pct": round(result.metrics.get("max_drawdown_pct", 0), 2),
-                "win_rate": round(result.metrics.get("win_rate", 0) * 100, 1),
-            },
-            "equity_curve": equity_curve,
-            "trades_sample": trades_sample,
-        })
-        
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=f"Invalid date format: {e}")
+    
+    if start_dt.tzinfo is None:
+        start_dt = start_dt.replace(tzinfo=timezone.utc)
+    if end_dt.tzinfo is None:
+        end_dt = end_dt.replace(tzinfo=timezone.utc)
+    
+    if start_dt >= end_dt:
+        raise HTTPException(status_code=400, detail="Start date must be before end date")
+    
+    timeframe: Timeframe = cast(Timeframe, req.timeframe)
+    
+    config = CallSimulationConfig(
+        underlying=req.underlying,
+        start=start_dt,
+        end=end_dt,
+        timeframe=timeframe,
+        decision_interval_bars=req.decision_interval_bars,
+        initial_spot_position=req.initial_position,
+        contract_size=1.0,
+        fee_rate=0.0005,
+        target_dte=req.target_dte,
+        dte_tolerance=req.dte_tolerance,
+        target_delta=req.target_delta,
+        delta_tolerance=req.delta_tolerance,
+    )
+    
+    ds = DeribitDataSource()
+    simulator = CoveredCallSimulator(data_source=ds, config=config)
+    
+    try:
+        result = simulator.simulate_policy(policy=always_trade_policy, size=req.initial_position)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        ds.close()
+        raise HTTPException(status_code=500, detail=f"Backtest simulation failed: {str(e)}")
+    finally:
+        ds.close()
+    
+    equity_curve = [
+        [ts.isoformat(), round(val, 4)]
+        for ts, val in sorted(result.equity_curve.items())
+    ]
+    
+    trades_sample = [
+        {
+            "instrument_name": t.instrument_name,
+            "open_time": t.open_time.isoformat(),
+            "close_time": t.close_time.isoformat(),
+            "pnl": round(t.pnl, 4),
+            "pnl_vs_hodl": round(t.pnl_vs_hodl, 4),
+            "max_drawdown_pct": round(t.max_drawdown_pct, 2),
+            "notes": t.notes,
+        }
+        for t in result.trades[:20]
+    ]
+    
+    return JSONResponse(content={
+        "config": {
+            "underlying": req.underlying,
+            "start": req.start,
+            "end": req.end,
+            "timeframe": req.timeframe,
+            "target_dte": req.target_dte,
+            "target_delta": req.target_delta,
+        },
+        "metrics": {
+            "num_trades": result.metrics.get("num_trades", 0),
+            "final_pnl": round(result.metrics.get("final_pnl", 0), 4),
+            "avg_pnl": round(result.metrics.get("avg_pnl", 0), 4),
+            "max_drawdown_pct": round(result.metrics.get("max_drawdown_pct", 0), 2),
+            "win_rate": round(result.metrics.get("win_rate", 0) * 100, 1),
+        },
+        "equity_curve": equity_curve,
+        "trades_sample": trades_sample,
+    })
 
 
 class InsightsRequest(BaseModel):
