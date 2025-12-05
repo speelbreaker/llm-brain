@@ -54,6 +54,12 @@ A modular Python framework for automated BTC/ETH covered call trading on Deribit
   - `compute_market_context_from_ds()` for backtest market regime detection
   - Default to USDC linear options on BTC/ETH (option_margin_type="linear", option_settlement_ccy="USDC")
   - `simulate_policy_with_scoring()` for scoring-based backtests
+- 2024-12: Training mode for multi-profile data collection:
+  - Three strategy profiles: conservative, moderate, aggressive with non-overlapping delta/DTE ranges
+  - Simultaneous position opening across profiles for diverse training data
+  - Batch execution with per-action result tracking
+  - Web dashboard training mode badge display
+  - All training positions are dry-run only for safety
 
 ## Architecture
 
@@ -66,7 +72,9 @@ A modular Python framework for automated BTC/ETH covered call trading on Deribit
 - `risk_engine.py` - Pre-trade validation (margin, delta, exposure)
 - `policy_rule_based.py` - Decision logic with scoring and exploration
 - `agent_brain_llm.py` - LLM-based decisions with regime-aware system prompt
-- `execution.py` - Order translation with dry-run support
+- `training_profiles.py` - Strategy profile definitions (conservative, moderate, aggressive)
+- `training_policy.py` - Multi-action builder for training mode data collection
+- `execution.py` - Order translation with dry-run support, batch execution
 - `logging_utils.py` - Structured JSONL logging
 - `chat_with_agent.py` - Natural language query interface
 - `status_store.py` - Thread-safe status storage
@@ -134,6 +142,16 @@ Optional settings:
 - `MAX_MARGIN_USED_PCT=80` - Maximum margin usage
 - `MAX_NET_DELTA_ABS=5.0` - Maximum absolute delta
 - `PREMIUM_MIN_USD=50` - Minimum premium in USD
+
+### Training Mode Parameters
+- `TRAINING_MODE=false` - Enable training mode for multi-profile data collection
+- `TRAINING_STRATEGIES=conservative,moderate,aggressive` - Comma-separated list of profiles to use
+- `MAX_CALLS_PER_UNDERLYING_TRAINING=3` - Max simultaneous calls per underlying in training mode
+
+#### Training Strategy Profiles (non-overlapping ranges):
+- **Conservative**: delta 0.15-0.25, DTE 7-14, description "Low delta, longer DTE"
+- **Moderate**: delta 0.25-0.35, DTE 5-10, description "Mid-range delta and DTE"
+- **Aggressive**: delta 0.35-0.45, DTE 3-7, description "Higher delta, shorter DTE"
 
 ## User Preferences
 - Python 3.11
