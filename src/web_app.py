@@ -117,11 +117,6 @@ def toggle_training_mode(payload: Dict[str, Any] = Body(...)) -> JSONResponse:
                 status_code=400,
                 content={"error": "Training mode requires RESEARCH mode"},
             )
-        if not settings.dry_run:
-            return JSONResponse(
-                status_code=400,
-                content={"error": "Training mode requires DRY_RUN=true for safety"},
-            )
     
     settings.training_mode = enable
     

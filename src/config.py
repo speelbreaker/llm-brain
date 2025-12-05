@@ -202,7 +202,7 @@ class Settings(BaseSettings):
     @property
     def is_training_enabled(self) -> bool:
         """Check if training mode is active (research + training_mode)."""
-        return self.is_research and self.training_mode and self.dry_run
+        return self.is_research and self.training_mode
 
     @property
     def max_calls_per_underlying(self) -> int:

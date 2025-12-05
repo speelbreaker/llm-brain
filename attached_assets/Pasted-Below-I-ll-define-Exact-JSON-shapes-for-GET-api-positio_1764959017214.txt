@@ -1,0 +1,323 @@
+Below I’ll define:
+
+Exact JSON shapes for
+
+GET /api/positions/open
+
+GET /api/positions/closed
+
+The UI tables that map 1:1 to those shapes (column-by-column).
+
+Optional tiny JS mapping snippets that match your existing style (like the backtest tables).
+
+1. JSON for /api/positions/open
+Response shape
+{
+  "positions": [
+    {
+      "position_id": "9e9f0eb7-4a49-4ab0-8f70-b4d2d54ad7f4",
+      "underlying": "BTC",
+      "symbol": "BTC-2025-01-03-90000-C",
+
+      "option_type": "CALL",               // or "PUT"
+      "strategy_type": "COVERED_CALL",     // later also "CASH_SECURED_PUT"
+      "side": "SHORT",                     // always SHORT for now
+
+      "quantity": 0.10,                    // contracts
+      "entry_price": 0.0045,               // in option currency (BTC or ETH)
+      "mark_price": 0.0031,                // current mark/mid
+      "unrealized_pnl": 28.73,             // USD
+      "unrealized_pnl_pct": 18.4,          // % of initial premium (or margin)
+
+      "entry_time": "2025-12-05T09:31:00Z",
+      "expiry": "2025-12-12T08:00:00Z",
+      "dte": 6.45,                         // days to expiry (float)
+      "num_rolls": 1,                      // legs - 1
+
+      "mode": "LIVE",                      // "LIVE" or "DRY_RUN"
+      "exit_style": "hold_to_expiry"       // or "tp_and_roll", purely descriptive
+    }
+  ],
+
+  "totals": {
+    "positions_count": 1,
+    "unrealized_pnl": 28.73,              // sum over positions
+    "unrealized_pnl_pct": 1.7             // portfolio-level % (optional / approximate)
+  }
+}
+
+Minimal Pydantic for clarity (optional)
+class OpenPositionSummary(BaseModel):
+    position_id: str
+    underlying: Literal["BTC", "ETH"]
+    symbol: str
+    option_type: Literal["CALL", "PUT"]
+    strategy_type: Literal["COVERED_CALL", "CASH_SECURED_PUT"]
+    side: Literal["SHORT", "LONG"]
+    quantity: float
+    entry_price: float
+    mark_price: float
+    unrealized_pnl: float
+    unrealized_pnl_pct: float
+    entry_time: datetime
+    expiry: datetime
+    dte: float
+    num_rolls: int
+    mode: Literal["LIVE", "DRY_RUN"]
+    exit_style: Optional[str] = None
+
+
+class OpenPositionsResponse(BaseModel):
+    positions: List[OpenPositionSummary]
+    totals: Dict[str, float]
+
+2. JSON for /api/positions/closed
+Response shape
+{
+  "chains": [
+    {
+      "position_id": "9e9f0eb7-4a49-4ab0-8f70-b4d2d54ad7f4",
+      "underlying": "BTC",
+      "symbol": "BTC-2025-01-03-90000-C",   // final leg symbol
+
+      "option_type": "CALL",
+      "strategy_type": "COVERED_CALL",
+
+      "open_time": "2025-12-01T10:00:00Z",  // first leg open
+      "close_time": "2025-12-05T12:30:00Z", // final leg close
+      "holding_days": 4.11,                 // (close_time - open_time) in days
+
+      "num_legs": 2,                        // initial + rolled leg
+      "num_rolls": 1,                       // num_legs - 1
+
+      "realized_pnl": 54.12,                // USD
+      "realized_pnl_pct": 32.5,             // % on margin or initial premium
+      "max_drawdown_pct": -12.7,            // worst equity excursion for this chain
+
+      "mode": "LIVE",                       // or "DRY_RUN"
+      "exit_style": "tp_and_roll",          // or "hold_to_expiry", "manual_close"
+      "note": "TP roll at +30% then closed before expiry"
+    }
+  ],
+
+  "totals": {
+    "chains_count": 1,
+    "realized_pnl": 54.12,
+    "realized_pnl_pct": 3.4                 // portfolio-level % if you want it
+  }
+}
+
+Minimal Pydantic (optional)
+class ClosedChainSummary(BaseModel):
+    position_id: str
+    underlying: Literal["BTC", "ETH"]
+    symbol: str
+    option_type: Literal["CALL", "PUT"]
+    strategy_type: Literal["COVERED_CALL", "CASH_SECURED_PUT"]
+    open_time: datetime
+    close_time: datetime
+    holding_days: float
+    num_legs: int
+    num_rolls: int
+    realized_pnl: float
+    realized_pnl_pct: float
+    max_drawdown_pct: float
+    mode: Literal["LIVE", "DRY_RUN"]
+    exit_style: Optional[str] = None
+    note: Optional[str] = None
+
+
+class ClosedPositionsResponse(BaseModel):
+    chains: List[ClosedChainSummary]
+    totals: Dict[str, float]
+
+3. Exact UI tables
+A. Open Positions table
+
+HTML skeleton (drop into the Live Agent tab, e.g. under “Market Overview” / “Last Decision”):
+
+<div class="section">
+  <h2>Bot Positions</h2>
+
+  <h3>Open Positions</h3>
+  <div style="overflow-x: auto; max-height: 260px; overflow-y: auto;">
+    <table class="steps-table">
+      <thead>
+        <tr>
+          <th>Underlying</th>
+          <th>Type</th>
+          <th>Strategy</th>
+          <th>Symbol</th>
+          <th>Qty</th>
+          <th>Entry</th>
+          <th>Mark</th>
+          <th>Unreal. PnL</th>
+          <th>Unreal. PnL %</th>
+          <th>DTE</th>
+          <th>Rolls</th>
+          <th>Mode</th>
+        </tr>
+      </thead>
+      <tbody id="live-open-positions-body">
+        <tr>
+          <td colspan="12" style="text-align:center;color:#666;">Loading...</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+
+Column → JSON mapping
+
+For each pos in res.positions:
+
+Column	Value
+Underlying	pos.underlying
+Type	pos.side === "SHORT" ? "Short " + pos.option_type : ...
+Strategy	pos.strategy_type.replace(/_/g, " ")
+Symbol	pos.symbol
+Qty	pos.quantity (format e.g. toFixed(3))
+Entry	pos.entry_price
+Mark	pos.mark_price
+Unreal. PnL	pos.unrealized_pnl (USD, color-coded +/- if you like)
+Unreal. PnL %	pos.unrealized_pnl_pct + " %"
+DTE	pos.dte.toFixed(1)
+Rolls	pos.num_rolls
+Mode	pos.mode
+
+JS rendering snippet (matches your updateBacktestStatus style):
+
+async function updateOpenPositions() {
+  try {
+    const res = await fetch('/api/positions/open');
+    const data = await res.json();
+    const tbody = document.getElementById('live-open-positions-body');
+    const positions = data.positions || [];
+
+    if (positions.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="12" style="text-align:center;color:#666;">No open positions</td></tr>';
+      return;
+    }
+
+    tbody.innerHTML = positions.map(pos => {
+      const typeLabel = (pos.side || 'SHORT') + ' ' + (pos.option_type || 'CALL');
+      const stratLabel = (pos.strategy_type || '').replace(/_/g, ' ');
+      const pnlClass = pos.unrealized_pnl >= 0 ? 'traded-yes' : 'traded-no';
+
+      return `<tr>
+        <td>${pos.underlying}</td>
+        <td>${typeLabel}</td>
+        <td>${stratLabel}</td>
+        <td>${pos.symbol}</td>
+        <td>${pos.quantity.toFixed(3)}</td>
+        <td>${pos.entry_price.toFixed(6)}</td>
+        <td>${pos.mark_price.toFixed(6)}</td>
+        <td class="${pnlClass}">${pos.unrealized_pnl.toFixed(2)}</td>
+        <td class="${pnlClass}">${pos.unrealized_pnl_pct.toFixed(1)}%</td>
+        <td>${pos.dte.toFixed(1)}</td>
+        <td>${pos.num_rolls}</td>
+        <td>${pos.mode}</td>
+      </tr>`;
+    }).join('');
+  } catch (err) {
+    console.error('Open positions fetch error:', err);
+  }
+}
+
+
+You can call updateOpenPositions() on the same interval as fetchStatus() or from inside it.
+
+B. Closed Chains / Realized PnL table
+
+HTML skeleton (same section, under the open table):
+
+<h3>Closed Chains</h3>
+<div style="overflow-x: auto; max-height: 260px; overflow-y: auto;">
+  <table class="steps-table">
+    <thead>
+      <tr>
+        <th>Closed At</th>
+        <th>Underlying</th>
+        <th>Type</th>
+        <th>Strategy</th>
+        <th>Symbol</th>
+        <th>Legs</th>
+        <th>Rolls</th>
+        <th>Real. PnL</th>
+        <th>Real. PnL %</th>
+        <th>Max DD %</th>
+        <th>Mode</th>
+      </tr>
+    </thead>
+    <tbody id="live-closed-positions-body">
+      <tr>
+        <td colspan="11" style="text-align:center;color:#666;">Loading...</td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+
+
+Column → JSON mapping
+
+For each chain in res.chains:
+
+Column	Value
+Closed At	new Date(chain.close_time).toISOString().replace('T',' ').slice(0,19)
+Underlying	chain.underlying
+Type	"Short " + chain.option_type
+Strategy	chain.strategy_type.replace(/_/g, " ")
+Symbol	chain.symbol
+Legs	chain.num_legs
+Rolls	chain.num_rolls
+Real. PnL	chain.realized_pnl (USD, color-coded)
+Real. PnL %	chain.realized_pnl_pct + " %"
+Max DD %	chain.max_drawdown_pct + " %"
+Mode	chain.mode
+
+JS rendering snippet
+
+async function updateClosedPositions() {
+  try {
+    const res = await fetch('/api/positions/closed');
+    const data = await res.json();
+    const tbody = document.getElementById('live-closed-positions-body');
+    const chains = data.chains || [];
+
+    if (chains.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="11" style="text-align:center;color:#666;">No closed chains yet</td></tr>';
+      return;
+    }
+
+    tbody.innerHTML = chains.slice(-50).reverse().map(chain => {
+      const t = new Date(chain.close_time).toISOString().replace('T', ' ').slice(0, 19);
+      const typeLabel = 'SHORT ' + (chain.option_type || 'CALL');
+      const stratLabel = (chain.strategy_type || '').replace(/_/g, ' ');
+      const pnlClass = chain.realized_pnl >= 0 ? 'traded-yes' : 'traded-no';
+
+      return `<tr>
+        <td>${t}</td>
+        <td>${chain.underlying}</td>
+        <td>${typeLabel}</td>
+        <td>${stratLabel}</td>
+        <td>${chain.symbol}</td>
+        <td>${chain.num_legs}</td>
+        <td>${chain.num_rolls}</td>
+        <td class="${pnlClass}">${chain.realized_pnl.toFixed(2)}</td>
+        <td class="${pnlClass}">${chain.realized_pnl_pct.toFixed(1)}%</td>
+        <td>${chain.max_drawdown_pct.toFixed(1)}%</td>
+        <td>${chain.mode}</td>
+      </tr>`;
+    }).join('');
+  } catch (err) {
+    console.error('Closed positions fetch error:', err);
+  }
+}
+
+
+You can either:
+
+Call both updateOpenPositions() and updateClosedPositions() every N seconds, or
+
+Call them inside your existing fetchStatus() loop so you only have one timer.
