@@ -38,12 +38,6 @@ def _agent_thread_target() -> None:
 @app.on_event("startup")
 def start_background_agent() -> None:
     """Start the agent loop in a background thread on FastAPI startup."""
-    print("\n" + "=" * 60)
-    print("IMPORTANT: This is a RESEARCH/EXPERIMENTATION system")
-    print("Running on Deribit TESTNET only")
-    print("This is NOT financial advice")
-    print("=" * 60 + "\n")
-    
     thread = threading.Thread(target=_agent_thread_target, daemon=True)
     thread.start()
     print("Agent loop started in background thread")
@@ -94,8 +88,47 @@ def get_agent_decisions() -> JSONResponse:
         "mode": "llm" if settings.llm_enabled else "rule_based",
         "llm_enabled": settings.llm_enabled,
         "dry_run": settings.dry_run,
+        "training_mode": settings.is_training_enabled,
         "last_update": last_update.isoformat() if last_update else None,
         "decisions": decisions,
+    })
+
+
+@app.get("/api/training/status")
+def get_training_status() -> JSONResponse:
+    """Get current training mode status."""
+    return JSONResponse(content={
+        "enabled": settings.is_training_enabled,
+        "training_mode": settings.training_mode,
+        "strategies": settings.training_strategies,
+        "is_research": settings.is_research,
+        "dry_run": settings.dry_run,
+    })
+
+
+@app.post("/api/training/toggle")
+def toggle_training_mode(payload: Dict[str, Any] = Body(...)) -> JSONResponse:
+    """Toggle training mode on/off."""
+    enable = payload.get("enable", False)
+    
+    if enable:
+        if not settings.is_research:
+            return JSONResponse(
+                status_code=400,
+                content={"error": "Training mode requires RESEARCH mode"},
+            )
+        if not settings.dry_run:
+            return JSONResponse(
+                status_code=400,
+                content={"error": "Training mode requires DRY_RUN=true for safety"},
+            )
+    
+    settings.training_mode = enable
+    
+    return JSONResponse(content={
+        "enabled": settings.is_training_enabled,
+        "training_mode": settings.training_mode,
+        "strategies": settings.training_strategies,
     })
 
 
@@ -110,6 +143,75 @@ class BacktestRequest(BaseModel):
     dte_tolerance: int = 2
     delta_tolerance: float = 0.05
     initial_position: float = 1.0
+
+
+class BacktestStartRequest(BaseModel):
+    underlying: str = "BTC"
+    start: str
+    end: str
+    timeframe: str = "1h"
+    decision_interval_hours: int = 24
+    exit_style: str = "hold_to_expiry"
+    target_dte: int = 7
+    target_delta: float = 0.25
+
+
+@app.post("/api/backtest/start")
+def start_backtest(req: BacktestStartRequest) -> JSONResponse:
+    """Start a new backtest in the background."""
+    from src.backtest.manager import backtest_manager
+    
+    try:
+        start_dt = datetime.fromisoformat(req.start.replace("Z", "+00:00"))
+        end_dt = datetime.fromisoformat(req.end.replace("Z", "+00:00"))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=f"Invalid date format: {e}")
+    
+    if start_dt.tzinfo is None:
+        start_dt = start_dt.replace(tzinfo=timezone.utc)
+    if end_dt.tzinfo is None:
+        end_dt = end_dt.replace(tzinfo=timezone.utc)
+    
+    if start_dt >= end_dt:
+        raise HTTPException(status_code=400, detail="Start date must be before end date")
+    
+    valid_exit_styles = ["hold_to_expiry", "tp_and_roll"]
+    if req.exit_style not in valid_exit_styles:
+        raise HTTPException(status_code=400, detail=f"Invalid exit_style. Must be one of: {valid_exit_styles}")
+    
+    started = backtest_manager.start(
+        underlying=req.underlying,
+        start_date=start_dt,
+        end_date=end_dt,
+        timeframe=req.timeframe,
+        decision_interval_hours=req.decision_interval_hours,
+        exit_style=req.exit_style,
+        target_dte=req.target_dte,
+        target_delta=req.target_delta,
+    )
+    
+    if not started:
+        return JSONResponse(
+            status_code=409,
+            content={"started": False, "error": "Backtest already running"},
+        )
+    
+    return JSONResponse(content={"started": True})
+
+
+@app.get("/api/backtest/status")
+def get_backtest_status() -> JSONResponse:
+    """Get the current backtest status."""
+    from src.backtest.manager import backtest_manager
+    return JSONResponse(content=backtest_manager.get_status())
+
+
+@app.post("/api/backtest/stop")
+def stop_backtest() -> JSONResponse:
+    """Stop the currently running backtest."""
+    from src.backtest.manager import backtest_manager
+    backtest_manager.stop()
+    return JSONResponse(content={"stopping": True})
 
 
 @app.post("/api/backtest/run")
@@ -306,6 +408,105 @@ def index() -> str:
     .badge-dry {{ background: #fff3e0; color: #e65100; }}
     .badge-live {{ background: #e8f5e9; color: #2e7d32; }}
     .badge-training {{ background: #ffecb3; color: #ff6f00; }}
+    
+    .switch {{
+      position: relative;
+      display: inline-block;
+      width: 48px;
+      height: 24px;
+    }}
+    .switch input {{
+      opacity: 0;
+      width: 0;
+      height: 0;
+    }}
+    .slider {{
+      position: absolute;
+      cursor: pointer;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background-color: #ccc;
+      transition: .3s;
+      border-radius: 24px;
+    }}
+    .slider:before {{
+      position: absolute;
+      content: "";
+      height: 18px;
+      width: 18px;
+      left: 3px;
+      bottom: 3px;
+      background-color: white;
+      transition: .3s;
+      border-radius: 50%;
+    }}
+    input:checked + .slider {{
+      background-color: #ff6f00;
+    }}
+    input:checked + .slider:before {{
+      transform: translateX(24px);
+    }}
+    
+    .progress-bar {{
+      width: 100%;
+      height: 24px;
+      background: #e9ecef;
+      border-radius: 12px;
+      overflow: hidden;
+      margin: 0.5rem 0;
+    }}
+    .progress-bar-inner {{
+      height: 100%;
+      background: linear-gradient(90deg, #1565c0, #42a5f5);
+      border-radius: 12px;
+      transition: width 0.3s ease;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: white;
+      font-weight: 600;
+      font-size: 0.8rem;
+    }}
+    
+    .bt-status-header {{
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+      margin-bottom: 1rem;
+      flex-wrap: wrap;
+    }}
+    .bt-status-indicator {{
+      padding: 0.25rem 0.75rem;
+      border-radius: 4px;
+      font-weight: 600;
+      font-size: 0.85rem;
+    }}
+    .bt-status-idle {{ background: #e9ecef; color: #666; }}
+    .bt-status-running {{ background: #e3f2fd; color: #1565c0; }}
+    .bt-status-finished {{ background: #e8f5e9; color: #2e7d32; }}
+    .bt-status-error {{ background: #ffebee; color: #c62828; }}
+    
+    .steps-table {{
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.85rem;
+      margin-top: 1rem;
+    }}
+    .steps-table th, .steps-table td {{
+      padding: 0.5rem;
+      text-align: left;
+      border-bottom: 1px solid #e9ecef;
+    }}
+    .steps-table th {{
+      background: #f8f9fa;
+      font-weight: 600;
+      color: #666;
+    }}
+    .steps-table tr:hover {{ background: #f8f9fa; }}
+    .traded-yes {{ color: #2e7d32; font-weight: 600; }}
+    .traded-no {{ color: #666; }}
     
     .tabs {{
       display: flex;
@@ -544,20 +745,27 @@ def index() -> str:
   <h1>Options Trading Agent</h1>
   <p class="subtitle">Deribit Testnet - Covered Call Strategy</p>
   
-  <div>
-    <span class="badge badge-mode">{decision_mode}</span>
-    <span class="badge {'badge-research' if settings.is_research else 'badge-production'}">
-      {op_mode} ({explore_pct}% explore)
-    </span>
-    <span class="badge {'badge-dry' if settings.dry_run else 'badge-live'}">
-      {'DRY RUN' if settings.dry_run else 'LIVE TRADING'}
-    </span>
-    {'<span class="badge badge-training">' + training_badge + '</span>' if training_enabled else ''}
-    <span class="badge" id="agent-status-badge" style="background:#e8f5e9;color:#2e7d32;">Active</span>
-  </div>
-  
-  <div class="warning">
-    This is a RESEARCH/EXPERIMENTATION system running on Deribit TESTNET only. This is NOT financial advice.
+  <div style="display:flex;align-items:center;gap:1rem;flex-wrap:wrap;">
+    <div>
+      <span class="badge badge-mode">{decision_mode}</span>
+      <span class="badge {'badge-research' if settings.is_research else 'badge-production'}">
+        {op_mode} ({explore_pct}% explore)
+      </span>
+      <span class="badge {'badge-dry' if settings.dry_run else 'badge-live'}">
+        {'DRY RUN' if settings.dry_run else 'LIVE TRADING'}
+      </span>
+      <span class="badge badge-training" id="training-badge" style="display:{'inline-block' if training_enabled else 'none'};">
+        TRAINING
+      </span>
+      <span class="badge" id="agent-status-badge" style="background:#e8f5e9;color:#2e7d32;">Active</span>
+    </div>
+    <div class="toggle-container" style="display:flex;align-items:center;gap:0.5rem;">
+      <span style="font-size:0.85rem;color:#666;">Training Mode:</span>
+      <label class="switch">
+        <input type="checkbox" id="training-toggle" {'checked' if training_enabled else ''} onchange="toggleTraining(this.checked)">
+        <span class="slider"></span>
+      </label>
+    </div>
   </div>
 
   <div class="tabs">
@@ -669,9 +877,22 @@ def index() -> str:
           </select>
         </div>
         <div class="form-group">
-          <label>Decision Interval (bars)</label>
-          <input type="number" id="bt-interval" value="1" min="1">
+          <label>Decision Interval</label>
+          <select id="bt-interval">
+            <option value="1">Every bar</option>
+            <option value="4">Every 4 bars</option>
+            <option value="24" selected>Daily</option>
+          </select>
         </div>
+        <div class="form-group">
+          <label>Exit Style</label>
+          <select id="bt-exit-style">
+            <option value="hold_to_expiry">Hold to Expiry</option>
+            <option value="tp_and_roll">Take Profit &amp; Roll</option>
+          </select>
+        </div>
+      </div>
+      <div class="form-row">
         <div class="form-group">
           <label>Target DTE</label>
           <input type="number" id="bt-dte" value="7" min="1" max="90">
@@ -681,7 +902,43 @@ def index() -> str:
           <input type="number" id="bt-delta" value="0.25" min="0.05" max="0.5" step="0.05">
         </div>
       </div>
-      <button onclick="runBacktest()">Run Backtest</button>
+      <button id="bt-start-stop-btn" onclick="startBacktest()">Start Backtest</button>
+    </div>
+
+    <div class="section">
+      <h2>Live Progress</h2>
+      <div class="bt-status-header">
+        <span>Status:</span>
+        <span class="bt-status-indicator bt-status-idle" id="bt-status-text">IDLE</span>
+        <span>Decisions:</span>
+        <span id="bt-decisions">0 / 0</span>
+      </div>
+      <div class="progress-bar">
+        <div class="progress-bar-inner" id="bt-progress-inner" style="width:0%">0%</div>
+      </div>
+      
+      <div id="bt-metrics-live" style="margin-top:1rem;display:none;">
+        <h3>Results</h3>
+        <pre id="bt-metrics-json" style="background:#f1f3f4;padding:1rem;border-radius:6px;font-size:0.85rem;"></pre>
+      </div>
+      
+      <h3>Recent Steps</h3>
+      <div style="overflow-x: auto; max-height: 300px; overflow-y: auto;">
+        <table class="steps-table">
+          <thead>
+            <tr>
+              <th>Time</th>
+              <th>Candidates</th>
+              <th>Best Score</th>
+              <th>Traded?</th>
+              <th>Exit Style</th>
+            </tr>
+          </thead>
+          <tbody id="bt-steps-body">
+            <tr><td colspan="5" style="text-align:center;color:#666;">No steps yet</td></tr>
+          </tbody>
+        </table>
+      </div>
     </div>
 
     <div class="section" id="backtest-results" style="display:none;">
@@ -881,6 +1138,156 @@ def index() -> str:
       }}
     }}
     
+    async function toggleTraining(enable) {{
+      try {{
+        const res = await fetch('/api/training/toggle', {{
+          method: 'POST',
+          headers: {{ 'Content-Type': 'application/json' }},
+          body: JSON.stringify({{ enable }})
+        }});
+        const data = await res.json();
+        if (!res.ok) {{
+          alert('Failed to toggle training mode: ' + (data.error || res.statusText));
+          document.getElementById('training-toggle').checked = !enable;
+          return;
+        }}
+        const badge = document.getElementById('training-badge');
+        if (data.enabled) {{
+          badge.style.display = 'inline-block';
+        }} else {{
+          badge.style.display = 'none';
+        }}
+      }} catch (err) {{
+        alert('Error toggling training mode: ' + err.message);
+        document.getElementById('training-toggle').checked = !enable;
+      }}
+    }}
+    
+    function setBacktestInputsDisabled(disabled) {{
+      const inputs = ['bt-underlying', 'bt-start', 'bt-end', 'bt-timeframe', 'bt-interval', 'bt-exit-style', 'bt-dte', 'bt-delta'];
+      inputs.forEach(id => {{
+        const el = document.getElementById(id);
+        if (el) el.disabled = disabled;
+      }});
+    }}
+    
+    async function startBacktest() {{
+      const underlying = document.getElementById('bt-underlying').value;
+      const start = document.getElementById('bt-start').value;
+      const end = document.getElementById('bt-end').value;
+      const timeframe = document.getElementById('bt-timeframe').value;
+      const intervalHours = parseInt(document.getElementById('bt-interval').value, 10);
+      const exitStyle = document.getElementById('bt-exit-style').value;
+      const dte = parseInt(document.getElementById('bt-dte').value);
+      const delta = parseFloat(document.getElementById('bt-delta').value);
+      
+      const payload = {{
+        underlying,
+        start: start + 'T00:00:00Z',
+        end: end + 'T00:00:00Z',
+        timeframe,
+        decision_interval_hours: intervalHours,
+        exit_style: exitStyle,
+        target_dte: dte,
+        target_delta: delta,
+      }};
+      
+      try {{
+        const res = await fetch('/api/backtest/start', {{
+          method: 'POST',
+          headers: {{ 'Content-Type': 'application/json' }},
+          body: JSON.stringify(payload),
+        }});
+        const data = await res.json();
+        if (!res.ok || data.started === false) {{
+          alert('Failed to start backtest: ' + (data.error || res.statusText));
+        }}
+      }} catch (err) {{
+        alert('Backtest start error: ' + err.message);
+      }}
+    }}
+    
+    async function stopBacktest() {{
+      try {{
+        await fetch('/api/backtest/stop', {{ method: 'POST' }});
+      }} catch (err) {{
+        console.error('Stop backtest error:', err);
+      }}
+    }}
+    
+    async function refreshBacktestStatus() {{
+      try {{
+        const res = await fetch('/api/backtest/status');
+        if (!res.ok) return;
+        const st = await res.json();
+        
+        const statusTextEl = document.getElementById('bt-status-text');
+        const progressBarInner = document.getElementById('bt-progress-inner');
+        const button = document.getElementById('bt-start-stop-btn');
+        
+        statusTextEl.className = 'bt-status-indicator';
+        if (st.error) {{
+          statusTextEl.textContent = 'ERROR';
+          statusTextEl.classList.add('bt-status-error');
+        }} else if (st.running) {{
+          statusTextEl.textContent = 'RUNNING';
+          statusTextEl.classList.add('bt-status-running');
+        }} else if (st.finished_at) {{
+          statusTextEl.textContent = 'FINISHED';
+          statusTextEl.classList.add('bt-status-finished');
+        }} else {{
+          statusTextEl.textContent = 'IDLE';
+          statusTextEl.classList.add('bt-status-idle');
+        }}
+        
+        const pct = Math.round((st.progress_pct || 0) * 100);
+        progressBarInner.style.width = pct + '%';
+        progressBarInner.textContent = pct + '%';
+        
+        if (st.running) {{
+          button.textContent = 'Stop Backtest';
+          button.onclick = stopBacktest;
+          setBacktestInputsDisabled(true);
+        }} else {{
+          button.textContent = 'Start Backtest';
+          button.onclick = startBacktest;
+          setBacktestInputsDisabled(false);
+        }}
+        
+        document.getElementById('bt-decisions').textContent =
+          (st.decisions_processed || 0) + ' / ' + (st.total_decisions || 0);
+        
+        const metricsLive = document.getElementById('bt-metrics-live');
+        const metricsJson = document.getElementById('bt-metrics-json');
+        if (st.metrics && Object.keys(st.metrics).length > 0) {{
+          metricsLive.style.display = 'block';
+          metricsJson.textContent = JSON.stringify(st.metrics, null, 2);
+        }} else {{
+          metricsLive.style.display = 'none';
+        }}
+        
+        const tbody = document.getElementById('bt-steps-body');
+        const steps = st.recent_steps || [];
+        if (steps.length === 0) {{
+          tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;color:#666;">No steps yet</td></tr>';
+        }} else {{
+          tbody.innerHTML = steps.slice(-20).reverse().map(step => {{
+            const t = new Date(step.time).toISOString().replace('T', ' ').slice(0, 19);
+            const tradedClass = step.traded ? 'traded-yes' : 'traded-no';
+            return `<tr>
+              <td>${{t}}</td>
+              <td>${{step.candidates}}</td>
+              <td>${{step.best_score.toFixed(2)}}</td>
+              <td class="${{tradedClass}}">${{step.traded ? 'Yes' : 'No'}}</td>
+              <td>${{step.exit_style}}</td>
+            </tr>`;
+          }}).join('');
+        }}
+      }} catch (err) {{
+        console.error('Backtest status fetch error:', err);
+      }}
+    }}
+    
     async function runBacktest() {{
       const underlying = document.getElementById('bt-underlying').value;
       const start = document.getElementById('bt-start').value;
@@ -1067,8 +1474,10 @@ def index() -> str:
 
     fetchStatus();
     fetchDecisions();
+    refreshBacktestStatus();
     setInterval(fetchStatus, 5000);
     setInterval(fetchDecisions, 10000);
+    setInterval(refreshBacktestStatus, 3000);
     
     document.getElementById('question').addEventListener('keydown', function(e) {{
       if (e.key === 'Enter' && !e.shiftKey) {{

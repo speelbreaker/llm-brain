@@ -1,0 +1,590 @@
+We now have:
+
+A live Deribit agent with /status and /api/agent/decisions endpoints and a dashboard.
+
+A backtest engine with:
+
+CoveredCallSimulator.simulate_policy(...)
+
+_score_candidate (0–10),
+
+two exit styles: "hold_to_expiry" and "tp_and_roll",
+
+build_historical_state(ds, cfg, t) and compute_market_context_from_ds(...).
+
+An example script python -m src.backtest.backtest_example that runs scoring-based backtests.
+
+I want to integrate backtesting into the web app, so I don’t have to look at raw logs.
+
+Please implement:
+
+A Backtest Manager in the backend,
+
+Three HTTP endpoints: /api/backtest/start, /api/backtest/status, /api/backtest/stop,
+
+A Backtesting UI section in the main HTML page with:
+
+on/off control,
+
+date pickers,
+
+exit style selection,
+
+and a live view of progress + recent steps.
+
+Important: keep everything in the existing FastAPI app and reuse the current templates / JS style. No separate app.
+
+1. Backend: Backtest Manager (single active run)
+
+Create a module, e.g. src/backtest/manager.py, that defines a simple in-memory manager for one active backtest at a time.
+
+Something like:
+
+# src/backtest/manager.py
+from __future__ import annotations
+
+from dataclasses import dataclass, asdict
+from datetime import datetime
+from threading import Thread, Lock
+from typing import Optional, Dict, Any, List, Literal
+
+from src.backtest.simulator import CoveredCallSimulator
+from src.backtest.state_builder import build_historical_state
+from src.backtest.data_source import DeribitDataSource
+from src.backtest.config import CallSimulationConfig  # or wherever config lives
+
+
+ExitStyle = Literal["hold_to_expiry", "tp_and_roll"]
+
+
+@dataclass
+class BacktestProgressStep:
+    time: datetime
+    candidates: int
+    best_score: float
+    traded: bool
+    exit_style: ExitStyle
+
+
+@dataclass
+class BacktestStatus:
+    running: bool
+    started_at: Optional[datetime]
+    finished_at: Optional[datetime]
+    progress_pct: float
+    current_time: Optional[datetime]
+    decisions_processed: int
+    total_decisions: int
+    exit_style: Optional[ExitStyle]
+    underlying: Optional[str]
+    start_date: Optional[datetime]
+    end_date: Optional[datetime]
+    metrics: Dict[str, Any]
+    recent_steps: List[BacktestProgressStep]
+    error: Optional[str]
+
+
+class BacktestManager:
+    def __init__(self) -> None:
+        self._lock = Lock()
+        self._thread: Optional[Thread] = None
+        self._status = BacktestStatus(
+            running=False,
+            started_at=None,
+            finished_at=None,
+            progress_pct=0.0,
+            current_time=None,
+            decisions_processed=0,
+            total_decisions=0,
+            exit_style=None,
+            underlying=None,
+            start_date=None,
+            end_date=None,
+            metrics={},
+            recent_steps=[],
+            error=None,
+        )
+        self._cancel_requested = False
+
+    def get_status(self) -> Dict[str, Any]:
+        with self._lock:
+            status_dict = asdict(self._status)
+            # Convert datetimes to isoformat for JSON
+            for key in ["started_at", "finished_at", "current_time", "start_date", "end_date"]:
+                if status_dict.get(key) is not None:
+                    status_dict[key] = status_dict[key].isoformat()
+            status_dict["recent_steps"] = [
+                {
+                    "time": step.time.isoformat(),
+                    "candidates": step.candidates,
+                    "best_score": step.best_score,
+                    "traded": step.traded,
+                    "exit_style": step.exit_style,
+                }
+                for step in self._status.recent_steps
+            ]
+            return status_dict
+
+    def stop(self) -> None:
+        with self._lock:
+            self._cancel_requested = True
+
+    def _set_error(self, msg: str) -> None:
+        with self._lock:
+            self._status.error = msg
+            self._status.running = False
+            self._status.finished_at = datetime.utcnow()
+
+    def start(
+        self,
+        ds: DeribitDataSource,
+        cfg: CallSimulationConfig,
+        decision_times: List[datetime],
+        exit_style: ExitStyle,
+    ) -> bool:
+        """
+        Start a new backtest in a background thread.
+        Returns False if a backtest is already running.
+        """
+        with self._lock:
+            if self._status.running:
+                return False
+            self._cancel_requested = False
+            self._status = BacktestStatus(
+                running=True,
+                started_at=datetime.utcnow(),
+                finished_at=None,
+                progress_pct=0.0,
+                current_time=None,
+                decisions_processed=0,
+                total_decisions=len(decision_times),
+                exit_style=exit_style,
+                underlying=cfg.underlying,
+                start_date=decision_times[0] if decision_times else None,
+                end_date=decision_times[-1] if decision_times else None,
+                metrics={},
+                recent_steps=[],
+                error=None,
+            )
+
+        def worker() -> None:
+            try:
+                sim = CoveredCallSimulator(ds, cfg)
+
+                steps_buffer: List[BacktestProgressStep] = []
+                cumulative_trades = 0
+
+                def state_builder(t: datetime) -> Dict[str, Any]:
+                    return build_historical_state(ds, cfg, t)
+
+                # We reimplement a lightweight version of simulate_policy loop here
+                # so we can update status after each decision.
+                trades = []
+                cumulative_pnl = 0.0
+                cumulative_pnl_vs_hodl = 0.0
+
+                total_decisions = len(decision_times)
+
+                for idx, t in enumerate(decision_times):
+                    with self._lock:
+                        if self._cancel_requested:
+                            break
+
+                    state = state_builder(t)
+                    spot = state.get("spot")
+                    options = state.get("candidate_options") or []
+                    if spot is None or spot <= 0 or not options:
+                        # Update status for this step (skipped)
+                        step = BacktestProgressStep(
+                            time=t,
+                            candidates=len(options),
+                            best_score=0.0,
+                            traded=False,
+                            exit_style=exit_style,
+                        )
+                        steps_buffer.append(step)
+                        self._update_status_step(idx + 1, total_decisions, t, steps_buffer, trades, cumulative_pnl)
+                        continue
+
+                    scored = []
+                    for opt in options:
+                        feats = sim._extract_candidate_features(state, opt)
+                        s = sim._score_candidate(feats)
+                        scored.append((s, opt))
+                    if not scored:
+                        step = BacktestProgressStep(
+                            time=t,
+                            candidates=0,
+                            best_score=0.0,
+                            traded=False,
+                            exit_style=exit_style,
+                        )
+                        steps_buffer.append(step)
+                        self._update_status_step(idx + 1, total_decisions, t, steps_buffer, trades, cumulative_pnl)
+                        continue
+
+                    scored.sort(key=lambda x: x[0], reverse=True)
+                    best_score, best_opt = scored[0]
+
+                    traded = False
+                    trade = None
+                    if best_score >= cfg.min_score_to_trade:
+                        if exit_style == "hold_to_expiry":
+                            trade = sim._simulate_call_hold_to_expiry(t, best_opt)
+                        else:
+                            trade = sim._simulate_call_tp_and_roll(t, best_opt)
+
+                    if trade is not None:
+                        trades.append(trade)
+                        cumulative_pnl += trade.pnl
+                        cumulative_pnl_vs_hodl += trade.pnl_vs_hodl
+                        traded = True
+                        cumulative_trades += 1
+
+                    step = BacktestProgressStep(
+                        time=t,
+                        candidates=len(options),
+                        best_score=best_score,
+                        traded=traded,
+                        exit_style=exit_style,
+                    )
+                    steps_buffer.append(step)
+
+                    self._update_status_step(idx + 1, total_decisions, t, steps_buffer, trades, cumulative_pnl)
+
+                # Final metrics (similar to SimulationResult)
+                metrics = {
+                    "num_trades": len(trades),
+                    "final_pnl": cumulative_pnl,
+                    "final_pnl_vs_hodl": cumulative_pnl_vs_hodl,
+                    # max_drawdown_pct could be computed from equity_curve here
+                }
+
+                with self._lock:
+                    self._status.metrics = metrics
+                    self._status.progress_pct = 1.0
+                    self._status.running = False
+                    self._status.finished_at = datetime.utcnow()
+
+            except Exception as e:
+                self._set_error(str(e))
+
+        # helper to update status inside loop
+        def _update_status_step(
+            self,
+            processed: int,
+            total: int,
+            current_time: datetime,
+            steps_buffer: List[BacktestProgressStep],
+            trades: List[Any],
+            cumulative_pnl: float,
+        ) -> None:
+            with self._lock:
+                self._status.decisions_processed = processed
+                self._status.total_decisions = total
+                self._status.current_time = current_time
+                self._status.progress_pct = processed / total if total else 0.0
+                # keep only last ~100 steps
+                self._status.recent_steps = steps_buffer[-100:]
+                # Optionally, we can also update a running equity or simple metric here
+
+        # attach helper method
+        self._update_status_step = _update_status_step.__get__(self, BacktestManager)
+
+        self._thread = Thread(target=worker, daemon=True)
+        self._thread.start()
+        return True
+
+
+# Single global instance
+backtest_manager = BacktestManager()
+
+
+Adjust imports / paths to match the repo.
+Important: only one active backtest at a time.
+
+2. Backend: FastAPI endpoints
+
+In the FastAPI app module (where /status and /api/agent/decisions are defined):
+
+a) POST /api/backtest/start
+
+Request JSON body:
+
+{
+  "underlying": "BTC",
+  "start": "2020-01-01",
+  "end": "2024-01-01",
+  "timeframe": "1h",
+  "decision_interval_hours": 24,
+  "exit_style": "hold_to_expiry"
+}
+
+
+Behavior:
+
+If a backtest is already running, respond with 409 and a JSON like:
+
+{ "error": "Backtest already running" }.
+
+Parse dates and build:
+
+DeribitDataSource instance for mainnet historical data,
+
+CallSimulationConfig (use existing fields: underlying, timeframe, target_dte, min_score_to_trade, etc.),
+
+decision_times: a list of datetimes between start and end, spaced by decision_interval_hours.
+
+Call backtest_manager.start(ds, cfg, decision_times, exit_style).
+
+Return {"started": true} or {"started": false, "error": "Backtest already running"}.
+
+b) GET /api/backtest/status
+
+No body.
+
+Returns backtest_manager.get_status() as JSON:
+
+{
+  "running": true,
+  "started_at": "2024-01-01T00:00:00Z",
+  "finished_at": null,
+  "progress_pct": 0.37,
+  "current_time": "2021-06-10T12:00:00Z",
+  "decisions_processed": 123,
+  "total_decisions": 333,
+  "exit_style": "tp_and_roll",
+  "underlying": "BTC",
+  "start_date": "2020-01-01T00:00:00Z",
+  "end_date": "2022-01-01T00:00:00Z",
+  "metrics": { ... partial or final ... },
+  "recent_steps": [
+    {
+      "time": "2021-06-10T08:00:00Z",
+      "candidates": 5,
+      "best_score": 7.8,
+      "traded": true,
+      "exit_style": "tp_and_roll"
+    },
+    ...
+  ],
+  "error": null
+}
+
+c) POST /api/backtest/stop
+
+No body.
+
+Calls backtest_manager.stop().
+
+Returns { "stopping": true }.
+(Status endpoint will show running=false once the loop responds to the cancel flag.)
+
+3. Frontend: Backtesting tab with on/off + date picker + live view
+
+On the main HTML page (where you already show status + Live Agent dashboard), add a “Backtesting” section or tab.
+
+It should include:
+
+Inputs:
+
+Underlying dropdown: BTC / ETH (default: BTC).
+
+Start date input (type="date").
+
+End date input (type="date").
+
+Timeframe select: e.g. 1h, 4h, 1d (default: 1h).
+
+Decision interval select: Every 1h, Every 4h, Daily (internally: 1, 4, 24 hours).
+
+Exit style select:
+
+Hold to expiry
+
+Take profit & roll (TP only for now)
+
+Controls:
+
+A main button:
+
+When no backtest running: label = “Start Backtest”
+
+When backtest running: label = “Stop Backtest”
+
+While running:
+
+disable the inputs,
+
+show progress.
+
+Live status view:
+
+A small status header:
+
+Status: RUNNING / IDLE / ERROR
+
+Progress: 37%
+
+Decisions: 123 / 333
+
+A progress bar (<div> with width based on progress_pct).
+
+A “Recent Steps” table:
+
+Columns:
+
+Time
+
+Candidates
+
+Best score
+
+Traded? (Yes/No)
+
+Exit style
+
+Summary result panel (when finished):
+
+Show metrics from status.metrics:
+
+num_trades
+
+final_pnl
+
+final_pnl_vs_hodl
+
+(Later we can add initial_capital + derived return %, DD, etc.)
+
+Frontend JS logic
+
+In the existing JS (where you already poll /status and /api/agent/decisions):
+
+Add functions:
+
+async function startBacktest() {
+  const underlying = document.getElementById("bt-underlying").value;
+  const start = document.getElementById("bt-start").value;   // "YYYY-MM-DD"
+  const end = document.getElementById("bt-end").value;
+  const timeframe = document.getElementById("bt-timeframe").value;
+  const intervalHours = parseInt(document.getElementById("bt-interval").value, 10);
+  const exitStyle = document.getElementById("bt-exit-style").value; // "hold_to_expiry" | "tp_and_roll"
+
+  const payload = {
+    underlying,
+    start,
+    end,
+    timeframe,
+    decision_interval_hours: intervalHours,
+    exit_style: exitStyle,
+  };
+
+  const res = await fetch("/api/backtest/start", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  const data = await res.json();
+  if (!res.ok || data.started === false) {
+    alert("Failed to start backtest: " + (data.error || res.statusText));
+  } else {
+    // UI will update via polling /api/backtest/status
+  }
+}
+
+async function stopBacktest() {
+  const res = await fetch("/api/backtest/stop", { method: "POST" });
+  // no need to do anything special; polling will show running=false
+}
+
+async function refreshBacktestStatus() {
+  const res = await fetch("/api/backtest/status");
+  if (!res.ok) return;
+  const st = await res.json();
+
+  // Update header
+  const statusTextEl = document.getElementById("bt-status-text");
+  const progressBarInner = document.getElementById("bt-progress-inner");
+  const button = document.getElementById("bt-start-stop-btn");
+
+  if (st.error) {
+    statusTextEl.textContent = "ERROR: " + st.error;
+  } else if (st.running) {
+    statusTextEl.textContent = "RUNNING";
+  } else if (st.finished_at) {
+    statusTextEl.textContent = "FINISHED";
+  } else {
+    statusTextEl.textContent = "IDLE";
+  }
+
+  const pct = Math.round((st.progress_pct || 0) * 100);
+  progressBarInner.style.width = pct + "%";
+  progressBarInner.textContent = pct + "%";
+
+  // Start/Stop button state
+  if (st.running) {
+    button.textContent = "Stop Backtest";
+    button.onclick = stopBacktest;
+    // disable inputs
+    setBacktestInputsDisabled(true);
+  } else {
+    button.textContent = "Start Backtest";
+    button.onclick = startBacktest;
+    setBacktestInputsDisabled(false);
+  }
+
+  // Update decisions counter
+  document.getElementById("bt-decisions").textContent =
+    (st.decisions_processed || 0) + " / " + (st.total_decisions || 0);
+
+  // Update metrics
+  const metricsEl = document.getElementById("bt-metrics");
+  const m = st.metrics || {};
+  metricsEl.textContent = JSON.stringify(m, null, 2);
+
+  // Update recent steps table
+  const tbody = document.getElementById("bt-steps-body");
+  tbody.innerHTML = "";
+  const steps = st.recent_steps || [];
+  steps.forEach(step => {
+    const tr = document.createElement("tr");
+    const t = new Date(step.time).toISOString().replace("T", " ").slice(0, 19);
+    tr.innerHTML = `
+      <td>${t}</td>
+      <td>${step.candidates}</td>
+      <td>${step.best_score.toFixed(2)}</td>
+      <td>${step.traded ? "Yes" : "No"}</td>
+      <td>${step.exit_style}</td>
+    `;
+    tbody.appendChild(tr);
+  });
+}
+
+
+Add setBacktestInputsDisabled(disabled) to enable/disable the inputs while running.
+
+Hook refreshBacktestStatus() into the existing polling loop (e.g. call it every 3–5 seconds).
+
+This will give me:
+
+A Backtesting tab in the app,
+
+An on/off button to start/stop runs,
+
+Date pickers and config controls,
+
+A live progress bar and a recent steps table showing:
+
+timestamps,
+
+candidates,
+
+best score,
+
+whether it traded,
+
+which exit style.
+
+No need to look at raw logs anymore; I can watch the backtester “walk through history” directly in the web UI.
+
+Please implement all of the above in the existing FastAPI app and template, reusing the current CSS/JS patterns.
