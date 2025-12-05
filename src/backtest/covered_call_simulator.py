@@ -19,6 +19,7 @@ import pandas as pd
 
 from .data_source import MarketDataSource
 from .types import CallSimulationConfig, SimulatedTrade, SimulationResult, TrainingExample, OptionSnapshot, ExitStyle, ChainData, ChainLeg, RollTrigger
+from .pricing import bs_call_price, bs_call_delta, get_synthetic_iv, compute_realized_volatility
 from src.models import MarketContext
 
 State = Dict[str, Any]
@@ -41,6 +42,90 @@ class CoveredCallSimulator:
     def __init__(self, data_source: MarketDataSource, config: CallSimulationConfig):
         self.ds = data_source
         self.cfg = config
+        self._spot_history_cache: List[tuple] = []
+    
+    def _get_synthetic_iv(self, as_of: datetime) -> float:
+        """Get synthetic implied volatility for pricing."""
+        return get_synthetic_iv(self.cfg, self._spot_history_cache, as_of)
+    
+    def _compute_synthetic_option_price(
+        self,
+        spot: float,
+        strike: float,
+        expiry: datetime,
+        as_of: datetime,
+    ) -> tuple:
+        """
+        Compute synthetic call option price and delta using Black-Scholes.
+        
+        Returns:
+            Tuple of (price, delta)
+        """
+        sigma = self._get_synthetic_iv(as_of)
+        t_years = max((expiry - as_of).total_seconds() / (365.0 * 24 * 3600), 1e-6)
+        r = self.cfg.risk_free_rate
+        
+        price = bs_call_price(spot, strike, t_years, sigma, r)
+        delta = bs_call_delta(spot, strike, t_years, sigma, r)
+        
+        return price, delta
+    
+    def _build_spot_history_cache(self, start: datetime, end: datetime) -> None:
+        """Pre-fetch spot history for synthetic IV calculation."""
+        lookback = timedelta(days=max(60, self.cfg.synthetic_rv_window_days + 10))
+        fetch_start = start - lookback
+        
+        spot_df = self.ds.get_spot_ohlc(
+            underlying=self.cfg.underlying,
+            start=fetch_start,
+            end=end,
+            timeframe="1d",
+        )
+        
+        if not spot_df.empty:
+            cache_list = []
+            for ts, row in spot_df.iterrows():
+                ts_dt = ts.to_pydatetime() if hasattr(ts, 'to_pydatetime') else datetime.utcnow()
+                cache_list.append((ts_dt, float(row["close"])))
+            self._spot_history_cache = cache_list
+        else:
+            self._spot_history_cache = []
+    
+    def _generate_synthetic_option_prices(
+        self,
+        spot_series: pd.Series,
+        strike: float,
+        expiry: datetime,
+    ) -> pd.Series:
+        """
+        Generate synthetic option prices for an entire spot time series.
+        
+        Args:
+            spot_series: Pandas Series with datetime index and spot prices
+            strike: Option strike price
+            expiry: Option expiry datetime
+        
+        Returns:
+            Pandas Series with synthetic option prices
+        """
+        sigma = self._get_synthetic_iv(expiry)
+        r = self.cfg.risk_free_rate
+        
+        prices = []
+        for ts, spot_val in spot_series.items():
+            ts_dt: datetime
+            if hasattr(ts, 'to_pydatetime'):
+                ts_dt = ts.to_pydatetime()
+            elif isinstance(ts, datetime):
+                ts_dt = ts
+            else:
+                ts_dt = datetime.utcnow()
+            
+            t_years = max((expiry - ts_dt).total_seconds() / (365.0 * 24 * 3600), 1e-6)
+            price = bs_call_price(float(spot_val), strike, t_years, sigma, r)
+            prices.append(price)
+        
+        return pd.Series(prices, index=spot_series.index)
     
     def _extract_candidate_features(self, state: State, option: OptionSnapshot) -> Dict[str, Any]:
         """
@@ -510,16 +595,18 @@ class CoveredCallSimulator:
         """
         Simulate a call option held to expiry using a specific option snapshot.
         Used by scoring-based policy for hold_to_expiry exit style.
+        
+        Supports both pricing modes:
+        - deribit_live: Uses actual option OHLC from data source
+        - synthetic_bs: Uses Black-Scholes synthetic pricing from spot
         """
         cfg = self.cfg
         ds = self.ds
+        use_synthetic = cfg.pricing_mode == "synthetic_bs"
         
         size = size if size is not None else cfg.initial_spot_position
         instrument_name = option_snapshot.instrument_name
-        open_price = float(option_snapshot.mark_price or 0.0)
-        if open_price <= 0:
-            return None
-        
+        strike = option_snapshot.strike
         expiry = option_snapshot.expiry
         
         spot_df = ds.get_spot_ohlc(
@@ -531,18 +618,36 @@ class CoveredCallSimulator:
         if spot_df.empty:
             return None
         
-        opt_df = ds.get_option_ohlc(
-            instrument_name=instrument_name,
-            start=decision_time,
-            end=expiry,
-            timeframe=cfg.timeframe,
-        )
-        if opt_df.empty:
-            return None
-        
-        idx = spot_df.index.union(opt_df.index).sort_values()
-        spot = spot_df.reindex(idx).ffill()["close"]
-        opt_price = opt_df.reindex(idx).ffill()["close"]
+        if use_synthetic:
+            if not self._spot_history_cache:
+                self._build_spot_history_cache(cfg.start, cfg.end)
+            
+            spot_at_open = float(spot_df["close"].iloc[0])
+            open_price, _ = self._compute_synthetic_option_price(spot_at_open, strike, expiry, decision_time)
+            
+            if open_price <= 0:
+                return None
+            
+            idx = spot_df.index.sort_values()
+            spot = spot_df.reindex(idx).ffill()["close"]
+            opt_price = self._generate_synthetic_option_prices(spot, strike, expiry)
+        else:
+            open_price = float(option_snapshot.mark_price or 0.0)
+            if open_price <= 0:
+                return None
+            
+            opt_df = ds.get_option_ohlc(
+                instrument_name=instrument_name,
+                start=decision_time,
+                end=expiry,
+                timeframe=cfg.timeframe,
+            )
+            if opt_df.empty:
+                return None
+            
+            idx = spot_df.index.union(opt_df.index).sort_values()
+            spot = spot_df.reindex(idx).ffill()["close"]
+            opt_price = opt_df.reindex(idx).ffill()["close"]
         
         portfolio_values: List[float] = []
         hodl_values: List[float] = []
@@ -576,6 +681,8 @@ class CoveredCallSimulator:
             if dd > max_dd_pct:
                 max_dd_pct = dd
         
+        pricing_note = "synthetic_bs" if use_synthetic else "deribit_live"
+        
         return SimulatedTrade(
             instrument_name=instrument_name,
             underlying=cfg.underlying,
@@ -588,7 +695,7 @@ class CoveredCallSimulator:
             pnl=pnl,
             pnl_vs_hodl=pnl_vs_hodl,
             max_drawdown_pct=max_dd_pct * 100.0,
-            notes=f"exit_style=hold_to_expiry; target_dte={cfg.target_dte}, delta={option_snapshot.delta}",
+            notes=f"exit_style=hold_to_expiry; pricing={pricing_note}; delta={option_snapshot.delta}",
         )
     
     def _simulate_call_tp_and_roll(
@@ -605,11 +712,19 @@ class CoveredCallSimulator:
         2. Defensive: When spot/strike >= defend_near_strike_pct (e.g., 98%)
         
         Only rolls if DTE > min_dte_to_roll and rolls_used < max_rolls_per_chain.
+        
+        Supports both pricing modes:
+        - deribit_live: Uses actual option OHLC from data source
+        - synthetic_bs: Uses Black-Scholes synthetic pricing from spot
         """
         from .state_builder import build_historical_state
         
         cfg = self.cfg
         ds = self.ds
+        use_synthetic = cfg.pricing_mode == "synthetic_bs"
+        
+        if use_synthetic and not self._spot_history_cache:
+            self._build_spot_history_cache(cfg.start, cfg.end)
         
         size = size if size is not None else cfg.initial_spot_position
         
@@ -638,10 +753,6 @@ class CoveredCallSimulator:
         while current_opt is not None:
             instrument_name = current_opt.instrument_name
             strike = current_opt.strike
-            open_price = float(current_opt.mark_price or 0.0)
-            if open_price <= 0:
-                break
-            
             expiry = current_opt.expiry
             backtest_end = cfg.end
             sim_end = min(expiry, backtest_end)
@@ -655,18 +766,32 @@ class CoveredCallSimulator:
             if spot_df.empty:
                 break
             
-            opt_df = ds.get_option_ohlc(
-                instrument_name=instrument_name,
-                start=current_leg_open_time,
-                end=sim_end,
-                timeframe=cfg.timeframe,
-            )
-            if opt_df.empty:
-                break
-            
-            idx = spot_df.index.union(opt_df.index).sort_values()
-            spot_series = spot_df.reindex(idx).ffill()["close"]
-            opt_price_series = opt_df.reindex(idx).ffill()["close"]
+            if use_synthetic:
+                spot_at_open = float(spot_df["close"].iloc[0])
+                open_price, _ = self._compute_synthetic_option_price(spot_at_open, strike, expiry, current_leg_open_time)
+                if open_price <= 0:
+                    break
+                
+                idx = spot_df.index.sort_values()
+                spot_series = spot_df.reindex(idx).ffill()["close"]
+                opt_price_series = self._generate_synthetic_option_prices(spot_series, strike, expiry)
+            else:
+                open_price = float(current_opt.mark_price or 0.0)
+                if open_price <= 0:
+                    break
+                
+                opt_df = ds.get_option_ohlc(
+                    instrument_name=instrument_name,
+                    start=current_leg_open_time,
+                    end=sim_end,
+                    timeframe=cfg.timeframe,
+                )
+                if opt_df.empty:
+                    break
+                
+                idx = spot_df.index.union(opt_df.index).sort_values()
+                spot_series = spot_df.reindex(idx).ffill()["close"]
+                opt_price_series = opt_df.reindex(idx).ffill()["close"]
             
             leg_close_time = sim_end
             leg_close_price = open_price
@@ -802,9 +927,11 @@ class CoveredCallSimulator:
             if dd > max_dd_pct:
                 max_dd_pct = dd
         
+        pricing_note = "synthetic_bs" if use_synthetic else "deribit_live"
         notes = (
             f"multi_roll: {legs_count} legs, rolls_used={rolls_used}, "
-            f"tp={tp_frac*100:.0f}%, defend={defend_thresh*100:.0f}%, max_rolls={max_rolls}"
+            f"tp={tp_frac*100:.0f}%, defend={defend_thresh*100:.0f}%, max_rolls={max_rolls}, "
+            f"pricing={pricing_note}"
         )
         
         chain_data = ChainData(
