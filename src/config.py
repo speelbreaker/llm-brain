@@ -122,12 +122,16 @@ class Settings(BaseSettings):
         default=False,
         description="Enable training mode for multi-strategy experimentation (research only)",
     )
+    training_profile_mode: Literal["single", "ladder"] = Field(
+        default="ladder",
+        description="Training behavior: 'single' = one call logic, 'ladder' = multi-profile exploration with aggressive candidate selection",
+    )
     max_calls_per_underlying_live: int = Field(
         default=1,
         description="Maximum covered calls per underlying in live mode",
     )
     max_calls_per_underlying_training: int = Field(
-        default=5,
+        default=6,
         description="Maximum covered calls per underlying in training mode",
     )
     training_strategies: list[str] = Field(

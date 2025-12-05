@@ -21,14 +21,14 @@ def build_training_actions(
     """
     Build multiple training actions for different strategy profiles.
     
-    For each underlying, picks up to one candidate per profile
-    (conservative / moderate / aggressive) and creates simulated
-    OPEN_COVERED_CALL actions.
+    Behavior depends on training_profile_mode:
+    - "single": One action per profile per underlying (traditional)
+    - "ladder": Aggressively fill all available slots with best premium candidates
     
-    In training mode, this is more aggressive:
-    - Uses wide DTE/delta ranges in profiles
-    - Falls back to best available candidate if profiles don't match
-    - Always opens a position if any valid candidate exists
+    In ladder mode, this is maximally aggressive:
+    - Sorts all candidates by premium (descending)
+    - Opens as many positions as remaining slots allow in a single iteration
+    - Ignores profile filtering to maximize coverage
     
     Args:
         agent_state: Current agent state with candidates
@@ -65,77 +65,78 @@ def build_training_actions(
         if opened_for_this_underlying >= cfg.max_calls_per_underlying_training:
             continue
         
-        matched_any_profile = False
+        remaining_slots = cfg.max_calls_per_underlying_training - opened_for_this_underlying
         
-        for profile_name in cfg.training_strategies:
-            profile = TRAINING_PROFILES.get(profile_name)
-            if not profile:
-                continue
-            
-            if opened_for_this_underlying >= cfg.max_calls_per_underlying_training:
-                break
-            
+        # In ladder mode: aggressively fill all available slots
+        if cfg.training_profile_mode == "ladder":
             available_cands = [c for c in cands if c.symbol not in used_symbols]
             if not available_cands:
                 continue
             
-            candidate_result = pick_candidate_for_profile(available_cands, profile)
-            if candidate_result is None:
-                continue
+            # Sort by premium (highest first) for most aggressive selection
+            available_cands.sort(key=lambda c: c.premium_usd, reverse=True)
             
-            matched_any_profile = True
+            # Take up to remaining_slots candidates
+            for i, cand in enumerate(available_cands[:remaining_slots]):
+                actions.append({
+                    "strategy": f"ladder_{i+1}",
+                    "underlying": underlying,
+                    "action": ActionType.OPEN_COVERED_CALL.value,
+                    "params": {
+                        "symbol": cand.symbol,
+                        "size": cfg.default_order_size,
+                    },
+                    "reasoning": (
+                        f"[training:ladder] "
+                        f"Slot {opened_for_this_underlying + i + 1}/{cfg.max_calls_per_underlying_training}: "
+                        f"{cand.symbol} delta={cand.delta:.3f}, "
+                        f"dte={cand.dte}, premium_usd={cand.premium_usd:.2f}, "
+                        f"ivrv={cand.ivrv:.2f}."
+                    ),
+                    "mode": cfg.mode,
+                    "policy_version": f"{cfg.policy_version}_training",
+                    "decision_source": "training_mode",
+                })
+                used_symbols.add(cand.symbol)
+        else:
+            # Single mode: traditional profile-based selection
+            matched_any_profile = False
             
-            if isinstance(candidate_result, CandidateOption):
-                sym = candidate_result.symbol
-                delta = candidate_result.delta
-                dte = candidate_result.dte
-                premium = candidate_result.premium_usd
-                ivrv = candidate_result.ivrv
-            else:
-                sym = str(candidate_result.get("symbol", ""))
-                delta = float(candidate_result.get("delta", 0.0))
-                dte = int(candidate_result.get("dte", 0))
-                premium = float(candidate_result.get("premium_usd", 0.0))
-                ivrv = float(candidate_result.get("ivrv", 1.0))
-            
-            used_symbols.add(sym)
-            
-            actions.append({
-                "strategy": profile_name,
-                "underlying": underlying,
-                "action": ActionType.OPEN_COVERED_CALL.value,
-                "params": {
-                    "symbol": sym,
-                    "size": cfg.default_order_size,
-                },
-                "reasoning": (
-                    f"[training:{profile_name}] "
-                    f"Selected {sym} with delta={delta:.3f}, "
-                    f"dte={dte}, premium_usd={premium:.2f}, "
-                    f"ivrv={ivrv:.2f}. "
-                    f"Profile: {profile.get('description', '')}"
-                ),
-                "mode": cfg.mode,
-                "policy_version": f"{cfg.policy_version}_training",
-                "decision_source": "training_mode",
-            })
-            
-            opened_for_this_underlying += 1
-        
-        if not matched_any_profile and opened_for_this_underlying < cfg.max_calls_per_underlying_training:
-            available_cands = [c for c in cands if c.symbol not in used_symbols]
-            if available_cands:
-                best_cand = max(available_cands, key=lambda x: x.premium_usd)
-                sym = best_cand.symbol
-                delta = best_cand.delta
-                dte = best_cand.dte
-                premium = best_cand.premium_usd
-                ivrv = best_cand.ivrv
+            for profile_name in cfg.training_strategies:
+                profile = TRAINING_PROFILES.get(profile_name)
+                if not profile:
+                    continue
+                
+                if opened_for_this_underlying >= cfg.max_calls_per_underlying_training:
+                    break
+                
+                available_cands = [c for c in cands if c.symbol not in used_symbols]
+                if not available_cands:
+                    continue
+                
+                candidate_result = pick_candidate_for_profile(available_cands, profile)
+                if candidate_result is None:
+                    continue
+                
+                matched_any_profile = True
+                
+                if isinstance(candidate_result, CandidateOption):
+                    sym = candidate_result.symbol
+                    delta = candidate_result.delta
+                    dte = candidate_result.dte
+                    premium = candidate_result.premium_usd
+                    ivrv = candidate_result.ivrv
+                else:
+                    sym = str(candidate_result.get("symbol", ""))
+                    delta = float(candidate_result.get("delta", 0.0))
+                    dte = int(candidate_result.get("dte", 0))
+                    premium = float(candidate_result.get("premium_usd", 0.0))
+                    ivrv = float(candidate_result.get("ivrv", 1.0))
                 
                 used_symbols.add(sym)
                 
                 actions.append({
-                    "strategy": "fallback",
+                    "strategy": profile_name,
                     "underlying": underlying,
                     "action": ActionType.OPEN_COVERED_CALL.value,
                     "params": {
@@ -143,15 +144,43 @@ def build_training_actions(
                         "size": cfg.default_order_size,
                     },
                     "reasoning": (
-                        f"[training:fallback] "
-                        f"No profile match, selecting best premium {sym} with delta={delta:.3f}, "
+                        f"[training:{profile_name}] "
+                        f"Selected {sym} with delta={delta:.3f}, "
                         f"dte={dte}, premium_usd={premium:.2f}, "
-                        f"ivrv={ivrv:.2f}."
+                        f"ivrv={ivrv:.2f}. "
+                        f"Profile: {profile.get('description', '')}"
                     ),
                     "mode": cfg.mode,
                     "policy_version": f"{cfg.policy_version}_training",
                     "decision_source": "training_mode",
                 })
+                
+                opened_for_this_underlying += 1
+            
+            # Fallback if no profile matched
+            if not matched_any_profile and opened_for_this_underlying < cfg.max_calls_per_underlying_training:
+                available_cands = [c for c in cands if c.symbol not in used_symbols]
+                if available_cands:
+                    best_cand = max(available_cands, key=lambda x: x.premium_usd)
+                    
+                    actions.append({
+                        "strategy": "fallback",
+                        "underlying": underlying,
+                        "action": ActionType.OPEN_COVERED_CALL.value,
+                        "params": {
+                            "symbol": best_cand.symbol,
+                            "size": cfg.default_order_size,
+                        },
+                        "reasoning": (
+                            f"[training:fallback] "
+                            f"No profile match, selecting best premium {best_cand.symbol} with delta={best_cand.delta:.3f}, "
+                            f"dte={best_cand.dte}, premium_usd={best_cand.premium_usd:.2f}, "
+                            f"ivrv={best_cand.ivrv:.2f}."
+                        ),
+                        "mode": cfg.mode,
+                        "policy_version": f"{cfg.policy_version}_training",
+                        "decision_source": "training_mode",
+                    })
     
     return actions
 

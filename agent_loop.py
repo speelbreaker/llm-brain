@@ -145,6 +145,7 @@ def run_agent_loop_forever(
     print(f"Decision Mode: {'LLM-based' if settings.llm_enabled else 'Rule-based'}")
     print(f"Training Mode: {'ENABLED' if settings.is_training_enabled else 'Disabled'}")
     if settings.is_training_enabled:
+        print(f"  Profile Mode: {settings.training_profile_mode.upper()}")
         print(f"  Strategies: {', '.join(settings.training_strategies)}")
         print(f"  Max Calls per Underlying: {settings.max_calls_per_underlying_training}")
         if settings.is_training_on_testnet:

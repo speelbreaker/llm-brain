@@ -256,6 +256,7 @@ def decide_action(
     for underlying in cfg.underlyings:
         covered_calls = _get_open_covered_calls(agent_state, underlying)
         existing_symbols = {cc.symbol for cc in covered_calls}
+        existing_count = len(covered_calls)
         
         # Exclude already-open symbols to avoid duplicates
         candidates = [
@@ -269,14 +270,24 @@ def decide_action(
         # In training mode on testnet: ALWAYS allow opening new positions if candidates exist
         # Only block if we've reached the absolute max training limit
         if cfg.is_training_on_testnet:
-            if len(covered_calls) >= cfg.max_calls_per_underlying_training:
+            if existing_count >= cfg.max_calls_per_underlying_training:
                 continue
             
-            chosen, was_exploration = choose_candidate_with_exploration(candidates, cfg)
+            remaining_slots = cfg.max_calls_per_underlying_training - existing_count
+            
+            # In ladder training mode, sort by premium (most aggressive)
+            if cfg.training_profile_mode == "ladder":
+                candidates.sort(
+                    key=lambda c: (c.premium_usd, c.delta),
+                    reverse=True,
+                )
+                chosen = candidates[0]
+                was_exploration = False
+            else:
+                chosen, was_exploration = choose_candidate_with_exploration(candidates, cfg)
             
             if chosen:
                 explore_tag = "Exploratory " if was_exploration else ""
-                existing_count = len(covered_calls)
                 return {
                     "action": ActionType.OPEN_COVERED_CALL.value,
                     "params": {
@@ -287,8 +298,10 @@ def decide_action(
                     "reasoning": f"[TRAINING] {explore_tag}OPEN_COVERED_CALL on {chosen.symbol}: "
                                f"DTE={chosen.dte}, delta={chosen.delta:.2f}, "
                                f"premium=${chosen.premium_usd:.2f}, IVRV={chosen.ivrv:.2f}. "
-                               f"Existing calls for {underlying}: {existing_count}. "
-                               f"Mode={cfg.mode}, policy={cfg.policy_version}.",
+                               f"Existing calls for {underlying}: {existing_count}, "
+                               f"remaining training slots: {remaining_slots}. "
+                               f"Mode={cfg.mode}, policy={cfg.policy_version}, "
+                               f"profile_mode={cfg.training_profile_mode}.",
                     "mode": cfg.mode,
                     "policy_version": cfg.policy_version,
                     "decision_source": "rule_based",
@@ -336,12 +349,12 @@ def decide_action(
         if all_at_max and existing_positions:
             reasoning = (
                 f"[TRAINING] All underlyings at max positions ({cfg.max_calls_per_underlying_training}). "
-                f"Existing: {', '.join(existing_positions)}."
+                f"Existing: {', '.join(existing_positions)}. profile_mode={cfg.training_profile_mode}."
             )
         elif not agent_state.candidate_options:
-            reasoning = "[TRAINING] No candidate options available that meet criteria."
+            reasoning = f"[TRAINING] No candidate options available. profile_mode={cfg.training_profile_mode}."
         else:
-            reasoning = "[TRAINING] No new candidates available (all symbols already open or filtered out)."
+            reasoning = f"[TRAINING] No new candidates (all symbols open or filtered). profile_mode={cfg.training_profile_mode}."
     elif existing_positions:
         reasoning = f"Existing positions: {', '.join(existing_positions)}. No action needed."
     elif not agent_state.candidate_options:
