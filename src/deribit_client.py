@@ -219,6 +219,36 @@ class DeribitClient:
         params = {"instrument_name": instrument_name}
         return self._make_request("private/cancel_all_by_instrument", params, private=True)
     
+    def get_tradingview_chart_data(
+        self,
+        instrument_name: str,
+        start: datetime,
+        end: datetime,
+        resolution: str = "1D",
+    ) -> dict[str, Any]:
+        """
+        Get TradingView-style OHLCV chart data.
+        
+        Args:
+            instrument_name: Instrument or index name (e.g. "btc_usd", "BTC-PERPETUAL")
+            start: Start datetime
+            end: End datetime
+            resolution: Candle resolution ('1', '5', '15', '60', '240', '1D')
+        
+        Returns:
+            Dict with keys: ticks, open, high, low, close, volume
+        """
+        start_ms = int(start.timestamp() * 1000)
+        end_ms = int(end.timestamp() * 1000)
+        
+        params = {
+            "instrument_name": instrument_name,
+            "start_timestamp": start_ms,
+            "end_timestamp": end_ms,
+            "resolution": resolution,
+        }
+        return self._make_request("public/get_tradingview_chart_data", params)
+
     def close(self) -> None:
         """Close the HTTP client."""
         self._client.close()

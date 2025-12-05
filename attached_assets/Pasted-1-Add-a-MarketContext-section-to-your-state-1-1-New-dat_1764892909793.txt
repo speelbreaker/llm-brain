@@ -1,0 +1,394 @@
+1. Add a MarketContext section to your state
+1.1 New dataclass
+
+In your shared models file (where AgentState lives – something like src/models.py), add:
+
+# src/models.py (or wherever AgentState is)
+
+from dataclasses import dataclass
+from datetime import datetime
+from typing import Optional, Literal, Dict, Any, List
+
+@dataclass
+class MarketContext:
+    underlying: str
+    time: datetime
+
+    # Trend / regime
+    regime: Literal["bull", "sideways", "bear"]
+    pct_from_50d_ma: float
+    pct_from_200d_ma: float
+
+    # Recent performance (%)
+    return_1d_pct: float
+    return_7d_pct: float
+    return_30d_pct: float
+
+    # Realized volatility (annualized)
+    realized_vol_7d: float
+    realized_vol_30d: float
+
+    # Optional: rough support/resistance (can be 0 or None for now)
+    support_level: Optional[float] = None
+    resistance_level: Optional[float] = None
+    distance_to_support_pct: Optional[float] = None
+    distance_to_resistance_pct: Optional[float] = None
+
+
+@dataclass
+class AgentState:
+    # existing fields...
+    timestamp: datetime
+    portfolio: Dict[str, Any]
+    candidate_options: List[Any]
+    # ...
+
+    # NEW:
+    market_context: Optional[MarketContext] = None
+
+
+If you’re using Pydantic models instead of dataclasses, same fields, just in a BaseModel.
+
+2. Compute market_context in your state builder
+
+In whatever module currently builds the agent state (often called state_builder.py or similar), add a helper that:
+
+Pulls recent OHLC for BTC/ETH,
+
+Computes MA50/MA200 (or approximate),
+
+Computes returns & realized vol,
+
+Classifies regime.
+
+2.1 Helper to compute trend / regime from OHLC
+
+Create a new module, e.g. src/market_context.py:
+
+# src/market_context.py
+from __future__ import annotations
+
+from datetime import datetime, timedelta, timezone
+from typing import Literal
+
+import numpy as np
+import pandas as pd
+
+from .models import MarketContext
+from .deribit_client import DeribitClient  # your live client (not backtest one)
+
+
+def compute_market_context(
+    client: DeribitClient,
+    underlying: str,
+    as_of: datetime,
+) -> MarketContext | None:
+    """
+    Build a compact 'chart-aware' summary for the LLM.
+    Uses daily or 4h candles for the last ~60 days.
+    """
+
+    # 1) Fetch recent OHLC – you can either:
+    # - use a "get_tradingview_chart_data" wrapper on your live DeribitClient, or
+    # - reuse the logic from backtest DeribitDataSource with daily timeframe.
+    #
+    # Pseudo-example assuming client.get_tradingview_chart_data exists:
+    start = as_of - timedelta(days=60)
+
+    res = client.get_tradingview_chart_data(
+        instrument_name=f"{underlying}_USDC",  # index
+        start=start,
+        end=as_of,
+        resolution="1D",  # daily candles to keep it simple
+    )
+    if not res["ticks"]:
+        return None
+
+    timestamps = [
+        datetime.fromtimestamp(ts / 1000, tz=timezone.utc) for ts in res["ticks"]
+    ]
+    df = pd.DataFrame(
+        {
+            "close": res["close"],
+        },
+        index=pd.DatetimeIndex(timestamps, name="timestamp"),
+    ).sort_index()
+
+    if len(df) < 30:
+        return None
+
+    close = df["close"]
+
+    # Returns
+    log_ret = np.log(close / close.shift(1)).dropna()
+    # % returns
+    def pct_return(days: int) -> float:
+        if len(close) < days + 1:
+            return 0.0
+        c_now = close.iloc[-1]
+        c_prev = close.iloc[-(days + 1)]
+        return float((c_now / c_prev - 1.0) * 100.0)
+
+    return_1d_pct = pct_return(1)
+    return_7d_pct = pct_return(7)
+    return_30d_pct = pct_return(30)
+
+    # Realized vol (annualized) over last N days
+    def realized_vol(days: int) -> float:
+        window = log_ret[-days:]
+        if window.empty:
+            return 0.0
+        daily_vol = float(window.std())
+        # annualize (sqrt(365))
+        return float(daily_vol * np.sqrt(365.0))
+
+    realized_vol_7d = realized_vol(7)
+    realized_vol_30d = realized_vol(30)
+
+    # Moving averages
+    ma_50 = close.rolling(window=50).mean().iloc[-1]
+    ma_200 = close.rolling(window=200).mean().iloc[-1] if len(close) >= 200 else ma_50
+
+    last = float(close.iloc[-1])
+    pct_from_50d_ma = float((last / ma_50 - 1.0) * 100.0) if ma_50 > 0 else 0.0
+    pct_from_200d_ma = float((last / ma_200 - 1.0) * 100.0) if ma_200 > 0 else 0.0
+
+    # Regime classification: very simple
+    if pct_from_200d_ma > 5.0 and return_30d_pct > 10.0:
+        regime: Literal["bull", "sideways", "bear"] = "bull"
+    elif pct_from_200d_ma < -5.0 and return_30d_pct < -10.0:
+        regime = "bear"
+    else:
+        regime = "sideways"
+
+    # For now we skip complex support/resistance. Leave them as None.
+    return MarketContext(
+        underlying=underlying,
+        time=as_of,
+        regime=regime,
+        pct_from_50d_ma=pct_from_50d_ma,
+        pct_from_200d_ma=pct_from_200d_ma,
+        return_1d_pct=return_1d_pct,
+        return_7d_pct=return_7d_pct,
+        return_30d_pct=return_30d_pct,
+        realized_vol_7d=realized_vol_7d,
+        realized_vol_30d=realized_vol_30d,
+        support_level=None,
+        resistance_level=None,
+        distance_to_support_pct=None,
+        distance_to_resistance_pct=None,
+    )
+
+
+Then in your state builder, where you currently do:
+
+agent_state = AgentState(
+    timestamp=now,
+    portfolio=portfolio_dict,
+    candidate_options=candidates,
+    # ...
+)
+
+
+change it to:
+
+from .market_context import compute_market_context
+
+mc = compute_market_context(deribit_client, underlying="BTC", as_of=now)
+# You can later build ETH market_context too; start with BTC.
+
+agent_state = AgentState(
+    timestamp=now,
+    portfolio=portfolio_dict,
+    candidate_options=candidates,
+    market_context=mc,
+)
+
+
+(If you track both BTC and ETH, you can build two partial contexts or pick the “primary” underlying for now.)
+
+3. Feed market_context into the LLM brain
+
+Now we wire this into agent_brain_llm.py (or whatever file defines choose_action_with_llm).
+
+3.1 Extend the LLM input JSON
+
+Inside choose_action_with_llm(agent_state, candidates), you probably build some payload (dict) that you pass to OpenAI Responses.
+
+Update that to include market_context explicitly:
+
+# src/agent_brain_llm.py (inside choose_action_with_llm)
+
+from .config import settings
+from .models import AgentState
+
+def build_llm_decision_payload(
+    state: AgentState,
+    candidates: list[dict],
+) -> dict:
+    mc = state.market_context
+
+    market_ctx_json = None
+    if mc is not None:
+        market_ctx_json = {
+            "underlying": mc.underlying,
+            "time": mc.time.isoformat(),
+            "regime": mc.regime,
+            "spot": state.portfolio.get("spot", None),
+            "pct_from_50d_ma": mc.pct_from_50d_ma,
+            "pct_from_200d_ma": mc.pct_from_200d_ma,
+            "return_1d_pct": mc.return_1d_pct,
+            "return_7d_pct": mc.return_7d_pct,
+            "return_30d_pct": mc.return_30d_pct,
+            "realized_vol_7d": mc.realized_vol_7d,
+            "realized_vol_30d": mc.realized_vol_30d,
+            "support_level": mc.support_level,
+            "resistance_level": mc.resistance_level,
+            "distance_to_support_pct": mc.distance_to_support_pct,
+            "distance_to_resistance_pct": mc.distance_to_resistance_pct,
+        }
+
+    payload = {
+        "mode": settings.mode,
+        "llm_enabled": settings.llm_enabled,
+        "portfolio": state.portfolio,
+        "market_context": market_ctx_json,
+        "candidates": candidates,   # your existing candidate serialization
+        "risk_limits": {
+            "max_margin_used_pct": settings.max_margin_used_pct,
+            "max_net_delta_abs": settings.max_net_delta_abs,
+            "max_expiry_exposure": settings.max_expiry_exposure,
+        },
+        "config": {
+            "default_order_size": settings.default_order_size,
+            "min_ivrv": settings.effective_ivrv_min,
+        },
+    }
+    return payload
+
+
+Then you pass payload into the OpenAI call:
+
+from openai import OpenAI
+
+client = OpenAI()
+
+def choose_action_with_llm(state: AgentState, candidates: list) -> dict:
+    payload = build_llm_decision_payload(state, candidates)
+
+    response = client.responses.create(
+        model=settings.llm_model_name,
+        input=[
+            {
+                "role": "system",
+                "content": LLM_DECISION_SYSTEM_PROMPT,
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "input_json",
+                        "input_json": payload,
+                    }
+                ],
+            },
+        ],
+        response_format={"type": "json_object"},
+    )
+
+    # parse JSON as before...
+
+3.2 Update the system prompt so the LLM uses these features correctly
+
+In the same file, define something like:
+
+LLM_DECISION_SYSTEM_PROMPT = """
+You are an options trading agent managing covered calls on Deribit (testnet for now) for BTC and ETH.
+
+You receive a JSON input with:
+- portfolio: holdings, equity, margin usage.
+- market_context: compact summary of recent price action and regime.
+- candidates: possible options to trade (symbol, strike, DTE, delta, IV, IVRV, premium, etc.).
+- risk_limits: hard constraints (max margin usage, max net delta, max expiry exposure).
+- config: default order size and minimum IVRV.
+
+Your job:
+1. Propose ONE of the following actions:
+   - DO_NOTHING
+   - OPEN_COVERED_CALL
+   - ROLL_COVERED_CALL
+   - CLOSE_COVERED_CALL
+
+2. Your JSON response MUST have exactly:
+   {
+     "action": "DO_NOTHING" | "OPEN_COVERED_CALL" | "ROLL_COVERED_CALL" | "CLOSE_COVERED_CALL",
+     "params": { ... },    # symbol, underlying, size, etc. if applicable
+     "reasoning": "short natural language explanation referencing the data you used"
+   }
+
+3. Respect risk limits strictly:
+   - Never suggest a trade that would violate max_expiry_exposure, max_margin_used_pct, or max_net_delta_abs.
+   - Never invent instrument symbols. Only use candidates or existing open positions.
+
+4. Use the market_context in a simple, structured way:
+   - If regime is "bull" AND 30-day return is strongly positive (e.g. > +15%) AND price is >5% above the 50-day MA:
+       * Be more conservative with calls:
+         - prefer lower deltas (further OTM),
+         - avoid very short-dated aggressive calls unless IVRV is clearly high.
+   - If regime is "bear" AND 30-day return is strongly negative (e.g. < -15%):
+       * Prioritize capital preservation:
+         - you may choose DO_NOTHING instead of opening new covered calls,
+         - or sell smaller size / further OTM if IVRV is attractive.
+   - If market_context shows a very recent dump (7-day return < -10%):
+       * Be cautious about selling new calls immediately after the drop unless IVRV is substantially above the minimum and margin is comfortable.
+   - If market_context shows sideways regime:
+       * It is acceptable to be more assertive with covered calls within risk limits (moderate deltas and shorter DTE).
+
+5. Use IVRV and premiums together with market_context:
+   - Only open/roll calls when IVRV is at or above the configured minimum.
+   - Between candidates, prefer those with a better balance of:
+       * higher premium,
+       * acceptable delta and DTE,
+       * and lower risk of getting deep ITM given the current regime.
+
+Be concise in reasoning but explicitly mention:
+- The regime (bull/sideways/bear),
+- Key return/vol metrics that influenced your choice,
+- Why you picked this particular candidate or chose DO_NOTHING.
+"""
+
+
+That gives the LLM clear, rule-like guidance on how to use the new market_context fields, so it doesn’t get “confused” – it just becomes slightly smarter about when to be aggressive vs conservative.
+
+4. Hooking market_context into your backtest / training data
+
+You already have:
+
+CoveredCallSimulator
+
+generate_training_data() → (state, action, reward) tuples
+
+To make those examples regime-aware, you can:
+
+When generating training data, also compute a historical MarketContext for each decision time using the same logic as compute_market_context (but with historical OHLC from your backtest MarketDataSource instead of live Deribit).
+
+Store those fields into the extra dict of each TrainingExample, e.g.:
+
+example.extra.update(
+    {
+        "regime": mc.regime,
+        "return_7d_pct": mc.return_7d_pct,
+        "return_30d_pct": mc.return_30d_pct,
+        "realized_vol_7d": mc.realized_vol_7d,
+        "pct_from_200d_ma": mc.pct_from_200d_ma,
+    }
+)
+
+
+When you eventually fine-tune or build a scoring model (or prepare LLM examples), include those regime features as part of the input JSON – the same schema the live LLM sees.
+
+That way:
+
+The backtester and the live agent speak the same language about regime.
+
+The LLM sees: “In historical bull regimes, this kind of call had good reward; in bear regimes, not so much,” encoded as features / scores.

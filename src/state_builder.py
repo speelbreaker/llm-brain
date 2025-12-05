@@ -10,9 +10,11 @@ from typing import Optional
 
 from src.config import Settings, settings
 from src.deribit_client import DeribitClient, DeribitAPIError
+from src.market_context import compute_market_context
 from src.models import (
     AgentState,
     CandidateOption,
+    MarketContext,
     OptionInstrument,
     OptionPosition,
     OptionType,
@@ -337,6 +339,15 @@ def build_agent_state(
         eth_skew=0.0,
     )
     
+    market_ctx: Optional[MarketContext] = None
+    primary_underlying = "BTC" if "BTC" in cfg.underlyings else (cfg.underlyings[0] if cfg.underlyings else None)
+    
+    if primary_underlying:
+        try:
+            market_ctx = compute_market_context(client, primary_underlying, now)
+        except Exception as e:
+            print(f"Warning: Could not compute market context: {e}")
+    
     return AgentState(
         timestamp=now,
         underlyings=cfg.underlyings,
@@ -344,4 +355,5 @@ def build_agent_state(
         portfolio=portfolio,
         vol_state=vol_state,
         candidate_options=candidate_options,
+        market_context=market_ctx,
     )

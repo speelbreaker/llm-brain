@@ -12,7 +12,7 @@ from typing import Any
 from openai import OpenAI
 
 from src.config import settings
-from src.models import AgentState, CandidateOption
+from src.models import AgentState, CandidateOption, MarketContext
 
 _client: OpenAI | None = None
 
@@ -40,6 +40,28 @@ def _get_openai_client() -> OpenAI:
     
     _client = OpenAI(api_key=api_key, base_url=base_url)
     return _client
+
+
+def _compress_market_context(mc: MarketContext | None) -> dict[str, Any] | None:
+    """Serialize market context for LLM consumption."""
+    if mc is None:
+        return None
+    return {
+        "underlying": mc.underlying,
+        "time": mc.time.isoformat(),
+        "regime": mc.regime,
+        "pct_from_50d_ma": round(mc.pct_from_50d_ma, 2),
+        "pct_from_200d_ma": round(mc.pct_from_200d_ma, 2),
+        "return_1d_pct": round(mc.return_1d_pct, 2),
+        "return_7d_pct": round(mc.return_7d_pct, 2),
+        "return_30d_pct": round(mc.return_30d_pct, 2),
+        "realized_vol_7d": round(mc.realized_vol_7d, 2),
+        "realized_vol_30d": round(mc.realized_vol_30d, 2),
+        "support_level": mc.support_level,
+        "resistance_level": mc.resistance_level,
+        "distance_to_support_pct": mc.distance_to_support_pct,
+        "distance_to_resistance_pct": mc.distance_to_resistance_pct,
+    }
 
 
 def _compress_state_for_llm(state: AgentState) -> dict[str, Any]:
@@ -79,6 +101,7 @@ def _compress_state_for_llm(state: AgentState) -> dict[str, Any]:
             "eth_rv": round(state.vol_state.eth_rv, 2),
             "eth_ivrv": round(state.vol_state.eth_ivrv, 2),
         },
+        "market_context": _compress_market_context(state.market_context),
         "risk_limits": {
             "max_margin_used_pct": settings.max_margin_used_pct,
             "max_net_delta_abs": settings.max_net_delta_abs,
@@ -128,10 +151,59 @@ def choose_action_with_llm(
     compact_state = _compress_state_for_llm(state)
     compact_candidates = _compress_candidates_for_llm(candidates)
     
-    system_prompt = """You are an options trading agent managing BTC/ETH covered calls for a single user.
-Your job is to choose a single action from a small, discrete set and explain it briefly.
-You must obey the user's risk constraints.
-Never invent symbols or sizes that are not in the provided candidates or positions.
+    system_prompt = """You are an options trading agent managing covered calls on Deribit (testnet for now) for BTC and ETH.
+
+You receive a JSON input with:
+- portfolio: holdings, equity, margin usage.
+- market_context: compact summary of recent price action and regime.
+- candidates: possible options to trade (symbol, strike, DTE, delta, IV, IVRV, premium, etc.).
+- risk_limits: hard constraints (max margin usage, max net delta, max expiry exposure).
+- config: default order size and minimum IVRV.
+
+Your job:
+1. Propose ONE of the following actions:
+   - DO_NOTHING
+   - OPEN_COVERED_CALL
+   - ROLL_COVERED_CALL
+   - CLOSE_COVERED_CALL
+
+2. Your JSON response MUST have exactly:
+   {
+     "action": "DO_NOTHING" | "OPEN_COVERED_CALL" | "ROLL_COVERED_CALL" | "CLOSE_COVERED_CALL",
+     "params": { ... },
+     "reasoning": "short explanation referencing the data you used"
+   }
+
+3. Respect risk limits strictly:
+   - Never suggest a trade that would violate max_expiry_exposure, max_margin_used_pct, or max_net_delta_abs.
+   - Never invent instrument symbols. Only use candidates or existing open positions.
+
+4. Use the market_context in a simple, structured way:
+   - If regime is "bull" AND 30-day return is strongly positive (e.g. > +15%) AND price is >5% above the 50-day MA:
+       * Be more conservative with calls:
+         - prefer lower deltas (further OTM),
+         - avoid very short-dated aggressive calls unless IVRV is clearly high.
+   - If regime is "bear" AND 30-day return is strongly negative (e.g. < -15%):
+       * Prioritize capital preservation:
+         - you may choose DO_NOTHING instead of opening new covered calls,
+         - or sell smaller size / further OTM if IVRV is attractive.
+   - If market_context shows a very recent dump (7-day return < -10%):
+       * Be cautious about selling new calls immediately after the drop unless IVRV is substantially above the minimum and margin is comfortable.
+   - If market_context shows sideways regime:
+       * It is acceptable to be more assertive with covered calls within risk limits (moderate deltas and shorter DTE).
+
+5. Use IVRV and premiums together with market_context:
+   - Only open/roll calls when IVRV is at or above the configured minimum.
+   - Between candidates, prefer those with a better balance of:
+       * higher premium,
+       * acceptable delta and DTE,
+       * and lower risk of getting deep ITM given the current regime.
+
+Be concise in reasoning but explicitly mention:
+- The regime (bull/sideways/bear),
+- Key return/vol metrics that influenced your choice,
+- Why you picked this particular candidate or chose DO_NOTHING.
+
 Return ONLY valid JSON matching the requested schema."""
 
     high_level_rules = {
@@ -159,13 +231,14 @@ Return ONLY valid JSON matching the requested schema."""
             "- CLOSE_COVERED_CALL (on an existing position)\n\n"
             "Constraints:\n"
             "- Respect the risk limits.\n"
+            "- Use the market_context to inform your decision (regime, returns, vol).\n"
             "- Prefer actions consistent with the objective and preferences.\n"
-            "- If nothing looks good, choose DO_NOTHING.\n\n"
+            "- If nothing looks good or market conditions are unfavorable, choose DO_NOTHING.\n\n"
             "Output format (JSON only):\n"
             "{\n"
             '  "action": "...",\n'
             '  "params": { ... },\n'
-            '  "reasoning": "short explanation"\n'
+            '  "reasoning": "short explanation mentioning regime and key metrics"\n'
             "}"
         ),
         "state": compact_state,

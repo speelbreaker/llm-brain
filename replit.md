@@ -33,17 +33,24 @@ A modular Python framework for automated BTC/ETH covered call trading on Deribit
   - DeribitDataSource using mainnet public API for historical data
   - Training data generation for ML/RL (state, action, reward tuples)
   - CSV/JSONL export and grid search utilities
+- 2024-12: MarketContext integration for chart-aware LLM decisions:
+  - MarketContext model with regime, returns, realized vol, MA distances
+  - compute_market_context() fetches 60-day daily OHLC for regime detection
+  - Regime classification: bull/sideways/bear based on 200d MA and 30d returns
+  - Enhanced LLM system prompt with regime-aware decision rules
+  - LLM reasoning now explicitly references market conditions
 
 ## Architecture
 
 ### Core Modules (src/)
 - `config.py` - Pydantic settings with mode selection and effective parameters
-- `models.py` - Type-safe data models for instruments, positions, state
+- `models.py` - Type-safe data models for instruments, positions, state, MarketContext
 - `deribit_client.py` - httpx-based API wrapper for Deribit testnet
-- `state_builder.py` - Market data aggregation and candidate filtering (uses effective params)
+- `state_builder.py` - Market data aggregation, candidate filtering, market context attachment
+- `market_context.py` - Compute trend/regime, returns, realized vol from OHLC data
 - `risk_engine.py` - Pre-trade validation (margin, delta, exposure)
 - `policy_rule_based.py` - Decision logic with scoring and exploration
-- `agent_brain_llm.py` - LLM-based decisions via OpenAI Chat API
+- `agent_brain_llm.py` - LLM-based decisions with regime-aware system prompt
 - `execution.py` - Order translation with dry-run support
 - `logging_utils.py` - Structured JSONL logging
 - `chat_with_agent.py` - Natural language query interface

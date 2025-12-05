@@ -6,9 +6,61 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import Enum
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, Field
+
+
+class MarketContext(BaseModel):
+    """
+    Compact market/chart context for LLM decision-making.
+    Includes trend/regime, recent returns, and realized volatility.
+    """
+    underlying: str = Field(..., description="Underlying asset: BTC or ETH")
+    time: datetime = Field(..., description="Timestamp of this snapshot")
+
+    regime: Literal["bull", "sideways", "bear"] = Field(
+        default="sideways",
+        description="Market regime classification",
+    )
+    pct_from_50d_ma: float = Field(
+        default=0.0,
+        description="Price distance from 50-day MA as percentage",
+    )
+    pct_from_200d_ma: float = Field(
+        default=0.0,
+        description="Price distance from 200-day MA as percentage",
+    )
+
+    return_1d_pct: float = Field(default=0.0, description="1-day return percentage")
+    return_7d_pct: float = Field(default=0.0, description="7-day return percentage")
+    return_30d_pct: float = Field(default=0.0, description="30-day return percentage")
+
+    realized_vol_7d: float = Field(
+        default=0.0,
+        description="7-day realized volatility (annualized)",
+    )
+    realized_vol_30d: float = Field(
+        default=0.0,
+        description="30-day realized volatility (annualized)",
+    )
+
+    support_level: Optional[float] = Field(
+        default=None,
+        description="Estimated support level (optional)",
+    )
+    resistance_level: Optional[float] = Field(
+        default=None,
+        description="Estimated resistance level (optional)",
+    )
+    distance_to_support_pct: Optional[float] = Field(
+        default=None,
+        description="Distance to support as percentage (optional)",
+    )
+    distance_to_resistance_pct: Optional[float] = Field(
+        default=None,
+        description="Distance to resistance as percentage (optional)",
+    )
 
 
 class OptionType(str, Enum):
@@ -149,6 +201,11 @@ class AgentState(BaseModel):
     candidate_options: list[CandidateOption] = Field(
         default_factory=list,
         description="Filtered list of candidate options for trading",
+    )
+    
+    market_context: Optional[MarketContext] = Field(
+        default=None,
+        description="Market/chart context for trend-aware decisions",
     )
 
 
