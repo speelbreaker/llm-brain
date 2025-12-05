@@ -60,6 +60,12 @@ A modular Python framework for automated BTC/ETH covered call trading on Deribit
   - Batch execution with per-action result tracking
   - Web dashboard training mode badge display
   - All training positions are dry-run only for safety
+- 2024-12: Enhanced Backtesting Lab UI:
+  - Pause/Resume controls for long-running backtests
+  - Configurable DTE range (min_dte, max_dte) and delta range (delta_min, delta_max)
+  - "Both (compare)" exit style runs hold_to_expiry and tp_and_roll in parallel
+  - Error display and phase indicator in Live Progress section
+  - Decision filtering collapses consecutive DO_NOTHING entries to latest only
 
 ## Architecture
 
