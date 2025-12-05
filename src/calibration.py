@@ -6,16 +6,19 @@ This module provides:
 2. Deribit public API helpers
 3. Calibration logic to compute pricing errors
 
+Uses RV-based IV model matching the synthetic backtester, NOT Deribit's mark_iv.
 Uses only public Deribit endpoints - no authentication required.
 """
 from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from datetime import datetime, timedelta, timezone
+from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
+
+from src.backtest.pricing import compute_realized_volatility
 
 
 DERIBIT_API = "https://www.deribit.com/api/v2"
@@ -76,6 +79,45 @@ def get_index_price(underlying: str) -> float:
     index_name = f"{underlying.lower()}_usd"
     result = deribit_get("public/get_index_price", {"index_name": index_name})
     return float(result["index_price"])
+
+
+def get_spot_history_for_rv(
+    underlying: str,
+    as_of: datetime,
+    window_days: int = 7,
+) -> List[Tuple[datetime, float]]:
+    """
+    Fetch daily index close prices for the given underlying from Deribit
+    over roughly `window_days` days, to use for realized volatility.
+
+    Uses public/get_tradingview_chart_data with instrument_name like "btc_usd".
+    """
+    start = as_of - timedelta(days=window_days + 10)
+
+    params = {
+        "instrument_name": f"{underlying.lower()}_usd",
+        "start_timestamp": int(start.timestamp() * 1000),
+        "end_timestamp": int(as_of.timestamp() * 1000),
+        "resolution": "1D",
+    }
+    try:
+        res = deribit_get("public/get_tradingview_chart_data", params)
+    except Exception:
+        params["instrument_name"] = f"{underlying}-PERPETUAL"
+        res = deribit_get("public/get_tradingview_chart_data", params)
+
+    ticks = res.get("ticks") or res.get("timestamp") or []
+    closes = res.get("close") or []
+    if not ticks or not closes:
+        return []
+
+    points: List[Tuple[datetime, float]] = []
+    for ts, close in zip(ticks, closes):
+        t = datetime.fromtimestamp(ts / 1000.0, tz=timezone.utc)
+        points.append((t, float(close)))
+
+    points.sort(key=lambda x: x[0])
+    return points
 
 
 @dataclass

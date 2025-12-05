@@ -1,0 +1,256 @@
+You are working inside the LLMAgentBrain repo.
+
+Goal: Update the calibration feature so that the synthetic Black–Scholes prices used in `src/calibration.py` **no longer use Deribit’s mark_iv**, but instead use the **same RV-based IV logic** as the synthetic backtester:
+
+    sigma_synth ≈ realized_vol(window_days) * synthetic_iv_multiplier
+
+We want to:
+
+- Compute a 7-day realized volatility from Deribit index prices (using the SAME formula as in src/backtest/pricing.py).
+- Use that RV as the base IV for the calibration synthetic prices.
+- Keep the calibration API and UI shape the same (no breaking frontend changes).
+- Fall back to `default_iv` if RV cannot be computed.
+
+DO NOT change anything in backtests or the main agent; only adjust the calibration module and its usage.
+
+────────────────────────────────────────
+A. Reuse the existing realized-vol logic
+────────────────────────────────────────
+
+1) Open `src/backtest/pricing.py` and locate:
+
+   ```python
+   def compute_realized_volatility(
+       prices: List[Tuple[datetime, float]],
+       as_of: datetime,
+       window_days: int = 30
+   ) -> float:
+       ...
+This returns annualized realized vol as a float, e.g. 0.70 for 70% vol, with caps between 0.10 and 2.0.
+
+In src/calibration.py, import this function at the top:
+
+python
+Copy code
+from src.backtest.pricing import compute_realized_volatility
+────────────────────────────────────────
+B. Fetch spot history for RV using Deribit
+────────────────────────────────────────
+
+In src/calibration.py, add a helper to fetch recent index closes from Deribit using the same endpoint as DeribitClient.get_tradingview_chart_data:
+
+At the top of the file, ensure you have:
+
+python
+Copy code
+from datetime import datetime, timedelta, timezone
+from typing import List, Tuple
+(If already imported, don’t duplicate.)
+
+Add a helper function, near the other Deribit helpers:
+
+python
+Copy code
+def get_spot_history_for_rv(
+    underlying: str,
+    as_of: datetime,
+    window_days: int = 7,
+) -> List[Tuple[datetime, float]]:
+    """
+    Fetch daily index close prices for the given underlying from Deribit
+    over roughly `window_days` days, to use for realized volatility.
+
+    Uses public/get_tradingview_chart_data with instrument_name like "btc_usd".
+    """
+    # We’ll over-request a bit to be safe
+    start = as_of - timedelta(days=window_days + 10)
+
+    # Use the same base URL and deribit_get() helper already defined in this module
+    params = {
+        "instrument_name": f"{underlying.lower()}_usd",
+        "start_timestamp": int(start.timestamp() * 1000),
+        "end_timestamp": int(as_of.timestamp() * 1000),
+        "resolution": "1D",
+    }
+    try:
+        res = deribit_get("public/get_tradingview_chart_data", params)
+    except Exception:
+        # Fallback: try PERPETUAL if index_name fails (mirrors market_context logic)
+        params["instrument_name"] = f"{underlying}-PERPETUAL"
+        res = deribit_get("public/get_tradingview_chart_data", params)
+
+    ticks = res.get("ticks") or res.get("timestamp") or []
+    closes = res.get("close") or []
+    if not ticks or not closes:
+        return []
+
+    points: List[Tuple[datetime, float]] = []
+    for ts, close in zip(ticks, closes):
+        # ticks are ms since epoch
+        t = datetime.fromtimestamp(ts / 1000.0, tz=timezone.utc)
+        points.append((t, float(close)))
+
+    # Ensure sorted
+    points.sort(key=lambda x: x[0])
+    return points
+Note: this should use the existing deribit_get() helper in calibration.py to call public/get_tradingview_chart_data.
+
+────────────────────────────────────────
+C. Replace synthetic_iv model with RV-based IV
+────────────────────────────────────────
+
+Currently, src/calibration.py has a function like:
+
+python
+Copy code
+def synthetic_iv_from_deribit(
+    quote: OptionQuote,
+    default_iv: float,
+    iv_multiplier: float,
+) -> float:
+    if quote.mark_iv is not None and quote.mark_iv > 0:
+        base_iv = quote.mark_iv
+    else:
+        base_iv = default_iv
+    return max(1e-6, base_iv * iv_multiplier)
+We want to stop using mark_iv as the base and instead use realized volatility from spot history, to match the synthetic backtester.
+
+Replace the function above with a simpler one that takes a base IV (already computed RV) and a multiplier:
+
+python
+Copy code
+def synthetic_iv_from_rv(
+    base_iv: float,
+    iv_multiplier: float,
+) -> float:
+    """
+    Synthetic IV model for calibration:
+
+    - base_iv is an annualized realized volatility (e.g. 0.70 for 70%).
+    - iv_multiplier scales it, same as CallSimulationConfig.synthetic_iv_multiplier.
+
+    Returns sigma to plug into Black–Scholes.
+    """
+    return max(1e-6, base_iv * iv_multiplier)
+Update any call sites to use synthetic_iv_from_rv(...) instead of synthetic_iv_from_deribit(...).
+
+────────────────────────────────────────
+D. Wire RV into run_calibration
+────────────────────────────────────────
+
+Now change run_calibration(...) so it:
+
+Computes one RV number (e.g. 7-day RV) for the underlying at “now”.
+
+Uses that as the base_iv for all synthetic prices in the calibration.
+
+Still respects iv_multiplier and default_iv as fallbacks.
+
+In run_calibration, near the top, replace the initial spot logic:
+
+Currently something like:
+
+python
+Copy code
+spot = get_index_price(underlying)
+...
+quotes = get_call_chain(...)
+Change this to:
+
+python
+Copy code
+now = datetime.now(timezone.utc)
+spot = get_index_price(underlying)
+
+# Compute realized vol from recent index closes
+rv_window_days = 7  # match weekly synthetic universe; can tweak later
+spot_history = get_spot_history_for_rv(underlying, as_of=now, window_days=rv_window_days)
+
+if spot_history:
+    rv_annualized = compute_realized_volatility(
+        prices=spot_history,
+        as_of=now,
+        window_days=rv_window_days,
+    )
+else:
+    # If we fail to compute RV, fall back to default_iv
+    rv_annualized = default_iv
+
+# This base_iv will be used for all options in this calibration run
+base_iv = rv_annualized
+Further down in the loop over quotes, where we previously had:
+
+python
+Copy code
+sigma = synthetic_iv_from_deribit(
+    quote,
+    default_iv=default_iv,
+    iv_multiplier=iv_multiplier,
+)
+Replace that with:
+
+python
+Copy code
+sigma = synthetic_iv_from_rv(
+    base_iv=base_iv,
+    iv_multiplier=iv_multiplier,
+)
+Do NOT use quote.mark_iv anymore for sigma; keep quote.mark_iv only for reporting in CalibrationRow.
+
+Keep the default_iv parameter in run_calibration(...) and in the FastAPI endpoint, but now its role is:
+
+“Fallback IV if we can’t compute RV from recent spot history.”
+
+That way, the existing /api/calibration signature and frontend don’t break.
+
+Optionally (nice to have, but not required):
+
+If you want to surface the RV used, add a field rv_annualized: float | None = None to CalibrationResult, set it in run_calibration, and include it in the JSON.
+
+Frontend can later show something like “using RV_7d ≈ 0.72 (72%)”.
+
+But the minimum requirement is: use RV-based base_iv instead of mark_iv inside the synthetic sigma.
+
+────────────────────────────────────────
+E. Final sanity checks
+────────────────────────────────────────
+
+After implementing:
+
+uvicorn main:app (or however you run the server).
+
+Go to the web UI and use the “Calibration vs Deribit” card:
+
+Underlying: BTC
+
+DTE Range: e.g. 3–10 days
+
+IV Multiplier: 1.0
+
+Confirm:
+
+The endpoint /api/calibration still returns JSON.
+
+The card renders with:
+
+Similar shape as before (summary + table).
+
+Mean absolute error now reflects your RV-based synthetic universe (likely higher than the earlier “1% with mark_iv”, but that’s expected).
+
+Adjust iv_multiplier in the UI to see how it shifts the bias between synthetic and mark prices.
+
+Do NOT change any backtest or agent logic in this task; only update src/calibration.py (and minor related bits if needed) so the calibration card validates the same IV model used by the synthetic backtester.
+
+yaml
+Copy code
+
+---
+
+You can paste that into your Builder, let it run, then hit your Calibration card again and see **how well the RV-based synthetic world lines up with live Deribit weeklies**.
+::contentReference[oaicite:0]{index=0}
+
+
+
+
+
+
