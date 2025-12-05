@@ -668,6 +668,8 @@ class CoveredCallSimulator:
             
             leg_close_time = sim_end
             leg_close_price = open_price
+            last_observed_time = current_leg_open_time
+            last_observed_price = open_price
             roll_triggered = False
             roll_time: Optional[datetime] = None
             
@@ -677,6 +679,9 @@ class CoveredCallSimulator:
                     
                 spot_now = float(spot_series.loc[ts])
                 opt_now = float(opt_price_series.loc[ts])
+                
+                last_observed_time = ts
+                last_observed_price = opt_now
                 
                 dte_now = (expiry - ts).total_seconds() / 86400.0
                 
@@ -707,6 +712,9 @@ class CoveredCallSimulator:
                         roll_triggered = True
                         roll_time = ts
                         break
+            else:
+                leg_close_time = last_observed_time
+                leg_close_price = last_observed_price
             
             leg_pnl = size * (open_price - leg_close_price)
             leg_hodl_at_close = hodl_curve[-1] if hodl_curve else size * float(spot_series.iloc[-1])
@@ -721,9 +729,13 @@ class CoveredCallSimulator:
             if roll_triggered and roll_time is not None:
                 rolls_used += 1
                 
+                state_roll: Optional[Dict[str, Any]] = None
+                candidates: List[OptionSnapshot] = []
                 try:
-                    state_roll = build_historical_state(ds, cfg, roll_time)
-                    candidates = state_roll.get("candidate_options") or []
+                    from .deribit_data_source import DeribitDataSource as DDS
+                    if isinstance(ds, DDS):
+                        state_roll = build_historical_state(ds, cfg, roll_time)
+                        candidates = state_roll.get("candidate_options") or []
                 except Exception:
                     candidates = []
                 
@@ -732,7 +744,8 @@ class CoveredCallSimulator:
                     if opt.instrument_name == instrument_name:
                         continue
                     try:
-                        feats = self._extract_candidate_features(state_roll, opt)
+                        roll_state = state_roll if state_roll else {"time": roll_time, "spot": None}
+                        feats = self._extract_candidate_features(roll_state, opt)
                         s = self._score_candidate(feats)
                         if s >= min_score:
                             scored.append((s, opt))

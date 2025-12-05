@@ -66,6 +66,12 @@ A modular Python framework for automated BTC/ETH covered call trading on Deribit
   - "Both (compare)" exit style runs hold_to_expiry and tp_and_roll in parallel
   - Error display and phase indicator in Live Progress section
   - Decision filtering collapses consecutive DO_NOTHING entries to latest only
+- 2024-12: Multi-roll call chain for backtests:
+  - New config params: min_dte_to_roll, defend_near_strike_pct, max_rolls_per_chain
+  - Two roll triggers: Take-profit (80% premium captured) and Defensive (spot near strike)
+  - Rolls to best-scored candidate excluding current position
+  - Chain-level PnL aggregation across all legs
+  - Notes include leg count, rolls used, and trigger thresholds
 
 ## Architecture
 
