@@ -1,0 +1,119 @@
+Step 1 – Turn on export
+
+In src/config.py we have:
+
+save_training_data: bool = Field(
+    default=False,
+    description="If True, export training data CSV/JSONL after each backtest",
+)
+training_data_dir: str = Field(default="data", ...)
+
+
+You can override via .env or Replit secrets:
+
+SAVE_TRAINING_DATA=true
+TRAINING_DATA_DIR=data
+
+
+(or any folder you like)
+
+Once that’s set:
+
+Every time you run a backtest from the UI, BacktestManager will accumulate all_training_examples and then dump them to data/training_dataset_....csv/jsonl at the end of the run.
+
+You don’t need a separate “training mode” just to get the files – that flag only controls multi-strategy experimentation, not the export itself. Export only cares about save_training_data.
+
+Step 2 – Run a batch of backtests to fill the dataset
+
+To get something useful, you want a lot of decision points across different regimes:
+
+BTC and ETH
+
+Different timeframes (1h, 4h, 1d)
+
+Different date windows (bull, chop, dump)
+
+Different exit styles (hold_to_expiry, tp_and_roll)
+
+Each run will add:
+
+Hundreds / thousands of (state, action, reward) examples
+
+Logged into one CSV + one JSONL in data/
+
+You can also use the CLI example in
+src/backtest/backtest_example.py → “Example 3: Training Data Generation”
+as a pattern to generate datasets programmatically, but the UI-driven backtests already do the export for you.
+
+3. What exactly is in each training example
+
+From the code in BacktestManager where we append TrainingExample:
+
+if traded:  # we actually sold a call
+    all_training_examples.append(TrainingExample(
+        decision_time=t,
+        underlying=underlying,
+        spot=spot,
+        action="SELL_CALL",
+        reward=trade.pnl,
+        extra={
+            "instrument": best_opt.instrument_name,
+            "delta": best_opt.delta,
+            "strike": best_opt.strike,
+            "dte": (best_opt.expiry - t).days,
+            "score": best_score,
+            "exit_style": current_exit_style,
+            "pnl_vs_hodl": trade.pnl_vs_hodl,
+            "max_drawdown_pct": trade.max_drawdown_pct,
+        },
+    ))
+else:       # we decided not to trade
+    all_training_examples.append(TrainingExample(
+        decision_time=t,
+        underlying=underlying,
+        spot=spot if spot else 0.0,
+        action="DO_NOTHING",
+        reward=0.0,
+        extra={
+            "best_score": best_score,
+            "candidates": len(options),
+            "reason": "score_below_threshold" or "trade_simulation_failed",
+        },
+    ))
+
+
+So conceptually each row is:
+
+“At time t, on underlying BTC/ETH, with spot S, best candidate call had delta D, DTE T, score X…, and the strategy chose SELL_CALL or DO_NOTHING. When we simulate that choice forward, the realized reward (PnL) is R.”
+
+That’s exactly the sort of thing you want for training a policy.
+
+4. Turning this into LLM training data
+
+You now have numeric state → (action, reward) tuples. There are two main ways to use them:
+
+Option A – Classic ML / small model (recommended as first step)
+
+Before throwing this at an LLM, the easiest/most robust route is:
+
+Define features from each example:
+
+spot, delta, dte, score, maybe normalized by ATR, IV/RV, etc. (you can add more into extra later).
+
+Train a model:
+
+e.g. gradient boosted trees / random forest / small MLP that predicts:
+
+Probability that SELL_CALL will have reward > 0, or
+
+Expected reward E[reward | state].
+
+At decision time:
+
+Let the existing scoring code propose candidates.
+
+Feed each candidate’s feature vector to the model.
+
+Choose the one with highest predicted reward or skip if < threshold.
+
+This gives you a quant policy that’s trained directly on backtest PnL, without worrying about prompt engineering or LLM finetuning. You can then have the LLM explain or override that policy, instead of being the first line of defense.
