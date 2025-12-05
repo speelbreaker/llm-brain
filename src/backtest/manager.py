@@ -189,6 +189,27 @@ def _compute_enhanced_metrics(
     
     total_pnl_vs_hodl = sum(t.pnl_vs_hodl for t in trades)
     
+    returns = [t.pnl for t in trades] if trades else []
+    
+    mean_return = sum(returns) / len(returns) if returns else 0.0
+    
+    std_return = 0.0
+    if len(returns) > 1:
+        variance = sum((r - mean_return) ** 2 for r in returns) / len(returns)
+        std_return = math.sqrt(variance)
+    
+    sharpe_ratio = (mean_return / std_return) if std_return > 0 else 0.0
+    
+    downside_returns = [r for r in returns if r < 0]
+    downside_std = 0.0
+    if len(downside_returns) > 1:
+        downside_variance = sum(r ** 2 for r in downside_returns) / len(downside_returns)
+        downside_std = math.sqrt(downside_variance)
+    elif len(downside_returns) == 1:
+        downside_std = abs(downside_returns[0])
+    
+    sortino_ratio = (mean_return / downside_std) if downside_std > 0 else 0.0
+    
     return {
         "initial_equity": round(initial_equity, 2),
         "final_equity": round(final_equity, 2),
@@ -206,6 +227,8 @@ def _compute_enhanced_metrics(
         "gross_loss": round(gross_loss, 2),
         "avg_winner": round(avg_winner, 2),
         "avg_loser": round(avg_loser, 2),
+        "sharpe_ratio": round(sharpe_ratio, 2),
+        "sortino_ratio": round(sortino_ratio, 2),
         "final_pnl": round(total_pnl, 4),
         "final_pnl_vs_hodl": round(total_pnl_vs_hodl, 4),
         "avg_pnl": round(avg_trade_usd, 4),

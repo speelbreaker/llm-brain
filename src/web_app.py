@@ -716,6 +716,104 @@ def index() -> str:
     .metric.positive .value {{ color: #2e7d32; }}
     .metric.negative .value {{ color: #c62828; }}
     
+    /* TradingView-style Summary Panel */
+    .tv-summary-panel {{
+      background: linear-gradient(135deg, #1a2332 0%, #0d1421 100%);
+      border-radius: 12px;
+      padding: 1.5rem;
+      margin: 1rem 0;
+      color: #fff;
+    }}
+    .tv-summary-header {{
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      margin-bottom: 1.5rem;
+      padding-bottom: 1rem;
+      border-bottom: 1px solid rgba(255,255,255,0.1);
+    }}
+    .tv-main-stat {{
+      display: flex;
+      align-items: baseline;
+      gap: 0.5rem;
+    }}
+    .tv-main-stat .tv-value {{
+      font-size: 2.5rem;
+      font-weight: 700;
+    }}
+    .tv-main-stat .tv-pct {{
+      font-size: 1.2rem;
+      opacity: 0.8;
+    }}
+    .tv-main-stat.positive .tv-value, .tv-main-stat.positive .tv-pct {{ color: #26a69a; }}
+    .tv-main-stat.negative .tv-value, .tv-main-stat.negative .tv-pct {{ color: #ef5350; }}
+    .tv-secondary-stats {{
+      display: flex;
+      gap: 2rem;
+    }}
+    .tv-stat {{
+      text-align: right;
+    }}
+    .tv-stat .tv-label {{
+      font-size: 0.75rem;
+      opacity: 0.6;
+      display: block;
+      margin-bottom: 0.25rem;
+    }}
+    .tv-stat .tv-value {{
+      font-size: 1.1rem;
+      font-weight: 600;
+    }}
+    .tv-metrics-grid {{
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 1.5rem;
+    }}
+    .tv-metric-group h4 {{
+      font-size: 0.85rem;
+      font-weight: 600;
+      opacity: 0.6;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin: 0 0 0.75rem 0;
+    }}
+    .tv-metric-row {{
+      display: flex;
+      justify-content: space-between;
+      padding: 0.4rem 0;
+      border-bottom: 1px solid rgba(255,255,255,0.05);
+    }}
+    .tv-metric-label {{
+      font-size: 0.9rem;
+      opacity: 0.7;
+    }}
+    .tv-metric-value {{
+      font-size: 0.9rem;
+      font-weight: 600;
+    }}
+    .tv-metric-value.positive {{ color: #26a69a; }}
+    .tv-metric-value.negative {{ color: #ef5350; }}
+    
+    .chart-legend {{
+      display: flex;
+      justify-content: center;
+      gap: 2rem;
+      margin-top: 0.5rem;
+      padding: 0.5rem;
+    }}
+    .legend-item {{
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      font-size: 0.85rem;
+      color: #666;
+    }}
+    .legend-color {{
+      width: 16px;
+      height: 4px;
+      border-radius: 2px;
+    }}
+    
     .chart-container {{
       width: 100%;
       height: 250px;
@@ -1121,12 +1219,97 @@ def index() -> str:
     </div>
 
     <div class="section" id="backtest-results" style="display:none;">
-      <h2>Backtest Results</h2>
-      <div class="metrics-grid" id="bt-metrics"></div>
+      <h2>Backtest Results - TradingView Summary</h2>
       
-      <h3>Equity Curve</h3>
-      <div class="chart-container">
+      <!-- TradingView-style Summary Panel -->
+      <div class="tv-summary-panel">
+        <div class="tv-summary-header">
+          <div class="tv-main-stat" id="tv-net-profit">
+            <span class="tv-value">$0</span>
+            <span class="tv-pct">(0.00%)</span>
+          </div>
+          <div class="tv-secondary-stats">
+            <div class="tv-stat">
+              <span class="tv-label">vs HODL</span>
+              <span class="tv-value" id="tv-vs-hodl">$0</span>
+            </div>
+            <div class="tv-stat">
+              <span class="tv-label">HODL Return</span>
+              <span class="tv-value" id="tv-hodl-return">0%</span>
+            </div>
+          </div>
+        </div>
+        
+        <div class="tv-metrics-grid">
+          <div class="tv-metric-group">
+            <h4>Profit &amp; Loss</h4>
+            <div class="tv-metric-row">
+              <span class="tv-metric-label">Gross Profit</span>
+              <span class="tv-metric-value positive" id="tv-gross-profit">$0</span>
+            </div>
+            <div class="tv-metric-row">
+              <span class="tv-metric-label">Gross Loss</span>
+              <span class="tv-metric-value negative" id="tv-gross-loss">$0</span>
+            </div>
+            <div class="tv-metric-row">
+              <span class="tv-metric-label">Profit Factor</span>
+              <span class="tv-metric-value" id="tv-profit-factor">0</span>
+            </div>
+          </div>
+          
+          <div class="tv-metric-group">
+            <h4>Trade Statistics</h4>
+            <div class="tv-metric-row">
+              <span class="tv-metric-label">Total Trades</span>
+              <span class="tv-metric-value" id="tv-num-trades">0</span>
+            </div>
+            <div class="tv-metric-row">
+              <span class="tv-metric-label">Win Rate</span>
+              <span class="tv-metric-value" id="tv-win-rate">0%</span>
+            </div>
+            <div class="tv-metric-row">
+              <span class="tv-metric-label">Avg Trade</span>
+              <span class="tv-metric-value" id="tv-avg-trade">$0</span>
+            </div>
+          </div>
+          
+          <div class="tv-metric-group">
+            <h4>Avg Win/Loss</h4>
+            <div class="tv-metric-row">
+              <span class="tv-metric-label">Avg Winner</span>
+              <span class="tv-metric-value positive" id="tv-avg-winner">$0</span>
+            </div>
+            <div class="tv-metric-row">
+              <span class="tv-metric-label">Avg Loser</span>
+              <span class="tv-metric-value negative" id="tv-avg-loser">$0</span>
+            </div>
+          </div>
+          
+          <div class="tv-metric-group">
+            <h4>Risk Metrics</h4>
+            <div class="tv-metric-row">
+              <span class="tv-metric-label">Max Drawdown</span>
+              <span class="tv-metric-value negative" id="tv-max-dd">0%</span>
+            </div>
+            <div class="tv-metric-row">
+              <span class="tv-metric-label">Sharpe Ratio</span>
+              <span class="tv-metric-value" id="tv-sharpe">0</span>
+            </div>
+            <div class="tv-metric-row">
+              <span class="tv-metric-label">Sortino Ratio</span>
+              <span class="tv-metric-value" id="tv-sortino">0</span>
+            </div>
+          </div>
+        </div>
+      </div>
+      
+      <h3>Equity Curve (Strategy vs HODL)</h3>
+      <div class="chart-container" style="height: 350px;">
         <canvas id="equity-chart"></canvas>
+      </div>
+      <div class="chart-legend">
+        <span class="legend-item"><span class="legend-color" style="background:#1565c0;"></span>Strategy</span>
+        <span class="legend-item"><span class="legend-color" style="background:#ff9800;"></span>HODL</span>
       </div>
       
       <h3>Sample Trades</h3>
@@ -1642,31 +1825,46 @@ def index() -> str:
     function displayBacktestResults(result) {{
       document.getElementById('backtest-results').style.display = 'block';
       
-      const metrics = result.metrics || {{}};
-      const metricsHtml = `
-        <div class="metric ${{metrics.final_pnl >= 0 ? 'positive' : 'negative'}}">
-          <div class="value">${{metrics.final_pnl?.toFixed(4) || 0}}</div>
-          <div class="label">Final PnL</div>
-        </div>
-        <div class="metric">
-          <div class="value">${{metrics.num_trades || 0}}</div>
-          <div class="label">Trades</div>
-        </div>
-        <div class="metric">
-          <div class="value">${{metrics.win_rate?.toFixed(1) || 0}}%</div>
-          <div class="label">Win Rate</div>
-        </div>
-        <div class="metric negative">
-          <div class="value">${{metrics.max_drawdown_pct?.toFixed(2) || 0}}%</div>
-          <div class="label">Max Drawdown</div>
-        </div>
-        <div class="metric">
-          <div class="value">${{metrics.avg_pnl?.toFixed(4) || 0}}</div>
-          <div class="label">Avg PnL</div>
-        </div>
-      `;
-      document.getElementById('bt-metrics').innerHTML = metricsHtml;
+      const m = result.metrics || {{}};
       
+      // Update TradingView-style summary panel
+      const netProfit = m.net_profit_usd || 0;
+      const netProfitPct = m.net_profit_pct || 0;
+      const mainStat = document.getElementById('tv-net-profit');
+      mainStat.className = 'tv-main-stat ' + (netProfit >= 0 ? 'positive' : 'negative');
+      mainStat.innerHTML = `
+        <span class="tv-value">$${{formatMoney(netProfit)}}</span>
+        <span class="tv-pct">(${{netProfitPct >= 0 ? '+' : ''}}${{netProfitPct.toFixed(2)}}%)</span>
+      `;
+      
+      const vsHodl = m.final_pnl_vs_hodl || 0;
+      document.getElementById('tv-vs-hodl').innerText = (vsHodl >= 0 ? '+' : '') + formatMoney(vsHodl);
+      document.getElementById('tv-vs-hodl').style.color = vsHodl >= 0 ? '#26a69a' : '#ef5350';
+      
+      document.getElementById('tv-hodl-return').innerText = (m.hodl_profit_pct >= 0 ? '+' : '') + (m.hodl_profit_pct || 0).toFixed(2) + '%';
+      document.getElementById('tv-hodl-return').style.color = (m.hodl_profit_pct || 0) >= 0 ? '#26a69a' : '#ef5350';
+      
+      // Profit & Loss
+      document.getElementById('tv-gross-profit').innerText = '$' + formatMoney(m.gross_profit || 0);
+      document.getElementById('tv-gross-loss').innerText = '-$' + formatMoney(Math.abs(m.gross_loss || 0));
+      document.getElementById('tv-profit-factor').innerText = (m.profit_factor || 0).toFixed(2);
+      
+      // Trade Statistics
+      document.getElementById('tv-num-trades').innerText = m.num_trades || 0;
+      document.getElementById('tv-win-rate').innerText = (m.win_rate || 0).toFixed(1) + '%';
+      document.getElementById('tv-avg-trade').innerText = (m.avg_trade_usd >= 0 ? '+$' : '-$') + formatMoney(Math.abs(m.avg_trade_usd || 0));
+      document.getElementById('tv-avg-trade').style.color = (m.avg_trade_usd || 0) >= 0 ? '#26a69a' : '#ef5350';
+      
+      // Avg Win/Loss
+      document.getElementById('tv-avg-winner').innerText = '+$' + formatMoney(m.avg_winner || 0);
+      document.getElementById('tv-avg-loser').innerText = '-$' + formatMoney(Math.abs(m.avg_loser || 0));
+      
+      // Risk Metrics
+      document.getElementById('tv-max-dd').innerText = '-' + (m.max_drawdown_pct || 0).toFixed(2) + '%';
+      document.getElementById('tv-sharpe').innerText = (m.sharpe_ratio || 0).toFixed(2);
+      document.getElementById('tv-sortino').innerText = (m.sortino_ratio || 0).toFixed(2);
+      
+      // Draw equity chart with HODL comparison
       drawEquityChart(result.equity_curve || []);
       
       const trades = result.trades_sample || [];
@@ -1687,6 +1885,12 @@ def index() -> str:
       }}
     }}
     
+    function formatMoney(num) {{
+      if (Math.abs(num) >= 1000000) return (num / 1000000).toFixed(2) + 'M';
+      if (Math.abs(num) >= 1000) return (num / 1000).toFixed(1) + 'K';
+      return num.toFixed(2);
+    }}
+    
     function drawEquityChart(equityCurve) {{
       const canvas = document.getElementById('equity-chart');
       const ctx = canvas.getContext('2d');
@@ -1705,38 +1909,65 @@ def index() -> str:
         return;
       }}
       
-      const values = equityCurve.map(p => p[1]);
-      const minVal = Math.min(...values);
-      const maxVal = Math.max(...values);
+      // Handle both old format [time, equity] and new format {{time, equity, hodl_equity}}
+      const hasHodl = equityCurve[0].hodl_equity !== undefined;
+      const strategyValues = equityCurve.map(p => hasHodl ? p.equity : p[1]);
+      const hodlValues = hasHodl ? equityCurve.map(p => p.hodl_equity) : [];
+      
+      const allValues = hasHodl ? [...strategyValues, ...hodlValues] : strategyValues;
+      const minVal = Math.min(...allValues);
+      const maxVal = Math.max(...allValues);
       const range = maxVal - minVal || 1;
       
-      const padding = 40;
-      const chartWidth = canvas.width - padding * 2;
-      const chartHeight = canvas.height - padding * 2;
+      const padding = {{ top: 20, right: 20, bottom: 30, left: 70 }};
+      const chartWidth = canvas.width - padding.left - padding.right;
+      const chartHeight = canvas.height - padding.top - padding.bottom;
       
+      // Draw grid lines
       ctx.strokeStyle = '#e9ecef';
       ctx.lineWidth = 1;
       for (let i = 0; i <= 4; i++) {{
-        const y = padding + (chartHeight * i / 4);
+        const y = padding.top + (chartHeight * i / 4);
         ctx.beginPath();
-        ctx.moveTo(padding, y);
-        ctx.lineTo(canvas.width - padding, y);
+        ctx.moveTo(padding.left, y);
+        ctx.lineTo(canvas.width - padding.right, y);
         ctx.stroke();
         
         const val = maxVal - (range * i / 4);
         ctx.fillStyle = '#666';
-        ctx.font = '10px sans-serif';
+        ctx.font = '11px sans-serif';
         ctx.textAlign = 'right';
-        ctx.fillText(val.toFixed(3), padding - 5, y + 3);
+        ctx.fillText('$' + formatMoney(val), padding.left - 5, y + 4);
       }}
       
+      // Draw HODL line first (background)
+      if (hasHodl && hodlValues.length > 0) {{
+        ctx.beginPath();
+        ctx.strokeStyle = '#ff9800';
+        ctx.lineWidth = 2;
+        ctx.setLineDash([5, 3]);
+        
+        equityCurve.forEach((point, i) => {{
+          const x = padding.left + (chartWidth * i / (equityCurve.length - 1));
+          const y = padding.top + chartHeight - ((point.hodl_equity - minVal) / range * chartHeight);
+          
+          if (i === 0) ctx.moveTo(x, y);
+          else ctx.lineTo(x, y);
+        }});
+        
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }}
+      
+      // Draw Strategy line (foreground)
       ctx.beginPath();
       ctx.strokeStyle = '#1565c0';
-      ctx.lineWidth = 2;
+      ctx.lineWidth = 2.5;
       
       equityCurve.forEach((point, i) => {{
-        const x = padding + (chartWidth * i / (equityCurve.length - 1));
-        const y = padding + chartHeight - ((point[1] - minVal) / range * chartHeight);
+        const x = padding.left + (chartWidth * i / (equityCurve.length - 1));
+        const val = hasHodl ? point.equity : point[1];
+        const y = padding.top + chartHeight - ((val - minVal) / range * chartHeight);
         
         if (i === 0) ctx.moveTo(x, y);
         else ctx.lineTo(x, y);
@@ -1744,9 +1975,14 @@ def index() -> str:
       
       ctx.stroke();
       
-      ctx.fillStyle = 'rgba(21, 101, 192, 0.1)';
-      ctx.lineTo(padding + chartWidth, padding + chartHeight);
-      ctx.lineTo(padding, padding + chartHeight);
+      // Fill under strategy curve
+      ctx.fillStyle = 'rgba(21, 101, 192, 0.08)';
+      const lastPoint = equityCurve[equityCurve.length - 1];
+      const lastVal = hasHodl ? lastPoint.equity : lastPoint[1];
+      const lastY = padding.top + chartHeight - ((lastVal - minVal) / range * chartHeight);
+      ctx.lineTo(padding.left + chartWidth, lastY);
+      ctx.lineTo(padding.left + chartWidth, padding.top + chartHeight);
+      ctx.lineTo(padding.left, padding.top + chartHeight);
       ctx.closePath();
       ctx.fill();
     }}
