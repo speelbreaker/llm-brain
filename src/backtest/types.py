@@ -74,6 +74,57 @@ class CallSimulationConfig:
     min_score_to_trade: float = 3.0
 
 
+RollTrigger = Literal["tp_roll", "defensive_roll", "expiry", "none"]
+
+
+@dataclass
+class ChainLeg:
+    """A single leg within a multi-roll call chain."""
+    index: int
+    instrument_name: str
+    open_time: datetime
+    close_time: datetime
+    strike: float
+    dte_open: float
+    open_price: float
+    close_price: float
+    pnl: float
+    trigger: RollTrigger
+
+
+@dataclass
+class ChainData:
+    """Multi-leg chain data attached to a SimulatedTrade."""
+    decision_time: datetime
+    underlying: str
+    total_pnl: float
+    max_drawdown_pct: float
+    legs: List[ChainLeg] = field(default_factory=list)
+    
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "decision_time": self.decision_time.isoformat(),
+            "underlying": self.underlying,
+            "total_pnl": self.total_pnl,
+            "max_drawdown_pct": self.max_drawdown_pct,
+            "legs": [
+                {
+                    "index": leg.index,
+                    "instrument_name": leg.instrument_name,
+                    "open_time": leg.open_time.isoformat(),
+                    "close_time": leg.close_time.isoformat(),
+                    "strike": leg.strike,
+                    "dte_open": leg.dte_open,
+                    "open_price": leg.open_price,
+                    "close_price": leg.close_price,
+                    "pnl": leg.pnl,
+                    "trigger": leg.trigger,
+                }
+                for leg in self.legs
+            ],
+        }
+
+
 @dataclass
 class SimulatedTrade:
     """
@@ -91,10 +142,11 @@ class SimulatedTrade:
     pnl_vs_hodl: float
     max_drawdown_pct: float
     notes: str = ""
+    chain: Optional[ChainData] = None
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
-        return {
+        result = {
             "instrument_name": self.instrument_name,
             "underlying": self.underlying,
             "side": self.side,
@@ -108,6 +160,9 @@ class SimulatedTrade:
             "max_drawdown_pct": self.max_drawdown_pct,
             "notes": self.notes,
         }
+        if self.chain:
+            result["chain"] = self.chain.to_dict()
+        return result
 
 
 @dataclass

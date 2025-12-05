@@ -1,0 +1,365 @@
+Right now everything you see in the screenshot is “single-number backtest output” – trades, PnL, scores – but nothing in the UI is actually looking at the multi-leg data yet.
+
+What your builder just fixed is:
+
+bulk Deribit calls ✅
+
+inverse options working ✅
+
+backtest finishing fast ✅
+
+They did not yet:
+
+expose “how many legs / rolls per trade” from the simulator to the API, or
+
+render that in the Backtesting Lab UI.
+
+So even if _simulate_call_tp_and_roll is now doing proper rolls, the UI will still look exactly like before.
+
+Also, in your screenshot you’re currently in Phase: hold_to_expiry, so that first pass doesn’t roll at all by design. Multi-leg only happens in the tp_and_roll phase.
+
+What needs to happen so you see multi-legs
+
+There are 3 plumbing steps:
+
+Simulator: for each backtest decision, return a structured “chain”:
+
+legs with open_time, close_time, strike, dte_open, pnl, trigger (tp_roll / defensive_roll / expiry),
+
+chain-level total_pnl and max_drawdown_pct.
+
+BacktestManager:
+
+collect those chains into status.recent_chains (keep last N),
+
+include them in /api/backtest/status JSON.
+
+Front-end (Backtesting Lab):
+
+new “Recent Chains” table (per decision: #legs, #rolls, total PnL, exit style),
+
+“View” button that opens a small modal with a row per leg.
+
+Below is a focused prompt you can give your builder that assumes multi-roll logic inside _simulate_call_tp_and_roll already works.
+
+PROMPT FOR BUILDER – SHOW MULTI-LEG CHAINS IN UI
+
+We already have:
+
+Multi-roll behavior in CoveredCallSimulator._simulate_call_tp_and_roll(...) (agent can roll a call multiple times).
+
+Backtesting Lab UI with /api/backtest/start, /api/backtest/status, /api/backtest/stop.
+
+BacktestManager in src/backtest/manager.py with BacktestStatus and recent_steps.
+
+Goal:
+When running backtests with exit style tp_and_roll (or the “Both (compare)” mode while in tp_and_roll phase), the UI should show multi-leg chains:
+
+For each decision: number of legs, number of rolls, total PnL, max DD, exit style.
+
+On click: list of legs with open/close times, strike, DTE at open, trigger, PnL.
+
+Do NOT change any multi-roll logic; just surface it and render it.
+
+1. Add chain summary data models
+
+In src/backtest/manager.py (or a nearby types file), add:
+
+from dataclasses import dataclass
+from datetime import datetime
+from typing import List, Literal, Optional
+
+RollTrigger = Literal["tp_roll", "defensive_roll", "expiry", "none"]
+
+@dataclass
+class BacktestLegSummary:
+    index: int
+    open_time: datetime
+    close_time: datetime
+    strike: float
+    dte_open: float
+    pnl: float
+    trigger: RollTrigger
+
+@dataclass
+class BacktestChainSummary:
+    decision_time: datetime
+    underlying: str
+    num_legs: int
+    num_rolls: int
+    total_pnl: float
+    max_drawdown_pct: float
+    exit_style: str
+    legs: List[BacktestLegSummary]
+
+
+Extend BacktestStatus:
+
+@dataclass
+class BacktestStatus:
+    ...
+    recent_steps: List[BacktestProgressStep]
+    recent_chains: List[BacktestChainSummary]  # NEW
+    error: Optional[str]
+
+
+Initialize recent_chains to [] wherever a new BacktestStatus is created.
+
+2. Make simulator attach a chain to each trade
+
+In src/backtest/covered_call_simulator.py, wherever _simulate_call_tp_and_roll(...) returns a SimulatedTrade (or equivalent), make sure it also attaches a chain dict to the trade, e.g.:
+
+@dataclass
+class SimulatedTrade:
+    ...
+    chain: Optional[dict] = None
+
+
+Inside _simulate_call_tp_and_roll after you have computed:
+
+list of legs (with open/close, strike, dte_open, pnl, trigger),
+
+decision_time (the original decision timestamp),
+
+chain-level total_pnl and max_drawdown_pct,
+
+set:
+
+trade.chain = {
+    "decision_time": decision_time,
+    "underlying": self.config.underlying,
+    "total_pnl": total_pnl,
+    "max_drawdown_pct": max_dd_pct,
+    "legs": [
+        {
+            "index": idx,
+            "open_time": leg_open_time,
+            "close_time": leg_close_time,
+            "strike": leg_strike,
+            "dte_open": leg_dte_open,
+            "pnl": leg_pnl,
+            "trigger": leg_trigger,  # "tp_roll" / "defensive_roll" / "expiry"
+        }
+        for idx, (...) in enumerate(chain_legs)
+    ],
+}
+
+
+For hold_to_expiry, you can either leave chain=None or attach a 1-leg chain; either is fine.
+
+3. In BacktestManager, collect recent_chains
+
+In BacktestManager (in manager.py), after each trade is produced in the worker loop, call a helper to add a summary:
+
+MAX_RECENT_CHAINS = 50
+
+def _append_chain_summary(self, trade) -> None:
+    chain = getattr(trade, "chain", None)
+    if not chain:
+        return
+
+    legs = []
+    for leg in chain.get("legs", []):
+        legs.append(BacktestLegSummary(
+            index=int(leg["index"]),
+            open_time=leg["open_time"],
+            close_time=leg["close_time"],
+            strike=float(leg["strike"]),
+            dte_open=float(leg.get("dte_open", 0.0)),
+            pnl=float(leg["pnl"]),
+            trigger=leg.get("trigger", "none"),
+        ))
+
+    num_legs = len(legs)
+    num_rolls = max(0, num_legs - 1)
+
+    summary = BacktestChainSummary(
+        decision_time=chain["decision_time"],
+        underlying=chain.get("underlying", self._status.underlying or ""),
+        num_legs=num_legs,
+        num_rolls=num_rolls,
+        total_pnl=float(chain.get("total_pnl", trade.pnl)),
+        max_drawdown_pct=float(chain.get("max_drawdown_pct", 0.0)),
+        exit_style=self._status.exit_style or "unknown",
+        legs=legs,
+    )
+
+    with self._lock:
+        self._status.recent_chains.append(summary)
+        self._status.recent_chains = self._status.recent_chains[-MAX_RECENT_CHAINS:]
+
+
+In the worker loop, after trades.append(trade) and metrics updates, call:
+
+self._append_chain_summary(trade)
+
+4. Include recent_chains in /api/backtest/status
+
+In BacktestManager.get_status(), when converting _status to JSON, also serialize recent_chains:
+
+def get_status(self) -> Dict[str, Any]:
+    with self._lock:
+        status = asdict(self._status)
+        ...
+
+        chains_json = []
+        for chain in self._status.recent_chains:
+            chains_json.append({
+                "decision_time": chain.decision_time.isoformat(),
+                "underlying": chain.underlying,
+                "num_legs": chain.num_legs,
+                "num_rolls": chain.num_rolls,
+                "total_pnl": float(chain.total_pnl),
+                "max_drawdown_pct": float(chain.max_drawdown_pct),
+                "exit_style": chain.exit_style,
+                "legs": [
+                    {
+                        "index": leg.index,
+                        "open_time": leg.open_time.isoformat(),
+                        "close_time": leg.close_time.isoformat(),
+                        "strike": float(leg.strike),
+                        "dte_open": float(leg.dte_open),
+                        "pnl": float(leg.pnl),
+                        "trigger": leg.trigger,
+                    }
+                    for leg in chain.legs
+                ],
+            })
+        status["recent_chains"] = chains_json
+        return status
+
+
+No changes to web_app.py backend routes are needed; /api/backtest/status just returns the extended status dict.
+
+5. Frontend – “Recent Chains” panel & modal
+
+In the Backtesting Lab HTML template (inside web_app.py where the Lab page is built), add:
+
+Table under “Recent Steps”:
+
+<h3>Recent Chains</h3>
+<table class="table" id="bt-chains-table">
+  <thead>
+    <tr>
+      <th>Decision Time</th>
+      <th>Legs</th>
+      <th>Rolls</th>
+      <th>Total PnL (USD)</th>
+      <th>Max DD %</th>
+      <th>Exit Style</th>
+      <th>Details</th>
+    </tr>
+  </thead>
+  <tbody id="bt-chains-body"></tbody>
+</table>
+
+
+Modal for leg details:
+
+<div id="bt-chain-modal" class="modal hidden">
+  <div class="modal-content">
+    <h3>Chain Details</h3>
+    <div id="bt-chain-summary"></div>
+    <table class="table">
+      <thead>
+        <tr>
+          <th>Leg</th>
+          <th>Open</th>
+          <th>Close</th>
+          <th>Strike</th>
+          <th>DTE at Open</th>
+          <th>Trigger</th>
+          <th>PnL (USD)</th>
+        </tr>
+      </thead>
+      <tbody id="bt-chain-legs-body"></tbody>
+    </table>
+    <button id="bt-chain-close-btn" class="btn btn-secondary">Close</button>
+  </div>
+</div>
+
+
+Add minimal CSS so .modal.hidden { display: none; } and .modal is a centered overlay, consistent with existing style.
+
+6. Frontend JS to render chains
+
+In the JS function that handles /api/backtest/status (where Recent Steps is updated), after processing st.recent_steps, add:
+
+window._lastBacktestStatus = st;  // keep for click handler
+
+const chainsBody = document.getElementById('bt-chains-body');
+chainsBody.innerHTML = '';
+const chains = st.recent_chains || [];
+chains.forEach((chain, idx) => {
+  const tr = document.createElement('tr');
+  const dt = chain.decision_time
+    ? new Date(chain.decision_time).toISOString().replace('T', ' ').slice(0, 16)
+    : '';
+
+  tr.innerHTML = `
+    <td>${dt}</td>
+    <td>${chain.num_legs}</td>
+    <td>${chain.num_rolls}</td>
+    <td>${chain.total_pnl.toFixed(2)}</td>
+    <td>${chain.max_drawdown_pct.toFixed(2)}</td>
+    <td>${chain.exit_style}</td>
+    <td><button class="btn btn-small" data-chain-index="${idx}">View</button></td>
+  `;
+  chainsBody.appendChild(tr);
+});
+
+
+Click handler + modal logic:
+
+document.getElementById('bt-chains-body').addEventListener('click', (e) => {
+  if (e.target.tagName.toLowerCase() !== 'button') return;
+  const idx = parseInt(e.target.getAttribute('data-chain-index'), 10);
+  const st = window._lastBacktestStatus || {};
+  const chains = st.recent_chains || [];
+  const chain = chains[idx];
+  if (!chain) return;
+
+  const summaryEl = document.getElementById('bt-chain-summary');
+  const dt = chain.decision_time
+    ? new Date(chain.decision_time).toISOString().replace('T', ' ').slice(0, 16)
+    : '';
+  summaryEl.textContent =
+    `Decision: ${dt} | Legs: ${chain.num_legs} | Rolls: ${chain.num_rolls} ` +
+    `| Total PnL: ${chain.total_pnl.toFixed(2)} USD | Max DD: ${chain.max_drawdown_pct.toFixed(2)}%`;
+
+  const legsBody = document.getElementById('bt-chain-legs-body');
+  legsBody.innerHTML = '';
+  (chain.legs || []).forEach((leg) => {
+    const open = leg.open_time
+      ? new Date(leg.open_time).toISOString().replace('T', ' ').slice(0, 16)
+      : '';
+    const close = leg.close_time
+      ? new Date(leg.close_time).toISOString().replace('T', ' ').slice(0, 16)
+      : '';
+
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td>${leg.index}</td>
+      <td>${open}</td>
+      <td>${close}</td>
+      <td>${leg.strike}</td>
+      <td>${leg.dte_open.toFixed(1)}</td>
+      <td>${leg.trigger}</td>
+      <td>${leg.pnl.toFixed(2)}</td>
+    `;
+    legsBody.appendChild(tr);
+  });
+
+  document.getElementById('bt-chain-modal').classList.remove('hidden');
+});
+
+document.getElementById('bt-chain-close-btn').onclick = () => {
+  document.getElementById('bt-chain-modal').classList.add('hidden');
+};
+
+
+Once they wire this in, you’ll get exactly what you’re looking for:
+
+In “Both (compare)” mode, once the phase switches to tp_and_roll, “Recent Chains” will start showing chains where num_legs > 1.
+
+Clicking “View” will show you how it rolled: which strikes, when, and how much PnL each leg made.
