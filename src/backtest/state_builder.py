@@ -209,7 +209,14 @@ def build_historical_state(
             if opt.kind != "call":
                 continue
 
-            expiry = opt.expiry
+            expiry = getattr(opt, "expiry", None)
+            if expiry is None:
+                instrument = getattr(opt, "instrument_name", None) or getattr(opt, "symbol", "")
+                expiry = parse_deribit_expiry(str(instrument))
+
+            if expiry is None:
+                continue
+
             dte = (expiry - t).total_seconds() / 86400.0
             if dte < min_dte or dte > max_dte:
                 continue
@@ -220,7 +227,11 @@ def build_historical_state(
             if delta_abs < delta_min or delta_abs > delta_max:
                 continue
 
-            candidates.append(opt)
+            if getattr(opt, "expiry", None) is None:
+                opt_with_expiry = replace(opt, expiry=expiry)
+                candidates.append(opt_with_expiry)
+            else:
+                candidates.append(opt)
 
     portfolio = {
         "spot_position": cfg.initial_spot_position,
