@@ -37,6 +37,7 @@ class PositionLeg:
     entry_time: datetime
     exit_price: Optional[float] = None
     exit_time: Optional[datetime] = None
+    mark_price: Optional[float] = None
 
     def is_open(self) -> bool:
         return self.exit_time is None
@@ -98,6 +99,13 @@ class PositionTracker:
         self._chains: Dict[str, PositionChain] = {}
         self._notional_multiplier = float(notional_multiplier)
 
+    def _find_open_chain_for(self, underlying: str, strategy_type: StrategyType) -> Optional[PositionChain]:
+        """Find an open chain for the given underlying and strategy (must be called with lock held)."""
+        for chain in self._chains.values():
+            if chain.is_open() and chain.underlying == underlying and chain.strategy_type == strategy_type:
+                return chain
+        return None
+
     def process_execution_result(self, result: Dict[str, Any]) -> None:
         """
         Update chains based on a single execution result.
@@ -136,16 +144,15 @@ class PositionTracker:
                     return float(o["price"])
             return float(params.get("price", 0.0))
 
-        position_id = f"{underlying}-{strategy_type}"
         now = _utc_now()
 
         with self._lock:
-            chain = self._chains.get(position_id)
-
             if action == "OPEN_COVERED_CALL":
                 symbol = params.get("symbol") or (orders[0].get("symbol") if orders else "")
                 size = float(params.get("size") or (orders[0].get("size", 0.0) if orders else 0.0))
                 price = _extract_price("symbol")
+                
+                position_id = f"{underlying}-{strategy_type}-{now.strftime('%Y%m%d%H%M%S')}"
 
                 leg = PositionLeg(
                     symbol=symbol,
@@ -155,6 +162,7 @@ class PositionTracker:
                     quantity=size,
                     entry_price=price,
                     entry_time=now,
+                    mark_price=price,
                 )
                 chain = PositionChain(
                     position_id=position_id,
@@ -169,6 +177,7 @@ class PositionTracker:
                 self._chains[position_id] = chain
 
             elif action == "ROLL_COVERED_CALL":
+                chain = self._find_open_chain_for(underlying, strategy_type)
                 if chain is None:
                     return
 
@@ -196,6 +205,7 @@ class PositionTracker:
                 chain.legs.append(new_leg)
 
             elif action == "CLOSE_COVERED_CALL":
+                chain = self._find_open_chain_for(underlying, strategy_type)
                 if chain is None:
                     return
                 symbol = params.get("symbol") or chain.symbol
@@ -221,6 +231,14 @@ class PositionTracker:
             for chain in self._chains.values():
                 if not chain.is_open():
                     continue
+                for leg in chain.legs:
+                    if leg.is_open() and leg.symbol:
+                        try:
+                            ticker = client.get_ticker(leg.symbol)
+                            if ticker and "mark_price" in ticker:
+                                leg.mark_price = float(ticker["mark_price"])
+                        except Exception:
+                            pass
                 self._update_chain_unrealized(chain)
 
     def get_open_positions_payload(self) -> Dict[str, Any]:
@@ -258,8 +276,8 @@ class PositionTracker:
         Compute PnL in USD for a single leg.
 
         Assumes linear USDC-settled options with contract_size=1.0:
-          SHORT: (entry - exit_or_mark) * qty
-          LONG:  (exit_or_mark - entry) * qty
+          SHORT: (entry - exit_or_mark) * qty  (profit when bought back cheaper)
+          LONG:  (exit_or_mark - entry) * qty  (profit when sold higher)
         """
         if mark_price is None:
             if leg.exit_price is None:
@@ -270,9 +288,11 @@ class PositionTracker:
 
         px1 = float(leg.entry_price)
         qty = float(leg.quantity)
-        direction = -1.0 if leg.side == "SHORT" else 1.0
 
-        return (px1 - px2) * qty * self._notional_multiplier * direction
+        if leg.side == "SHORT":
+            return (px1 - px2) * qty * self._notional_multiplier
+        else:
+            return (px2 - px1) * qty * self._notional_multiplier
 
     def _update_chain_unrealized(self, chain: PositionChain) -> None:
         realized = chain.realized_pnl
@@ -280,7 +300,8 @@ class PositionTracker:
 
         for leg in chain.legs:
             if leg.is_open():
-                unrealized += self._pnl_for_leg(leg, mark_price=leg.entry_price)
+                mark = leg.mark_price if leg.mark_price is not None else leg.entry_price
+                unrealized += self._pnl_for_leg(leg, mark_price=mark)
 
         chain.unrealized_pnl = unrealized
         if chain.legs:

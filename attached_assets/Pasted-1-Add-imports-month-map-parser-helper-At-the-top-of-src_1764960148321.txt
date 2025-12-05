@@ -1,0 +1,261 @@
+1. Add imports + month map + parser helper
+
+At the top of src/position_tracker.py, add re and a small month map + parser:
+
+import re
+from datetime import datetime, timezone, timedelta
+# ... the rest of your imports
+
+MONTH_MAP = {
+    "JAN": 1, "FEB": 2, "MAR": 3, "APR": 4,
+    "MAY": 5, "JUN": 6, "JUL": 7, "AUG": 8,
+    "SEP": 9, "OCT": 10, "NOV": 11, "DEC": 12,
+}
+
+
+def parse_deribit_expiry(symbol: str) -> Optional[datetime]:
+    """
+    Try to parse expiry from a Deribit-style option symbol.
+
+    Supported examples:
+      BTC-2025-01-03-90000-C  (ISO style)
+      BTC-6DEC24-90000-C      (Deribit classic style)
+
+    Returns a timezone-aware UTC datetime at 08:00:00 if possible,
+    otherwise None.
+    """
+    if not symbol:
+        return None
+
+    # 1) ISO style: UNDERLYING-YYYY-MM-DD-...
+    m = re.match(r"^[A-Z]+-(\d{4})-(\d{2})-(\d{2})-", symbol)
+    if m:
+        year, month, day = map(int, m.groups())
+        return datetime(year, month, day, 8, 0, 0, tzinfo=timezone.utc)
+
+    # 2) Classic Deribit style: UNDERLYING-DMONYY-...
+    # Example: BTC-6DEC24-90000-C
+    m = re.match(r"^[A-Z]+-(\d{1,2})([A-Z]{3})(\d{2})-", symbol)
+    if m:
+        day_str, mon_str, year_2 = m.groups()
+        day = int(day_str)
+        mon_str = mon_str.upper()
+        month = MONTH_MAP.get(mon_str)
+        if month is None:
+            return None
+        year = 2000 + int(year_2)  # "24" -> 2024
+        return datetime(year, month, day, 8, 0, 0, tzinfo=timezone.utc)
+
+    return None
+
+
+(If your symbols are only one of those styles, that’s fine; this safely handles both.)
+
+2. Extend PositionChain to store expiry
+
+In the @dataclass PositionChain definition, add an expiry field:
+
+@dataclass
+class PositionChain:
+    # existing fields...
+    position_id: str
+    underlying: str
+    option_type: OptionType
+    strategy_type: StrategyType
+    mode: ModeType
+    exit_style: Optional[str] = None
+
+    legs: List[PositionLeg] = field(default_factory=list)
+    open_time: datetime = field(default_factory=_utc_now)
+    close_time: Optional[datetime] = None
+    realized_pnl: float = 0.0
+    realized_pnl_pct: float = 0.0
+    max_drawdown_pct: float = 0.0
+
+    unrealized_pnl: float = 0.0
+    unrealized_pnl_pct: float = 0.0
+
+    # NEW
+    expiry: Optional[datetime] = None
+
+
+You can place expiry right after unrealized_pnl_pct, order doesn’t matter functionally.
+
+3. Set / update expiry when we open or roll
+
+Inside PositionTracker.process_execution_result, update the OPEN and ROLL branches so we parse expiry from the symbol and store it on the chain.
+
+OPEN branch
+
+Replace the OPEN part with this (or patch your existing one):
+
+        # In this first version we support at most one chain per underlying
+        position_id = f"{underlying}-{strategy_type}"
+        now = _utc_now()
+
+        with self._lock:
+            chain = self._chains.get(position_id)
+
+            # OPEN
+            if action == "OPEN_COVERED_CALL":
+                symbol = params.get("symbol") or (orders[0].get("symbol") if orders else "")
+                size = float(params.get("size") or (orders[0].get("size", 0.0) if orders else 0.0))
+                price = _extract_price("symbol")
+
+                leg = PositionLeg(
+                    symbol=symbol,
+                    underlying=underlying,
+                    option_type=option_type,
+                    side="SHORT",
+                    quantity=size,
+                    entry_price=price,
+                    entry_time=now,
+                )
+                expiry = parse_deribit_expiry(symbol)
+
+                chain = PositionChain(
+                    position_id=position_id,
+                    underlying=underlying,
+                    option_type=option_type,
+                    strategy_type=strategy_type,
+                    mode=mode,
+                    exit_style=exit_style,
+                    legs=[leg],
+                    open_time=now,
+                    expiry=expiry,
+                )
+                self._chains[position_id] = chain
+
+ROLL branch
+
+In the ROLL block, after you create new_leg, update the chain expiry based on the new symbol:
+
+            # ROLL
+            elif action == "ROLL_COVERED_CALL":
+                if chain is None:
+                    return
+
+                from_symbol = params.get("from_symbol") or ""
+                to_symbol = params.get("to_symbol") or ""
+                size = float(params.get("size") or (orders[0].get("size", 0.0) if orders else 0.0))
+
+                # close old leg
+                close_price = _extract_price("from_symbol")
+                for leg in chain.legs:
+                    if leg.is_open() and (not from_symbol or leg.symbol == from_symbol):
+                        leg.exit_price = close_price
+                        leg.exit_time = now
+                        chain.realized_pnl += self._pnl_for_leg(leg)
+
+                # open new leg
+                open_price = _extract_price("to_symbol") or close_price
+                new_symbol = to_symbol or from_symbol
+                new_leg = PositionLeg(
+                    symbol=new_symbol,
+                    underlying=underlying,
+                    option_type=option_type,
+                    side="SHORT",
+                    quantity=size,
+                    entry_price=open_price,
+                    entry_time=now,
+                )
+                chain.legs.append(new_leg)
+
+                # update chain expiry to that of the new leg
+                new_expiry = parse_deribit_expiry(new_symbol)
+                if new_expiry is not None:
+                    chain.expiry = new_expiry
+
+
+For CLOSE you don’t need to change anything; we just keep chain.expiry as last known expiry.
+
+4. Use expiry to compute DTE in summaries
+
+Now update the two serializer helpers.
+
+_chain_to_open_summary
+
+Replace that function with:
+
+    def _chain_to_open_summary(self, chain: PositionChain) -> Dict[str, Any]:
+        # DTE in days from *now* to expiry, if we know it
+        if chain.expiry is not None:
+            now = _utc_now()
+            dte = (chain.expiry - now).total_seconds() / 86400.0
+            if dte < 0:
+                dte = 0.0
+            expiry_str = chain.expiry.isoformat()
+        else:
+            dte = 0.0
+            expiry_str = None
+
+        return {
+            "position_id": chain.position_id,
+            "underlying": chain.underlying,
+            "symbol": chain.symbol,
+            "option_type": chain.option_type,
+            "strategy_type": chain.strategy_type,
+            "side": "SHORT",
+            "quantity": chain.legs[-1].quantity if chain.legs else 0.0,
+            "entry_price": chain.legs[0].entry_price if chain.legs else 0.0,
+            "mark_price": chain.legs[-1].entry_price if chain.legs else 0.0,
+            "unrealized_pnl": chain.unrealized_pnl,
+            "unrealized_pnl_pct": chain.unrealized_pnl_pct,
+            "entry_time": chain.open_time.isoformat(),
+            "expiry": expiry_str,
+            "dte": dte,
+            "num_rolls": chain.num_rolls,
+            "mode": chain.mode,
+            "exit_style": chain.exit_style or "hold_to_expiry",
+        }
+
+
+Your frontend DTE column will now show a meaningful number (e.g. 6.5 days).
+
+_chain_to_closed_summary (optional expiry)
+
+If you also want expiry in the closed table, you can add it; otherwise you can leave it. Here’s a version that adds it:
+
+    def _chain_to_closed_summary(self, chain: PositionChain) -> Dict[str, Any]:
+        if chain.close_time is None:
+            holding_days = 0.0
+            close_time = _utc_now()
+        else:
+            close_time = chain.close_time
+            holding_days = (close_time - chain.open_time).total_seconds() / 86400.0
+
+        expiry_str = chain.expiry.isoformat() if chain.expiry is not None else None
+
+        return {
+            "position_id": chain.position_id,
+            "underlying": chain.underlying,
+            "symbol": chain.symbol,
+            "option_type": chain.option_type,
+            "strategy_type": chain.strategy_type,
+            "open_time": chain.open_time.isoformat(),
+            "close_time": close_time.isoformat(),
+            "holding_days": holding_days,
+            "num_legs": chain.num_legs,
+            "num_rolls": chain.num_rolls,
+            "realized_pnl": chain.realized_pnl,
+            "realized_pnl_pct": chain.realized_pnl_pct,
+            "max_drawdown_pct": chain.max_drawdown_pct,
+            "mode": chain.mode,
+            "exit_style": chain.exit_style or "hold_to_expiry",
+            "note": None,
+            "expiry": expiry_str,
+        }
+
+
+Your existing UI can just ignore the extra expiry field.
+
+5. Frontend: use new dte value
+
+Because we kept the JSON shape (dte + expiry) exactly as we had designed earlier, you don’t have to change your JS if you’re already reading pos.dte. It will now be a live value instead of 0.0.
+
+The only slight improvement you may want is to clamp:
+
+<td>${Math.max(0, pos.dte).toFixed(1)}</td>
+
+
+so if a position is technically expired but still on the account (weird timing) it won’t show a negative DTE.
