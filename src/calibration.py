@@ -253,6 +253,7 @@ class CalibrationResult:
     bias_pct: float
     timestamp: datetime
     rows: List[CalibrationRow]
+    rv_annualized: Optional[float] = None
 
 
 def run_calibration(
@@ -318,6 +319,7 @@ def run_calibration(
             bias_pct=0.0,
             timestamp=now,
             rows=[],
+            rv_annualized=rv_annualized,
         )
 
     if len(quotes) > max_samples:
@@ -382,4 +384,5 @@ def run_calibration(
         bias_pct=bias_pct,
         timestamp=now,
         rows=rows,
+        rv_annualized=rv_annualized,
     )

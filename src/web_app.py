@@ -177,6 +177,7 @@ def get_calibration(
             "max_dte": result.max_dte,
             "iv_multiplier": result.iv_multiplier,
             "default_iv": result.default_iv,
+            "rv_annualized": result.rv_annualized,
             "count": result.count,
             "mae_pct": result.mae_pct,
             "bias_pct": result.bias_pct,
@@ -1801,9 +1802,11 @@ def index() -> str:
         const bias = (data.bias_pct ?? 0).toFixed(2);
         const count = data.count ?? 0;
         const spot = data.spot ?? 0;
+        const rv = data.rv_annualized ? (data.rv_annualized * 100).toFixed(1) : 'N/A';
 
         summaryEl.textContent =
           `Underlying ${{data.underlying}} @ ${{spot.toFixed ? spot.toFixed(2) : spot}} USD - ` +
+          `RV_7d = ${{rv}}% - ` +
           `${{count}} options in [${{data.min_dte}}d, ${{data.max_dte}}d], ` +
           `MAE ~ ${{mae}}% of mark, bias ~ ${{bias}}%.`;
 
