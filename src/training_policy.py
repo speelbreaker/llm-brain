@@ -25,6 +25,11 @@ def build_training_actions(
     (conservative / moderate / aggressive) and creates simulated
     OPEN_COVERED_CALL actions.
     
+    In training mode, this is more aggressive:
+    - Uses wide DTE/delta ranges in profiles
+    - Falls back to best available candidate if profiles don't match
+    - Always opens a position if any valid candidate exists
+    
     Args:
         agent_state: Current agent state with candidates
         config: Settings configuration
@@ -49,24 +54,26 @@ def build_training_actions(
         if not cands:
             continue
         
-        # Count existing open positions for this underlying
         existing_positions = [
             p for p in agent_state.portfolio.option_positions
             if p.underlying == underlying and p.side.value == "sell"
         ]
         opened_for_this_underlying = len(existing_positions)
         
-        # Initialize used_symbols with already-open symbols to avoid duplicates
         used_symbols: set[str] = {p.symbol for p in existing_positions}
         
-        # Skip if already at max positions for this underlying
         if opened_for_this_underlying >= cfg.max_calls_per_underlying_training:
             continue
+        
+        matched_any_profile = False
         
         for profile_name in cfg.training_strategies:
             profile = TRAINING_PROFILES.get(profile_name)
             if not profile:
                 continue
+            
+            if opened_for_this_underlying >= cfg.max_calls_per_underlying_training:
+                break
             
             available_cands = [c for c in cands if c.symbol not in used_symbols]
             if not available_cands:
@@ -76,8 +83,7 @@ def build_training_actions(
             if candidate_result is None:
                 continue
             
-            if opened_for_this_underlying >= cfg.max_calls_per_underlying_training:
-                break
+            matched_any_profile = True
             
             if isinstance(candidate_result, CandidateOption):
                 sym = candidate_result.symbol
@@ -115,6 +121,37 @@ def build_training_actions(
             })
             
             opened_for_this_underlying += 1
+        
+        if not matched_any_profile and opened_for_this_underlying < cfg.max_calls_per_underlying_training:
+            available_cands = [c for c in cands if c.symbol not in used_symbols]
+            if available_cands:
+                best_cand = max(available_cands, key=lambda x: x.premium_usd)
+                sym = best_cand.symbol
+                delta = best_cand.delta
+                dte = best_cand.dte
+                premium = best_cand.premium_usd
+                ivrv = best_cand.ivrv
+                
+                used_symbols.add(sym)
+                
+                actions.append({
+                    "strategy": "fallback",
+                    "underlying": underlying,
+                    "action": ActionType.OPEN_COVERED_CALL.value,
+                    "params": {
+                        "symbol": sym,
+                        "size": cfg.default_order_size,
+                    },
+                    "reasoning": (
+                        f"[training:fallback] "
+                        f"No profile match, selecting best premium {sym} with delta={delta:.3f}, "
+                        f"dte={dte}, premium_usd={premium:.2f}, "
+                        f"ivrv={ivrv:.2f}."
+                    ),
+                    "mode": cfg.mode,
+                    "policy_version": f"{cfg.policy_version}_training",
+                    "decision_source": "training_mode",
+                })
     
     return actions
 

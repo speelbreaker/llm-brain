@@ -12,27 +12,27 @@ from src.models import CandidateOption
 TRAINING_PROFILES: dict[str, dict[str, Any]] = {
     "conservative": {
         "target_delta": 0.20,
-        "delta_min": 0.15,
+        "delta_min": 0.10,
         "delta_max": 0.25,
-        "min_dte": 7,
-        "max_dte": 14,
-        "description": "Low delta, longer DTE - lower assignment risk, steadier premium",
+        "min_dte": 1,
+        "max_dte": 21,
+        "description": "Low delta - lower assignment risk, steadier premium",
     },
     "moderate": {
         "target_delta": 0.30,
         "delta_min": 0.25,
         "delta_max": 0.35,
-        "min_dte": 5,
-        "max_dte": 10,
-        "description": "Mid-range delta and DTE - balanced risk/reward",
+        "min_dte": 1,
+        "max_dte": 21,
+        "description": "Mid-range delta - balanced risk/reward",
     },
     "aggressive": {
         "target_delta": 0.40,
         "delta_min": 0.35,
-        "delta_max": 0.45,
-        "min_dte": 3,
-        "max_dte": 7,
-        "description": "Higher delta, shorter DTE - higher premium but more assignment risk",
+        "delta_max": 0.50,
+        "min_dte": 1,
+        "max_dte": 21,
+        "description": "Higher delta - higher premium but more assignment risk",
     },
 }
 

@@ -257,63 +257,93 @@ def decide_action(
         covered_calls = _get_open_covered_calls(agent_state, underlying)
         existing_symbols = {cc.symbol for cc in covered_calls}
         
-        # In training mode on testnet: allow multiple calls per underlying
-        # In normal mode: only open if no existing calls
-        can_open_new = (
-            cfg.is_training_on_testnet
-            or not covered_calls
-        )
+        # Exclude already-open symbols to avoid duplicates
+        candidates = [
+            c for c in agent_state.candidate_options
+            if c.underlying == underlying and c.symbol not in existing_symbols
+        ]
         
-        # In training mode, check against max_calls_per_underlying_training
-        if cfg.is_training_on_testnet and covered_calls:
+        if not candidates:
+            continue
+        
+        # In training mode on testnet: ALWAYS allow opening new positions if candidates exist
+        # Only block if we've reached the absolute max training limit
+        if cfg.is_training_on_testnet:
             if len(covered_calls) >= cfg.max_calls_per_underlying_training:
-                can_open_new = False
-        
-        if can_open_new:
-            # Exclude already-open symbols to avoid duplicates
-            candidates = [
-                c for c in agent_state.candidate_options
-                if c.underlying == underlying and c.symbol not in existing_symbols
-            ]
+                continue
             
-            if candidates:
-                chosen, was_exploration = choose_candidate_with_exploration(candidates, cfg)
-                
-                if chosen:
-                    explore_tag = "Exploratory " if was_exploration else ""
-                    training_tag = "[TRAINING] " if cfg.is_training_on_testnet else ""
-                    existing_count = len(covered_calls)
-                    return {
-                        "action": ActionType.OPEN_COVERED_CALL.value,
-                        "params": {
-                            "underlying": underlying,
-                            "symbol": chosen.symbol,
-                            "size": cfg.default_order_size,
-                        },
-                        "reasoning": f"{training_tag}{explore_tag}OPEN_COVERED_CALL on {chosen.symbol}: "
-                                   f"DTE={chosen.dte}, delta={chosen.delta:.2f}, "
-                                   f"premium=${chosen.premium_usd:.2f}, IVRV={chosen.ivrv:.2f}. "
-                                   f"Existing calls for {underlying}: {existing_count}. "
-                                   f"Mode={cfg.mode}, policy={cfg.policy_version}.",
-                        "mode": cfg.mode,
-                        "policy_version": cfg.policy_version,
-                        "decision_source": "rule_based",
-                    }
+            chosen, was_exploration = choose_candidate_with_exploration(candidates, cfg)
+            
+            if chosen:
+                explore_tag = "Exploratory " if was_exploration else ""
+                existing_count = len(covered_calls)
+                return {
+                    "action": ActionType.OPEN_COVERED_CALL.value,
+                    "params": {
+                        "underlying": underlying,
+                        "symbol": chosen.symbol,
+                        "size": cfg.default_order_size,
+                    },
+                    "reasoning": f"[TRAINING] {explore_tag}OPEN_COVERED_CALL on {chosen.symbol}: "
+                               f"DTE={chosen.dte}, delta={chosen.delta:.2f}, "
+                               f"premium=${chosen.premium_usd:.2f}, IVRV={chosen.ivrv:.2f}. "
+                               f"Existing calls for {underlying}: {existing_count}. "
+                               f"Mode={cfg.mode}, policy={cfg.policy_version}.",
+                    "mode": cfg.mode,
+                    "policy_version": cfg.policy_version,
+                    "decision_source": "rule_based",
+                }
+        else:
+            # Non-training mode: only open if no existing calls for this underlying
+            if covered_calls:
+                continue
+            
+            chosen, was_exploration = choose_candidate_with_exploration(candidates, cfg)
+            
+            if chosen:
+                explore_tag = "Exploratory " if was_exploration else ""
+                return {
+                    "action": ActionType.OPEN_COVERED_CALL.value,
+                    "params": {
+                        "underlying": underlying,
+                        "symbol": chosen.symbol,
+                        "size": cfg.default_order_size,
+                    },
+                    "reasoning": f"{explore_tag}OPEN_COVERED_CALL on {chosen.symbol}: "
+                               f"DTE={chosen.dte}, delta={chosen.delta:.2f}, "
+                               f"premium=${chosen.premium_usd:.2f}, IVRV={chosen.ivrv:.2f}. "
+                               f"Mode={cfg.mode}, policy={cfg.policy_version}.",
+                    "mode": cfg.mode,
+                    "policy_version": cfg.policy_version,
+                    "decision_source": "rule_based",
+                }
     
     existing_positions = []
     for underlying in cfg.underlyings:
         ccs = _get_open_covered_calls(agent_state, underlying)
         existing_positions.extend([cc.symbol for cc in ccs])
     
-    if existing_positions:
-        if cfg.is_training_on_testnet:
-            # In training mode, reaching max positions is the only valid "done" state
+    if cfg.is_training_on_testnet:
+        # In training mode, we only reach here if ALL underlyings are at max positions
+        # or there are no valid candidates left
+        all_at_max = True
+        for underlying in cfg.underlyings:
+            ccs = _get_open_covered_calls(agent_state, underlying)
+            if len(ccs) < cfg.max_calls_per_underlying_training:
+                all_at_max = False
+                break
+        
+        if all_at_max and existing_positions:
             reasoning = (
-                f"Training mode: max positions reached for all underlyings. "
+                f"[TRAINING] All underlyings at max positions ({cfg.max_calls_per_underlying_training}). "
                 f"Existing: {', '.join(existing_positions)}."
             )
+        elif not agent_state.candidate_options:
+            reasoning = "[TRAINING] No candidate options available that meet criteria."
         else:
-            reasoning = f"Existing positions: {', '.join(existing_positions)}. No action needed."
+            reasoning = "[TRAINING] No new candidates available (all symbols already open or filtered out)."
+    elif existing_positions:
+        reasoning = f"Existing positions: {', '.join(existing_positions)}. No action needed."
     elif not agent_state.candidate_options:
         reasoning = "No candidate options available that meet criteria."
     else:
