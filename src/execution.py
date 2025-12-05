@@ -13,9 +13,21 @@ from src.models import ActionType
 from src.position_tracker import position_tracker
 
 
-def _round_price(price: float, tick_size: float = 0.0001) -> float:
-    """Round price to valid tick size for Deribit options."""
-    return round(price / tick_size) * tick_size
+def _round_price(price: float) -> float:
+    """
+    Round price to valid tick size for Deribit BTC options.
+    
+    Tick size steps (from Deribit):
+    - Below 0.005: tick_size = 0.0001
+    - At or above 0.005: tick_size = 0.0005
+    """
+    if price < 0.005:
+        tick_size = 0.0001
+    else:
+        tick_size = 0.0005
+    
+    rounded = round(price / tick_size) * tick_size
+    return round(rounded, 4)
 
 
 def _get_mid_price(client: DeribitClient, symbol: str) -> float:

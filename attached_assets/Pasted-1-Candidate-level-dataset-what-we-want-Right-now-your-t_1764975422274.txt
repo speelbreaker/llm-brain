@@ -1,0 +1,369 @@
+1. Candidate-level dataset: what we want
+
+Right now, your training_dataset_..._both_...csv is chain-level:
+
+One row per decision time where a trade was taken.
+
+Only the chosen candidate appears.
+
+No rows for “no trade” decisions.
+
+No rows for candidates that were rejected.
+
+For the LLM to learn a full decision boundary, we want:
+
+One row per candidate per decision step, with a binary label “chosen or not”, plus SKIP-only decisions.
+
+1.1. Proposed candidate-level CSV schema
+
+Target filename pattern (for builder):
+
+training_candidates_BTC_20240901_20251205_both_YYYYMMDD_HHMMSS.csv
+
+
+Suggested columns:
+
+decision_time        ISO datetime, one per step, repeats across candidates
+underlying           "BTC" or "ETH"
+spot                 spot price at decision_time
+
+# Candidate description
+instrument           Deribit symbol, e.g. "BTC-12DEC25-85000-C"
+strike               numeric
+dte                  days to expiry (float or int)
+delta                BS or Deribit delta at decision_time
+score                your juiciness / ranking score
+iv                   (optional) candidate IV at decision time
+ivrv_ratio           (optional) IV/RV at decision time
+
+# Labels
+exit_style           "hold_to_expiry" or "tp_and_roll" (teacher policy)
+trade_executed       bool/int: 1 if *any* trade was taken at this decision_time, else 0
+chosen               bool/int: 1 if this candidate was the one actually traded in this policy, else 0
+action               "SELL_CALL" or "SKIP" from the teacher’s perspective *for this candidate*
+
+# Hindsight outcome for chosen candidate (optional labels)
+reward               realized reward for this chain (0 or NaN for non-chosen)
+pnl_vs_hodl          realized pnl vs HODL for this chain (0 or NaN for non-chosen)
+max_drawdown_pct     chain max drawdown in % (0 or NaN for non-chosen)
+
+
+Semantics:
+
+For a trade step (teacher decided to trade):
+
+Exactly one candidate row has:
+
+chosen = 1, action = "SELL_CALL", trade_executed = 1
+
+reward, pnl_vs_hodl, max_drawdown_pct populated
+
+All other candidates at that time:
+
+chosen = 0, action = "SKIP", trade_executed = 1
+
+reward / pnl = 0 or NaN
+
+For a no-trade step:
+
+There is no chain.
+
+All candidates:
+
+chosen = 0, action = "SKIP", trade_executed = 0
+
+reward / pnl = 0 or NaN
+
+This gives you exactly what you want:
+
+Per-candidate classification: SELL_CALL vs SKIP.
+
+Per time-step ranking: among candidates, at most one is chosen.
+
+2. Prompt for your AI Builder
+
+You can paste this straight into the Builder.
+
+You are working inside the LLMAgentBrain repo.
+
+Goal
+=====
+
+Extend the training data export pipeline so that, in addition to the existing chain-level
+`training_dataset_*` CSVs, we also export a **candidate-level dataset** with:
+
+- One row per candidate per decision time step
+- Explicit SKIP / no-trade examples
+- A binary label indicating whether a candidate was chosen or not
+
+We will use this for training an LLM policy that learns when to trade vs skip and which candidate to choose.
+
+Requirements
+===========
+
+1. DO NOT break or change the existing chain-level training exports.
+   - Keep `training_dataset_BTC_..._both_...csv` as-is.
+2. ADD a new export:
+   - `training_candidates_<underlying>_<start>_<end>_both_<timestamp>.csv`
+3. Ensure:
+   - SKIP / no-trade decisions are included.
+   - All candidates for each decision time appear, not just the chosen one.
+   - Exactly one `chosen=1` per decision time when a trade is taken (per exit_style),
+     and `chosen=0` for all when no trade is taken.
+
+────────────────────────────────────────
+A. Locate current training export code
+────────────────────────────────────────
+
+1. Find the module/function that creates the existing `training_dataset_BTC_..._both_...csv` files.
+   - It likely lives in a `training`, `export`, or `backtest` module and loops over backtest results to build rows like:
+     `(decision_time, underlying, spot, action, reward, instrument, delta, strike, dte, score, exit_style, pnl_vs_hodl, max_drawdown_pct)`.
+
+2. Once you find that export function:
+   - Do NOT modify its existing behavior.
+   - Add a **parallel export path** for candidate-level data.
+
+────────────────────────────────────────
+B. Data model: how to find candidates vs chosen
+────────────────────────────────────────
+
+At each decision time step, the backtest / simulator should have:
+
+- A list of **candidate options** evaluated at that time (with features: instrument, delta, strike, dte, score, etc.).
+- A **chosen candidate** (if any) per policy (`hold_to_expiry`, `tp_and_roll`).
+- A **chain result** with realized reward, pnl, max_drawdown_pct for that trade.
+
+If this is not yet surfaced in a single structure, please:
+
+1. Identify the object that holds the per-step decision context (often something like `DecisionStep`, `StepResult`, or similar) with:
+   - `decision_time`
+   - `spot`
+   - `candidates: list[Candidate]`
+   - `chosen_candidate_id` or a pointer to the chosen one (or an index/flag)
+   - Possibly `exit_style` or a mapping from policy → chosen candidate.
+
+2. If necessary, augment the step result so we can iterate as:
+
+   ```python
+   for step in backtest_steps:
+       all_candidates = step.candidates         # list of candidates
+       chosen_in_hold = step.chosen_hold        # optional
+       chosen_in_tp = step.chosen_tp           # optional
+       ...
+
+
+Use the existing Recent Steps and Recent Chains structures as a guide; the data to join is already there.
+
+────────────────────────────────────────
+C. Create candidate-level export rows
+────────────────────────────────────────
+
+Add a new export function, e.g.:
+
+def export_candidate_level_training_data(
+    backtest_result: BacktestResult,
+    underlying: str,
+    start_date: datetime,
+    end_date: datetime,
+    output_dir: Path,
+) -> Path:
+    """
+    Writes training_candidates_<underlying>_<start>_<end>_both_<timestamp>.csv
+
+    One row per candidate per decision time, with labels for chosen/skip and SKIP-only decisions.
+    """
+    ...
+
+
+Within this function:
+
+Loop over all decision time steps in the backtest:
+
+for step in backtest_result.steps:
+    decision_time = step.decision_time
+    spot = step.spot
+    candidates = step.candidates  # list of Candidate objects
+    # Each Candidate should have instrument_name, strike, dte_days, delta, score, etc.
+
+
+Determine for each exit_style (hold_to_expiry, tp_and_roll):
+
+For now, focus on the teacher policy you’re exporting (e.g. both policies, or just one).
+
+For each policy, determine:
+
+trade_executed: True if the policy opened a chain at this decision_time.
+
+chosen_instrument: instrument_name of the candidate that was actually traded, or None if no trade.
+
+This information exists already since we have chain-level exports; reuse that logic.
+
+For each candidate in candidates:
+
+Construct a row with columns:
+
+row = {
+    "decision_time": decision_time.isoformat(),
+    "underlying": underlying,
+    "spot": spot,
+    "instrument": candidate.instrument_name,
+    "strike": candidate.strike,
+    "dte": candidate.dte_days,
+    "delta": candidate.delta,
+    "score": candidate.score,
+    # optional: IV, IV/RV if available
+    "exit_style": exit_style,  # "hold_to_expiry" or "tp_and_roll"
+
+    "trade_executed": int(trade_executed),  # 1 or 0
+    "chosen": int(trade_executed and candidate.instrument_name == chosen_instrument),
+
+    # Action from the teacher’s perspective for this candidate:
+    # If trade_executed and this is the chosen candidate -> SELL_CALL
+    # Otherwise -> SKIP (no-trade or not-chosen)
+    "action": "SELL_CALL" if trade_executed and candidate.instrument_name == chosen_instrument else "SKIP",
+
+    # Hindsight outcome only for chosen:
+    "reward": reward_for_chain if candidate.instrument_name == chosen_instrument else 0.0,
+    "pnl_vs_hodl": pnl_vs_hodl_for_chain if candidate.instrument_name == chosen_instrument else 0.0,
+    "max_drawdown_pct": dd_for_chain if candidate.instrument_name == chosen_instrument else 0.0,
+}
+
+
+For no-trade steps:
+
+There is no chain; trade_executed = False, chosen_instrument = None.
+
+All candidates get:
+
+chosen = 0
+
+action = "SKIP"
+
+reward/pnl/dd = 0.0
+
+Write all rows to a CSV with header columns:
+
+decision_time,underlying,spot,instrument,strike,dte,delta,score,
+exit_style,trade_executed,chosen,action,reward,pnl_vs_hodl,max_drawdown_pct
+
+
+(Plus any extra feature columns you can easily add and that are available at decision time.)
+
+────────────────────────────────────────
+D. Wire the candidate export into existing pipeline
+────────────────────────────────────────
+
+Wherever the existing chain-level export is invoked (for both policies):
+
+After writing the chain-level training_dataset_..._both_...csv, call:
+
+export_candidate_level_training_data(
+    backtest_result=backtest_result,
+    underlying="BTC",  # or dynamic
+    start_date=start_date,
+    end_date=end_date,
+    output_dir=output_dir,
+)
+
+
+Use the same <start>_<end>_both_<timestamp> pattern for filenames so we can easily match chain-level and candidate-level datasets from the same run.
+
+────────────────────────────────────────
+E. Sanity checks
+────────────────────────────────────────
+
+After implementation:
+
+Run a backtest with SAVE_TRAINING_DATA enabled.
+
+Confirm that the output folder contains:
+
+training_dataset_BTC_..._both_...csv (existing)
+
+training_candidates_BTC_..._both_...csv (new)
+
+Inspect the new CSV:
+
+For a decision where the dashboard shows “Traded? Yes”:
+
+All candidates for that time exist as rows.
+
+Exactly one candidate has chosen=1 and action="SELL_CALL" per exit_style.
+
+For “Traded? No”:
+
+All candidates have chosen=0, action="SKIP", trade_executed=0.
+
+Ensure reward/pnl fields are non-zero only for chosen candidates.
+
+Do not change the behavior of the backtest itself or the existing training exports in this task.
+
+
+---
+
+## 3. JSON training formats
+
+Once the candidate-level CSV exists, you can build **two kinds of training corpora**.
+
+### 3.1. Trade vs SKIP (per candidate classifier)
+
+For each candidate row, you train:
+
+> “Given this state + candidate, should we TRADE (SELL_CALL) or SKIP?”
+
+Example JSONL entry:
+
+```json
+{
+  "messages": [
+    {
+      "role": "system",
+      "content": "You are an automated BTC covered-call trading policy. For each candidate option, decide whether to SELL_CALL or SKIP based on the state. Do not use hindsight PnL; treat it as teacher labels only."
+    },
+    {
+      "role": "user",
+      "content": "Decision time: 2024-11-16T00:00:00Z\nUnderlying: BTC\nSpot price: 90000.0\nTeacher policy: tp_and_roll\nCandidate option: BTC-23NOV24-95000-C\n  - Strike: 95000\n  - DTE (days): 7\n  - Delta: 0.24\n  - Score: 6.47\nRisk snapshot:\n  - Max drawdown observed on this chain (teacher hindsight): 10.09%\n  - Reward (USD, teacher hindsight): 2591.51\n  - PnL vs HODL (USD, teacher hindsight): 1200.00\nQuestion: Before seeing the outcome, what ACTION should the policy take on this candidate? Reply with exactly one token: SELL_CALL or SKIP."
+    },
+    {
+      "role": "assistant",
+      "content": "SELL_CALL"
+    }
+  ]
+}
+
+
+For a row with action = "SELL_CALL" → assistant "SELL_CALL".
+
+For a row with action = "SKIP" → assistant "SKIP".
+
+Later you can drop the hindsight lines if you want the model to purely rely on state features.
+
+3.2. Pick-the-best-candidate (ranking per decision step)
+
+Here, one training example per decision time with all candidates listed, and the label is which instrument to pick (or NO_TRADE).
+
+Example:
+
+{
+  "messages": [
+    {
+      "role": "system",
+      "content": "You are an automated BTC covered-call strategy. At each decision, you see multiple candidate options and may either pick exactly one to SELL_CALL or decide NO_TRADE. Choose the single best candidate by balancing premium, risk, and time to expiry, imitating the teacher policy."
+    },
+    {
+      "role": "user",
+      "content": "Decision time: 2024-11-16T00:00:00Z\nUnderlying: BTC\nSpot: 90000.0\nTeacher policy: tp_and_roll\nCandidates:\n  [1] BTC-23NOV24-93000-C — Strike: 93000, DTE: 7, Delta: 0.32, Score: 5.10\n  [2] BTC-23NOV24-95000-C — Strike: 95000, DTE: 7, Delta: 0.24, Score: 6.47\n  [3] BTC-23NOV24-98000-C — Strike: 98000, DTE: 7, Delta: 0.12, Score: 3.80\nOutcome (teacher hindsight for the chosen candidate only):\n  - Candidate [2] realized Reward: 2591.51 USD, PnL vs HODL: 1200.00 USD.\n\nQuestion: Before seeing the outcome, which candidate index should the policy choose to SELL_CALL? Reply with exactly one token: 1, 2, 3, or NO_TRADE."
+    },
+    {
+      "role": "assistant",
+      "content": "2"
+    }
+  ]
+}
+
+
+If trade_executed = 1, answer is the index of the candidate with chosen=1.
+
+If trade_executed = 0, answer is "NO_TRADE".
+
+This is ideal if you want the LLM to reason at the portfolio/step level, not just candidate-by-candidate.

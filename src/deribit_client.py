@@ -86,6 +86,14 @@ class DeribitClient:
             
             return data.get("result")
         except httpx.HTTPStatusError as e:
+            # Try to get more error details from the response body
+            try:
+                error_body = e.response.json() if e.response else None
+                if error_body and "error" in error_body:
+                    err = error_body["error"]
+                    raise DeribitAPIError(err.get("code", -1), err.get("message", str(e)))
+            except Exception:
+                pass
             raise DeribitAPIError(-1, f"HTTP error: {e}")
         except httpx.RequestError as e:
             raise DeribitAPIError(-1, f"Request error: {e}")
@@ -196,9 +204,13 @@ class DeribitClient:
             "instrument_name": instrument_name,
             "amount": amount,
             "type": order_type,
-            "post_only": str(post_only).lower(),
-            "reduce_only": str(reduce_only).lower(),
         }
+        
+        # Only add optional parameters if they have non-default values
+        if post_only:
+            params["post_only"] = True
+        if reduce_only:
+            params["reduce_only"] = True
         
         if price is not None:
             params["price"] = price
