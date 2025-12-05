@@ -30,6 +30,15 @@ def _round_price(price: float) -> float:
     return round(rounded, 4)
 
 
+def _extract_underlying(symbol: str) -> str:
+    """Extract underlying (BTC/ETH) from symbol like BTC-26DEC25-96000-C."""
+    if symbol.startswith("BTC"):
+        return "BTC"
+    elif symbol.startswith("ETH"):
+        return "ETH"
+    return "?"
+
+
 def _get_mid_price(client: DeribitClient, symbol: str) -> float:
     """Get the mid price for an instrument, rounded to valid tick size."""
     try:
@@ -89,10 +98,13 @@ def execute_action(
             "message": "Action is DO_NOTHING, no orders placed",
         }
     
-    if cfg.dry_run:
-        return _simulate_execution(action_type, params, client, cfg)
+    # Extract underlying from action_dict or infer from symbol
+    underlying = action_dict.get("underlying") or _extract_underlying(params.get("symbol", ""))
     
-    return _execute_real(action_type, params, client, cfg)
+    if cfg.dry_run:
+        return _simulate_execution(action_type, params, client, cfg, underlying)
+    
+    return _execute_real(action_type, params, client, cfg, underlying)
 
 
 def _simulate_execution(
@@ -100,6 +112,7 @@ def _simulate_execution(
     params: dict[str, Any],
     client: DeribitClient,
     config: Settings,
+    underlying: str = "?",
 ) -> dict[str, Any]:
     """Simulate execution without placing real orders."""
     result = {
@@ -108,6 +121,7 @@ def _simulate_execution(
         "action": action_type.value,
         "params": params,
         "orders": [],
+        "underlying": underlying,
     }
     
     if action_type == ActionType.OPEN_COVERED_CALL:
@@ -182,6 +196,7 @@ def _execute_real(
     params: dict[str, Any],
     client: DeribitClient,
     config: Settings,
+    underlying: str = "?",
 ) -> dict[str, Any]:
     """Execute real orders on Deribit testnet."""
     result = {
@@ -191,6 +206,7 @@ def _execute_real(
         "params": params,
         "orders": [],
         "errors": [],
+        "underlying": underlying,
     }
     
     if action_type == ActionType.OPEN_COVERED_CALL:

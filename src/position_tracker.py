@@ -193,7 +193,8 @@ class PositionTracker:
                 size = float(params.get("size") or (orders[0].get("size", 0.0) if orders else 0.0))
                 price = _extract_price("symbol")
                 
-                position_id = f"{underlying}-{strategy_type}-{now.strftime('%Y%m%d%H%M%S')}"
+                # Use symbol + microseconds for unique ID in batch executions
+                position_id = f"{underlying}-{strategy_type}-{symbol}-{now.strftime('%Y%m%d%H%M%S%f')}"
 
                 leg = PositionLeg(
                     symbol=symbol,
