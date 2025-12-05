@@ -41,6 +41,9 @@ MarginType = Literal["linear", "inverse"]
 SettlementCcy = Literal["ANY", "USDC", "BTC", "ETH"]
 
 ExitStyle = Literal["hold_to_expiry", "tp_and_roll", "both"]
+RollTrigger = Literal["tp_roll", "defensive_roll", "expiry", "none"]
+
+MAX_RECENT_CHAINS = 50
 
 
 @dataclass
@@ -50,6 +53,31 @@ class BacktestProgressStep:
     best_score: float
     traded: bool
     exit_style: str
+
+
+@dataclass
+class BacktestLegSummary:
+    """Summary of a single leg in a chain."""
+    index: int
+    open_time: datetime
+    close_time: datetime
+    strike: float
+    dte_open: float
+    pnl: float
+    trigger: RollTrigger
+
+
+@dataclass
+class BacktestChainSummary:
+    """Summary of a multi-leg call chain."""
+    decision_time: datetime
+    underlying: str
+    num_legs: int
+    num_rolls: int
+    total_pnl: float
+    max_drawdown_pct: float
+    exit_style: str
+    legs: List[BacktestLegSummary] = field(default_factory=list)
 
 
 @dataclass
@@ -69,6 +97,7 @@ class BacktestStatus:
     end_date: Optional[datetime] = None
     metrics: Dict[str, Any] = field(default_factory=dict)
     recent_steps: List[BacktestProgressStep] = field(default_factory=list)
+    recent_chains: List[BacktestChainSummary] = field(default_factory=list)
     error: Optional[str] = None
 
 
@@ -83,6 +112,30 @@ class BacktestManager:
 
     def get_status(self) -> Dict[str, Any]:
         with self._lock:
+            chains_json = []
+            for chain in self._status.recent_chains:
+                chains_json.append({
+                    "decision_time": chain.decision_time.isoformat(),
+                    "underlying": chain.underlying,
+                    "num_legs": chain.num_legs,
+                    "num_rolls": chain.num_rolls,
+                    "total_pnl": _sanitize_float(chain.total_pnl),
+                    "max_drawdown_pct": _sanitize_float(chain.max_drawdown_pct),
+                    "exit_style": chain.exit_style,
+                    "legs": [
+                        {
+                            "index": leg.index,
+                            "open_time": leg.open_time.isoformat(),
+                            "close_time": leg.close_time.isoformat(),
+                            "strike": _sanitize_float(leg.strike),
+                            "dte_open": _sanitize_float(leg.dte_open),
+                            "pnl": _sanitize_float(leg.pnl),
+                            "trigger": leg.trigger,
+                        }
+                        for leg in chain.legs
+                    ],
+                })
+            
             status_dict = {
                 "running": self._status.running,
                 "paused": self._status.paused,
@@ -108,9 +161,46 @@ class BacktestManager:
                     }
                     for step in self._status.recent_steps
                 ],
+                "recent_chains": chains_json,
                 "error": self._status.error,
             }
             return status_dict
+    
+    def _append_chain_summary(self, trade: Any, exit_style: str) -> None:
+        """Extract chain data from trade and append to recent_chains."""
+        chain = getattr(trade, "chain", None)
+        if not chain:
+            return
+
+        legs = []
+        for leg in getattr(chain, "legs", []):
+            legs.append(BacktestLegSummary(
+                index=leg.index,
+                open_time=leg.open_time,
+                close_time=leg.close_time,
+                strike=float(leg.strike),
+                dte_open=float(leg.dte_open),
+                pnl=float(leg.pnl),
+                trigger=leg.trigger,
+            ))
+
+        num_legs = len(legs)
+        num_rolls = max(0, num_legs - 1)
+
+        summary = BacktestChainSummary(
+            decision_time=chain.decision_time,
+            underlying=getattr(chain, "underlying", self._status.underlying or ""),
+            num_legs=num_legs,
+            num_rolls=num_rolls,
+            total_pnl=float(chain.total_pnl),
+            max_drawdown_pct=float(chain.max_drawdown_pct),
+            exit_style=exit_style,
+            legs=legs,
+        )
+
+        with self._lock:
+            self._status.recent_chains.append(summary)
+            self._status.recent_chains = self._status.recent_chains[-MAX_RECENT_CHAINS:]
 
     def stop(self) -> None:
         with self._lock:
@@ -346,6 +436,7 @@ class BacktestManager:
                             cumulative_pnl += trade.pnl
                             cumulative_pnl_vs_hodl += trade.pnl_vs_hodl
                             traded = True
+                            self._append_chain_summary(trade, current_exit_style)
 
                         step = BacktestProgressStep(
                             time=t,

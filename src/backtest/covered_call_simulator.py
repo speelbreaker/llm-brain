@@ -18,7 +18,7 @@ import numpy as np
 import pandas as pd
 
 from .data_source import MarketDataSource
-from .types import CallSimulationConfig, SimulatedTrade, SimulationResult, TrainingExample, OptionSnapshot, ExitStyle
+from .types import CallSimulationConfig, SimulatedTrade, SimulationResult, TrainingExample, OptionSnapshot, ExitStyle, ChainData, ChainLeg, RollTrigger
 from src.models import MarketContext
 
 State = Dict[str, Any]
@@ -626,6 +626,8 @@ class CoveredCallSimulator:
         legs_count = 0
         rolls_used = 0
         
+        chain_legs: List[ChainLeg] = []
+        
         first_open_time = decision_time
         last_close_time = decision_time
         first_instrument = option_snapshot.instrument_name
@@ -721,6 +723,32 @@ class CoveredCallSimulator:
             leg_portfolio_at_close = equity_curve[-1] if equity_curve else leg_pnl
             leg_pnl_vs_hodl = leg_portfolio_at_close - leg_hodl_at_close
             
+            dte_at_open = (expiry - current_leg_open_time).total_seconds() / 86400.0
+            
+            leg_trigger: RollTrigger = "none"
+            if roll_triggered:
+                premium_captured = open_price - leg_close_price
+                capture_frac = premium_captured / open_price if open_price > 0 else 0.0
+                if capture_frac >= tp_frac:
+                    leg_trigger = "tp_roll"
+                else:
+                    leg_trigger = "defensive_roll"
+            elif leg_close_time >= expiry or (expiry - leg_close_time).total_seconds() / 86400.0 <= 0:
+                leg_trigger = "expiry"
+            
+            chain_legs.append(ChainLeg(
+                index=legs_count,
+                instrument_name=instrument_name,
+                open_time=current_leg_open_time,
+                close_time=leg_close_time,
+                strike=strike,
+                dte_open=dte_at_open,
+                open_price=open_price,
+                close_price=leg_close_price,
+                pnl=leg_pnl,
+                trigger=leg_trigger,
+            ))
+            
             realized_pnl += leg_pnl
             realized_pnl_vs_hodl = leg_portfolio_at_close - leg_hodl_at_close if hodl_curve else 0.0
             legs_count += 1
@@ -779,6 +807,14 @@ class CoveredCallSimulator:
             f"tp={tp_frac*100:.0f}%, defend={defend_thresh*100:.0f}%, max_rolls={max_rolls}"
         )
         
+        chain_data = ChainData(
+            decision_time=decision_time,
+            underlying=cfg.underlying,
+            total_pnl=realized_pnl,
+            max_drawdown_pct=max_dd_pct * 100.0,
+            legs=chain_legs,
+        )
+        
         return SimulatedTrade(
             instrument_name=first_instrument,
             underlying=cfg.underlying,
@@ -792,6 +828,7 @@ class CoveredCallSimulator:
             pnl_vs_hodl=realized_pnl_vs_hodl,
             max_drawdown_pct=max_dd_pct * 100.0,
             notes=notes,
+            chain=chain_data,
         )
     
     def simulate_policy_with_scoring(
