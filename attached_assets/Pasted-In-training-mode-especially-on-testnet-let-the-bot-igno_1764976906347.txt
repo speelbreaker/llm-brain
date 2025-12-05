@@ -1,0 +1,288 @@
+In training mode, especially on testnet, let the bot ignore portfolio / exposure limits and happily spam multiple calls (laddered profiles) so we can learn.
+
+Below I’ll do two things:
+
+Explain the logic in plain language so it’s clear what will happen.
+
+Give you a ready-to-paste prompt for your AI builder that describes the exact changes file-by-file.
+
+1. What we want the bot to do in “training mode”
+Modes
+
+We keep the three concepts you already have:
+
+mode: "live" / "paper" / "research" (already in config)
+
+training_mode: "off" / "research" / "testnet"
+
+environment: "mainnet" / "testnet"
+
+Goal:
+
+Normal live / paper trading
+→ use full risk filters, per-expiry exposure limits, etc.
+
+Training mode on testnet (training_mode="testnet", environment="testnet")
+→ skip risk checks, allow multiple calls per underlying and per expiry, and let the rule-based policy open multiple profiles over time (conservative, moderate, aggressive).
+
+You already almost have this:
+
+In risk_manager.is_trade_allowed, you already do:
+
+if settings.is_training_on_testnet:
+    return True, ["training_mode on testnet: risk checks skipped"]
+
+
+So risk is not the reason you only saw one open position once you turned training mode on testnet.
+
+The real bottleneck is in the rule-based policy:
+
+policy_rule_based.choose_action_single(...)
+
+It returns a single action per loop.
+
+It only opens one new call per underlying per tick, even in training.
+
+But you do already have:
+
+if cfg.is_training_on_testnet:
+    can_open_new = existing_count < cfg.max_calls_per_underlying_training
+
+
+So if you:
+
+Set training_mode = "testnet",
+
+Set environment = "testnet",
+
+Set max_calls_per_underlying_training to something > 1,
+
+then the rule-based brain will gradually open more calls over time (one per loop) until it hits that max.
+
+What you want now is to:
+
+Crank up that limit for training.
+
+Make the training behavior more aggressive and “ladder-like”.
+
+Make sure dry_run = False so you actually see trades on testnet.
+
+2. Prompt for your AI builder (with concrete changes)
+
+You can literally copy-paste this block to your AI builder and let it edit the code.
+
+PROMPT FOR AI BUILDER (copy-paste this):
+
+You are editing my existing project.
+I want to change how the bot behaves in training mode so that on testnet it can aggressively open multiple covered calls instead of basically sitting on a single position.
+
+Please implement the following changes exactly:
+
+1. Config: training & multi-position parameters
+
+File: src/config.py
+
+Ensure we have a field for how many calls we are allowed to open per underlying in training mode:
+
+class Settings(BaseSettings):
+    # ... existing fields ...
+
+    # How many calls we allow per underlying in training mode (testnet)
+    max_calls_per_underlying_training: int = 6  # or 8, something > 1
+
+
+If max_calls_per_underlying_training already exists, just set its default higher (e.g. 6 instead of 1).
+
+Add a training profile mode to control how aggressive the training is:
+
+class Settings(BaseSettings):
+    # ... existing fields ...
+
+    # Training behavior: "single" = one call logic, "ladder" = multi-profile exploration
+    training_profile_mode: Literal["single", "ladder"] = "ladder"
+
+
+We already have training_mode and environment.
+Make sure Settings exposes:
+
+@property
+def is_training_on_testnet(self) -> bool:
+    return self.training_mode == "testnet" and self.environment == "testnet"
+
+@property
+def is_training_enabled(self) -> bool:
+    return self.training_mode in ("research", "testnet")
+
+
+If these properties already exist, keep them but make sure they match the semantics above.
+
+2. Risk manager: keep skipping checks on testnet training
+
+File: src/risk_manager.py
+
+We already have:
+
+if settings.is_training_on_testnet:
+    return True, ["training_mode on testnet: risk checks skipped"]
+
+
+Leave this as-is.
+This is correct: in testnet training mode risk checks should not block trades.
+
+No other changes needed in this file for now.
+
+3. Rule-based policy: aggressive multi-position training
+
+File: src/policy_rule_based.py
+
+We will tweak choose_action_single to:
+
+Keep current behavior for normal/live modes.
+
+In testnet training mode with training_profile_mode == "ladder", we’ll:
+
+Allow opening more calls per underlying, as long as we’re below max_calls_per_underlying_training.
+
+Prefer more aggressive candidates (higher premium / delta), but still within configured global delta/DTE limits.
+
+Make the following changes inside choose_action_single:
+
+Keep the early DO_NOTHING cases as they are (no state, missing data, etc). Don’t touch those.
+
+Locate the block (already present) where you compute covered_calls and can_open_new:
+
+for underlying in cfg.underlyings:
+    # ...
+    open_covered_calls = _get_open_covered_calls(agent_state, underlying)
+    existing_count = len(open_covered_calls)
+
+    can_open_new = existing_count == 0
+    if cfg.is_training_on_testnet:
+        can_open_new = existing_count < cfg.max_calls_per_underlying_training
+
+
+Right after this can_open_new calculation, add logic that:
+
+Reads cfg.training_profile_mode.
+
+If we’re in training on testnet and training_profile_mode == "ladder", then:
+
+Filter candidates by underlying as you already do.
+
+Exclude symbols we already have (existing calls).
+
+Sort remaining candidates by premium_usd (descending) or by delta (descending) within the configured effective_delta_range and effective_dte_range.
+
+Pick the top candidate (for this loop) as normal, but also encode in the reasoning that we are in “ladder training mode” and how many remaining slots there are.
+
+Concretely, update the candidate selection block like this:
+
+        if can_open_new and candidates_for_underlying:
+            # training / exploration tags already computed above
+            remaining_slots = (
+                cfg.max_calls_per_underlying_training - existing_count
+                if cfg.is_training_on_testnet
+                else 1
+            )
+
+            # Filter out symbols we already have open
+            existing_symbols = {cc.symbol for cc in open_covered_calls}
+            available_candidates = [
+                c for c in candidates_for_underlying
+                if c.symbol not in existing_symbols
+            ]
+
+            if not available_candidates:
+                continue
+
+            # In ladder training mode on testnet, be more aggressive:
+            if cfg.is_training_on_testnet and cfg.training_profile_mode == "ladder":
+                # Sort by premium first, then by delta (higher is more aggressive)
+                available_candidates.sort(
+                    key=lambda c: (c.premium_usd, c.delta),
+                    reverse=True,
+                )
+            else:
+                # Default behavior: keep existing heuristic or sort by delta/premium as desired
+                available_candidates.sort(
+                    key=lambda c: (c.delta, c.premium_usd),
+                    reverse=True,
+                )
+
+            # We still return a single action per loop, but with remaining_slots > 1
+            # the bot will keep opening more on subsequent iterations until it hits the cap.
+            chosen = available_candidates[0]
+
+            return {
+                "action": ActionType.OPEN_COVERED_CALL.value,
+                "params": {
+                    "underlying": underlying,
+                    "symbol": chosen.symbol,
+                    "size": cfg.default_order_size,
+                },
+                "reasoning": (
+                    f"{training_tag}{explore_tag}"
+                    f"OPEN_COVERED_CALL on {chosen.symbol}: "
+                    f"DTE={chosen.dte}, delta={chosen.delta:.2f}, "
+                    f"premium=${chosen.premium_usd:.2f}, IVRV={chosen.ivrv:.2f}. "
+                    f"Existing calls for {underlying}: {existing_count}, "
+                    f"remaining training slots: {max(remaining_slots, 0)}. "
+                    f"Mode={cfg.mode}, policy={cfg.policy_version}, "
+                    f"profile_mode={cfg.training_profile_mode}."
+                ),
+                "mode": cfg.mode,
+                "policy_version": cfg.policy_version,
+                "decision_source": "rule_based",
+            }
+
+
+Leave the rest of choose_action_single (the final DO_NOTHING reasoning) as-is.
+
+Net effect:
+
+In normal / live modes:
+behavior is unchanged.
+
+In testnet training mode with training_profile_mode="ladder":
+
+Risk checks are skipped (already handled in risk_manager).
+
+The bot can open up to max_calls_per_underlying_training calls per underlying, one per loop.
+
+Candidate selection is biased toward higher premium / higher delta (more aggressive) while still respecting your global effective_delta_range and effective_dte_range.
+
+Over 12 hours, you will see a small ladder of calls across different strikes/expiries instead of a single lonely position.
+
+4. Enable actual testnet trades (no dry_run)
+
+Finally, in your environment configuration / .env or wherever you set runtime config:
+
+Set:
+
+MODE=research
+ENVIRONMENT=testnet
+TRAINING_MODE=testnet
+DRY_RUN=false
+
+
+(Use the exact keys your project expects — e.g. mode, environment, training_mode, dry_run — keep casing consistent with Settings.)
+
+This ensures:
+
+The agent runs in research mode, but on testnet.
+
+training_mode="testnet" makes is_training_on_testnet == True.
+
+dry_run = false means orders will actually be sent to Deribit testnet and show up in positions, not just in logs.
+
+If you feed the builder the prompt above, it should be able to update the three files (config.py, risk_manager.py, policy_rule_based.py) so that:
+
+In training/testnet:
+
+Risk constraints don’t block trades.
+
+The rule-based brain aggressively opens multiple covered calls per underlying (up to your training cap).
+
+In normal/live:
+
+Behavior stays conservative and safe.

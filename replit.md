@@ -23,7 +23,13 @@ The agent is built with a clear separation of concerns, featuring modules for co
 - **Synthetic Pricing Mode**: Black-Scholes based option pricing for self-consistent historical backtests without requiring live Deribit option data. Uses realized volatility computed from spot history to avoid look-ahead bias. Generates synthetic strikes around spot price with synthetic expiries (target_dte days from decision time) to ensure candidates are always available regardless of historical date range.
 - **TradingView-style Metrics**: Enhanced backtest summary with net profit, max drawdown, profit factor, Sharpe ratio, Sortino ratio, win rate, and gross profit/loss calculations.
 - **Equity Curve Visualization**: Interactive chart comparing Strategy returns vs HODL benchmark with dual-line display.
-- **Training Mode**: Allows for multi-profile data collection (conservative, moderate, aggressive strategies) to generate diverse datasets for ML/RL. In training mode on testnet, the policy layer allows multiple covered calls per underlying (up to `max_calls_per_underlying_training`), excluding already-open symbols to build delta ladders. Both rule-based and LLM policies are aware of training mode and behave more aggressively.
+- **Training Mode**: Allows for multi-profile data collection (conservative, moderate, aggressive strategies) to generate diverse datasets for ML/RL. In training mode on testnet:
+  - The policy layer allows multiple covered calls per underlying (up to `max_calls_per_underlying_training`), excluding already-open symbols to build delta ladders
+  - Both rule-based and LLM policies are aware of training mode and behave more aggressively
+  - The rb_v1_explore policy does NOT block new positions due to existing positions
+  - Training profiles use wide DTE (1-21 days) and delta ranges to maximize candidate matching
+  - A fallback mechanism picks the best premium candidate if no profile matches, ensuring trades are executed when candidates exist
+  - DO_NOTHING only occurs when truly no valid candidates are available or max positions reached
 - **Training Data Export**: Captures (state, action, reward) tuples and exports to CSV/JSONL. Supports two export formats:
   - **Chain-level**: One row per trade decision (`training_dataset_*.csv`) with the chosen candidate and outcome
   - **Candidate-level**: One row per candidate per decision step (`training_candidates_*.csv`) with binary labels for chosen/not-chosen, including SKIP examples for all rejected candidates and no-trade decisions. Useful for training LLM policies that learn decision boundaries.
