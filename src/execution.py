@@ -10,6 +10,7 @@ from typing import Any
 from src.config import Settings, settings
 from src.deribit_client import DeribitClient, DeribitAPIError
 from src.models import ActionType
+from src.position_tracker import position_tracker
 
 
 def _round_price(price: float, tick_size: float = 0.0001) -> float:
@@ -157,6 +158,10 @@ def _simulate_execution(
         )
     
     print(f"[DRY-RUN] {result.get('message', 'Simulated execution')}")
+    try:
+        position_tracker.process_execution_result(result)
+    except Exception as e:
+        print(f"[PositionTracker] error (simulated): {e}")
     return result
 
 
@@ -323,6 +328,10 @@ def _execute_real(
             result["status"] = "partial_error"
             result["errors"].append(f"Open leg failed: {e}")
     
+    try:
+        position_tracker.process_execution_result(result)
+    except Exception as e:
+        print(f"[PositionTracker] error (real): {e}")
     return result
 
 
