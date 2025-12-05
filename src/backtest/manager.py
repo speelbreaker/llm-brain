@@ -145,12 +145,17 @@ class BacktestManager:
 
                 tf: Timeframe = cast(Timeframe, timeframe)
                 
+                hours_per_bar = {"1m": 1/60, "5m": 5/60, "15m": 0.25, "1h": 1, "4h": 4, "1d": 24}
+                bar_duration_hours = hours_per_bar.get(timeframe, 1)
+                
+                interval_bars = max(1, int(decision_interval_hours / bar_duration_hours))
+                
                 config = CallSimulationConfig(
                     underlying=underlying,
                     start=start_date,
                     end=end_date,
                     timeframe=tf,
-                    decision_interval_bars=1,
+                    decision_interval_bars=interval_bars,
                     initial_spot_position=1.0,
                     contract_size=1.0,
                     fee_rate=0.0005,
@@ -163,15 +168,14 @@ class BacktestManager:
                 ds = DeribitDataSource()
                 sim = CoveredCallSimulator(data_source=ds, config=config)
 
-                hours_map = {"1m": 1/60, "5m": 5/60, "15m": 0.25, "1h": 1, "4h": 4, "1d": 24}
-                bar_hours = hours_map.get(timeframe, 1)
-                interval_hours = decision_interval_hours * bar_hours
-
                 decision_times: List[datetime] = []
                 current = start_date
                 while current <= end_date:
                     decision_times.append(current)
-                    current = current + timedelta(hours=interval_hours)
+                    current = current + timedelta(hours=decision_interval_hours)
+                
+                if not decision_times:
+                    decision_times = [start_date]
 
                 with self._lock:
                     self._status.total_decisions = len(decision_times)
@@ -184,7 +188,11 @@ class BacktestManager:
                 for idx, t in enumerate(decision_times):
                     with self._lock:
                         if self._cancel_requested:
-                            break
+                            self._status.running = False
+                            self._status.finished_at = datetime.utcnow()
+                            self._status.error = "Cancelled by user"
+                            ds.close()
+                            return
 
                     try:
                         state = build_historical_state(ds, config, t)

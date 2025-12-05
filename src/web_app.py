@@ -159,7 +159,8 @@ class BacktestStartRequest(BaseModel):
 @app.post("/api/backtest/start")
 def start_backtest(req: BacktestStartRequest) -> JSONResponse:
     """Start a new backtest in the background."""
-    from src.backtest.manager import backtest_manager
+    from src.backtest.manager import backtest_manager, ExitStyle
+    from typing import cast
     
     try:
         start_dt = datetime.fromisoformat(req.start.replace("Z", "+00:00"))
@@ -179,13 +180,15 @@ def start_backtest(req: BacktestStartRequest) -> JSONResponse:
     if req.exit_style not in valid_exit_styles:
         raise HTTPException(status_code=400, detail=f"Invalid exit_style. Must be one of: {valid_exit_styles}")
     
+    exit_style: ExitStyle = cast(ExitStyle, req.exit_style)
+    
     started = backtest_manager.start(
         underlying=req.underlying,
         start_date=start_dt,
         end_date=end_dt,
         timeframe=req.timeframe,
         decision_interval_hours=req.decision_interval_hours,
-        exit_style=req.exit_style,
+        exit_style=exit_style,
         target_dte=req.target_dte,
         target_delta=req.target_delta,
     )
