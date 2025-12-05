@@ -18,7 +18,12 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
 
-from src.backtest.pricing import compute_realized_volatility
+from src.backtest.pricing import (
+    compute_realized_volatility,
+    compute_synthetic_iv_with_skew,
+    bs_call_delta,
+)
+from src.config import settings
 
 
 DERIBIT_API = "https://www.deribit.com/api/v2"
@@ -269,8 +274,8 @@ def run_calibration(
     """
     Compare synthetic BS prices vs Deribit mark prices for CALLs.
     
-    Uses RV-based IV model matching the synthetic backtester:
-        sigma_synth = realized_vol(window_days) * iv_multiplier
+    Uses RV-based IV model with skew matching the synthetic backtester:
+        sigma_synth = realized_vol(window_days) * iv_multiplier * skew_factor(delta)
     
     1. Fetch current spot and recent spot history from Deribit
     2. Compute realized volatility from spot history
@@ -278,7 +283,8 @@ def run_calibration(
     4. Sub-sample to at most max_samples quotes
     5. For each quote:
        - Compute t_years = dte_days / 365.0
-       - Compute sigma = synthetic_iv_from_rv(base_iv, iv_multiplier)
+       - Compute delta for this strike
+       - Compute sigma using RV * multiplier * skew_factor(delta)
        - Compute synthetic_price via Black-Scholes
        - diff = synthetic_price - mark_price
        - diff_pct = diff / mark_price * 100
@@ -331,7 +337,26 @@ def run_calibration(
 
     for q in quotes:
         t_years = max(0.0001, q.dte_days / 365.0)
-        sigma = synthetic_iv_from_rv(base_iv=base_iv, iv_multiplier=iv_multiplier)
+        
+        base_iv_for_delta = max(1e-6, rv_annualized * iv_multiplier)
+        abs_delta = abs(bs_call_delta(
+            spot=spot,
+            strike=q.strike,
+            t_years=t_years,
+            sigma=base_iv_for_delta,
+            r=r,
+        ))
+        
+        sigma = compute_synthetic_iv_with_skew(
+            underlying=underlying,
+            option_type="call",
+            abs_delta=abs_delta,
+            rv_annualized=rv_annualized,
+            iv_multiplier=iv_multiplier,
+            skew_enabled=settings.synthetic_skew_enabled,
+            skew_min_dte=settings.synthetic_skew_min_dte,
+            skew_max_dte=settings.synthetic_skew_max_dte,
+        )
 
         synthetic_price_usd = black_scholes_call_price(
             spot=spot,
