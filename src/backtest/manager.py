@@ -538,7 +538,7 @@ class BacktestManager:
                 styles_to_export = [exit_style]
             
             for style in styles_to_export:
-                examples = build_candidate_level_examples(decision_steps, style)
+                examples = build_candidate_level_examples(decision_steps, style, include_empty_steps=True)
                 
                 if not examples:
                     print(f"[CandidateExport] No candidate examples for {underlying} ({style})")
@@ -706,6 +706,14 @@ class BacktestManager:
                         if spot and spot > 0:
                             spot_at_times[t] = float(spot)
                         
+                        if t not in decision_step_data:
+                            decision_step_data[t] = DecisionStepData(
+                                decision_time=t,
+                                underlying=underlying,
+                                spot=float(spot) if spot and spot > 0 else 0.0,
+                                candidates=[],
+                            )
+                        
                         if spot is None or spot <= 0 or not options:
                             step = BacktestProgressStep(
                                 time=t,
@@ -749,7 +757,8 @@ class BacktestManager:
                         scored_with_feats.sort(key=lambda x: x[0], reverse=True)
                         best_score, best_opt = scored[0]
                         
-                        if t not in decision_step_data:
+                        step_data = decision_step_data[t]
+                        if not step_data.candidates:
                             candidates_list = []
                             for sc, opt, feats in scored_with_feats:
                                 dte_days = (opt.expiry - t).total_seconds() / 86400.0 if opt.expiry else 0.0
@@ -762,12 +771,8 @@ class BacktestManager:
                                     "iv": float(opt.iv) if opt.iv else None,
                                     "ivrv_ratio": feats.get("ivrv"),
                                 })
-                            decision_step_data[t] = DecisionStepData(
-                                decision_time=t,
-                                underlying=underlying,
-                                spot=float(spot),
-                                candidates=candidates_list,
-                            )
+                            step_data.candidates = candidates_list
+                            step_data.spot = float(spot)
 
                         traded = False
                         trade = None
@@ -789,19 +794,17 @@ class BacktestManager:
                             traded = True
                             self._append_chain_summary(trade, current_exit_style)
                             
-                            step_data = decision_step_data.get(t)
-                            if step_data:
-                                trade_result = {
-                                    "reward": trade.pnl,
-                                    "pnl_vs_hodl": trade.pnl_vs_hodl,
-                                    "max_drawdown_pct": trade.max_drawdown_pct,
-                                }
-                                if current_exit_style == "hold_to_expiry":
-                                    step_data.chosen_hold_to_expiry = best_opt.instrument_name
-                                    step_data.trade_result_hold = trade_result
-                                else:
-                                    step_data.chosen_tp_and_roll = best_opt.instrument_name
-                                    step_data.trade_result_tp = trade_result
+                            trade_result = {
+                                "reward": trade.pnl,
+                                "pnl_vs_hodl": trade.pnl_vs_hodl,
+                                "max_drawdown_pct": trade.max_drawdown_pct,
+                            }
+                            if current_exit_style == "hold_to_expiry":
+                                step_data.chosen_hold_to_expiry = best_opt.instrument_name
+                                step_data.trade_result_hold = trade_result
+                            else:
+                                step_data.chosen_tp_and_roll = best_opt.instrument_name
+                                step_data.trade_result_tp = trade_result
                             
                             all_training_examples.append(TrainingExample(
                                 decision_time=t,

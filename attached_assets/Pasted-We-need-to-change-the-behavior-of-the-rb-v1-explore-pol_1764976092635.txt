@@ -1,0 +1,145 @@
+We need to change the behavior of the "rb_v1_explore" policy in TRAINING MODE
+on TESTNET. Currently, the agent keeps saying "Existing positions: ... No action
+needed." after opening 1 covered call, even though margin and delta are tiny.
+
+The risk engine is already set so that in training_mode on testnet, risk checks
+are skipped. That part is fine. Now we must update the *policy*.
+
+Please implement the following changes:
+
+1) Central training-mode check
+------------------------------
+We already have a notion of "training_mode" and "research" mode, and the
+Deribit environment (testnet vs mainnet).
+
+Add or reuse a helper like:
+
+    def is_training_enabled(self) -> bool:
+        """
+        Returns True when we are in the special training mode intended for
+        Deribit TESTNET experimentation (research / learning).
+        """
+        # Example (adapt to actual config fields):
+        # return self.mode == "research" and self.training_mode and self.deribit_env == "testnet"
+        ...
+
+We'll use this helper in the policy code.
+
+2) Remove "we already have a call, so do nothing" in training mode
+------------------------------------------------------------------
+Inside the "rb_v1_explore" decision logic (and any other policy that decides
+actions), find the code that blocks new covered calls because there is already
+a call for that underlying / expiry, or because "existing positions are
+sufficient". It currently leads to messages like:
+
+    "Existing positions: BTC-12DEC25-91000-C. No action needed."
+
+Change such checks so they ONLY apply when NOT in training mode.
+
+Example pattern:
+
+Before (current behavior, simplified):
+
+    if has_open_call_for(underlying, expiry):
+        return DO_NOTHING, "Existing positions: ... No action needed."
+
+After (desired behavior):
+
+    if (not settings.is_training_enabled()
+        and has_open_call_for(underlying, expiry)):
+        return DO_NOTHING, "Existing positions: ... No action needed."
+
+In training mode, having an existing call MUST NOT block the policy from
+opening more calls.
+
+Apply the same pattern to any logic that says "do nothing because we already
+have enough calls" or similar reasoning.
+
+3) Do not use per-expiry exposure / positions-count limits in training mode
+---------------------------------------------------------------------------
+Even if risk checks are skipped, some of those limits may also be enforced on
+the policy side. For example:
+
+    if per_expiry_exposure >= settings.max_per_expiry_exposure:
+        return DO_NOTHING, "per-expiry exposure exceeded"
+
+    if positions_for_underlying >= settings.max_positions_per_underlying:
+        return DO_NOTHING, "max positions per underlying reached"
+
+Update these so they are ignored in training mode:
+
+    if (not settings.is_training_enabled()
+        and per_expiry_exposure >= settings.max_per_expiry_exposure):
+        return DO_NOTHING, "per-expiry exposure exceeded"
+
+    if (not settings.is_training_enabled()
+        and positions_for_underlying >= settings.max_positions_per_underlying):
+        return DO_NOTHING, "max positions per underlying reached"
+
+4) In training mode, prefer "OPEN_CALL" over DO_NOTHING when candidates exist
+-----------------------------------------------------------------------------
+In "rb_v1_explore", particularly when profile = "training:aggressive" or
+similar, the policy should behave more like:
+
+    - If there are NO candidates that meet filters (delta, DTE, IVRV, etc.):
+        -> DO_NOTHING is fine.
+    - If there ARE candidates:
+        -> At least one OPEN_COVERED_CALL action should be selected.
+
+Concretely:
+
+- After computing candidates and filtering by delta/DTE/IVRV, check:
+
+    if settings.is_training_enabled():
+        if not candidates:
+            return DO_NOTHING, "No candidates meeting filters"
+        else:
+            # Always choose an OPEN_COVERED_CALL action here
+            # (pick the top candidate by score/premium or use explore top_k)
+
+- In training mode, do NOT allow logic like:
+
+    "Candidates exist but we already have a position, so DO_NOTHING."
+
+to short-circuit the decision.
+
+5) Keep exploration, but don't let it collapse to DO_NOTHING
+------------------------------------------------------------
+We already have "rb_v1_explore" with fields like explore_prob and explore_top_k.
+
+In training mode:
+
+- It's OK to keep exploration, but exploration must pick among candidate CALL
+  actions, not default to DO_NOTHING when there are valid candidates.
+
+- If you currently treat DO_NOTHING as one of the sampled actions in exploration,
+  then in training mode, remove DO_NOTHING from the sampled set when candidates
+  exist. DO_NOTHING should only be possible if there are literally no valid
+  candidate calls to open.
+
+6) Do not treat past execution errors as a reason to stop trying
+----------------------------------------------------------------
+From the logs, some attempted orders failed with execution errors, after which
+the policy didn't try again.
+
+In training mode, if an order fails due to an execution error (e.g. "invalid
+price", "not enough liquidity", etc.), that should NOT cause a long-term
+"do nothing" state.
+
+Instead:
+
+- The policy should continue to consider new candidates normally on subsequent
+  ticks, as long as settings.is_training_enabled() is True.
+
+- If there's any "cooldown after error" or "disable trading after error" flag,
+  gate it with `not settings.is_training_enabled()` so cooldowns only apply on
+  mainnet / real-money mode.
+
+Summary:
+- On TESTNET + training_mode (is_training_enabled=True):
+    - Do NOT block new calls because we "already have one".
+    - Do NOT enforce per-expiry or per-underlying exposure limits in policy.
+    - When candidates exist, always choose an OPEN_COVERED_CALL action instead
+      of DO_NOTHING.
+    - Do NOT let execution errors freeze the policy into DO_NOTHING.
+- On MAINNET or when training_mode is off, behavior must remain exactly as now.

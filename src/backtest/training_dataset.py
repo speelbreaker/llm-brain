@@ -146,6 +146,7 @@ def run_grid_search(
 def build_candidate_level_examples(
     decision_steps: List[DecisionStepData],
     exit_style: str,
+    include_empty_steps: bool = True,
 ) -> List[CandidateLevelExample]:
     """
     Build candidate-level training examples from collected decision step data.
@@ -157,9 +158,14 @@ def build_candidate_level_examples(
     - action = "SELL_CALL" if chosen, else "SKIP"
     - Hindsight outcomes (reward, pnl, dd) only populated for chosen candidates
     
+    For steps with zero candidates (when include_empty_steps=True):
+    - Creates a placeholder SKIP row with instrument="NO_CANDIDATES"
+    - This ensures the dataset includes all decision timestamps
+    
     Args:
         decision_steps: List of DecisionStepData from backtest
         exit_style: "hold_to_expiry" or "tp_and_roll"
+        include_empty_steps: If True, create placeholder rows for steps with no candidates
         
     Returns:
         List of CandidateLevelExample objects
@@ -175,6 +181,29 @@ def build_candidate_level_examples(
             trade_result = step.trade_result_tp
         
         trade_executed = chosen_instrument is not None
+        
+        if not step.candidates:
+            if include_empty_steps:
+                examples.append(CandidateLevelExample(
+                    decision_time=step.decision_time,
+                    underlying=step.underlying,
+                    spot=step.spot,
+                    instrument="NO_CANDIDATES",
+                    strike=0.0,
+                    dte=0.0,
+                    delta=0.0,
+                    score=0.0,
+                    iv=None,
+                    ivrv_ratio=None,
+                    exit_style=exit_style,
+                    trade_executed=False,
+                    chosen=False,
+                    action="SKIP",
+                    reward=0.0,
+                    pnl_vs_hodl=0.0,
+                    max_drawdown_pct=0.0,
+                ))
+            continue
         
         for cand in step.candidates:
             instrument = cand.get("instrument", "")
