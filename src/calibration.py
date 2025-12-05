@@ -89,6 +89,7 @@ class OptionQuote:
     mark_iv: Optional[float]
     delta: Optional[float]
     dte_days: float
+    settlement_currency: str = "BTC"
 
 
 def get_call_chain(
@@ -129,6 +130,8 @@ def get_call_chain(
         if dte_days < min_dte or dte_days > max_dte:
             continue
 
+        settlement_currency = inst.get("settlement_currency", underlying)
+        
         try:
             ticker = deribit_get(
                 "public/ticker",
@@ -151,6 +154,7 @@ def get_call_chain(
                     mark_iv=float(mark_iv) if mark_iv is not None else None,
                     delta=float(delta) if delta is not None else None,
                     dte_days=dte_days,
+                    settlement_currency=settlement_currency,
                 )
             )
         except Exception:
@@ -270,13 +274,19 @@ def run_calibration(
         t_years = max(0.0001, q.dte_days / 365.0)
         sigma = synthetic_iv(q, default_iv=default_iv, iv_multiplier=iv_multiplier)
 
-        synthetic_price = black_scholes_call_price(
+        synthetic_price_usd = black_scholes_call_price(
             spot=spot,
             strike=q.strike,
             t_years=t_years,
             sigma=sigma,
             r=r,
         )
+        
+        is_inverse = q.settlement_currency.upper() in ("BTC", "ETH")
+        if is_inverse:
+            synthetic_price = synthetic_price_usd / spot
+        else:
+            synthetic_price = synthetic_price_usd
 
         diff = synthetic_price - q.mark_price
         if q.mark_price > 0:
