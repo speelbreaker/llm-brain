@@ -46,6 +46,172 @@ RollTrigger = Literal["tp_roll", "defensive_roll", "expiry", "none"]
 MAX_RECENT_CHAINS = 50
 
 
+def _compute_equity_curve(
+    trades: List[Any],
+    spot_at_times: Dict[datetime, float],
+    position_size: float,
+    start_time: datetime,
+    end_time: datetime,
+) -> List["EquityCurvePoint"]:
+    """
+    Compute equity curve from trades and spot prices.
+    
+    Args:
+        trades: List of SimulatedTrade objects sorted by close_time
+        spot_at_times: Dict mapping datetime to spot price
+        position_size: Size of underlying position (e.g., 1.0 BTC)
+        start_time: Backtest start time
+        end_time: Backtest end time
+    
+    Returns:
+        List of EquityCurvePoint objects
+    """
+    if not spot_at_times:
+        return []
+    
+    sorted_times = sorted(spot_at_times.keys())
+    if not sorted_times:
+        return []
+    
+    spot_start = spot_at_times.get(start_time) or spot_at_times.get(sorted_times[0], 0)
+    if spot_start <= 0:
+        spot_start = spot_at_times.get(sorted_times[0], 10000)
+    
+    base_equity = spot_start * position_size
+    
+    points: List[EquityCurvePoint] = []
+    
+    points.append(EquityCurvePoint(
+        time=start_time,
+        equity=base_equity,
+        hodl_equity=base_equity,
+    ))
+    
+    cumulative_pnl_vs_hodl = 0.0
+    
+    sorted_trades = sorted(trades, key=lambda t: t.close_time)
+    
+    for trade in sorted_trades:
+        cumulative_pnl_vs_hodl += trade.pnl_vs_hodl
+        
+        close_time = trade.close_time
+        spot_now = spot_at_times.get(close_time)
+        if spot_now is None:
+            closest_time = min(sorted_times, key=lambda t: abs((t - close_time).total_seconds()))
+            spot_now = spot_at_times.get(closest_time, spot_start)
+        
+        hodl_equity = spot_now * position_size
+        equity = hodl_equity + cumulative_pnl_vs_hodl
+        
+        points.append(EquityCurvePoint(
+            time=close_time,
+            equity=equity,
+            hodl_equity=hodl_equity,
+        ))
+    
+    if sorted_trades:
+        last_trade_time = sorted_trades[-1].close_time
+        if end_time > last_trade_time:
+            spot_end = spot_at_times.get(end_time)
+            if spot_end is None:
+                closest_time = min(sorted_times, key=lambda t: abs((t - end_time).total_seconds()))
+                spot_end = spot_at_times.get(closest_time, spot_start)
+            
+            hodl_equity = spot_end * position_size
+            equity = hodl_equity + cumulative_pnl_vs_hodl
+            
+            points.append(EquityCurvePoint(
+                time=end_time,
+                equity=equity,
+                hodl_equity=hodl_equity,
+            ))
+    
+    return points
+
+
+def _compute_enhanced_metrics(
+    trades: List[Any],
+    equity_curve: List["EquityCurvePoint"],
+    position_size: float,
+) -> Dict[str, Any]:
+    """
+    Compute enhanced strategy metrics like TradingView.
+    
+    Args:
+        trades: List of SimulatedTrade objects
+        equity_curve: List of EquityCurvePoint objects
+        position_size: Size of underlying position
+    
+    Returns:
+        Dict with enhanced metrics
+    """
+    if not equity_curve:
+        return {}
+    
+    initial_equity = equity_curve[0].equity if equity_curve else 0.0
+    final_equity = equity_curve[-1].equity if equity_curve else 0.0
+    final_hodl = equity_curve[-1].hodl_equity if equity_curve else 0.0
+    
+    net_profit_usd = final_equity - initial_equity
+    net_profit_pct = (net_profit_usd / initial_equity * 100) if initial_equity > 0 else 0.0
+    
+    hodl_profit_usd = final_hodl - initial_equity
+    hodl_profit_pct = (hodl_profit_usd / initial_equity * 100) if initial_equity > 0 else 0.0
+    
+    max_drawdown_pct = 0.0
+    max_drawdown_usd = 0.0
+    peak_equity = equity_curve[0].equity if equity_curve else 0.0
+    
+    for pt in equity_curve:
+        if pt.equity > peak_equity:
+            peak_equity = pt.equity
+        drawdown_usd = peak_equity - pt.equity
+        drawdown_pct = (drawdown_usd / peak_equity * 100) if peak_equity > 0 else 0.0
+        if drawdown_pct > max_drawdown_pct:
+            max_drawdown_pct = drawdown_pct
+            max_drawdown_usd = drawdown_usd
+    
+    num_trades = len(trades)
+    winning_trades = [t for t in trades if t.pnl > 0]
+    losing_trades = [t for t in trades if t.pnl <= 0]
+    win_count = len(winning_trades)
+    win_rate = (win_count / num_trades * 100) if num_trades > 0 else 0.0
+    
+    total_pnl = sum(t.pnl for t in trades)
+    avg_trade_usd = total_pnl / num_trades if num_trades > 0 else 0.0
+    
+    gross_profit = sum(t.pnl for t in winning_trades)
+    gross_loss = abs(sum(t.pnl for t in losing_trades))
+    profit_factor = (gross_profit / gross_loss) if gross_loss > 0 else (float('inf') if gross_profit > 0 else 0.0)
+    
+    avg_winner = gross_profit / len(winning_trades) if winning_trades else 0.0
+    avg_loser = gross_loss / len(losing_trades) if losing_trades else 0.0
+    
+    total_pnl_vs_hodl = sum(t.pnl_vs_hodl for t in trades)
+    
+    return {
+        "initial_equity": round(initial_equity, 2),
+        "final_equity": round(final_equity, 2),
+        "net_profit_usd": round(net_profit_usd, 2),
+        "net_profit_pct": round(net_profit_pct, 2),
+        "hodl_profit_usd": round(hodl_profit_usd, 2),
+        "hodl_profit_pct": round(hodl_profit_pct, 2),
+        "max_drawdown_pct": round(max_drawdown_pct, 2),
+        "max_drawdown_usd": round(max_drawdown_usd, 2),
+        "num_trades": num_trades,
+        "win_rate": round(win_rate, 1),
+        "avg_trade_usd": round(avg_trade_usd, 2),
+        "profit_factor": round(profit_factor, 2) if profit_factor != float('inf') else 999.99,
+        "gross_profit": round(gross_profit, 2),
+        "gross_loss": round(gross_loss, 2),
+        "avg_winner": round(avg_winner, 2),
+        "avg_loser": round(avg_loser, 2),
+        "final_pnl": round(total_pnl, 4),
+        "final_pnl_vs_hodl": round(total_pnl_vs_hodl, 4),
+        "avg_pnl": round(avg_trade_usd, 4),
+    }
+
+
 @dataclass
 class BacktestProgressStep:
     time: datetime
@@ -81,6 +247,14 @@ class BacktestChainSummary:
 
 
 @dataclass
+class EquityCurvePoint:
+    """A single point in the equity curve."""
+    time: datetime
+    equity: float
+    hodl_equity: float
+
+
+@dataclass
 class BacktestStatus:
     running: bool = False
     paused: bool = False
@@ -98,6 +272,7 @@ class BacktestStatus:
     metrics: Dict[str, Any] = field(default_factory=dict)
     recent_steps: List[BacktestProgressStep] = field(default_factory=list)
     recent_chains: List[BacktestChainSummary] = field(default_factory=list)
+    equity_curve: List[EquityCurvePoint] = field(default_factory=list)
     error: Optional[str] = None
 
 
@@ -136,6 +311,15 @@ class BacktestManager:
                     ],
                 })
             
+            equity_curve_json = [
+                {
+                    "time": pt.time.isoformat(),
+                    "equity": _sanitize_float(pt.equity),
+                    "hodl_equity": _sanitize_float(pt.hodl_equity),
+                }
+                for pt in self._status.equity_curve
+            ]
+            
             status_dict = {
                 "running": self._status.running,
                 "paused": self._status.paused,
@@ -162,6 +346,7 @@ class BacktestManager:
                     for step in self._status.recent_steps
                 ],
                 "recent_chains": chains_json,
+                "equity_curve": equity_curve_json,
                 "error": self._status.error,
             }
             return status_dict
@@ -393,6 +578,9 @@ class BacktestManager:
                 global_step_index = 0
 
                 all_training_examples: List[Any] = []
+                spot_at_times: Dict[datetime, float] = {}
+                all_equity_curves: Dict[str, List[EquityCurvePoint]] = {}
+                position_size = config.initial_spot_position
                 
                 for phase_idx, current_exit_style in enumerate(styles_to_run):
                     steps_buffer: List[BacktestProgressStep] = []
@@ -422,6 +610,9 @@ class BacktestManager:
 
                         spot = state.get("spot")
                         options = state.get("candidate_options") or []
+                        
+                        if spot and spot > 0:
+                            spot_at_times[t] = float(spot)
                         
                         if spot is None or spot <= 0 or not options:
                             step = BacktestProgressStep(
@@ -526,14 +717,20 @@ class BacktestManager:
                         progress = global_step_index / (len(decision_times) * total_phases)
                         self._update_status_step(global_step_index, len(decision_times) * total_phases, t, steps_buffer, progress, current_exit_style)
 
-                    win_count = sum(1 for t in trades if t.pnl > 0)
-                    phase_metrics = {
-                        "num_trades": len(trades),
-                        "final_pnl": round(cumulative_pnl, 4),
-                        "final_pnl_vs_hodl": round(cumulative_pnl_vs_hodl, 4),
-                        "avg_pnl": round(cumulative_pnl / len(trades), 4) if trades else 0,
-                        "win_rate": round(win_count / len(trades) * 100, 1) if trades else 0,
-                    }
+                    equity_curve = _compute_equity_curve(
+                        trades=trades,
+                        spot_at_times=spot_at_times,
+                        position_size=position_size,
+                        start_time=start_date,
+                        end_time=end_date,
+                    )
+                    all_equity_curves[current_exit_style] = equity_curve
+                    
+                    phase_metrics = _compute_enhanced_metrics(
+                        trades=trades,
+                        equity_curve=equity_curve,
+                        position_size=position_size,
+                    )
 
                     if exit_style == "both":
                         all_metrics[current_exit_style] = phase_metrics
@@ -550,8 +747,15 @@ class BacktestManager:
                     examples=all_training_examples,
                 )
 
+                primary_equity_curve: List[EquityCurvePoint] = []
+                if exit_style == "both":
+                    primary_equity_curve = all_equity_curves.get("tp_and_roll", [])
+                else:
+                    primary_equity_curve = all_equity_curves.get(exit_style, [])
+
                 with self._lock:
                     self._status.metrics = all_metrics
+                    self._status.equity_curve = primary_equity_curve
                     self._status.progress_pct = 1.0
                     self._status.running = False
                     self._status.paused = False
