@@ -1,0 +1,243 @@
+Right now the backtester isn’t “finding zero good trades” – it’s literally seeing zero candidate options at all for each decision time. That means the problem is in the data pipeline / filters, not in the scoring or exit logic.
+
+Let me walk through what I see in your repo and what to do next.
+
+1. What “Candidates = 0” actually means
+
+From your code:
+
+DeribitDataSource.list_option_chain(...) pulls all options from Deribit.
+
+build_historical_state(...) filters them by:
+
+expiry in a DTE window,
+
+delta range,
+
+being calls (for now),
+
+mark_price and delta present.
+
+The backtester then looks at state["candidate_options"].
+
+If Candidates=0 and Best Score=0.00 on every step, that means:
+
+options = state.get("candidate_options") or []
+if not options:
+    # we skip scoring and no trade is possible
+
+
+So either:
+
+list_option_chain is returning an empty list, or
+
+It returns some options, but all of them get filtered out (DTE/delta/mark/IV/etc).
+
+Given your ranges are already wide, my money is on (1): we’re not seeing any linear USDC BTC options in the backtest data source.
+
+2. The big suspects (from the code I have)
+
+Looking at the project you sent (note: it might be slightly older than your current one, but the structure is the same):
+
+a) Backtest uses linear + USDC only
+
+CallSimulationConfig defaults (from src/backtest/types.py):
+
+option_margin_type: Literal["linear", "inverse"] = "linear"
+option_settlement_ccy: str = "USDC"
+min_score_to_trade: float = 3.0
+
+
+And DeribitDataSource.list_option_chain(...) does:
+
+inst_settlement = inst.get("settlement_currency", "").upper()
+is_linear = inst_settlement == "USDC" or inst_settlement == "USD"
+
+if margin_type == "linear" and not is_linear:
+    continue
+if margin_type == "inverse" and is_linear:
+    continue
+
+if settlement_ccy.upper() != "ANY":
+    if is_linear and inst_settlement not in ["USDC", "USD"]:
+        continue
+    if not is_linear and inst_settlement.upper() != cur.upper():  # BTC / ETH
+        continue
+
+
+So in backtests we are only looking at instruments whose settlement_currency is USDC or USD and treating them as linear.
+
+That’s exactly what we want long-term (linear USDC options), but it has some immediate consequences:
+
+If Deribit’s API is not yet returning those linear BTC/ETH options the way we expect (e.g. different settlement_currency string, or your backtest is pointed to testnet, which may not have them), list_option_chain will return 0 instruments after these filters.
+
+Then everything downstream is empty.
+
+Given your screenshot shows:
+
+Start date around 2025-09-01,
+
+Underlying BTC, DTE range 3–21, delta range 0.15–0.35,
+
+And still 0 candidates,
+
+the most likely issues are:
+
+Backtest data source is pointing at testnet (which probably doesn’t have a full USDC options history yet), or
+
+Deribit’s mainnet linear options are returned, but with a different settlement_currency than "USDC"/"USD" (our filter is too strict).
+
+In the zip you sent, the backtest client is mainnet:
+
+# src/backtest/deribit_client.py
+self.http = httpx.Client(base_url="https://www.deribit.com/api/v2", ... )
+
+
+…but your current Replit project could have been changed by the builder. If it got “optimized” to test.deribit.com, that alone would explain 0 candidates.
+
+3. What I’d do right now to debug (very small changes)
+
+Even if you don’t like logs, this is the quickest way to see exactly what’s happening without changing the UI again.
+
+Ask your builder to patch src/backtest/deribit_data_source.py like this:
+
+Add simple counters inside list_option_chain:
+
+def list_option_chain(...):
+    ...
+    instruments = self.client.get_instruments(currency=underlying, kind="option")
+    total = 0
+    after_linear_filter = 0
+    after_settlement_filter = 0
+
+    for inst in instruments:
+        name = inst["instrument_name"]
+        parts = name.split("-")
+        if len(parts) < 4:
+            continue
+
+        total += 1
+
+        cur = parts[0]
+        expiry_ts = inst.get("expiration_timestamp")
+        if expiry_ts is None:
+            continue
+        expiry = datetime.fromtimestamp(expiry_ts / 1000, tz=timezone.utc)
+        if expiry <= as_of:
+            continue
+
+        inst_settlement = inst.get("settlement_currency", "").upper()
+        is_linear = inst_settlement == "USDC" or inst_settlement == "USD"
+
+        # margin_type filter
+        if margin_type == "linear" and not is_linear:
+            continue
+        if margin_type == "inverse" and is_linear:
+            continue
+        after_linear_filter += 1
+
+        # settlement filter
+        if settlement_ccy.upper() != "ANY":
+            if is_linear and inst_settlement not in ["USDC", "USD"]:
+                continue
+            if not is_linear and inst_settlement.upper() != cur.upper():
+                continue
+        after_settlement_filter += 1
+
+        ...
+        snapshots.append(OptionSnapshot(...))
+
+    print(
+        f"[BACKTEST] {underlying} @ {as_of} - "
+        f"total={total}, after_linear={after_linear_filter}, "
+        f"after_settlement={after_settlement_filter}, snapshots={len(snapshots)}"
+    )
+    return snapshots
+
+
+Then run one short backtest (e.g. a week) and look at the console:
+
+If total is 0 → we’re calling the wrong API (testnet, wrong currency, etc.).
+
+If total > 0 but after_linear is 0 → Deribit is not flagging any options as USDC/USD in settlement_currency (we need to relax the logic).
+
+If after_linear > 0 but snapshots is 0 → get_ticker is failing for every instrument (network, rate limiting, or changed field names).
+
+Once we see which count goes to zero, we can fix precisely and then remove this debug print.
+
+4. Quick “stop-gap” fix to get backtests producing something
+
+While we debug the linear USDC specifics, you can at least verify that the rest of the engine (scoring, exit styles, PnL curves) is healthy by relaxing the filters:
+
+A) Allow both inverse and linear, any settlement
+
+In CallSimulationConfig (in src/backtest/types.py), temporarily set:
+
+option_margin_type: Literal["linear", "inverse"] = "linear"  # keep this
+option_settlement_ccy: str = "ANY"  # <— change from "USDC"
+
+
+And in the manager where config is constructed for the backtest, make sure we pass that through:
+
+cfg = CallSimulationConfig(
+    underlying=underlying,
+    timeframe=timeframe,
+    decision_interval_hours=decision_interval_hours,
+    target_dte=target_dte,
+    target_delta=target_delta,
+    option_margin_type="linear",       # or even "inverse" for a quick sanity test
+    option_settlement_ccy="ANY",       # <— loosen this while debugging
+)
+
+
+Then:
+
+Run a short backtest starting in 2024 using inverse first (option_margin_type="inverse").
+
+If you immediately see candidates and non-zero scores and trades in the UI, you know the simulator + state builder + UI are fine, and the only remaining issue is the linear USDC selection logic.
+
+We can then re-tighten the filters for linear options once we confirm exactly how Deribit labels them.
+
+5. About Target DTE / Target Delta vs ranges
+
+You asked earlier whether we still need Target DTE and Target Delta now that the UI has DTE and Delta ranges.
+
+Yes – they serve different purposes:
+
+DTE Range / Delta Range
+= hard filters for what’s even considered a candidate.
+Example: “only look at 3–21 DTE, 0.15–0.35 delta”.
+
+Target DTE / Target Delta
+= the center for the scoring function – where we want the sweet spot.
+Example: inside that 3–21 / 0.15–0.35 window, a 7-DTE / 0.25-delta call should get a higher score than a 20-DTE / 0.18-delta one.
+
+So I’d definitely keep both:
+
+Ranges to chop off stuff you’d never trade.
+
+Targets to tell the scoring function what “ideal” looks like.
+
+6. What to tell your AI builder (short prompt)
+
+If you want a concise instruction for the builder, you can say:
+
+In src/backtest/deribit_data_source.py, instrument list_option_chain with debug counters:
+
+total, after_linear_filter, after_settlement_filter, and snapshots.
+
+Print them once per call with a [BACKTEST] prefix (as in the code above).
+
+In src/backtest/types.py and src/backtest/manager.py:
+
+For the backtest config, temporarily set option_settlement_ccy="ANY" and expose option_margin_type so it can be easily switched between "inverse" and "linear".
+
+Run a short backtest and verify:
+
+That total is > 0 (we’re getting instruments),
+
+That some survive the filters, and
+
+That the UI shows non-zero Candidates and Best Score when using inverse options.
+
+Once inverse options work, refine the linear USDC filters based on what settlement_currency actually looks like in the live API responses, then revert option_settlement_ccy back to "USDC".

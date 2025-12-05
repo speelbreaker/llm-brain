@@ -1,0 +1,114 @@
+You’re right that “0 candidates, best score 0” with such a wide range is suspicious – but the good news is: it’s almost certainly not a bug in your scoring logic, it’s the data you’re asking for.
+
+I unpacked the project you sent and traced the backtest path:
+
+/api/backtest/start → BacktestStartRequest → backtest.manager.BacktestManager.start
+
+start() builds a CallSimulationConfig with
+option_margin_type="linear" and option_settlement_ccy="USDC" (the defaults in CallSimulationConfig).
+
+build_historical_state() then calls
+DeribitDataSource.list_option_chain(underlying, as_of, settlement_ccy="USDC", margin_type="linear")
+
+list_option_chain() filters instruments to USDC / USD-settled linear options only.
+
+Why you see 0 candidates
+
+Deribit did not have USDC-settled BTC/ETH options in 2024.
+They added USDC-settled BTC & ETH options only around August 19, 2025.
+
+Before that:
+
+BTC & ETH options were all inverse (coin-settled).
+
+USDC-settled options existed only for some altcoins (SOL, XRP, MATIC) starting March 2024.
+
+So when you run a BTC backtest from 2024-09-01 → 2026-01-01 with:
+
+margin_type="linear"
+
+settlement_ccy="USDC"
+
+then for all decision times in 2024 (and most of 2025 before Aug 19):
+
+DeribitDataSource.list_option_chain(...) returns empty (no USDC-linear BTC options existed).
+
+build_historical_state() then produces candidate_options = [].
+
+BacktestManager sees options == [] and records:
+
+Candidates: 0, Best Score: 0.00, Traded: No
+
+…which is exactly what you’re seeing in the “Recent Steps” table.
+
+Nothing is “wrong” with the scoring or state builder – the filters + history you chose just give you an empty chain for that period.
+
+What you can do now
+1. Quick sanity check you can do yourself
+
+Try a shorter, recent window where USDC BTC options definitely exist:
+
+Underlying: BTC
+
+Start Date: 2025-09-01
+
+End Date: 2025-12-01
+
+Timeframe: 4 hours
+
+Decision interval: Daily or Every 4 bars
+
+Exit style: “Both (compare)” or just “Take Profit & Roll”
+
+If the plumbing is correct, you should start seeing:
+
+non-zero Candidates
+
+positive Best Score
+
+some rows with Traded = Yes
+
+If you still see 0 candidates even after September 2025, then we’d look for an additional bug – but given how the code is written, I strongly expect it will work in that window.
+
+Longer-term fix (what I’d actually change in the code)
+
+Right now the backtest assumes “USDC linear only”, which is perfect for the live agent (your current preference), but too restrictive for historical BTC/ETH data.
+
+I’d adjust the backtest config so you can choose, and also have a sensible default:
+
+Backtest should default to inverse options for BTC/ETH, at least for dates before USDC options existed.
+
+Optionally, add a UI toggle for:
+
+Margin type: linear / inverse
+
+Settlement: ANY / USDC / coin
+
+Concrete changes I’d make (high level, so you can prompt your AI builder):
+
+In CallSimulationConfig keep:
+
+option_margin_type: Literal["linear", "inverse"] = "linear"
+option_settlement_ccy: str = "USDC"
+
+
+In backtest only, override these when you create the config:
+
+config = CallSimulationConfig(
+    ...,
+    target_dte=target_dte,
+    dte_tolerance=3,
+    target_delta=target_delta,
+    delta_tolerance=0.15,
+    option_margin_type="inverse",      # <- for historical BTC/ETH
+    option_settlement_ccy="ANY",       # <- accept BTC-settled options too
+)
+
+
+Later, you can expose these as extra fields in BacktestStartRequest and the UI, so you can pick:
+
+Linear USDC when you want to backtest exactly what the live agent is trading today.
+
+Inverse when you want lots of history.
+
+This alone should turn your “0 candidates” into a healthy list for the 2020–2024 period.

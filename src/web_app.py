@@ -158,6 +158,8 @@ class BacktestStartRequest(BaseModel):
     max_dte: int = 21
     delta_min: float = 0.15
     delta_max: float = 0.35
+    margin_type: str = "inverse"
+    settlement_ccy: str = "ANY"
 
 
 @app.post("/api/backtest/start")
@@ -196,6 +198,8 @@ def start_backtest(req: BacktestStartRequest) -> JSONResponse:
         max_dte=req.max_dte,
         delta_min=req.delta_min,
         delta_max=req.delta_max,
+        margin_type=req.margin_type,
+        settlement_ccy=req.settlement_ccy,
     )
     
     if not started:
@@ -948,6 +952,24 @@ def index() -> str:
       </div>
       <div class="form-row">
         <div class="form-group">
+          <label>Option Type</label>
+          <select id="bt-margin-type">
+            <option value="inverse" selected>Inverse (coin-settled, pre-2025)</option>
+            <option value="linear">Linear (USDC-settled, Aug 2025+)</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Settlement Currency</label>
+          <select id="bt-settlement-ccy">
+            <option value="ANY" selected>Any</option>
+            <option value="USDC">USDC only</option>
+            <option value="BTC">BTC only</option>
+            <option value="ETH">ETH only</option>
+          </select>
+        </div>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
           <label>Target DTE</label>
           <input type="number" id="bt-dte" value="7" min="1" max="90">
         </div>
@@ -1238,7 +1260,7 @@ def index() -> str:
     }}
     
     function setBacktestInputsDisabled(disabled) {{
-      const inputs = ['bt-underlying', 'bt-start', 'bt-end', 'bt-timeframe', 'bt-interval', 'bt-exit-style', 'bt-dte', 'bt-delta', 'bt-min-dte', 'bt-max-dte', 'bt-delta-min', 'bt-delta-max'];
+      const inputs = ['bt-underlying', 'bt-start', 'bt-end', 'bt-timeframe', 'bt-interval', 'bt-exit-style', 'bt-dte', 'bt-delta', 'bt-min-dte', 'bt-max-dte', 'bt-delta-min', 'bt-delta-max', 'bt-margin-type', 'bt-settlement-ccy'];
       inputs.forEach(id => {{
         const el = document.getElementById(id);
         if (el) el.disabled = disabled;
@@ -1258,6 +1280,8 @@ def index() -> str:
       const maxDte = parseInt(document.getElementById('bt-max-dte').value, 10);
       const deltaMin = parseFloat(document.getElementById('bt-delta-min').value);
       const deltaMax = parseFloat(document.getElementById('bt-delta-max').value);
+      const marginType = document.getElementById('bt-margin-type').value;
+      const settlementCcy = document.getElementById('bt-settlement-ccy').value;
       
       const payload = {{
         underlying,
@@ -1272,6 +1296,8 @@ def index() -> str:
         max_dte: maxDte,
         delta_min: deltaMin,
         delta_max: deltaMax,
+        margin_type: marginType,
+        settlement_ccy: settlementCcy,
       }};
       
       document.getElementById('bt-error').style.display = 'none';
