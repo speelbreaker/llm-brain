@@ -1,0 +1,311 @@
+Goal
+
+Extend the existing training mode so that, when training_mode is enabled on Deribit testnet, the agent:
+
+Builds a ladder of short calls per underlying using training profiles (conservative / moderate / aggressive).
+
+Executes multiple actions per tick (one or more per profile), instead of only the first training action.
+
+Tags each leg with its strategy/profile name in the logs and execution summary so training data can later distinguish which profile generated which trade.
+
+Still uses the normal production logic when training_mode is off.
+
+This is only for training mode on testnet. On mainnet / production, nothing should change.
+
+1. Config: add explicit training ladder limits
+
+File: src/config.py
+
+Task
+
+Add a couple of simple caps so training doesn’t explode into thousands of legs:
+
+class Settings(BaseSettings):
+    ...
+    training_mode: bool = Field(False, env="TRAINING_MODE")
+
+    # Max training legs on testnet per underlying per tick
+    training_max_calls_per_underlying: int = Field(
+        5, env="TRAINING_MAX_CALLS_PER_UNDERLYING"
+    )
+
+    # Soft cap per expiry in training ladders (per underlying)
+    training_max_calls_per_expiry: int = Field(
+        3, env="TRAINING_MAX_CALLS_PER_EXPIRY"
+    )
+    ...
+
+    @property
+    def is_training_on_testnet(self) -> bool:
+        # This property already exists but make sure it is correct.
+        # It should return True only when both:
+        #   - training_mode is True
+        #   - we are connected to deribit TESTNET, not mainnet.
+        ...
+
+
+Make sure is_training_on_testnet is correctly wired to whatever you already use to differentiate between mainnet and testnet.
+
+2. Training profiles: small cleanup + helper for multiple candidates (optional)
+
+File: src/training_profiles.py
+
+Task 2a — bugfix
+
+There is a small bug near the end of pick_candidates_for_all_profiles:
+
+def pick_candidates_for_all_profiles(
+    profiles: dict[str, TrainingProfileSet],
+    asset: str,
+    candidates: list[CandidateOption],
+) -> dict[str, list[CandidateOption]]:
+    ...
+-    return res
++    return result
+
+
+Make sure we return the correct variable (result) and not an undefined name.
+
+Task 2b — make sure each profile can return multiple legs
+
+We already have:
+
+def pick_candidates_for_all_profiles(...):
+    result: dict[str, list[CandidateOption]] = {name: [] for name in profiles.keys()}
+    ...
+
+
+Update it so that for each profile_name:
+
+You can add multiple candidates per profile up to a configurable max_legs for that profile AND subject to settings.training_max_calls_per_underlying and settings.training_max_calls_per_expiry.
+
+We should prefer variety (different DTE and strikes) but don’t overcomplicate; simple criteria is fine:
+
+Sort candidates by premium_usd or by closeness to target delta.
+
+Iterate and append while limits are not exceeded.
+
+Pseudocode inside pick_candidates_for_all_profiles:
+
+for profile_name, profile_set in profiles.items():
+    profile_cfg = profile_set.profile_for(asset)
+    if not profile_cfg.enabled:
+        continue
+
+    # Filter candidates for this profile (delta, DTE, IVRV etc. can stay as-is)
+    profile_candidates = [
+        c for c in candidates
+        if profile_cfg.min_delta <= c.delta <= profile_cfg.max_delta
+        and profile_cfg.min_dte <= c.dte <= profile_cfg.max_dte
+        and c.ivrv >= profile_cfg.ivrv_min
+    ]
+
+    # Sort by whatever heuristic you already use (e.g. premium_usd desc)
+    profile_candidates.sort(key=lambda c: c.premium_usd, reverse=True)
+
+    for c in profile_candidates:
+        if len(result[profile_name]) >= profile_cfg.max_legs:
+            break
+        if per_expiry_counts.get(c.dte, 0) >= settings.training_max_calls_per_expiry:
+            continue
+
+        result[profile_name].append(c)
+        per_expiry_counts[c.dte] = per_expiry_counts.get(c.dte, 0) + 1
+
+
+Important: this helper is only used in training mode; production mode should continue using the existing selection logic.
+
+3. Training policy: return a full ladder of actions
+
+File: src/training_policy.py
+
+Task
+
+In build_training_actions(agent_state: AgentState, cfg: Settings) -> list[dict]:
+
+Currently it selects at most one candidate per profile and returns a flat list of single actions.
+
+We want it to return one action per candidate, across all profiles, up to cfg.training_max_calls_per_underlying per underlying.
+
+Concretely:
+
+Import and use pick_candidates_for_all_profiles:
+
+from src.training_profiles import (
+    get_training_profiles,
+    pick_candidates_for_all_profiles,
+    ...
+)
+
+
+For each underlying (BTC, ETH):
+
+profiles = get_training_profiles()
+all_profile_candidates = pick_candidates_for_all_profiles(
+    profiles=profiles,
+    asset=underlying,
+    candidates=cands,  # existing candidate list for this underlying
+)
+
+calls_for_underlying = 0
+max_calls_for_underlying = cfg.training_max_calls_per_underlying
+
+for profile_name in cfg.training_strategies:
+    profile_candidates = all_profile_candidates.get(profile_name, [])
+    for c in profile_candidates:
+        if calls_for_underlying >= max_calls_for_underlying:
+            break
+
+        if c.symbol in used_symbols:
+            continue
+
+        action = {
+            "action": "OPEN_COVERED_CALL",
+            "mode": "training",
+            "strategy": profile_name,
+            "underlying": underlying,
+            "params": {
+                "symbol": c.symbol,
+                "size": cfg.training_call_size,  # or whatever you use now
+            },
+            "diagnostics": {
+                "delta": c.delta,
+                "dte": c.dte,
+                "premium_usd": c.premium_usd,
+                "ivrv": c.ivrv,
+            },
+            "reasoning": f"Training mode [{profile_name}] ladder leg on {underlying}",
+        }
+
+        actions.append(action)
+        used_symbols.add(c.symbol)
+        calls_for_underlying += 1
+
+    if calls_for_underlying >= max_calls_for_underlying:
+        break
+
+
+Keep the old single-action behavior for production (non-training) mode untouched.
+
+4. Agent loop: execute all training actions, not just the first
+
+File: agent_loop.py
+
+Current behavior (simplified)
+
+In the main loop, you have something like:
+
+if settings.training_mode and settings.is_training_on_testnet:
+    training_actions = build_training_actions(agent_state, settings)
+    if training_actions:
+        print("Training mode: candidate ladder:")
+        for ta in training_actions:
+            print(f"  [{ta.get('strategy', '?')}] {ta.get('params', {}).get('symbol', '?')}")
+        proposed_action = training_actions[0]   # <--- only one leg used
+    else:
+        proposed_action = rule_decide_action(...)
+...
+# later:
+risk_check = check_action_allowed(agent_state, proposed_action, settings)
+execution = execute_action(client, proposed_action, settings)
+
+
+We want:
+
+In training mode on testnet:
+
+Execute every action returned by build_training_actions (subject to the training limits we defined).
+
+Still log one decision entry, but include the full list of legs in the log for transparency & training.
+
+Change this logic to:
+
+if settings.training_mode and settings.is_training_on_testnet:
+    training_actions = build_training_actions(agent_state, settings)
+
+    if training_actions:
+        print("Training mode: candidate ladder:")
+        for ta in training_actions:
+            sym = ta.get("params", {}).get("symbol", "?")
+            strat = ta.get("strategy", "?")
+            diag = ta.get("diagnostics", {})
+            print(
+                f"  [{strat}] {sym} "
+                f"Δ≈{diag.get('delta', '?')}, "
+                f"DTE={diag.get('dte', '?')}, "
+                f"IVRV={diag.get('ivrv', '?')}"
+            )
+
+        # Execute all training actions as a batch
+        batch_results = []
+        for ta in training_actions:
+            # Risk checks will be skipped in training_on_testnet anyway
+            rc = check_action_allowed(agent_state, ta, settings)
+            exec_result = execute_action(client, ta, settings)
+            batch_results.append({
+                "action": ta,
+                "risk_check": rc.__dict__ if hasattr(rc, "__dict__") else rc,
+                "execution": exec_result,
+            })
+
+        # For logging, synthesize a 'TRAINING_LADDER' meta-action
+        proposed_action = {
+            "action": "TRAINING_LADDER",
+            "mode": "training",
+            "params": {
+                "legs": [
+                    {
+                        "strategy": ta.get("strategy"),
+                        "symbol": ta.get("params", {}).get("symbol"),
+                        "underlying": ta.get("underlying"),
+                        "diagnostics": ta.get("diagnostics", {}),
+                    }
+                    for ta in training_actions
+                ]
+            },
+            "reasoning": "Training mode on testnet: executed ladder of short calls across profiles.",
+        }
+
+        # And summarize execution into a simple object
+        execution_summary = {
+            "status": "simulated" if settings.dry_run else "completed",
+            "dry_run": settings.dry_run,
+            "legs": batch_results,
+        }
+
+        # Later, when building the decision log, use:
+        # final_action = proposed_action
+        # execution = execution_summary
+        # risk_check can be a dummy 'allowed=True, reasons=["training_mode on testnet: risk checks skipped"]'
+
+    else:
+        proposed_action = rule_decide_action(agent_state, candidates, settings)
+
+
+Important:
+
+Do not change the non-training branches (llm_enabled, pure rule-based, etc.).
+
+Make sure the final decision log still has a single top-level proposed_action, final_action, execution, risk_check, but that execution["legs"] contains the per-profile details.
+
+In training mode we don’t care about strict risk limits; risk_engine.check_action_allowed already skips checks when is_training_on_testnet is true.
+
+5. Training data: keep track of strategy (if needed)
+
+If you are using src/backtest/training_dataset.py and TrainingExample for offline RL later:
+
+Optional but recommended
+
+Extend TrainingExample (in src/backtest/types.py) to include a strategy: str | None field.
+
+When converting a decision log into TrainingExample, populate strategy from:
+
+action.get("strategy") for single-leg actions, or
+
+leg["action"]["strategy"] for each leg in the training ladder.
+
+This will allow us later to ask questions like:
+
+“How did aggressive profile legs perform vs conservative?”
+
+“Should we keep all three profiles, or merge them?”

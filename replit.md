@@ -41,6 +41,7 @@ The agent is built with a clear separation of concerns, featuring modules for co
 - **Calibration vs Deribit**: Compares synthetic Black-Scholes option prices against live Deribit mark prices. Uses RV-based IV model matching the synthetic backtester (sigma = RV(7d) * iv_multiplier * skew_factor), fetches real-time option chains from Deribit public API, and reports Mean Absolute Error (MAE) and bias. Displays computed realized volatility and allows tuning via iv_multiplier slider. Handles both inverse (BTC/ETH-settled) and linear (USDC-settled) contracts correctly.
 - **Synthetic Skew Engine**: Derives IV skew factors from live Deribit smile data. Computes skew anchors at deltas [0.15, 0.25, 0.35, 0.50] by comparing IV to ATM IV, then interpolates linearly for any delta. Skew anchors are cached per (underlying, option_type) to minimize API calls. Skew is applied to both calibration and synthetic backtester pricing.
 - **Structured Logging**: Uses JSONL for structured logging of all decisions and actions, facilitating future analysis and ML/RL training.
+- **Position Persistence**: Bot-managed positions are automatically saved to `data/positions.json` and restored on restart, ensuring position tracking survives workflow restarts.
 
 ### Technical Implementations
 - **Configuration**: Pydantic settings are used for managing application configuration and switching between research/production modes.

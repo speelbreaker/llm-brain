@@ -6,15 +6,20 @@ can display PnL without scraping logs. Designed for *approximate* PnL;
 if you need exchange-perfect numbers, extend this module to read full
 trade history from Deribit.
 
-This module is deliberately self-contained and has no side effects on import.
+Persistence: Positions are saved to a JSON file and restored on restart.
 """
 from __future__ import annotations
 
+import json
+import os
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, asdict
 from datetime import datetime, timezone
+from pathlib import Path
 from threading import Lock
 from typing import Dict, List, Optional, Literal, Any
+
+DEFAULT_PERSISTENCE_PATH = Path("data/positions.json")
 
 Side = Literal["SHORT", "LONG"]
 OptionType = Literal["CALL", "PUT"]
@@ -129,16 +134,30 @@ class PositionChain:
 
 class PositionTracker:
     """
-    Thread-safe tracker of bot-managed positions.
+    Thread-safe tracker of bot-managed positions with JSON persistence.
 
     Assumes linear USDC-settled options with contract_size=1.0.
     For inverse / other contract sizes, adjust `_pnl_for_leg`.
+    
+    Positions are automatically saved to disk after each update and
+    restored on initialization.
     """
 
-    def __init__(self, notional_multiplier: float = 1.0) -> None:
+    def __init__(
+        self,
+        notional_multiplier: float = 1.0,
+        persistence_path: Optional[Path] = None,
+    ) -> None:
         self._lock = Lock()
         self._chains: Dict[str, PositionChain] = {}
         self._notional_multiplier = float(notional_multiplier)
+        self._persistence_path = persistence_path or DEFAULT_PERSISTENCE_PATH
+        
+        # Ensure data directory exists
+        self._persistence_path.parent.mkdir(parents=True, exist_ok=True)
+        
+        # Load persisted positions on startup
+        self._load_from_disk()
 
     def _find_open_chain_for(self, underlying: str, strategy_type: StrategyType) -> Optional[PositionChain]:
         """Find an open chain for the given underlying and strategy (must be called with lock held)."""
@@ -186,6 +205,7 @@ class PositionTracker:
             return float(params.get("price", 0.0))
 
         now = _utc_now()
+        chain: Optional[PositionChain] = None
 
         with self._lock:
             if action == "OPEN_COVERED_CALL":
@@ -270,6 +290,9 @@ class PositionTracker:
 
             if chain is not None:
                 self._update_chain_unrealized(chain)
+            
+            # Auto-save after any position update
+            self._save_to_disk()
 
     def refresh_marks(self, client: Any) -> None:
         """
@@ -421,6 +444,128 @@ class PositionTracker:
             "note": None,
             "expiry": expiry_str,
         }
+
+    def _save_to_disk(self) -> None:
+        """Save all chains to disk (must be called with lock held)."""
+        try:
+            data = {
+                "version": 1,
+                "saved_at": _utc_now().isoformat(),
+                "chains": {},
+            }
+            
+            for position_id, chain in self._chains.items():
+                chain_data = {
+                    "position_id": chain.position_id,
+                    "underlying": chain.underlying,
+                    "option_type": chain.option_type,
+                    "strategy_type": chain.strategy_type,
+                    "mode": chain.mode,
+                    "exit_style": chain.exit_style,
+                    "open_time": chain.open_time.isoformat(),
+                    "close_time": chain.close_time.isoformat() if chain.close_time else None,
+                    "realized_pnl": chain.realized_pnl,
+                    "realized_pnl_pct": chain.realized_pnl_pct,
+                    "max_drawdown_pct": chain.max_drawdown_pct,
+                    "unrealized_pnl": chain.unrealized_pnl,
+                    "unrealized_pnl_pct": chain.unrealized_pnl_pct,
+                    "expiry": chain.expiry.isoformat() if chain.expiry else None,
+                    "legs": [],
+                }
+                
+                for leg in chain.legs:
+                    leg_data = {
+                        "symbol": leg.symbol,
+                        "underlying": leg.underlying,
+                        "option_type": leg.option_type,
+                        "side": leg.side,
+                        "quantity": leg.quantity,
+                        "entry_price": leg.entry_price,
+                        "entry_time": leg.entry_time.isoformat(),
+                        "exit_price": leg.exit_price,
+                        "exit_time": leg.exit_time.isoformat() if leg.exit_time else None,
+                        "mark_price": leg.mark_price,
+                    }
+                    chain_data["legs"].append(leg_data)
+                
+                data["chains"][position_id] = chain_data
+            
+            # Write atomically using temp file + os.replace (cross-platform)
+            temp_path = self._persistence_path.with_suffix(".tmp")
+            with open(temp_path, "w") as f:
+                json.dump(data, f, indent=2)
+            os.replace(temp_path, self._persistence_path)
+            
+        except Exception as e:
+            print(f"[PositionTracker] Failed to save positions: {e}")
+
+    def _load_from_disk(self) -> None:
+        """Load chains from disk on startup."""
+        if not self._persistence_path.exists():
+            print("[PositionTracker] No persisted positions found, starting fresh")
+            return
+        
+        try:
+            with open(self._persistence_path, "r") as f:
+                data = json.load(f)
+            
+            if data.get("version") != 1:
+                print(f"[PositionTracker] Unknown version {data.get('version')}, skipping load")
+                return
+            
+            chains_data = data.get("chains", {})
+            loaded_count = 0
+            
+            for position_id, chain_data in chains_data.items():
+                legs = []
+                for leg_data in chain_data.get("legs", []):
+                    leg = PositionLeg(
+                        symbol=leg_data["symbol"],
+                        underlying=leg_data["underlying"],
+                        option_type=leg_data["option_type"],
+                        side=leg_data["side"],
+                        quantity=leg_data["quantity"],
+                        entry_price=leg_data["entry_price"],
+                        entry_time=datetime.fromisoformat(leg_data["entry_time"]),
+                        exit_price=leg_data.get("exit_price"),
+                        exit_time=datetime.fromisoformat(leg_data["exit_time"]) if leg_data.get("exit_time") else None,
+                        mark_price=leg_data.get("mark_price"),
+                    )
+                    legs.append(leg)
+                
+                chain = PositionChain(
+                    position_id=chain_data["position_id"],
+                    underlying=chain_data["underlying"],
+                    option_type=chain_data["option_type"],
+                    strategy_type=chain_data["strategy_type"],
+                    mode=chain_data["mode"],
+                    exit_style=chain_data.get("exit_style"),
+                    legs=legs,
+                    open_time=datetime.fromisoformat(chain_data["open_time"]),
+                    close_time=datetime.fromisoformat(chain_data["close_time"]) if chain_data.get("close_time") else None,
+                    realized_pnl=chain_data.get("realized_pnl", 0.0),
+                    realized_pnl_pct=chain_data.get("realized_pnl_pct", 0.0),
+                    max_drawdown_pct=chain_data.get("max_drawdown_pct", 0.0),
+                    unrealized_pnl=chain_data.get("unrealized_pnl", 0.0),
+                    unrealized_pnl_pct=chain_data.get("unrealized_pnl_pct", 0.0),
+                    expiry=datetime.fromisoformat(chain_data["expiry"]) if chain_data.get("expiry") else None,
+                )
+                self._chains[position_id] = chain
+                loaded_count += 1
+            
+            open_count = sum(1 for c in self._chains.values() if c.is_open())
+            closed_count = loaded_count - open_count
+            print(f"[PositionTracker] Loaded {loaded_count} positions ({open_count} open, {closed_count} closed)")
+            
+        except Exception as e:
+            print(f"[PositionTracker] Failed to load positions: {e}")
+
+    def clear_all(self) -> None:
+        """Clear all positions (useful for testing)."""
+        with self._lock:
+            self._chains.clear()
+            self._save_to_disk()
+            print("[PositionTracker] Cleared all positions")
 
 
 position_tracker = PositionTracker(notional_multiplier=1.0)
