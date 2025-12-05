@@ -18,6 +18,7 @@ from src.status_store import status_store
 from src.decisions_store import decisions_store
 from src.chat_with_agent import chat_with_agent
 from src.config import settings
+from src.position_tracker import position_tracker
 
 
 app = FastAPI(
@@ -125,6 +126,20 @@ def toggle_training_mode(payload: Dict[str, Any] = Body(...)) -> JSONResponse:
         "training_mode": settings.training_mode,
         "strategies": settings.training_strategies,
     })
+
+
+@app.get("/api/positions/open")
+def get_open_positions() -> JSONResponse:
+    """Return open bot-managed positions for the UI."""
+    payload = position_tracker.get_open_positions_payload()
+    return JSONResponse(content=payload)
+
+
+@app.get("/api/positions/closed")
+def get_closed_positions() -> JSONResponse:
+    """Return closed bot-managed chains with realized PnL."""
+    payload = position_tracker.get_closed_positions_payload()
+    return JSONResponse(content=payload)
 
 
 class BacktestRequest(BaseModel):
@@ -1001,6 +1016,59 @@ def index() -> str:
     </div>
 
     <div class="section">
+      <h2>Bot Positions</h2>
+      
+      <h3 style="margin-bottom: 0.5rem;">Open Positions</h3>
+      <div style="overflow-x: auto; max-height: 260px; overflow-y: auto; margin-bottom: 1.5rem;">
+        <table class="steps-table">
+          <thead>
+            <tr>
+              <th>Underlying</th>
+              <th>Type</th>
+              <th>Strategy</th>
+              <th>Symbol</th>
+              <th>Qty</th>
+              <th>Entry</th>
+              <th>Mark</th>
+              <th>Unreal. PnL</th>
+              <th>Unreal. %</th>
+              <th>DTE</th>
+              <th>Rolls</th>
+              <th>Mode</th>
+            </tr>
+          </thead>
+          <tbody id="live-open-positions-body">
+            <tr><td colspan="12" style="text-align:center;color:#666;">No open positions</td></tr>
+          </tbody>
+        </table>
+      </div>
+      
+      <h3 style="margin-bottom: 0.5rem;">Closed Chains</h3>
+      <div style="overflow-x: auto; max-height: 260px; overflow-y: auto;">
+        <table class="steps-table">
+          <thead>
+            <tr>
+              <th>Closed At</th>
+              <th>Underlying</th>
+              <th>Type</th>
+              <th>Strategy</th>
+              <th>Symbol</th>
+              <th>Legs</th>
+              <th>Rolls</th>
+              <th>Real. PnL</th>
+              <th>Real. %</th>
+              <th>Max DD %</th>
+              <th>Mode</th>
+            </tr>
+          </thead>
+          <tbody id="live-closed-positions-body">
+            <tr><td colspan="11" style="text-align:center;color:#666;">No closed chains yet</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="section">
       <h2>Recent Decisions</h2>
       <div style="overflow-x: auto;">
         <table class="decisions-table">
@@ -1391,8 +1459,85 @@ def index() -> str:
         
         document.getElementById('status-box').innerText = JSON.stringify(data, null, 2);
         document.getElementById('last-update').innerText = 'Last update: ' + new Date().toLocaleTimeString();
+        
+        updateOpenPositions();
+        updateClosedPositions();
       }} catch (err) {{
         console.error('Status fetch error:', err);
+      }}
+    }}
+    
+    async function updateOpenPositions() {{
+      try {{
+        const res = await fetch('/api/positions/open');
+        const data = await res.json();
+        const tbody = document.getElementById('live-open-positions-body');
+        const positions = data.positions || [];
+
+        if (positions.length === 0) {{
+          tbody.innerHTML = '<tr><td colspan="12" style="text-align:center;color:#666;">No open positions</td></tr>';
+          return;
+        }}
+
+        tbody.innerHTML = positions.map(pos => {{
+          const typeLabel = (pos.side || 'SHORT') + ' ' + (pos.option_type || 'CALL');
+          const stratLabel = (pos.strategy_type || '').replace(/_/g, ' ');
+          const pnlClass = pos.unrealized_pnl >= 0 ? 'traded-yes' : 'traded-no';
+
+          return `<tr>
+            <td>${{pos.underlying}}</td>
+            <td>${{typeLabel}}</td>
+            <td>${{stratLabel}}</td>
+            <td>${{pos.symbol}}</td>
+            <td>${{pos.quantity.toFixed(3)}}</td>
+            <td>${{pos.entry_price.toFixed(6)}}</td>
+            <td>${{pos.mark_price.toFixed(6)}}</td>
+            <td class="${{pnlClass}}">${{pos.unrealized_pnl.toFixed(2)}}</td>
+            <td class="${{pnlClass}}">${{pos.unrealized_pnl_pct.toFixed(1)}}%</td>
+            <td>${{pos.dte.toFixed(1)}}</td>
+            <td>${{pos.num_rolls}}</td>
+            <td>${{pos.mode}}</td>
+          </tr>`;
+        }}).join('');
+      }} catch (err) {{
+        console.error('Open positions fetch error:', err);
+      }}
+    }}
+    
+    async function updateClosedPositions() {{
+      try {{
+        const res = await fetch('/api/positions/closed');
+        const data = await res.json();
+        const tbody = document.getElementById('live-closed-positions-body');
+        const chains = data.chains || [];
+
+        if (chains.length === 0) {{
+          tbody.innerHTML = '<tr><td colspan="11" style="text-align:center;color:#666;">No closed chains yet</td></tr>';
+          return;
+        }}
+
+        tbody.innerHTML = chains.slice(-50).reverse().map(chain => {{
+          const t = new Date(chain.close_time).toISOString().replace('T', ' ').slice(0, 19);
+          const typeLabel = 'SHORT ' + (chain.option_type || 'CALL');
+          const stratLabel = (chain.strategy_type || '').replace(/_/g, ' ');
+          const pnlClass = chain.realized_pnl >= 0 ? 'traded-yes' : 'traded-no';
+
+          return `<tr>
+            <td>${{t}}</td>
+            <td>${{chain.underlying}}</td>
+            <td>${{typeLabel}}</td>
+            <td>${{stratLabel}}</td>
+            <td>${{chain.symbol}}</td>
+            <td>${{chain.num_legs}}</td>
+            <td>${{chain.num_rolls}}</td>
+            <td class="${{pnlClass}}">${{chain.realized_pnl.toFixed(2)}}</td>
+            <td class="${{pnlClass}}">${{chain.realized_pnl_pct.toFixed(1)}}%</td>
+            <td>${{chain.max_drawdown_pct.toFixed(1)}}%</td>
+            <td>${{chain.mode}}</td>
+          </tr>`;
+        }}).join('');
+      }} catch (err) {{
+        console.error('Closed positions fetch error:', err);
       }}
     }}
     
