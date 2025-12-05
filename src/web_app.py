@@ -1494,7 +1494,7 @@ def index() -> str:
             <td>${{pos.mark_price.toFixed(6)}}</td>
             <td class="${{pnlClass}}">${{pos.unrealized_pnl.toFixed(2)}}</td>
             <td class="${{pnlClass}}">${{pos.unrealized_pnl_pct.toFixed(1)}}%</td>
-            <td>${{pos.dte.toFixed(1)}}</td>
+            <td>${{Math.max(0, pos.dte).toFixed(1)}}</td>
             <td>${{pos.num_rolls}}</td>
             <td>${{pos.mode}}</td>
           </tr>`;
