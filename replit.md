@@ -77,6 +77,14 @@ A modular Python framework for automated BTC/ETH covered call trading on Deribit
   - Added settlement_ccy selector: "ANY", "USDC", "BTC", or "ETH"
   - Defaults to inverse/ANY for historical compatibility (USDC options only exist after Aug 2025)
   - UI dropdowns in Backtesting Lab for easy selection
+- 2024-12: Multi-leg chain visualization for backtests:
+  - ChainData and ChainLeg dataclasses track leg-by-leg roll history
+  - Recent Chains table in Backtesting Lab shows all tp_and_roll chains
+  - Modal popup displays leg details: open/close times, strike, DTE, PnL, trigger type
+  - Color-coded triggers: tp_roll (green), defensive_roll (orange), expiry (gray)
+  - BacktestManager._append_chain_summary extracts chain data from trades
+  - Bulk API optimization: replaced 704 individual calls with 1 bulk call (~2s vs timeout)
+  - Local Black-Scholes delta calculation avoids API overhead for greeks
 
 ## Architecture
 
