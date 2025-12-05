@@ -18,7 +18,8 @@ from src.state_builder import build_agent_state
 from src.risk_engine import check_action_allowed
 from src.policy_rule_based import decide_action as rule_decide_action
 from src.agent_brain_llm import choose_action_with_llm
-from src.execution import execute_action
+from src.training_policy import build_actions as build_training_actions
+from src.execution import execute_action, execute_actions
 from src.logging_utils import log_decision, log_error, print_decision_summary
 from src.models import ActionType
 from src.decisions_store import decisions_store
@@ -98,6 +99,8 @@ def _build_status_snapshot(
             "policy_version": settings.policy_version,
             "dry_run": settings.dry_run,
             "llm_enabled": settings.llm_enabled,
+            "training_mode": settings.is_training_enabled,
+            "training_strategies": settings.training_strategies if settings.is_training_enabled else [],
             "explore_prob": settings.explore_prob,
             "explore_top_k": settings.explore_top_k,
             "effective_delta_range": [settings.effective_delta_min, settings.effective_delta_max],
@@ -137,6 +140,10 @@ def run_agent_loop_forever(
     print("=" * 60)
     print(f"Operating Mode: {settings.mode.upper()}")
     print(f"Decision Mode: {'LLM-based' if settings.llm_enabled else 'Rule-based'}")
+    print(f"Training Mode: {'ENABLED' if settings.is_training_enabled else 'Disabled'}")
+    if settings.is_training_enabled:
+        print(f"  Strategies: {', '.join(settings.training_strategies)}")
+        print(f"  Max Calls per Underlying: {settings.max_calls_per_underlying_training}")
     print(f"Dry Run: {settings.dry_run}")
     print(f"Explore Probability: {settings.explore_prob * 100:.0f}%")
     print(f"Loop Interval: {settings.loop_interval_sec} seconds")
@@ -204,10 +211,23 @@ def run_agent_loop_forever(
                 time.sleep(settings.loop_interval_sec)
                 continue
             
+            training_actions: list = []
+            is_training = settings.is_training_enabled
+            
             try:
                 print("\nMaking decision...")
                 
-                if settings.llm_enabled:
+                if is_training:
+                    training_actions = build_training_actions(agent_state, settings)
+                    if training_actions:
+                        print(f"Training mode: {len(training_actions)} actions across profiles")
+                        for ta in training_actions:
+                            print(f"  [{ta.get('strategy', '?')}] {ta.get('params', {}).get('symbol', '?')}")
+                        proposed_action = training_actions[0]
+                    else:
+                        proposed_action = rule_decide_action(agent_state, settings)
+                        print(f"Training mode: No suitable candidates, falling back to rule-based")
+                elif settings.llm_enabled:
                     proposed_action = choose_action_with_llm(
                         agent_state,
                         agent_state.candidate_options,
@@ -227,6 +247,7 @@ def run_agent_loop_forever(
                     "params": {},
                     "reasoning": f"Error during decision: {e}",
                 }
+                training_actions = []
             
             try:
                 allowed, reasons = check_action_allowed(agent_state, proposed_action, settings)
@@ -254,16 +275,26 @@ def run_agent_loop_forever(
                 }
             
             try:
-                final_action_type = final_action.get("action", "DO_NOTHING")
-                
-                if final_action_type != ActionType.DO_NOTHING.value:
-                    print(f"\nExecuting: {final_action_type}")
-                    execution_result = execute_action(client, final_action, settings)
+                if is_training and training_actions:
+                    print(f"\nExecuting {len(training_actions)} training actions...")
+                    execution_result = execute_actions(client, training_actions, settings)
+                    print(f"Training execution: {execution_result.get('status')}")
+                    for r in execution_result.get("results", []):
+                        strat = r.get("strategy", "?")
+                        sym = r.get("params", {}).get("symbol", "?")
+                        status = r.get("status", "?")
+                        print(f"  [{strat}] {sym}: {status}")
                 else:
-                    execution_result = {
-                        "status": "skipped",
-                        "message": "Action is DO_NOTHING",
-                    }
+                    final_action_type = final_action.get("action", "DO_NOTHING")
+                    
+                    if final_action_type != ActionType.DO_NOTHING.value:
+                        print(f"\nExecuting: {final_action_type}")
+                        execution_result = execute_action(client, final_action, settings)
+                    else:
+                        execution_result = {
+                            "status": "skipped",
+                            "message": "Action is DO_NOTHING",
+                        }
                 
             except Exception as e:
                 error_msg = f"Execution error: {e}"
@@ -284,20 +315,48 @@ def run_agent_loop_forever(
                 execution_result=execution_result,
             )
             
-            decision_entry = {
-                "timestamp": datetime.utcnow().isoformat(),
-                "decision_source": proposed_action.get("decision_source", "llm" if settings.llm_enabled else "rule_based"),
-                "proposed_action": proposed_action,
-                "final_action": final_action,
-                "risk_check": {"allowed": allowed, "reasons": reasons},
-                "execution": execution_result,
-                "config_snapshot": {
-                    "mode": settings.mode,
-                    "llm_enabled": settings.llm_enabled,
-                    "dry_run": settings.dry_run,
-                },
-            }
-            decisions_store.add(decision_entry)
+            if is_training and training_actions:
+                decision_source = "training_mode"
+                for ta in training_actions:
+                    ta_result = None
+                    for r in execution_result.get("results", []):
+                        if r.get("strategy") == ta.get("strategy"):
+                            ta_result = r
+                            break
+                    decision_entry = {
+                        "timestamp": datetime.utcnow().isoformat(),
+                        "decision_source": decision_source,
+                        "strategy": ta.get("strategy"),
+                        "underlying": ta.get("underlying"),
+                        "proposed_action": ta,
+                        "final_action": ta,
+                        "risk_check": {"allowed": True, "reasons": []},
+                        "execution": ta_result or {"status": "unknown"},
+                        "config_snapshot": {
+                            "mode": settings.mode,
+                            "training_mode": True,
+                            "training_strategies": settings.training_strategies,
+                            "llm_enabled": settings.llm_enabled,
+                            "dry_run": settings.dry_run,
+                        },
+                    }
+                    decisions_store.add(decision_entry)
+            else:
+                decision_entry = {
+                    "timestamp": datetime.utcnow().isoformat(),
+                    "decision_source": proposed_action.get("decision_source", "llm" if settings.llm_enabled else "rule_based"),
+                    "proposed_action": proposed_action,
+                    "final_action": final_action,
+                    "risk_check": {"allowed": allowed, "reasons": reasons},
+                    "execution": execution_result,
+                    "config_snapshot": {
+                        "mode": settings.mode,
+                        "training_mode": False,
+                        "llm_enabled": settings.llm_enabled,
+                        "dry_run": settings.dry_run,
+                    },
+                }
+                decisions_store.add(decision_entry)
             
             try:
                 log_decision(

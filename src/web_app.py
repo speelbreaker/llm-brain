@@ -270,6 +270,8 @@ def index() -> str:
     decision_mode = "LLM" if settings.llm_enabled else "Rule-based"
     op_mode = settings.mode.upper()
     explore_pct = int(settings.explore_prob * 100)
+    training_enabled = settings.is_training_enabled
+    training_badge = f"TRAINING ({', '.join(settings.training_strategies)})" if training_enabled else ""
     
     return f"""
 <!DOCTYPE html>
@@ -303,6 +305,7 @@ def index() -> str:
     .badge-production {{ background: #e8f5e9; color: #2e7d32; }}
     .badge-dry {{ background: #fff3e0; color: #e65100; }}
     .badge-live {{ background: #e8f5e9; color: #2e7d32; }}
+    .badge-training {{ background: #ffecb3; color: #ff6f00; }}
     
     .tabs {{
       display: flex;
@@ -549,6 +552,7 @@ def index() -> str:
     <span class="badge {'badge-dry' if settings.dry_run else 'badge-live'}">
       {'DRY RUN' if settings.dry_run else 'LIVE TRADING'}
     </span>
+    {'<span class="badge badge-training">' + training_badge + '</span>' if training_enabled else ''}
     <span class="badge" id="agent-status-badge" style="background:#e8f5e9;color:#2e7d32;">Active</span>
   </div>
   
