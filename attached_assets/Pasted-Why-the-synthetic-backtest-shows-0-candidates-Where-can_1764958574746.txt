@@ -1,0 +1,456 @@
+Why the synthetic backtest shows “0 candidates”
+Where candidates are built
+
+Candidates for the backtest come from src/backtest/state_builder.py:
+
+# src/backtest/state_builder.py
+
+all_options = ds.list_option_chain(
+    underlying=underlying,
+    as_of=t,
+    settlement_ccy=cfg.option_settlement_ccy,
+    margin_type=cfg.option_margin_type,
+)
+
+candidates: List[OptionSnapshot] = []
+min_dte = cfg.min_dte
+max_dte = cfg.max_dte
+delta_min = cfg.delta_min
+delta_max = cfg.delta_max
+
+for opt in all_options:
+    if opt.kind != "call":
+        continue
+
+    expiry = opt.expiry
+    dte = (expiry - t).total_seconds() / 86400.0
+    if dte < min_dte or dte > max_dte:
+        continue
+
+    if opt.delta is None:
+        continue
+    delta_abs = abs(float(opt.delta))
+    if delta_abs < delta_min or delta_abs > delta_max:
+        continue
+
+    candidates.append(opt)
+
+
+Then the backtest manager uses this:
+
+# src/backtest/manager.py
+state = build_historical_state(ds, config, t)
+spot = state.get("spot")
+options = state.get("candidate_options") or []
+
+if spot is None or spot <= 0 or not options:
+    step = BacktestProgressStep(
+        time=t,
+        candidates=len(options),
+        best_score=0.0,
+        traded=False,
+        exit_style=current_exit_style,
+    )
+    ...
+
+
+So if candidate_options is empty, you see candidates = 0 in the UI and no trades.
+
+Why they’re empty with your current dates
+
+Key points:
+
+DeribitDataSource.list_option_chain pulls the current live chain from Deribit (there is no “as_of” parameter in the real API).
+
+Option expiries in that chain are real calendar dates in the future (e.g. weekly, monthlies, quarterlies around now).
+
+The backtest uses historical timestamps t from your chosen window, e.g.:
+
+start_date = 2024-09-01
+
+end_date = 2025-12-05
+
+DTE is computed as:
+
+dte = (expiry - t).total_seconds() / 86400.0
+
+
+And immediately filtered with:
+
+if dte < min_dte or dte > max_dte:
+    continue
+
+
+Given that the expiries in the live chain are all around late 2025 / 2026, and your t starts in September 2024, for a long time:
+
+dte is hundreds of days, way bigger than your min_dte=3, max_dte=21.
+
+So every option fails the DTE filter → candidates stays empty → UI shows 0 candidates and no trades.
+
+You would only start seeing candidates when t gets within [min_dte, max_dte] days of the earliest current expiry. With a long window starting in 2024, that effectively means you see “zero” for almost the entire run.
+
+This isn’t a bug in the loop itself; it’s a consequence of:
+
+No historical option chain,
+
+Using live expiries while pretending to be in 2024, and
+
+Filtering by DTE relative to the simulated date.
+
+How to fix it for the synthetic universe
+
+For synthetic_bs mode, we don’t actually want to respect Deribit’s real expiries. We want:
+
+Historical spot path (from TV data / OHLC), and
+
+Synthetic options with a configurable DTE (e.g. always 7 days) and IV from either:
+
+fixed IV, or
+
+“RV window * multiplier”.
+
+The clean fix is:
+
+Still use Deribit chain only as a template for strikes / deltas.
+
+But in synthetic_bs mode, override the expiry so that every candidate behaves like a fresh weekly/monthly option sold at time t.
+
+Concretely, in build_historical_state:
+
+If cfg.pricing_mode == "synthetic_bs":
+
+Set synthetic_expiry = t + timedelta(days=cfg.target_dte) (or clamp within [min_dte, max_dte]).
+
+Use that for DTE filtering.
+
+And store it back into the OptionSnapshot so the simulator uses the synthetic maturity when generating prices.
+
+That will immediately fix the “0 candidates” for the synthetic backtest and make the behaviour consistent with the synthetic universe idea.
+
+I’ve folded that change into the prompt for your Builder below.
+
+2. README block (drop-in text)
+
+You can paste this into README.md under something like “Current Behaviour & Roadmap”.
+
+## What the Agent Does Today
+
+### Instruments & Direction
+
+- Trades **options only** (no spot / futures yet).
+- Always a **net seller of options**, never a net buyer.
+- Implemented actions:
+  - `SELL_CALL`
+  - `ROLL_COVERED_CALL` (buy back + sell new)
+  - `CLOSE_COVERED_CALL` (buy back)
+
+### Strategy Type
+
+- Strategy is **covered calls only** on BTC/ETH:
+  - Assume you already hold BTC / ETH.
+  - Sell **OTM calls** against that.
+  - Optionally roll:
+    - Take-profit roll.
+    - Defensive roll (when price runs toward strike).
+
+### Position Management
+
+- At most **one active covered call chain per underlying** in both live agent and backtester.
+- Behaviour by underlying (BTC, ETH):
+  - If **no qualifying short call** is open → try to open one that passes scoring + risk checks.
+  - Otherwise → either:
+    - Do nothing, or
+    - Roll the existing call (depending on policy + risk engine).
+
+- **Ladders / multiple expiries at once** (e.g. 3 different DTEs in parallel) are **not implemented yet**, but the architecture allows it.
+
+### Manual Positions on Deribit
+
+- The state builder fetches **all open positions**, including manual ones.
+- Today there is **no clean distinction** between:
+  - Positions opened by the bot, and
+  - Positions you opened manually.
+
+Practical effect today:
+
+- The agent *sees* any short calls in the portfolio and uses them to decide:
+  - Whether it believes a covered call is already open (so it shouldn’t open another).
+  - Whether roll conditions are met.
+- But there is no explicit “managed vs external” flag, so interaction with manual positions is **not guaranteed or precisely controlled**.
+
+**Planned safety improvement:**
+
+- A config such as `manage_external_positions: true/false` and/or
+- A `client_order_id` prefix (e.g. `"LLM_"`) so the bot only manages its own positions.
+
+### Backtester & Synthetic Universe
+
+- Backtester uses the same core simulator and scoring engine as the live agent.
+- Pricing modes:
+  - `deribit_live`: uses Deribit option OHLC where available.
+  - `synthetic_bs` (default): uses **Black-Scholes synthetic prices** from spot data:
+    - Spot OHLC from Deribit / TradingView-style endpoints.
+    - IV from either:
+      - fixed IV (`synthetic_fixed_iv`), or
+      - realized volatility window * multiplier.
+
+**Important note about synthetic mode:**
+
+- We **do not** have historical option chains from Deribit.
+- In `synthetic_bs` mode we treat the current Deribit chain only as a **template** for strikes / deltas.
+- The expiry used in the simulation is made **synthetic** (e.g. always `target_dte` days from the decision time) so that we always have near-dated options to sell in backtests.
+
+### What’s Coming Next (designed, not fully wired)
+
+1. **Dry-Run Switch (Live Agent)**  
+   - Global `dry_run` flag (already in config) exposed to the UI:
+     - When `true`:
+       - No real orders are sent to Deribit.
+       - Actions are logged and simulated only.
+     - When `false`:
+       - Orders are placed as today.
+   - Training mode uses `dry_run=true` by design.
+
+2. **Position & PnL Dashboard**
+
+   - Dedicated panel in the UI showing:
+     - **Open chains** created by the bot:
+       - Underlying, symbol, size, side, avg entry,
+       - Current mark, unrealized PnL, days to expiry, rolls.
+     - **Closed chains**:
+       - Realized PnL per chain,
+       - Number of rolls, holding period, max drawdown.
+   - Powered by a small `PositionTracker` that:
+     - Tags bot orders via `client_order_id` prefix,
+     - Groups legs into “chains”,
+     - Computes realized + unrealized PnL.
+
+3. **Short Puts / Cash-Secured Puts**
+
+   - Extend the action space to:
+     - `SELL_PUT`, `ROLL_PUT`, `CLOSE_PUT`.
+   - Risk rules:
+     - Only sell puts when there is enough USDC to be **cash-secured**.
+     - Respect per-underlying and portfolio margin limits.
+   - Policy chooses between:
+     - Covered call vs cash-secured put,
+     - Based on IV/RV, skew, and your configured preferences.
+
+4. **Multi-Leg Structures (later)**
+
+   - Vertical call spreads, put spreads, short strangles, butterflies:
+     - Represented as bundles of legs in the simulator.
+     - Backtester can rank bundles by PnL and risk metrics.
+     - Later the LLM policy can choose which structure to deploy.
+
+3. Builder / LLM prompt block
+
+Here’s a single prompt you can paste into your Builder / LLM agent to implement the next set of changes, including fixing the zero-candidate issue.
+
+You are working inside the LLMAgentBrain repo.
+
+Goal: 
+1) Fix the synthetic backtester so it no longer shows “0 candidates” when using historical date ranges.
+2) Add a DRY-RUN on/off switch exposed to the UI.
+3) Add position & PnL tracking panels for bot-managed positions (open + closed).
+4) Prepare the architecture to support SELL_PUT / ROLL_PUT / CLOSE_PUT later (no need to fully implement put trading yet, just shape the interfaces).
+
+Context (current behaviour):
+
+- Live agent:
+  - Supports options only, direction = net seller.
+  - Only covered calls are implemented:
+    - SELL_CALL, ROLL_COVERED_CALL, CLOSE_COVERED_CALL.
+  - At most one active covered-call chain per underlying (BTC, ETH).
+  - Agent state is built by src/state_builder.py using DeribitClient.
+  - Positions include both manual and bot-opened; there is no “managed vs external” flag yet.
+  - There is already a Settings.dry_run flag in src/config.py and src/execution.py respects it.
+
+- Backtester:
+  - Code is under src/backtest/*.
+  - CallSimulationConfig and related types live in src/backtest/types.py.
+  - BacktestManager is src/backtest/manager.py and the web UI talks to it via /api/backtest/* in src/web_app.py.
+  - Historical state is built by src/backtest/state_builder.py using DeribitDataSource.
+  - Candidate options are filtered by DTE and delta:
+
+    for opt in all_options:
+        if opt.kind != "call":
+            continue
+        expiry = opt.expiry
+        dte = (expiry - t).total_seconds() / 86400.0
+        if dte < min_dte or dte > max_dte:
+            continue
+        if opt.delta is None:
+            continue
+        delta_abs = abs(float(opt.delta))
+        if delta_abs < delta_min or delta_abs > delta_max:
+            continue
+        candidates.append(opt)
+
+  - In practice DeribitDataSource.list_option_chain uses the **current** Deribit option chain (no historical expiries), so when we backtest starting in 2024 with min_dte/max_dte = [3,21], dte is huge (> max_dte) for most timestamps; this produces 0 candidates for most of the run.
+
+- Synthetic universe:
+  - src/backtest/covered_call_simulator.py supports a PricingMode:
+    - "deribit_live"
+    - "synthetic_bs"
+  - synthetic_bs uses Black-Scholes to generate synthetic option price paths from spot OHLC.
+  - CallSimulationConfig in src/backtest/types.py has:
+    - pricing_mode: Literal["deribit_live", "synthetic_bs"] = "synthetic_bs"
+    - synthetic_iv_mode, synthetic_fixed_iv, synthetic_rv_window_days, synthetic_iv_multiplier.
+
+Tasks:
+
+=== A. Fix synthetic backtest “0 candidates” issue ===
+
+1) In src/backtest/state_builder.py, modify build_historical_state so that:
+   - It reads cfg.pricing_mode from CallSimulationConfig.
+   - When cfg.pricing_mode == "synthetic_bs":
+     - Do NOT use the real Deribit expiry to determine DTE.
+     - Instead:
+       - Define synthetic_expiry = t + timedelta(days=cfg.target_dte).
+       - Compute dte from this synthetic_expiry, and apply min_dte / max_dte filters to that.
+       - Before appending the OptionSnapshot to candidates, replace its expiry with synthetic_expiry.
+         - Use dataclasses.replace() on the OptionSnapshot to avoid mutating the original.
+
+   - When cfg.pricing_mode == "deribit_live":
+     - Keep the current behaviour (DTE based on real expiry) unchanged.
+
+2) Ensure that the simulator (CoveredCallSimulator) then uses the updated OptionSnapshot.expiry for:
+   - synthetic option price generation, and
+   - hold_to_expiry / tp_and_roll simulation.
+
+3) Add a small logging statement (e.g. via print or a logger) that reports, for debugging:
+   - t, len(all_options), len(candidates), cfg.pricing_mode.
+   - Keep it lightweight and safe for long backtests.
+
+Acceptance: When running a BTC backtest in synthetic_bs mode over a long historical window (e.g., 2024-09-01 to 2025-12-05, 1h or 1d timeframe, min_dte=3, max_dte=21, delta_min=0.15, delta_max=0.35), the UI should show non-zero candidates on most decision steps and should actually produce trades (chains).
+
+=== B. DRY-RUN switch in the UI ===
+
+Already in place:
+- Settings.dry_run in src/config.py
+- src/execution.py checks cfg.dry_run and avoids placing real orders when true.
+
+Implement:
+
+1) Add a new API endpoint in src/web_app.py:
+   - POST /api/mode/dry_run
+   - Request body: {"enable": true/false}
+   - Behaviour:
+     - Update settings.dry_run in memory.
+     - Return current value: {"dry_run": settings.dry_run}
+
+2) Add a small control in the HTML/JS frontend:
+   - In the Live Agent / Dashboard section, add:
+     - A toggle (checkbox or button group) labeled "Dry Run".
+     - On change, send POST /api/mode/dry_run.
+     - Reflect the current value from an initial GET (you can either expose it via an existing status endpoint or add a tiny GET /api/mode/dry_run that just returns the current value).
+
+3) Make sure that:
+   - Training mode (if enabled) requires dry_run = true (this is already enforced in /api/training/toggle; preserve that).
+   - If a user tries to disable dry_run while training mode is active, return a 400 with a clear error.
+
+=== C. Position & PnL tracking for bot-managed positions ===
+
+Goal: Without reading logs, the user should see in the UI:
+
+1) A table of **Open bot positions** (grouped by “chain”):
+   - Underlying
+   - Instrument name
+   - Side (SELL_CALL for now)
+   - Size (contracts)
+   - Avg entry price
+   - Current mark price
+   - Unrealized PnL (USD)
+   - DTE
+   - Number of rolls in chain
+
+2) A table of **Closed bot chains**:
+   - Underlying
+   - Chain start date
+   - Chain end date
+   - Number of legs (rolls)
+   - Realized PnL (USD)
+   - Max drawdown for the chain (if easily computed)
+   - Notes (e.g. TP roll, defensive roll, expiry)
+
+Implementation plan:
+
+1) Create a new module src/position_tracker.py with:
+   - A dataclass or Pydantic model for a single leg:
+     - symbol, underlying, option_type, side, size, entry_price, exit_price, entry_time, exit_time, realized_pnl, client_order_id.
+   - A model for a chain:
+     - underlying, chain_id, legs: list[Leg], status: "OPEN" | "CLOSED", realized_pnl, unrealized_pnl, open_time, close_time, max_drawdown_pct, metadata (exit_style, etc.).
+   - A PositionTracker class with in-memory state and optional JSON persistence under data/positions.json:
+     - record_open_leg(...)
+     - record_close_leg(...)
+     - update_mark_price(symbol, mark_price) to refresh unrealized PnL.
+     - get_open_chains() -> list[ChainSummary]
+     - get_closed_chains() -> list[ChainSummary]
+
+2) Tag bot orders:
+   - Decide on a prefix, e.g. "LLMBOT_" for client_order_id / label.
+   - In src/execution.py, when placing an order in SELL_COVERED_CALL, ROLL_COVERED_CALL, CLOSE_COVERED_CALL:
+     - Attach a label with the prefix (respecting any existing label logic).
+   - PositionTracker will treat only positions / trades with this prefix as “managed by bot”.
+
+3) Wire the tracker:
+   - After each successful execution in src/execution.py:
+     - Call PositionTracker to update chains based on:
+       - action type (SELL_CALL, ROLL_COVERED_CALL, CLOSE_COVERED_CALL),
+       - symbol,
+       - size,
+       - fill price,
+       - timestamp from Deribit.
+   - On each agent loop iteration, when we fetch positions and tickers:
+     - Update mark prices in PositionTracker for open chains.
+
+4) API & UI:
+   - Add two endpoints in src/web_app.py:
+     - GET /api/positions/open
+       - Returns JSON list of open chains with the fields needed for the UI table.
+     - GET /api/positions/closed
+       - Returns JSON list of closed chains with realized PnL and stats.
+   - In the frontend, add a “Bot Positions” section with two tables:
+     - “Open Positions” (open chains).
+     - “Closed Chains / Realized PnL”.
+   - Make sure these endpoints are lightweight and safe to poll every ~5–10 seconds.
+
+For now it is OK if historical positions from before the PositionTracker existed are not reconstructed; focus on correctly tracking from here forward.
+
+=== D. Prepare for short puts (no full trading logic yet) ===
+
+We just want to wire the types and basic plumbing so that later we can implement real put logic.
+
+1) In src/models.py:
+   - Extend ActionType enum to include:
+     - SELL_PUT
+     - ROLL_PUT
+     - CLOSE_PUT
+
+2) In src/risk_engine.py:
+   - Add stub methods for put-specific checks, e.g.:
+     - can_open_cash_secured_put(...)
+     - can_roll_put(...)
+   - For now, they can be simple and conservative:
+     - require that free USDC >= notionally required to be cash-secured for the strike, size, and contract_size.
+
+3) In src/policy_rule_based.py:
+   - Add placeholder logic that could, in the future, consider puts:
+     - For now, it can simply never return SELL_PUT (keep behaviour unchanged) but have the branches commented / sketched.
+   - Document clearly that these branches are placeholders for future work.
+
+4) In src/backtest/types.py and src/backtest/covered_call_simulator.py:
+   - Keep existing functionality focused on calls, but:
+     - Rename anything that’s clearly “call-only” in a way that would make later extension easier (without breaking current behaviour).
+     - For example, comments and type names can note that PnL formulas are “short-call specific”.
+
+Do NOT change the current live behaviour for calls yet; the put path should be effectively disabled until we explicitly implement it.
+
+Testing:
+
+- After changes, verify:
+  - Backtest in synthetic_bs mode over a long window produces non-zero candidates and some trades.
+  - /api/mode/dry_run toggles correctly and shows on the UI; training toggle still requires dry_run=true.
+  - /api/positions/open and /api/positions/closed return sane JSON (even if initially empty).
+  - Existing live covered-call behaviour is unchanged when dry_run=false.
