@@ -51,7 +51,7 @@ externalPort = 3001
 [userenv]
 
 [userenv.shared]
-DRY_RUN = "true"
+DRY_RUN = "false"
 LLM_ENABLED = "true"
 DEFAULT_ORDER_SIZE = "0.1"
 MAX_EXPIRY_EXPOSURE = "0.1"
