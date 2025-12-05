@@ -205,6 +205,7 @@ class PositionTracker:
                     entry_time=now,
                     mark_price=price,
                 )
+                expiry = parse_deribit_expiry(symbol)
                 chain = PositionChain(
                     position_id=position_id,
                     underlying=underlying,
@@ -214,6 +215,7 @@ class PositionTracker:
                     exit_style=exit_style,
                     legs=[leg],
                     open_time=now,
+                    expiry=expiry,
                 )
                 self._chains[position_id] = chain
 
@@ -234,16 +236,22 @@ class PositionTracker:
                         chain.realized_pnl += self._pnl_for_leg(leg)
 
                 open_price = _extract_price("to_symbol") or close_price
+                new_symbol = to_symbol or from_symbol
                 new_leg = PositionLeg(
-                    symbol=to_symbol or from_symbol,
+                    symbol=new_symbol,
                     underlying=underlying,
                     option_type=option_type,
                     side="SHORT",
                     quantity=size,
                     entry_price=open_price,
                     entry_time=now,
+                    mark_price=open_price,
                 )
                 chain.legs.append(new_leg)
+                
+                new_expiry = parse_deribit_expiry(new_symbol)
+                if new_expiry is not None:
+                    chain.expiry = new_expiry
 
             elif action == "CLOSE_COVERED_CALL":
                 chain = self._find_open_chain_for(underlying, strategy_type)
