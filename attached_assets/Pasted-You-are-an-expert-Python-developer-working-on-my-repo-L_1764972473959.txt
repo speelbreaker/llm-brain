@@ -1,0 +1,255 @@
+You are an expert Python developer working on my repo **LLMAgentBrain**.
+
+Goal
+=====
+In **training / research mode**, I want the agent to be able to open **multiple simultaneous positions (ladders)** without being blocked by the risk engine. This is *only* for learning / simulation (dry-run). In live mode, all current risk checks must remain unchanged.
+
+Current Behavior (important)
+============================
+- The project lives under `LLMAgentBrain/src/`.
+- Config:
+  - `src/config.py` defines the `Settings` class with:
+    - `mode: Literal["research", "live"]`
+    - `training_mode: bool`
+    - Property: 
+      ```python
+      @property
+      def is_training_enabled(self) -> bool:
+          return self.mode == "research" and self.training_mode
+      ```
+- Risk engine:
+  - `src/risk_engine.py` defines `RiskConfig`, `RiskCheck`, and the core function:
+    ```python
+    def check_action_allowed(
+        agent_state: AgentState,
+        proposed_action: Dict[str, Any],
+        config: Settings | None = None,
+    ) -> RiskCheck:
+        ...
+    ```
+  - Inside this function we enforce:
+    - `max_margin_used_pct`
+    - `max_positions_per_underlying`
+    - `max_net_delta_abs`
+    - spacing between strikes and expiries
+    - min account balance, etc.
+  - Those limits are intended for **real trading**, but right now they also block our research bot after it opens a single position.
+- Training profiles / strategy:
+  - `src/training_profiles.py` defines multiple training configurations such as:
+    - `"conservative"`
+    - `"moderate"`
+    - `"aggressive"`
+    - `"deep_otm"` etc.
+  - `src/training_policy.py` implements:
+    ```python
+    def is_training_enabled(settings: Settings) -> bool: ...
+    def build_training_actions(
+        settings: Settings,
+        agent_state: AgentState,
+        top_candidates: list[CandidateOption],
+    ) -> list[dict]:
+        ...
+    ```
+    This function already knows how to build multiple candidate actions per profile (e.g. aggressive / conservative / moderate).
+- Runtime loop:
+  - `LLMAgentBrain/agent_loop.py` hosts `run_agent_loop()` which:
+    - Builds `agent_state` (via `state_builder`).
+    - Chooses the main `proposed_action` through `LLM`/policy.
+    - Performs a **risk check** and sets `risk_check`, `final_action`, and `execution` fields in the JSON log.
+    - Logs a `config_snapshot` that includes `mode`, `policy_version`, `dry_run`, etc.
+  - In the version currently running, **training actions are not actually executed**, and the risk engine still blocks additional positions even in research/training mode.
+
+What I Want
+===========
+**Only when training is enabled** (`settings.is_training_enabled()`), I want:
+
+1. **Risk checks effectively disabled** (or made very permissive) so the bot can simulate opening many positions without being blocked by portfolio constraints.
+   - This applies only when:
+     - `settings.is_training_enabled()` is `True` (i.e. `mode == "research"` AND `training_mode == True`), and
+     - `settings.dry_run` is `True` (we are not trading real money).
+   - In this regime, `check_action_allowed()` should always return `allowed=True` for option‐selling actions, with a clear reason like `"training_mode: risk checks skipped"`.
+   - In all other regimes (live or non-training), the current risk behavior must remain exactly the same.
+
+2. **Multiple training strategies executed in parallel** in training mode:
+   - Use `training_policy.build_training_actions()` to generate **multiple actions**, e.g. one per profile:
+     - `"conservative"`, `"moderate"`, `"aggressive"`, etc.
+   - For each returned training action:
+     - Run through the training-specific risk rule (which for training we will effectively “allow all” as above).
+     - If allowed, send it through the existing execution path (i.e. via the same execution function that the main `final_action` uses), but **always in dry_run** mode.
+   - This should result in **several positions being opened/simulated simultaneously** per underlying when conditions are good, instead of being blocked after the first one.
+
+3. **Logging / telemetry for training actions**
+   - Extend the JSON log written by `run_agent_loop()` to include a new field, for example:
+     ```python
+     "training_actions_executed": [
+         {
+             "profile": "<profile_name>",
+             "action": { ... },          # same shape as proposed_action/final_action
+             "execution": { ... },       # simulated orders, prices, etc.
+         },
+         ...
+     ]
+     ```
+   - Keep the existing `proposed_action`, `risk_check`, `final_action`, and `execution` fields intact for the main strategy. In training mode we can still have the main `final_action`, but the interesting part for analysis will be `training_actions_executed`.
+   - In `config_snapshot`, please fix the current bug where we store:
+     ```python
+     "training_mode": settings.is_training_enabled
+     ```
+     This stores the function object instead of the boolean. Change it to:
+     ```python
+     "training_mode": settings.is_training_enabled(),
+     "training_strategies": settings.training_strategies if settings.is_training_enabled() else [],
+     ```
+     (or equivalent).
+
+Implementation Details
+======================
+
+### 1. Risk engine: bypass in training mode
+
+In `src/risk_engine.py`:
+
+- Modify `check_action_allowed()` so it begins something like this (pseudo-code, adapt to existing style):
+
+```python
+from src.config import Settings, settings
+
+def check_action_allowed(
+    agent_state: AgentState,
+    proposed_action: dict[str, Any],
+    config: Settings | None = None,
+) -> RiskCheck:
+    cfg = config or settings
+
+    # NEW: short-circuit in training mode (research + training_mode) and dry_run
+    if cfg.is_training_enabled() and cfg.dry_run:
+        return RiskCheck(
+            allowed=True,
+            reasons=["training_mode: risk checks skipped"]
+        )
+
+    # existing logic below: margin checks, max positions per underlying,
+    # net delta limits, spacing between strikes/expiries, etc.
+    ...
+Do not change the existing risk logic beyond adding this short-circuit.
+
+This ensures:
+
+In training+research+dry_run: we allow all actions for simulation.
+
+In any live or non-training mode: current risk behavior is preserved.
+
+2. Running multiple training actions in the loop
+In LLMAgentBrain/agent_loop.py (inside run_agent_loop()):
+
+After we have built agent_state and top_candidates (they are already present in the logs as state["top_candidates"] in my current JSON logs), add logic like:
+
+python
+Copy code
+from src.training_policy import is_training_enabled as training_enabled, build_training_actions
+from src import risk_engine
+
+...
+
+agent_state = build_agent_state(client, settings)
+top_candidates = agent_state.top_candidates  # or however they are currently fetched
+
+training_actions_executed: list[dict[str, Any]] = []
+
+# Existing main policy / LLM decision path here:
+proposed_action, decision_source = choose_main_action(...)
+
+# Existing risk check + execution for the main `proposed_action`
+risk_result = risk_engine.check_action_allowed(agent_state, proposed_action, settings)
+...
+
+# NEW: in training mode, also generate and execute multiple training actions
+if settings.is_training_enabled():
+    training_action_dicts = build_training_actions(settings, agent_state, top_candidates)
+
+    for ta in training_action_dicts:
+        profile_name = ta.get("profile") or ta.get("name") or "unknown"
+        action = ta["action"]          # the ActionType + params
+
+        # Let risk engine short-circuit in training (allowed=True)
+        tr_risk = risk_engine.check_action_allowed(agent_state, action, settings)
+
+        if not tr_risk.allowed:
+            # For training logging, record the rejection reason
+            training_actions_executed.append({
+                "profile": profile_name,
+                "action": action,
+                "risk_check": {"allowed": False, "reasons": tr_risk.reasons},
+                "execution": {"status": "blocked_by_risk"},
+            })
+            continue
+
+        # Use the same execution path as main actions, but this will be dry_run anyway
+        tr_execution = execute_action(client, action, settings, dry_run=settings.dry_run)
+
+        training_actions_executed.append({
+            "profile": profile_name,
+            "action": action,
+            "risk_check": {"allowed": True, "reasons": tr_risk.reasons},
+            "execution": tr_execution,
+        })
+At the point where we construct the log_record (the big dict we currently dump to JSON), add:
+
+python
+Copy code
+log_record = {
+    "log_timestamp": datetime.utcnow().isoformat(),
+    "state": state_dict,
+    "proposed_action": proposed_action,
+    "risk_check": {...},
+    "final_action": final_action,
+    "execution": execution_result,
+    "training_actions_executed": training_actions_executed,  # NEW
+    "config_snapshot": {
+        ...
+        "training_mode": settings.is_training_enabled(),
+        "training_strategies": settings.training_strategies if settings.is_training_enabled() else [],
+        ...
+    },
+    "decision_source": decision_source,
+}
+Make sure we only execute build_training_actions() and training actions when settings.is_training_enabled() is True, so live mode is untouched.
+
+3. Acceptance criteria
+After your changes, I should be able to:
+
+Run the agent with:
+
+mode = "research"
+
+training_mode = true
+
+dry_run = true
+
+Observe in the logs that:
+
+training_actions_executed contains multiple entries per tick, typically one per training profile (conservative / moderate / aggressive / etc.).
+
+Each entry has:
+
+"profile"
+
+"action"
+
+"risk_check" with "allowed": true and reason "training_mode: risk checks skipped" (or similar)
+
+"execution" with simulated orders.
+
+See that the main risk engine behavior for non-training/live modes has not changed:
+
+In mode="live" or training_mode=False, risk checks still enforce max_margin_used_pct, max_positions_per_underlying, spacing rules, etc., exactly as before.
+
+Please implement these changes cleanly, keep the style consistent with the existing codebase, and ensure all existing tests still pass (or add small tests around check_action_allowed for training vs non-training mode if tests exist).
+
+yaml
+Copy code
+
+---
+
+If you want, after Builder makes these changes, you can paste one of the new JSON logs here and we’ll sanity-check that it’s actually spraying multiple ladders in training mode the way you intend.
+::contentReference[oaicite:0]{index=0}

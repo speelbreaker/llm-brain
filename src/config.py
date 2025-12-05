@@ -25,6 +25,10 @@ class Settings(BaseSettings):
         description="Operating mode: 'production' for mainnet, 'research' for testnet exploration",
     )
 
+    deribit_env: Literal["testnet", "mainnet"] = Field(
+        default="testnet",
+        description="Deribit environment: 'testnet' or 'mainnet'",
+    )
     deribit_base_url: str = Field(
         default="https://test.deribit.com",
         description="Deribit API base URL (testnet by default)",
@@ -220,6 +224,16 @@ class Settings(BaseSettings):
     def is_training_enabled(self) -> bool:
         """Check if training mode is active (research + training_mode)."""
         return self.is_research and self.training_mode
+
+    @property
+    def is_testnet(self) -> bool:
+        """Check if connected to Deribit testnet."""
+        return self.deribit_env == "testnet"
+
+    @property
+    def is_training_on_testnet(self) -> bool:
+        """Check if training mode is active AND on testnet (safe for bypassing risk)."""
+        return self.is_training_enabled and self.is_testnet
 
     @property
     def max_calls_per_underlying(self) -> int:

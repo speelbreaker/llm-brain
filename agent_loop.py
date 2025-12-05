@@ -96,10 +96,12 @@ def _build_status_snapshot(
         "execution": execution_result,
         "config_snapshot": {
             "mode": settings.mode,
+            "deribit_env": settings.deribit_env,
             "policy_version": settings.policy_version,
             "dry_run": settings.dry_run,
             "llm_enabled": settings.llm_enabled,
             "training_mode": settings.is_training_enabled,
+            "training_on_testnet": settings.is_training_on_testnet,
             "training_strategies": settings.training_strategies if settings.is_training_enabled else [],
             "explore_prob": settings.explore_prob,
             "explore_top_k": settings.explore_top_k,
@@ -136,14 +138,19 @@ def run_agent_loop_forever(
         signal.signal(signal.SIGTERM, signal_handler)
     
     print("=" * 60)
-    print("Options Trading Agent - Deribit Testnet")
+    print(f"Options Trading Agent - Deribit {settings.deribit_env.upper()}")
     print("=" * 60)
     print(f"Operating Mode: {settings.mode.upper()}")
+    print(f"Deribit Environment: {settings.deribit_env.upper()}")
     print(f"Decision Mode: {'LLM-based' if settings.llm_enabled else 'Rule-based'}")
     print(f"Training Mode: {'ENABLED' if settings.is_training_enabled else 'Disabled'}")
     if settings.is_training_enabled:
         print(f"  Strategies: {', '.join(settings.training_strategies)}")
         print(f"  Max Calls per Underlying: {settings.max_calls_per_underlying_training}")
+        if settings.is_training_on_testnet:
+            print(f"  Risk Checks: BYPASSED (training on testnet)")
+        else:
+            print(f"  Risk Checks: ENFORCED (mainnet)")
     print(f"Dry Run: {settings.dry_run}")
     print(f"Explore Probability: {settings.explore_prob * 100:.0f}%")
     print(f"Loop Interval: {settings.loop_interval_sec} seconds")

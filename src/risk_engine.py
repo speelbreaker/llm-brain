@@ -30,6 +30,9 @@ def check_action_allowed(
     cfg = config or settings
     reasons: list[str] = []
     
+    if cfg.is_training_on_testnet:
+        return True, ["training_mode on testnet: risk checks skipped"]
+    
     action_str = proposed_action.get("action", "DO_NOTHING")
     
     if isinstance(action_str, ActionType):
