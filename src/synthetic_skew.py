@@ -42,7 +42,7 @@ def compute_live_skew_anchors(
     option_type: str = "call",
     min_dte: float = 3.0,
     max_dte: float = 14.0,
-    max_instruments: int = 200,
+    max_quotes: int = 80,
 ) -> List[SkewAnchor]:
     """
     Build a simple skew template from current Deribit data.
@@ -68,24 +68,35 @@ def compute_live_skew_anchors(
         return _flat_anchors()
 
     now = datetime.now(timezone.utc)
-    quotes: List[dict] = []
-
-    for inst in instruments[:max_instruments]:
+    
+    filtered_instruments: List[dict] = []
+    for inst in instruments:
         if inst.get("option_type") != option_type:
             continue
 
-        instrument_name = inst["instrument_name"]
         expiration_ts_ms = inst.get("expiration_timestamp", 0)
         expiration = datetime.fromtimestamp(expiration_ts_ms / 1000.0, tz=timezone.utc)
         dte_days = (expiration - now).total_seconds() / 86400.0
 
         if dte_days < min_dte or dte_days > max_dte:
             continue
-
+        
+        filtered_instruments.append({
+            "instrument_name": inst["instrument_name"],
+            "dte": dte_days,
+        })
+    
+    filtered_instruments.sort(key=lambda x: x["dte"])
+    filtered_instruments = filtered_instruments[:max_quotes]
+    
+    quotes: List[dict] = []
+    for fi in filtered_instruments:
         try:
-            ticker = _deribit_get("public/ticker", {"instrument_name": instrument_name})
+            ticker = _deribit_get("public/ticker", {"instrument_name": fi["instrument_name"]})
             mark_iv = ticker.get("mark_iv")
-            delta = ticker.get("delta")
+            
+            greeks = ticker.get("greeks") or {}
+            delta = greeks.get("delta")
 
             if mark_iv is None or mark_iv <= 0:
                 continue
@@ -93,10 +104,10 @@ def compute_live_skew_anchors(
                 continue
 
             quotes.append({
-                "instrument": instrument_name,
+                "instrument": fi["instrument_name"],
                 "mark_iv": float(mark_iv),
                 "delta": float(delta),
-                "dte": dte_days,
+                "dte": fi["dte"],
             })
         except Exception:
             continue
