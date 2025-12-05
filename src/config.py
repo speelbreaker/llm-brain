@@ -140,6 +140,23 @@ class Settings(BaseSettings):
         description="Directory to save training data files",
     )
 
+    synthetic_iv_multiplier: float = Field(
+        default=1.0,
+        description="Multiplier applied to realized vol for synthetic IV",
+    )
+    synthetic_skew_enabled: bool = Field(
+        default=True,
+        description="If True, apply a static skew curve to synthetic IV based on live Deribit smile",
+    )
+    synthetic_skew_min_dte: float = Field(
+        default=3.0,
+        description="Minimum DTE (days) for options used to estimate skew",
+    )
+    synthetic_skew_max_dte: float = Field(
+        default=14.0,
+        description="Maximum DTE (days) for options used to estimate skew",
+    )
+
     default_order_size: float = Field(
         default=0.1,
         description="Default order size in BTC/ETH",

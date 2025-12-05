@@ -1,0 +1,423 @@
+add a simple, Deribit-derived skew model and wire it into the synthetic universe + calibration.
+Here’s a prompt you can paste into your AI Builder / code agent.
+
+Builder Prompt – Add Synthetic Skew Based on Deribit Smile
+You are working inside the LLMAgentBrain repo.
+
+Goal
+=====
+
+Add a simple, realistic **IV skew model** to the synthetic universe so that:
+
+- Synthetic Black–Scholes prices for BTC/ETH options use:
+  
+  sigma(δ) ≈ RV_7d * synthetic_iv_multiplier * skew_factor(δ)
+
+- skew_factor(δ) is derived from the **current Deribit smile** (mark IV vs delta) and then held fixed as a template for the synthetic backtests.
+
+We must:
+
+1. Implement a small “skew engine” that:
+   - Fetches live Deribit IV vs delta for a near-dated expiry bucket,
+   - Builds a few “skew anchors” by delta,
+   - Provides a function skew_factor(underlying, option_type, abs_delta) with caching and safe fallbacks.
+
+2. Use this skew_factor:
+   - In the **synthetic pricing** used by the backtester (synthetic_bs mode).
+   - In the **calibration** module (src/calibration.py), so the calibration card shows how the skewed synthetic universe compares to Deribit.
+
+3. Keep all **public APIs** unchanged:
+   - Existing backtest endpoints,
+   - Calibration endpoint `/api/calibration`,
+   - UI JSON shapes.
+
+The only behavioral change should be: synthetic prices now incorporate a static skew shape derived from live Deribit.
+
+Important constraints
+=====================
+
+- Do NOT change how the **Deribit-live** pricing mode works (where we use Deribit mark_iv directly). Only synthetic_bs / RV-based synthetic pricing should be altered.
+- Use the existing Black–Scholes and delta helpers (e.g. black_scholes_delta, compute_realized_volatility) instead of reinventing them.
+- Avoid hammering Deribit:
+  - Compute skew anchors at most once per process per (underlying, option_type).
+  - Cache the result in memory.
+
+────────────────────────────────────────
+A. New module: src/synthetic_skew.py
+────────────────────────────────────────
+
+Create a new module `src/synthetic_skew.py` with:
+
+1) Imports:
+
+   ```python
+   from __future__ import annotations
+
+   from dataclasses import dataclass
+   from datetime import datetime, timezone
+   from typing import List, Dict, Tuple, Optional
+
+   import math
+   import requests
+
+   from src.backtest.pricing import black_scholes_delta
+   from src.calibration import deribit_get  # or duplicate a simple deribit_get if import cycles; see note below.
+
+If importing deribit_get from src/calibration would create an import cycle, instead:
+
+
+Copy the minimal deribit_get() implementation into this module and use that.
+
+
+Ensure the base URL is the same as in calibration (https://www.deribit.com/api/v2).
+
+
+
+
+Data structures:
+@dataclass
+class SkewAnchor:
+    delta: float      # absolute delta, e.g. 0.15, 0.25, 0.35, 0.50
+    ratio: float      # IV(δ) / IV_ATM
+
+# Cache: (underlying, option_type) -> list[SkewAnchor] sorted by delta asc
+_SKEW_CACHE: Dict[Tuple[str, str], List[SkewAnchor]] = {}
+
+
+
+Helper: compute live skew anchors from Deribit
+Add a function:
+def compute_live_skew_anchors(
+    underlying: str,
+    option_type: str,
+    min_dte: float = 3.0,
+    max_dte: float = 14.0,
+    max_instruments: int = 200,
+) -> List[SkewAnchor]:
+    """
+    Build a simple call skew template from current Deribit data.
+
+    Steps:
+      1) Fetch non-expired option instruments for the given underlying via public/get_instruments.
+      2) Filter by:
+          - kind == "option"
+          - option_type == ("call" or "put")
+          - expired == False
+      3) For each instrument:
+          - compute DTE (days) from expiration_timestamp.
+          - keep only min_dte <= DTE <= max_dte.
+          - fetch ticker via public/ticker to get mark_iv and delta.
+      4) Find ATM IV:
+          - for calls: instrument with |delta - 0.5| minimal.
+          - for puts: instrument with |delta + 0.5| minimal (if we support puts later).
+        If no good ATM found, return anchors with ratio = 1.0 (flat).
+      5) For calls for now:
+          - use anchor deltas = [0.15, 0.25, 0.35, 0.50].
+          - For each anchor δ_i:
+              - find quotes whose abs(delta) is within +/-0.05 of δ_i.
+              - compute skew_ratio = average(mark_iv / iv_atm) over those quotes.
+              - if no quotes in this window, fallback ratio = 1.0.
+      6) Return a list[SkewAnchor] sorted by delta ascending.
+    """
+    ...
+
+Implementation details:
+
+
+Use deribit_get("public/get_instruments", {"currency": underlying, "kind": "option", "expired": False}).
+
+
+Use deribit_get("public/ticker", {"instrument_name": instrument_name}) for mark_iv, delta.
+
+
+Handle missing or zero mark_iv by skipping that instrument in the skew computation.
+
+
+iv_atm is the mark_iv of the selected ATM instrument.
+
+
+Clamp skew ratios to a sane range, e.g. [0.4, 1.4] to avoid crazy outliers.
+
+
+
+
+Helper: piecewise-linear interpolation of skew factor
+def get_skew_factor(
+    underlying: str,
+    option_type: str,
+    abs_delta: float,
+    skew_enabled: bool,
+    min_dte: float = 3.0,
+    max_dte: float = 14.0,
+) -> float:
+    """
+    Return a skew factor for a given absolute delta in [0, 1].
+
+    - If skew_enabled is False, always return 1.0.
+    - Otherwise:
+        - Lazily initialize anchors for (underlying, option_type) in _SKEW_CACHE
+          using compute_live_skew_anchors(…).
+        - Interpolate linearly between the two nearest anchors by delta.
+        - If abs_delta < smallest anchor delta -> use smallest anchor ratio.
+        - If abs_delta > largest anchor delta -> use largest anchor ratio.
+    """
+    ...
+
+Interpolation formula (given anchors sorted by delta):
+
+
+Find i such that anchors[i].delta <= abs_delta <= anchors[i+1].delta
+
+
+Let t = (abs_delta - anchors[i].delta) / (anchors[i+1].delta - anchors[i].delta)
+
+
+ratio = anchors[i].ratio + t * (anchors[i+1].ratio - anchors[i].ratio)
+
+
+If anything fails (no anchors, exceptions), return 1.0 as safe fallback.
+
+
+────────────────────────────────────────
+B. Config: enable/disable skew + DTE window
+────────────────────────────────────────
+In src/config.py (where CallSimulationConfig or similar lives), add:
+
+
+Global settings (Pydantic fields) for skew:
+synthetic_skew_enabled: bool = Field(
+    default=True,
+    description="If True, apply a static skew curve to synthetic IV based on live Deribit smile.",
+)
+synthetic_skew_min_dte: float = Field(
+    default=3.0,
+    description="Minimum DTE (days) for options used to estimate skew.",
+)
+synthetic_skew_max_dte: float = Field(
+    default=14.0,
+    description="Maximum DTE (days) for options used to estimate skew.",
+)
+
+These values should be used in both backtester and calibration when calling get_skew_factor() or compute_live_skew_anchors().
+
+
+Make sure they can be overridden by environment variables (via the existing settings mechanism).
+
+
+────────────────────────────────────────
+C. Centralize synthetic IV computation
+────────────────────────────────────────
+We want one place that defines:
+sigma_synth(underlying, option_type, abs_delta, rv_annualized, settings)
+
+so both the backtester and calibration use the same logic.
+In src/backtest/pricing.py:
+
+
+Add a helper function:
+from src.synthetic_skew import get_skew_factor
+from src.config import settings  # or pass settings as a parameter if that’s your pattern
+
+def compute_synthetic_iv_with_skew(
+    underlying: str,
+    option_type: str,
+    abs_delta: float,
+    rv_annualized: float,
+) -> float:
+    """
+    Compute synthetic annualized IV for the synthetic universe:
+
+        base_iv = rv_annualized * settings.synthetic_iv_multiplier
+        skew_factor = get_skew_factor(
+            underlying=underlying,
+            option_type=option_type,
+            abs_delta=abs_delta,
+            skew_enabled=settings.synthetic_skew_enabled,
+            min_dte=settings.synthetic_skew_min_dte,
+            max_dte=settings.synthetic_skew_max_dte,
+        )
+
+        sigma = base_iv * skew_factor
+
+    Returns sigma (annualized volatility) to plug into Black–Scholes.
+    """
+    base_iv = max(1e-6, rv_annualized * settings.synthetic_iv_multiplier)
+    skew_factor = get_skew_factor(
+        underlying=underlying,
+        option_type=option_type,
+        abs_delta=abs_delta,
+        skew_enabled=settings.synthetic_skew_enabled,
+        min_dte=settings.synthetic_skew_min_dte,
+        max_dte=settings.synthetic_skew_max_dte,
+    )
+    return max(1e-6, base_iv * skew_factor)
+
+
+
+Wherever synthetic_bs mode previously did something like:
+sigma = rv_annualized * cfg.synthetic_iv_multiplier
+
+change it to:
+abs_delta = abs(black_scholes_delta(
+    spot=spot,
+    strike=strike,
+    t_years=t_years,
+    sigma=max(1e-6, rv_annualized * cfg.synthetic_iv_multiplier),
+    r=r,
+    option_type="call",  # or "put" later
+))
+sigma = compute_synthetic_iv_with_skew(
+    underlying=underlying,
+    option_type="call",
+    abs_delta=abs_delta,
+    rv_annualized=rv_annualized,
+)
+
+Notes:
+
+
+Use the same Black–Scholes delta implementation the repo already uses (e.g. black_scholes_delta from src/backtest/pricing or src/utils).
+
+
+Do not change live Deribit pricing: only synthetic_bs code paths should switch to this.
+
+
+
+
+Make sure both the candidate scoring / synthetic pricing and the simulation/trade PnL use compute_synthetic_iv_with_skew, not two different formulas.
+
+
+────────────────────────────────────────
+D. Update calibration to use skewed synthetic IV
+────────────────────────────────────────
+In src/calibration.py, we recently switched to RV-based IV (using compute_realized_volatility and RV_7d).
+Now we must pipe that through the skew logic so calibration reflects the same synthetic universe as the backtester.
+
+
+Import the helper near the top of src/calibration.py:
+from src.backtest.pricing import compute_synthetic_iv_with_skew, black_scholes_delta
+from src.config import settings
+
+
+
+Inside run_calibration(...), after computing:
+now = datetime.now(timezone.utc)
+spot = get_index_price(underlying)
+rv_window_days = 7
+spot_history = get_spot_history_for_rv(underlying, as_of=now, window_days=rv_window_days)
+
+if spot_history:
+    rv_annualized = compute_realized_volatility(
+        prices=spot_history,
+        as_of=now,
+        window_days=rv_window_days,
+    )
+else:
+    rv_annualized = default_iv
+
+keep rv_annualized and use it in the loop.
+
+
+In the per-quote loop, replace the current sigma computation:
+Currently something like:
+t_years = max(0.0001, q.dte_days / 365.0)
+sigma = synthetic_iv_from_rv(base_iv=rv_annualized, iv_multiplier=iv_multiplier)
+
+Change it to:
+t_years = max(0.0001, q.dte_days / 365.0)
+
+# Approximate delta for this strike using base RV * multiplier, before skew
+base_iv = max(1e-6, rv_annualized * iv_multiplier)
+abs_delta = abs(black_scholes_delta(
+    spot=spot,
+    strike=q.strike,
+    t_years=t_years,
+    sigma=base_iv,
+    r=r,
+    option_type="call",
+))
+
+sigma = compute_synthetic_iv_with_skew(
+    underlying=underlying,
+    option_type="call",
+    abs_delta=abs_delta,
+    rv_annualized=rv_annualized,
+)
+
+Then keep using sigma in black_scholes_call_price(...) as before.
+
+
+Optional but helpful: if CalibrationResult doesn’t yet surface the RV used, you can extend it with:
+rv_annualized: float | None = None
+
+and set it in run_calibration, and include it in the JSON payload returned by /api/calibration, so the frontend can show something like:
+“Underlying BTC @ 89,387 – RV_7d ≈ 77.2%, MAE ~ X%, bias ~ Y%”.
+
+
+────────────────────────────────────────
+E. Safety & sanity checks
+────────────────────────────────────────
+After implementation:
+
+
+uvicorn main:app (or however you run the app).
+
+
+In the UI, use “Calibration vs Deribit”:
+
+
+Underlying: BTC
+
+
+DTE range: 3–14 days
+
+
+IV Multiplier: 1.0
+
+
+
+
+Confirm that:
+
+
+/api/calibration still works.
+
+
+Summary line shows RV_7d and error metrics.
+
+
+Compared to the RV-only calibration (before skew), we expect:
+
+
+OTM upside calls (especially 90k–100k strikes) to have MUCH lower relative error than the 200–1000% you saw.
+
+
+ATM-ish calls to remain close.
+
+
+
+
+
+
+Run a small synthetic backtest as before and ensure nothing crashes. The PnL numbers will change (that’s expected and desired) but the wiring of backtests + UI must remain intact.
+
+
+Do NOT modify:
+
+
+Any endpoint URLs or response shapes.
+
+
+Any live trading logic that uses Deribit mark_iv directly.
+
+
+Only synthetic_bs pricing paths and calibration should use this new skew model.
+
+---
+
+If you give this to your Builder and let it run, your synthetic universe will:
+
+- Use **RV-based IV**,  
+- With a **static skew curve learned from today’s Deribit smile**,  
+- And your calibration card will finally tell you how close that skewed universe is to reality at the strikes/deltas you actually care about.
+::contentReference[oaicite:0]{index=0}
