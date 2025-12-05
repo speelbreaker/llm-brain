@@ -263,26 +263,44 @@ def run_calibration(
     default_iv: float = 0.6,
     r: float = 0.0,
     max_samples: int = 80,
+    rv_window_days: int = 7,
 ) -> CalibrationResult:
     """
     Compare synthetic BS prices vs Deribit mark prices for CALLs.
     
-    1. Fetch current spot from Deribit
-    2. Fetch call chain via get_call_chain()
-    3. Sub-sample to at most max_samples quotes
-    4. For each quote:
+    Uses RV-based IV model matching the synthetic backtester:
+        sigma_synth = realized_vol(window_days) * iv_multiplier
+    
+    1. Fetch current spot and recent spot history from Deribit
+    2. Compute realized volatility from spot history
+    3. Fetch call chain via get_call_chain()
+    4. Sub-sample to at most max_samples quotes
+    5. For each quote:
        - Compute t_years = dte_days / 365.0
-       - Compute sigma = synthetic_iv(...)
+       - Compute sigma = synthetic_iv_from_rv(base_iv, iv_multiplier)
        - Compute synthetic_price via Black-Scholes
        - diff = synthetic_price - mark_price
        - diff_pct = diff / mark_price * 100
-    5. Compute:
+    6. Compute:
        - mae_pct = mean(|diff_pct|)
        - bias_pct = mean(diff_pct)
-    6. Return CalibrationResult with rows and aggregates
+    7. Return CalibrationResult with rows and aggregates
     """
     now = datetime.now(timezone.utc)
     spot = get_index_price(underlying)
+    
+    spot_history = get_spot_history_for_rv(underlying, as_of=now, window_days=rv_window_days)
+    
+    if spot_history:
+        rv_annualized = compute_realized_volatility(
+            prices=spot_history,
+            as_of=now,
+            window_days=rv_window_days,
+        )
+    else:
+        rv_annualized = default_iv
+    
+    base_iv = rv_annualized
     
     quotes = get_call_chain(underlying, min_dte=min_dte, max_dte=max_dte)
     quotes = sorted(quotes, key=lambda q: (q.dte_days, q.strike))
@@ -311,7 +329,7 @@ def run_calibration(
 
     for q in quotes:
         t_years = max(0.0001, q.dte_days / 365.0)
-        sigma = synthetic_iv(q, default_iv=default_iv, iv_multiplier=iv_multiplier)
+        sigma = synthetic_iv_from_rv(base_iv=base_iv, iv_multiplier=iv_multiplier)
 
         synthetic_price_usd = black_scholes_call_price(
             spot=spot,
