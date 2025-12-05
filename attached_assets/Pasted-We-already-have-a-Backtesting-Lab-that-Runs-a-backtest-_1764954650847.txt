@@ -1,0 +1,218 @@
+We already have a Backtesting Lab that:
+
+- Runs a backtest over a date range with:
+  - underlying, timeframe, decision interval
+  - DTE & delta ranges and target values
+  - exit style: hold_to_expiry, tp_and_roll, or both (compare)
+- Returns:
+  - num_trades, final_pnl, final_pnl_vs_hodl, avg_pnl, win_rate
+- Shows:
+  - Live Progress bar
+  - Recent Steps (time, candidates, best score, traded?, exit style)
+
+I want to upgrade this to a more “TradingView Strategy Tester”-style experience:
+
+1) BACKEND: richer summary stats
+2) BACKEND: equity curve over time
+3) FRONTEND: nice summary panel + equity chart
+
+Please implement the following.
+
+-----------------------------------
+1. BACKEND – Equity curve & summary stats
+-----------------------------------
+
+We already have a list of `SimulatedTrade` objects per backtest, each with at least:
+
+- `open_time`, `close_time`
+- `pnl` (absolute PnL in underlying currency or USD)
+- `pnl_vs_hodl` (outperformance vs simply holding the underlying)
+- `max_drawdown_pct` (per-trade chain DD, for multi-leg chains)
+
+We also have the config (from BacktestStartRequest / CallSimulationConfig) and the ability to get the spot price over time.
+
+A. Add config fields for initial capital:
+
+- Extend BacktestStartRequest and CallSimulationConfig with:
+
+  - `initial_capital_usd: float = 10000.0`
+  - `position_size_underlying: float = 1.0`
+
+  For now, interpret `position_size_underlying` as:
+  - We assume we are always long this many units of the underlying (e.g. 1 BTC)
+  - PnL from covered calls is added on top of that.
+  - `initial_capital_usd` is used just as a reference baseline (e.g. price_of_BTC_at_start * position_size) to compute % returns.
+
+B. Build an equity curve
+
+In BacktestManager, after the backtest finishes (after we have the full list of trades for a given exit style):
+
+- Construct a time series of equity vs time, at least sampled at each trade close plus start and end.
+
+  Pseudocode:
+
+  ```python
+  # assume trades are sorted by close_time
+  equity_points = []  # list of (time, equity_usd, hodl_equity_usd)
+
+  # Determine initial underlying price at start_date (first decision or first candle)
+  spot_start = ...   # use market_data_source for underlying at the first decision time
+  base_equity = spot_start * position_size_underlying
+
+  equity = base_equity
+  hodl_equity = base_equity  # hodl baseline: just 1 BTC (or ETH) held with no calls
+  cumulative_pnl = 0.0
+  cumulative_pnl_vs_hodl = 0.0
+
+  # Add initial point
+  equity_points.append((start_time, equity, hodl_equity))
+
+  for trade in trades:
+      cumulative_pnl += trade.pnl
+      cumulative_pnl_vs_hodl += trade.pnl_vs_hodl
+
+      # get spot at trade.close_time
+      spot = ...  # from market_data_source
+      hodl_equity = spot * position_size_underlying
+      equity = hodl_equity + cumulative_pnl_vs_hodl  # equity vs hodl baseline
+
+      equity_points.append((trade.close_time, equity, hodl_equity))
+
+  # Optionally: add final point at end_date if different from last trade.close_time
+From equity_points, compute:
+
+net_profit_usd = equity_points[-1].equity - equity_points[0].equity
+
+net_profit_pct = net_profit_usd / equity_points[0].equity * 100
+
+max_drawdown_pct over the equity curve:
+
+classic running-peak drawdown in % and USD
+
+num_trades (already present)
+
+win_rate (already present, but keep)
+
+avg_trade_usd (mean PnL per trade)
+
+profit_factor = gross_profit / abs(gross_loss):
+
+gross_profit = sum(pnl for pnl > 0)
+
+gross_loss = sum(pnl for pnl < 0)
+
+Optionally:
+
+exposure_time_pct (percentage of time with an open short call)
+
+sharpe_ratio (optional: use daily returns of equity curve, risk-free = 0)
+
+C. Add these to BacktestStatus
+
+Extend the BacktestStatus dataclass to include:
+
+python
+Copy code
+@dataclass
+class BacktestStatus:
+    ...
+    metrics: Dict[str, Any]  # currently used summary
+    equity_curve: List[Dict[str, Any]]  # NEW: list of {time, equity_usd, hodl_equity_usd}
+Format for equity_curve entries:
+
+python
+Copy code
+{
+  "time": "2025-11-28T00:00:00Z",
+  "equity": 12345.67,
+  "hodl_equity": 11890.12
+}
+And for metrics, add at least:
+
+python
+Copy code
+"initial_equity": float,
+"net_profit_usd": float,
+"net_profit_pct": float,
+"max_drawdown_pct": float,
+"max_drawdown_usd": float,
+"num_trades": int,
+"win_rate": float,
+"avg_trade_usd": float,
+"profit_factor": float,
+"final_pnl": float,         # existing
+"final_pnl_vs_hodl": float, # existing
+"avg_pnl": float,           # existing
+Serialize these in get_status() so /api/backtest/status returns them when status == "FINISHED".
+
+FRONTEND – TradingView-style summary & equity chart
+
+In the Backtesting Lab UI:
+
+A. Replace the plain JSON “Results” block with a nicer summary panel, e.g.:
+
+Net Profit (% and USD)
+
+Max Drawdown (% and USD)
+
+Total Trades
+
+Win Rate
+
+Average Trade
+
+Profit Factor
+
+Use the metrics dict from /api/backtest/status instead of raw JSON.
+
+B. Add a small equity curve chart
+
+Using plain HTML/JS (no heavy chart lib required, but you can use a lightweight SVG or canvas if available):
+
+Plot equity over time from equity_curve.
+
+Optionally overlay hodl_equity as a faint line for comparison.
+
+X-axis: time; Y-axis: equity (USD).
+
+Only show this chart when status == "FINISHED" and equity_curve has at least 2 points.
+
+Example:
+
+Add a <canvas id="bt-equity-chart"></canvas> or <svg> in the Results section.
+
+In refreshBacktestStatus(), when the status is FINISHED:
+
+Get st.equity_curve.
+
+Render it as a simple line chart (normalize to canvas width/height).
+
+Don’t worry about making it fancy; a simple line is enough to see whether the strategy behaves like TradingView’s equity curve.
+
+Behavior notes
+
+For now, assume:
+
+Strategy always holds a long underlying position of position_size_underlying.
+
+Covered calls PnL is added on top of hodl baseline to compute equity.
+
+We will later extend this to:
+
+Other strategies (puts, spreads, etc.),
+
+Different position sizing rules,
+
+And richer stats, but the above is enough to replicate the “feel” of TradingView’s strategy tester:
+
+Net profit, DD, trades, win rate, equity curve.
+
+pgsql
+Copy code
+
+---
+
+When you’re ready, start a **new chat**, paste that project brief we wrote earlier, then paste this TradingView-style prompt when you want the builder to work on the equity curves and stats.
+
+And if you like, first thing in the new chat can be: “Here’s my project brief, now let’s verify multi-leg chains are visible and then refine the TradingView-style summary.”
+::contentReference[oaicite:0]{index=0}

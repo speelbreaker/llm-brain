@@ -13,6 +13,8 @@ from typing import Literal, Dict, List, Any, Optional
 from .data_source import Timeframe
 
 ExitStyle = Literal["hold_to_expiry", "tp_and_roll"]
+PricingMode = Literal["deribit_live", "synthetic_bs"]
+SyntheticIVMode = Literal["fixed", "rv_window"]
 
 
 @dataclass
@@ -72,9 +74,33 @@ class CallSimulationConfig:
     defend_near_strike_pct: float = 0.98
     max_rolls_per_chain: int = 3
     min_score_to_trade: float = 3.0
+    
+    initial_capital_usd: float = 10000.0
+    position_size_underlying: float = 1.0
+    
+    pricing_mode: PricingMode = "synthetic_bs"
+    synthetic_iv_mode: SyntheticIVMode = "fixed"
+    synthetic_fixed_iv: float = 0.70
+    synthetic_rv_window_days: int = 30
+    synthetic_iv_multiplier: float = 1.0
 
 
 RollTrigger = Literal["tp_roll", "defensive_roll", "expiry", "none"]
+
+
+@dataclass
+class EquityPoint:
+    """A single point in the equity curve."""
+    time: datetime
+    equity: float
+    hodl_equity: float
+    
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "time": self.time.isoformat(),
+            "equity": self.equity,
+            "hodl_equity": self.hodl_equity,
+        }
 
 
 @dataclass

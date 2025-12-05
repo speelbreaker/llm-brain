@@ -1,0 +1,163 @@
+Next step: synthetic pricing mode (so backtests are self-consistent)
+
+If you want to move forward without paying for Tardis right away, the best move is:
+
+Use Deribit only to learn which strikes & expiries exist,
+and use our own Black–Scholes pricing model on BTC spot history to simulate premiums and mark-to-market PnL.
+
+That gives you a “toy universe” that is internally consistent and perfectly suitable for backtests & RL training. Later, if you add Tardis, we can switch the pricing mode to “real historical”.
+
+Here’s a prompt you can give your builder to implement this synthetic mode cleanly.
+
+Prompt for builder – add synthetic pricing mode for historical backtests
+We’ve just implemented training data export (state, action, reward) and discovered that Deribit’s public API does not provide historical option greeks/mark prices – only current values. That makes “historical” backtests using Deribit marks invalid.
+
+I want to keep the same backtesting and training pipeline, but introduce a new “synthetic pricing” mode for historical runs:
+
+- Use Deribit (or any source) only to get instrument metadata (strike, expiry, type).
+- Use ONLY historical BTC/ETH spot prices + a simple volatility model to price options with Black–Scholes.
+- This should be fully self-consistent, even if it doesn’t match reality tick-for-tick.
+
+Please implement the following:
+
+1) Add a pricing_mode to CallSimulationConfig
+
+In `src/backtest/types.py` (or wherever CallSimulationConfig lives), add:
+
+```python
+from typing import Literal
+
+class CallSimulationConfig(BaseModel):
+    ...
+    pricing_mode: Literal["deribit_live", "synthetic_bs"] = "synthetic_bs"
+
+    # Parameters for synthetic pricing:
+    synthetic_iv_mode: Literal["fixed", "rv_window"] = "fixed"
+    synthetic_fixed_iv: float = 0.7           # 70% annualized, default
+    synthetic_rv_window_days: int = 30       # window for realized vol if using rv_window
+    synthetic_iv_multiplier: float = 1.0     # scale factor on realized vol
+
+
+For now we’ll default historical backtests to pricing_mode="synthetic_bs". We can later expose this in the Backtesting Lab UI as a dropdown.
+
+Implement a synthetic pricing helper
+
+Create a helper in src/backtest/covered_call_simulator.py or a new module pricing.py:
+
+from math import log, sqrt, erf, exp
+from datetime import datetime
+
+def _norm_cdf(x: float) -> float:
+    return 0.5 * (1.0 + erf(x / (2 ** 0.5)))
+
+def bs_call_price(spot: float, strike: float, t_years: float, sigma: float, r: float = 0.0) -> float:
+    if spot <= 0 or strike <= 0 or t_years <= 0 or sigma <= 0:
+        return 0.0
+    d1 = (log(spot / strike) + (r + 0.5 * sigma * sigma) * t_years) / (sigma * sqrt(t_years))
+    d2 = d1 - sigma * sqrt(t_years)
+    return spot * _norm_cdf(d1) - strike * exp(-r * t_years) * _norm_cdf(d2)
+
+
+Also, a helper to choose sigma given config and historical spot path:
+
+def get_synthetic_iv(config: CallSimulationConfig, spot_series, t: datetime) -> float:
+    # spot_series: time-indexed series of spot prices
+    if config.synthetic_iv_mode == "fixed":
+        return config.synthetic_fixed_iv
+
+    # rv_window mode
+    # compute realized volatility over synthetic_rv_window_days ending at t
+    window_days = config.synthetic_rv_window_days
+    # extract window of spot prices, compute daily log returns, then annualize
+    ...
+    return realized_vol_annualized * config.synthetic_iv_multiplier
+
+
+Use synthetic pricing in the simulator when pricing_mode="synthetic_bs"
+
+In CoveredCallSimulator, wherever we currently rely on Deribit mark_price / mark_iv for backtests:
+
+When opening a new short call at decision time:
+
+if config.pricing_mode == "synthetic_bs":
+    spot = current_spot_price_from_market_data
+    strike = option.strike
+    t_years = max(dte_days / 365.0, 1e-6)
+    sigma = get_synthetic_iv(config, spot_series, decision_time)
+    premium = bs_call_price(spot, strike, t_years, sigma)
+    # use this premium as initial credit; ignore option_snapshot.mark_price in this mode
+else:
+    # deribit_live: use option_snapshot.mark_price as before
+    premium = option_snapshot.mark_price
+
+
+When marking the option to market at intermediate times (for TP or defensive roll), do the same:
+
+if config.pricing_mode == "synthetic_bs":
+    spot_now = spot_at_current_time
+    t_remaining_years = max(dte_remaining / 365.0, 1e-6)
+    sigma = get_synthetic_iv(config, spot_series, current_time)
+    mark_price = bs_call_price(spot_now, strike, t_remaining_years, sigma)
+else:
+    mark_price = option_snapshot.mark_price  # or from Deribit book if live
+
+
+This way, in synthetic mode, all option premiums and MTM marks are generated from BTC spot history only.
+
+Adjust DeribitDataSource / build_historical_state for synthetic mode
+
+In build_historical_state(), keep fetching option metadata (strike, expiry, type) as we do now.
+
+For pricing_mode="synthetic_bs":
+
+It’s okay if mark_price, iv, delta from Deribit are missing or wrong.
+
+We rely on our synthetic pricing inside the simulator instead of these fields.
+
+For features:
+
+We can still compute delta for scoring using the same BS formula and the synthetic sigma.
+
+Or we can reuse the _bs_call_delta helper already in the code.
+
+Make sure training data uses the synthetic prices in synthetic mode
+
+The training data exporter currently takes whatever PnL / rewards the simulator outputs.
+
+By moving all pricing to the synthetic engine when pricing_mode="synthetic_bs", the exported (state, action, reward) tuples will be internally consistent:
+
+State features come from spot history + option metadata.
+
+Actions come from our policy.
+
+Rewards come from PnL computed in the synthetic BS world.
+
+No change needed in the export logic itself; just ensure the simulator uses synthetic pricing when that mode is configured.
+
+Default behavior
+
+For historical backtests:
+
+set pricing_mode="synthetic_bs" by default.
+
+For live agent and any future Tardis integration:
+
+keep pricing_mode="deribit_live" (use real mark prices and greeks).
+
+After this change:
+
+Historical backtests will no longer depend on today’s Deribit book summaries.
+
+Training data collected from backtests will be usable for model training, knowing we are in a simplified but coherent market model.
+
+When/if we add Tardis, we can add a third pricing_mode="historical_orderbook" and plug it into the same interface.
+
+
+---
+
+If you want, when you open the **new chat**, you can paste:
+
+1. The big “project brief” we wrote,  
+2. Then this synthetic-pricing prompt,  
+
+and say: “Let’s continue from here and make sure the training data and backtests are correct.”
