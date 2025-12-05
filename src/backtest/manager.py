@@ -243,6 +243,54 @@ class BacktestManager:
             self._status.recent_steps = steps_buffer[-50:]
             if current_phase:
                 self._status.current_phase = current_phase
+    
+    def _export_training_data_if_enabled(
+        self,
+        underlying: str,
+        start_date: datetime,
+        end_date: datetime,
+        exit_style: str,
+        config: Any,
+    ) -> None:
+        """Export training data if SAVE_TRAINING_DATA is enabled."""
+        try:
+            from src.config import settings
+            if not settings.save_training_data:
+                return
+            
+            from pathlib import Path
+            from .deribit_data_source import DeribitDataSource
+            from .covered_call_simulator import CoveredCallSimulator
+            from .training_dataset import export_to_csv, export_to_jsonl, compute_dataset_stats
+            
+            ds = DeribitDataSource()
+            sim = CoveredCallSimulator(data_source=ds, config=config)
+            
+            examples = sim.generate_training_data()
+            ds.close()
+            
+            if not examples:
+                print(f"[TrainingExport] No training examples generated for {underlying}")
+                return
+            
+            timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+            base_name = f"training_dataset_{underlying}_{start_date.strftime('%Y%m%d')}_{end_date.strftime('%Y%m%d')}_{exit_style}_{timestamp}"
+            
+            data_dir = Path(settings.training_data_dir)
+            data_dir.mkdir(parents=True, exist_ok=True)
+            
+            csv_path = data_dir / f"{base_name}.csv"
+            jsonl_path = data_dir / f"{base_name}.jsonl"
+            
+            export_to_csv(examples, csv_path)
+            export_to_jsonl(examples, jsonl_path)
+            
+            stats = compute_dataset_stats(examples)
+            print(f"[TrainingExport] Saved {stats['total_examples']} examples to {csv_path} and {jsonl_path}")
+            print(f"[TrainingExport] Stats: {stats}")
+            
+        except Exception as e:
+            print(f"[TrainingExport] Error exporting training data: {e}")
 
     def start(
         self,
@@ -465,6 +513,14 @@ class BacktestManager:
                         all_metrics = phase_metrics
 
                 ds.close()
+                
+                self._export_training_data_if_enabled(
+                    underlying=underlying,
+                    start_date=start_date,
+                    end_date=end_date,
+                    exit_style=exit_style,
+                    config=config,
+                )
 
                 with self._lock:
                     self._status.metrics = all_metrics

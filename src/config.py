@@ -130,6 +130,15 @@ class Settings(BaseSettings):
         default=["conservative", "moderate", "aggressive"],
         description="Strategy profiles to test in training mode",
     )
+    
+    save_training_data: bool = Field(
+        default=False,
+        description="If True, export training data CSV/JSONL after each backtest",
+    )
+    training_data_dir: str = Field(
+        default="data",
+        description="Directory to save training data files",
+    )
 
     default_order_size: float = Field(
         default=0.1,
