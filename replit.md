@@ -30,12 +30,14 @@ The agent is built with a clear separation of concerns, featuring modules for co
   - Training profiles use wide DTE (1-21 days) and delta ranges to maximize candidate matching
   - A fallback mechanism picks the best premium candidate if no profile matches, ensuring trades are executed when candidates exist
   - DO_NOTHING only occurs when truly no valid candidates are available or max positions reached
+  - **Per-Expiry Limits**: Configurable via `training_max_calls_per_expiry` (default 3), tracks positions by actual expiry date (not DTE) to prevent over-concentration on a single expiry
   - **Profile Modes**: Configurable via `TRAINING_PROFILE_MODE`:
     - `single`: Traditional one-action-per-profile-per-iteration (conservative)
-    - `ladder`: Aggressively fills all available slots in a single iteration, sorting candidates by premium (highest first) and opening multiple positions at once (e.g., 3+ positions per iteration)
-- **Training Data Export**: Captures (state, action, reward) tuples and exports to CSV/JSONL. Supports two export formats:
-  - **Chain-level**: One row per trade decision (`training_dataset_*.csv`) with the chosen candidate and outcome
-  - **Candidate-level**: One row per candidate per decision step (`training_candidates_*.csv`) with binary labels for chosen/not-chosen, including SKIP examples for all rejected candidates and no-trade decisions. Useful for training LLM policies that learn decision boundaries.
+    - `ladder`: Multi-candidate per profile selection with per-expiry limits. Each profile has `max_legs` (default 2) and `enabled` flag. Candidates are sorted by premium and selected respecting per-expiry caps.
+  - **Diagnostics**: Each training action includes a `diagnostics` field with delta, dte, premium_usd, and ivrv for analysis. Agent loop logs display these metrics for visibility.
+- **Training Data Export**: Captures (state, action, reward, strategy) tuples and exports to CSV/JSONL. Supports two export formats:
+  - **Chain-level**: One row per trade decision (`training_dataset_*.csv`) with the chosen candidate, outcome, and strategy profile used
+  - **Candidate-level**: One row per candidate per decision step (`training_candidates_*.csv`) with binary labels for chosen/not-chosen, strategy profile, including SKIP examples for all rejected candidates and no-trade decisions. Useful for training LLM policies that learn decision boundaries.
   Note: Historical backtests can use synthetic pricing for self-consistent option prices or live option data from Deribit's public API.
 - **Web Dashboard**: A FastAPI application offers a "Live Agent" view with real-time status and recent decisions, a "Backtesting Lab" with TradingView-style summary panel, equity curve charts, a "Calibration" tab for comparing synthetic BS prices vs live Deribit marks, and a "Chat" interface for natural language interaction with the agent.
 - **Calibration vs Deribit**: Compares synthetic Black-Scholes option prices against live Deribit mark prices. Uses RV-based IV model matching the synthetic backtester (sigma = RV(7d) * iv_multiplier * skew_factor), fetches real-time option chains from Deribit public API, and reports Mean Absolute Error (MAE) and bias. Displays computed realized volatility and allows tuning via iv_multiplier slider. Handles both inverse (BTC/ETH-settled) and linear (USDC-settled) contracts correctly.
