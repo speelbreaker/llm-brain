@@ -12,3 +12,4 @@ flask
 gunicorn
 fastapi
 uvicorn
+pytest

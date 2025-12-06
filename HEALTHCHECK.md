@@ -219,7 +219,7 @@ The following items have been identified as needing cleanup. They are marked wit
 | **Duplicate state builders** (live vs backtest) | Makes it harder to add new features—changes must be made in two places, increasing the chance one gets forgotten. | Moderate risk; the live and backtest builders have different data sources, so a hasty merge could break either mode. | Open |
 | **Duplicate Deribit clients** (trading vs public data) | Maintenance burden; any bug fix or API change must be applied twice. | Low-to-moderate risk; the clients serve different purposes (auth vs no-auth), so they can share base code without full merge. | Open |
 | **Duplicate expiry parsing** (`_parse_expiry` vs `parse_deribit_expiry`) | Minor—mostly code clarity. Same logic in two places means potential for subtle date parsing bugs. | Very low risk; simple utility functions that can be extracted without touching core logic. | **FIXED** – Now uses `src/utils/expiry.py:parse_deribit_expiry()` |
-| **No unit tests** | Regressions go undetected until they cause visible problems in production or backtests. | Time investment rather than code risk; tests should be added incrementally without modifying existing code. | Open |
+| **No unit tests** | Regressions go undetected until they cause visible problems in production or backtests. | Time investment rather than code risk; tests should be added incrementally without modifying existing code. | **FIXED** – Minimal pytest suite added (30 tests for IVRV, scoring, expiry) |
 
 ---
 
@@ -271,13 +271,30 @@ The following items have been identified as needing cleanup. They are marked wit
 | `src/backtest/covered_call_simulator.py` | ~1,000 | Split into: `simulator.py` (core), `scoring.py` (candidate scoring), `features.py` (feature extraction). |
 | `src/config.py` | ~260 | Consider grouping related settings into sub-models (RiskConfig, TrainingConfig, BacktestConfig). |
 
-### Missing Test Coverage
+### Unit Tests (minimal)
 
-- No unit tests exist for any module
+A minimal pytest suite now covers the core helper functions:
+
+| Test File | Module Tested | Tests |
+|-----------|---------------|-------|
+| `tests/test_volatility.py` | `src/metrics/volatility.py` | 10 tests for `compute_ivrv_ratio()` |
+| `tests/test_scoring.py` | `src/scoring/candidates.py` | 8 tests for `score_option_candidate()` |
+| `tests/test_expiry.py` | `src/utils/expiry.py` | 12 tests for `parse_deribit_expiry()` |
+
+**Run tests:**
+```bash
+bash scripts/run_tests.sh
+```
+
+**Expected output:** `30 passed` with no failures.
+
+### Remaining Test Gaps
+
 - No integration tests for the agent loop
 - No regression tests for the backtest engine
+- No end-to-end tests for web API
 
-Consider adding tests in a `tests/` directory using pytest.
+These can be added incrementally as the project matures.
 
 ---
 
