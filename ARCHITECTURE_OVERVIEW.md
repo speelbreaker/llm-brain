@@ -277,40 +277,65 @@ python scripts/build_llm_training_from_candidates.py \
 
 ## Known Rough Edges / TODOs
 
-### Duplicated Logic
+See `HEALTHCHECK.md` for the full prioritized list with risk assessments. Below is a summary.
 
-1. **Two state builders**: `src/state_builder.py` (live) and `src/backtest/state_builder.py` (historical) do similar things. Could potentially be unified with a mode flag.
+---
 
-2. **Two Deribit clients**: `src/deribit_client.py` (authenticated, for trading) and `src/backtest/deribit_client.py` (public, for data). Some code overlap in response parsing.
+## Technical Debt Priorities
 
-3. **Policy selection scattered**: The logic for choosing between rule-based vs LLM vs training mode is in `agent_loop.py`, but training logic is also in `training_policy.py`. Could be cleaner with a single policy dispatcher.
+### Priority Legend
 
-### Unclear Naming
+| Priority | Meaning |
+|----------|---------|
+| **P0** | Must fix soon – bug risk or correctness issue |
+| **P1** | Worth fixing, but not urgent – code clarity or duplication |
+| **P2** | Nice-to-have / cosmetic – style, structure, readability |
 
-1. `server.py` vs `src/web_app.py`: Both are "servers." `server.py` is an older Flask wrapper that's mostly superseded by the FastAPI app. Could be removed.
+---
 
-2. `src/backtest/types.py` has generic name. Could be `backtest_models.py` or `simulation_config.py`.
+### P0 – Must Fix Soon
 
-3. `rb_v1_explore` policy version string appears in code but isn't clearly documented.
+| Item | Risk if Unfixed | Risk of Refactoring |
+|------|-----------------|---------------------|
+| **Duplicate scoring functions** (`policy_rule_based.py` vs `covered_call_simulator.py`) | Live agent and backtester may score candidates differently, leading to strategy drift where backtest results don't match live behavior. | Could break both backtests and live trading if the unified scorer has bugs or different default parameters. |
+| **IVRV calculated in multiple places** (state_builder, simulator, training_profiles) | Inconsistent IVRV values could cause the agent to make different decisions than the backtester, making training data unreliable. | Minor risk if done carefully; mainly need to update all call sites to use the centralized version. |
 
-### Potential Dead Code
+---
 
-1. `backtest/env_simulator.py` in root `backtest/` folder - appears to be an older version superseded by `src/backtest/`.
+### P1 – Worth Fixing (Not Urgent)
 
-2. `server.py` - The Flask server is mostly replaced by FastAPI `web_app.py`. Consider removing.
+| Item | Risk if Unfixed | Risk of Refactoring |
+|------|-----------------|---------------------|
+| **Duplicate state builders** (live vs backtest) | Makes it harder to add new features—changes must be made in two places, increasing the chance one gets forgotten. | Moderate risk; the live and backtest builders have different data sources, so a hasty merge could break either mode. |
+| **Duplicate Deribit clients** (trading vs public data) | Maintenance burden; any bug fix or API change must be applied twice. | Low-to-moderate risk; the clients serve different purposes (auth vs no-auth), so they can share base code without full merge. |
+| **Duplicate expiry parsing** | Minor—mostly code clarity. Same logic in two places means potential for subtle date parsing bugs. | Very low risk; simple utility functions that can be extracted without touching core logic. |
+| **No unit tests** | Regressions go undetected until they cause visible problems in production or backtests. | Time investment rather than code risk; tests should be added incrementally without modifying existing code. |
 
-3. `main.py` - May be redundant with the FastAPI app startup.
+---
 
-### Things That Could Be Smaller/Cleaner
+### P2 – Nice-to-Have / Cosmetic
 
-1. **`src/web_app.py` is 2500+ lines**: The HTML templates are embedded as strings. Could move to separate template files.
+| Item | Risk if Unfixed | Risk of Refactoring |
+|------|-----------------|---------------------|
+| **Dead code: `main.py`, `server.py`, `backtest/`** | Confuses new developers. Zero functional risk. | No risk—just delete after confirming nothing imports them. |
+| **Large files** (`web_app.py`, `covered_call_simulator.py`) | Harder to navigate and maintain. No correctness issue. | Moderate effort; splitting requires careful testing. |
+| **Configuration sprawl** (`config.py`) | Minor—still manageable. Could benefit from grouping. | Low risk; sub-models can be introduced without changing behavior. |
 
-2. **`covered_call_simulator.py` is 1000+ lines**: Does simulation, scoring, feature extraction, and training data generation. Could split into:
-   - `simulator.py` (core simulation)
-   - `scoring.py` (candidate scoring)
-   - `features.py` (feature extraction)
+---
 
-3. **Configuration sprawl**: `src/config.py` has 50+ settings. Could organize into sub-configs (risk_config, backtest_config, training_config).
+### Summary: Recommended Order
+
+1. **P0 first**: Fix scoring and IVRV duplication to ensure backtest-live consistency.
+2. **P1 next**: Unify state builders and clients when adding new features.
+3. **P2 whenever convenient**: Delete dead code (easy wins), split large files during related work.
+
+---
+
+### Detailed Reference
+
+For the full tables with specific file paths and suggestions, see the "Technical Debt" section in `HEALTHCHECK.md`.
+
+---
 
 ### Missing Features / Improvements
 

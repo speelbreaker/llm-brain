@@ -189,7 +189,62 @@ bash scripts/smoke_web_api.sh
 
 The following items have been identified as needing cleanup. They are marked with `TODO` comments in the code.
 
-### Dead Code (can likely be removed)
+---
+
+## Technical Debt Priorities
+
+### Priority Legend
+
+| Priority | Meaning |
+|----------|---------|
+| **P0** | Must fix soon – bug risk or correctness issue |
+| **P1** | Worth fixing, but not urgent – code clarity or duplication |
+| **P2** | Nice-to-have / cosmetic – style, structure, readability |
+
+---
+
+### P0 – Must Fix Soon
+
+| Item | Risk if Unfixed | Risk of Refactoring |
+|------|-----------------|---------------------|
+| **Duplicate scoring functions** (`policy_rule_based.py` vs `covered_call_simulator.py`) | Live agent and backtester may score candidates differently, leading to strategy drift where backtest results don't match live behavior. | Could break both backtests and live trading if the unified scorer has bugs or different default parameters. |
+| **IVRV calculated in multiple places** (state_builder, simulator, training_profiles) | Inconsistent IVRV values could cause the agent to make different decisions than the backtester, making training data unreliable. | Minor risk if done carefully; mainly need to update all call sites to use the centralized version. |
+
+---
+
+### P1 – Worth Fixing (Not Urgent)
+
+| Item | Risk if Unfixed | Risk of Refactoring |
+|------|-----------------|---------------------|
+| **Duplicate state builders** (live vs backtest) | Makes it harder to add new features—changes must be made in two places, increasing the chance one gets forgotten. | Moderate risk; the live and backtest builders have different data sources, so a hasty merge could break either mode. |
+| **Duplicate Deribit clients** (trading vs public data) | Maintenance burden; any bug fix or API change must be applied twice. | Low-to-moderate risk; the clients serve different purposes (auth vs no-auth), so they can share base code without full merge. |
+| **Duplicate expiry parsing** (`_parse_expiry` vs `parse_deribit_expiry`) | Minor—mostly code clarity. Same logic in two places means potential for subtle date parsing bugs. | Very low risk; simple utility functions that can be extracted without touching core logic. |
+| **No unit tests** | Regressions go undetected until they cause visible problems in production or backtests. | Time investment rather than code risk; tests should be added incrementally without modifying existing code. |
+
+---
+
+### P2 – Nice-to-Have / Cosmetic
+
+| Item | Risk if Unfixed | Risk of Refactoring |
+|------|-----------------|---------------------|
+| **Dead code: `main.py`** | Confuses new developers who might think it's the entry point. Zero functional risk. | No risk—just delete it. |
+| **Dead code: `server.py`** | Same confusion issue; someone might try to run it instead of the FastAPI app. | No risk—just delete it after confirming nothing imports it. |
+| **Dead code: `backtest/env_simulator.py`** | Misleading file in the wrong folder. No functional risk. | No risk—delete the entire `backtest/` folder (not `src/backtest/`). |
+| **Large file: `web_app.py` (2500+ lines)** | Harder to navigate and maintain. No correctness issue. | Moderate effort; extracting templates and routes requires careful testing of all UI features. |
+| **Large file: `covered_call_simulator.py` (1000+ lines)** | Harder to understand; encourages monolithic changes. | Some risk; splitting could introduce import issues or break the simulation if done incorrectly. |
+| **Large file: `config.py` (260 lines)** | Minor—still manageable. Could benefit from grouping. | Low risk; sub-models can be introduced without changing behavior. |
+
+---
+
+### Summary: Recommended Order
+
+1. **P0 first**: Fix scoring and IVRV duplication to ensure backtest-live consistency.
+2. **P1 next**: Unify state builders and clients when adding new features.
+3. **P2 whenever convenient**: Delete dead code (easy wins), split large files during related work.
+
+---
+
+### Dead Code (Reference Table)
 
 | File | Issue |
 |------|-------|
@@ -198,7 +253,7 @@ The following items have been identified as needing cleanup. They are marked wit
 | `backtest/env_simulator.py` | RL-environment stub superseded by `src/backtest/covered_call_simulator.py`. |
 | `backtest/__init__.py` | Root backtest folder is legacy; real code is in `src/backtest/`. |
 
-### Duplicated Logic (should be unified)
+### Duplicated Logic (Reference Table)
 
 | Duplication | Files Involved | Suggestion |
 |-------------|----------------|------------|
