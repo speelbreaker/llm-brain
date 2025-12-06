@@ -2,6 +2,9 @@
 Backtesting environment simulator stub.
 Provides a minimal RL-compatible interface for future training.
 
+# TODO: dead code? This file is superseded by src/backtest/covered_call_simulator.py
+# which has a fully functional backtest engine. Consider removing this stub.
+
 TODO: This module will be expanded to include:
 - Historical price data loading for BTC/ETH
 - Option pricing simulation using Black-Scholes or historical IVs

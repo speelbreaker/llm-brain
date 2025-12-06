@@ -1,6 +1,9 @@
 """
 Web server wrapper for the Options Trading Agent.
 Provides health check endpoint for Autoscale deployment while running the agent in background.
+
+# TODO: dead code? This Flask server is superseded by src/web_app.py (FastAPI).
+# Consider removing this file and using web_app.py exclusively.
 """
 import os
 import threading

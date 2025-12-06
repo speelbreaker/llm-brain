@@ -1,6 +1,9 @@
 """
 Historical state builder for backtests.
 Constructs state dicts that mirror live AgentState for scoring and simulation.
+
+# TODO: duplicate of src/state_builder.py? Both build agent state snapshots.
+# Consider unifying with a shared interface: build_state(source, time, mode="live"|"historical")
 """
 from __future__ import annotations
 

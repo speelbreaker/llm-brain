@@ -1,6 +1,11 @@
 """
 State builder module.
 Fetches market data and positions to construct the AgentState.
+
+# TODO: duplicate logic with src/backtest/state_builder.py
+# Both parse expiry dates and build state snapshots. Consider:
+# 1. Shared expiry parsing utility
+# 2. Unified state builder interface for live vs historical
 """
 from __future__ import annotations
 

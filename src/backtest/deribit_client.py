@@ -1,6 +1,10 @@
 """
 Minimal wrapper around Deribit's public endpoints used for backtesting.
 Uses mainnet by default for historical data access.
+
+# TODO: duplicate of src/deribit_client.py? Both implement Deribit API wrappers.
+# Consider unifying: add public endpoint methods to main DeribitClient, or
+# have DeribitPublicClient inherit common logic from a shared base.
 """
 from __future__ import annotations
 

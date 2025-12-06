@@ -50,6 +50,10 @@ def score_candidate(candidate: CandidateOption, cfg: Settings) -> float:
     
     Returns:
         Score value (higher is better)
+    
+    # TODO: duplicate of src/backtest/covered_call_simulator.py:_score_candidate()
+    # Both implement candidate scoring with different formulas. Consider unifying
+    # into a shared scoring module (src/scoring.py) with configurable weights.
     """
     target_delta = (cfg.effective_delta_min + cfg.effective_delta_max) / 2.0
     target_dte = (cfg.effective_dte_min + cfg.effective_dte_max) / 2.0
