@@ -1,0 +1,81 @@
+TASK: Create ROADMAP.md from our current state
+
+Goal:
+Summarize our current project status and create a clear, non-technical roadmap for the next phases of the Options Trading Agent.
+
+Please:
+
+1) Read ARCHITECTURE_OVERVIEW.md and HEALTHCHECK.md to understand the current state of the project (features, smoke tests, technical debt status).
+
+2) Create a new file at the repo root called:
+
+   ROADMAP.md
+
+Audience:
+Me (project owner, non-programmer). Use simple language and keep it high-level.
+
+Structure:
+ROADMAP.md should have these sections:
+
+1. Current Status
+   - Brief bullet list of what we already have, for example:
+     - Live Deribit testnet agent (covered calls) with rule-based and LLM modes
+     - Web dashboard (Live Agent / Backtesting Lab / Calibration / Chat)
+     - Backtesting engine with synthetic pricing
+     - Training data export + LLM training conversion scripts
+     - Smoke tests + minimal unit tests in place
+   - Mention that P0 technical debt items are fixed and some P1 items (IVRV, expiry parsing, tests) are done.
+
+2. Phase 1 – Stabilize “One Good Bot”
+   - Summarize that this is mostly complete.
+   - Optionally list a few small polish items (better docs for TRAINING_MODE, presets, etc.) but mark them as optional.
+
+3. Phase 2 – Multi-bot / Multi-strategy Architecture
+   - Explain, in non-technical language:
+     - We want several strategies (“bots”) that share the same risk engine and data.
+     - Examples:
+       - Covered calls – conservative
+       - Covered calls – aggressive
+       - Calls+puts experimental
+     - Each strategy has:
+       - A name (strategy_id)
+       - A risk profile
+       - Allowed instruments/actions
+       - A policy type (rule-based vs LLM)
+     - The agent loop will:
+       - Build one market snapshot,
+       - Ask each strategy for a proposal,
+       - Let the risk engine decide which orders to place.
+   - Mention that the Backtesting Lab will also support running/backtesting individual strategies identified by strategy_id and data_version.
+
+4. Phase 3 – LLM “Researcher Mode”
+   - Describe the idea:
+     - The LLM periodically reads backtest and training metrics and proposes new strategy configurations or parameter sets.
+     - These go into an experiment queue.
+     - The backtesting engine evaluates them automatically.
+     - Good ones can be promoted to real strategies; bad ones are rejected.
+   - Emphasize that all experiments go through backtests and risk checks before ever trading.
+
+5. Phase 4 – Real Historical Data (Tardis) and Advanced Training
+   - Briefly describe:
+     - Integrating Tardis.dev’s Deribit options history as a data source.
+     - Using it to train better small models or fine-tune LLM behavior on real skew/vol surfaces.
+   - Clearly mark this as a later “R&D phase” that requires a data subscription.
+
+6. Priorities & Next Steps
+   - A short list, e.g.:
+     - Near-term:
+       - Implement multi-strategy support (strategy_id, registry, shared risk engine)
+       - Add a basic strategy status table in the Live Agent UI
+     - Medium-term:
+       - Add a simple researcher job + experiment queue for backtests
+     - Long-term:
+       - Integrate Tardis historical data
+       - Experiment with more complex structures (puts, spreads, butterflies)
+
+Constraints:
+- Do not promise features that aren’t feasible with the current architecture.
+- Keep it concise and readable (target ~2–3 pages max).
+- Use headings and bullet points so I can skim it easily.
+
+Do NOT modify any code in this task; only create ROADMAP.md and, if needed, minimally update ARCHITECTURE_OVERVIEW.md to link to the roadmap.

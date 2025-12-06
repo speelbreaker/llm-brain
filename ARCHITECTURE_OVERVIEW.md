@@ -367,4 +367,12 @@ For the full tables with specific file paths and suggestions, see the "Technical
 
 ---
 
+## Related Documents
+
+- **ROADMAP.md** – High-level project roadmap and next steps
+- **HEALTHCHECK.md** – Smoke tests, unit tests, and technical debt status
+- **replit.md** – Quick reference for developers
+
+---
+
 *Last updated: December 2024*
