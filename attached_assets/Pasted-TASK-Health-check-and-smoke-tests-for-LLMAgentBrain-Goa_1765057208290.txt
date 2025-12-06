@@ -1,0 +1,166 @@
+TASK: Health check and smoke tests for LLMAgentBrain
+
+Goal: As the project owner (non-programmer), I want a simple way to verify that the most important pieces of the system actually work, without reading code. Please implement the following.
+
+--------------------------------
+1) Create HEALTHCHECK.md
+--------------------------------
+
+At the repo root, create a new file:
+
+  HEALTHCHECK.md
+
+Audience: me (non-programmer). Use plain language.
+
+In this file, document:
+
+A. Quick summary
+   - One paragraph summarizing what the health checks do (“quick tests to confirm live agent, web UI, backtester, and training export still work after changes”).
+
+B. Smoke tests list
+
+   For each of the following, give:
+
+   - Name of the test
+   - When to run it (e.g. “after code changes”, “once a week”)
+   - Exact command or steps
+   - What a SUCCESSFUL result looks like (in plain English)
+
+   Required smoke tests:
+
+   1. **Live Agent Dry-Run (single iteration)**
+      - Purpose: Verify the live agent loop can build state, propose an action, pass risk checks, and log a decision WITHOUT actually trading.
+      - Implementation details:
+        - If needed, add a small CLI wrapper or helper function in `agent_loop.py`, e.g.:
+
+          - a `main()` that accepts flags like `--dry-run` and `--max-iterations=1`
+          - internally, it should:
+            - ensure `DRY_RUN=true`,
+            - run exactly ONE loop iteration,
+            - then exit.
+
+        - The smoke command should be something simple like:
+
+          `python -m agent_loop --dry-run --max-iterations=1`
+
+      - In HEALTHCHECK.md, describe what success looks like, e.g.:
+        - Command exits without errors
+        - A new line appears at the end of `logs/agent_decisions_*.jsonl` with a proposed action and `execution.status="simulated"`.
+
+   2. **Web App + API Status Check**
+      - Purpose: Confirm the FastAPI web app starts, and the `/status` and `/api/agent/decisions` endpoints respond correctly.
+      - Implementation details:
+        - Describe how to start the web app (e.g. `python -m src.web_app` or “use Replit Run button”).
+        - Provide simple curl commands (or URLs) to test:
+          - `GET /status`
+          - `GET /api/agent/decisions`
+        - In HEALTHCHECK.md, explain:
+          - What HTTP status code should be (200)
+          - What kind of JSON fields we expect (e.g. “loop_running”, “last_decision_time”, “recent_decisions” length).
+
+   3. **Backtesting Engine Smoke Test**
+      - Purpose: Verify we can run a small backtest end-to-end using the Backtesting Lab engine.
+      - Implementation details:
+        - Use an existing example or add a new minimalist script, e.g.:
+
+          - `python -m src.backtest.backtest_example`
+
+        - This backtest should:
+          - Run on a short date range,
+          - Use synthetic pricing or a simple config that is known to work,
+          - Print summary metrics (num_trades, final_pnl, etc.) to stdout.
+
+      - In HEALTHCHECK.md:
+        - Show the command,
+        - Describe which summary lines to look for to know it worked.
+
+   4. **Training Data Export Smoke Test**
+      - Purpose: Verify the training data export pipeline works (state, action, reward → CSV/JSONL).
+      - Implementation details:
+        - Add a small script or command that:
+          - Runs a very short backtest with `SAVE_TRAINING_DATA=true`,
+          - Verifies that at least one CSV and/or JSONL file is created in `data/`,
+          - Optionally prints the path to the new file and the first few lines.
+
+        Options:
+        - Either a python module, e.g.:
+          - `python -m src.backtest.training_dataset_example`
+        - Or reuse `backtest_example` plus a short helper that reads the output files.
+
+      - In HEALTHCHECK.md:
+        - Show the command,
+        - Explain what output files to look for and how to confirm they contain sensible columns (e.g. time, features, action, reward).
+
+   5. **Chat with Agent Smoke Test (optional but nice)**
+      - Purpose: Confirm the chat endpoint used by `src/chat_with_agent.py` works end to end.
+      - Implementation details:
+        - Document how to:
+          - Start the web app,
+          - Hit the chat endpoint once (either via the UI or a simple API call) with a test question like “What was the last decision?”,
+          - Confirm that a JSON answer comes back without error.
+
+      - In HEALTHCHECK.md: This can be clearly marked as OPTIONAL if it’s not trivial.
+
+--------------------------------
+2) Add small helper scripts in scripts/
+--------------------------------
+
+Under the `scripts/` folder, add simple scripts for each main smoke test so I don’t have to remember the exact commands.
+
+Examples:
+
+- `scripts/smoke_live_agent.sh`
+  - Runs the “Live Agent Dry-Run (single iteration)” test.
+  - e.g.:
+
+    ```bash
+    #!/usr/bin/env bash
+    set -e
+    export DRY_RUN=true
+    python -m agent_loop --dry-run --max-iterations=1
+    ```
+
+  - Make sure it works in the Replit environment.
+
+- `scripts/smoke_backtest.sh`
+  - Runs the “Backtesting Engine Smoke Test”.
+  - e.g. `python -m src.backtest.backtest_example`
+
+- `scripts/smoke_training_export.sh`
+  - Runs the “Training Data Export Smoke Test”.
+  - After running, it should print either:
+    - the name of the newest training CSV/JSONL file, or
+    - a short message like “Created training dataset at data/training_YYYYMMDD_HHMM.csv”.
+
+If you need to add minimal changes to `agent_loop.py` (like a `main()` or `max_iterations` argument) to support smoke tests, please do that, but do NOT change core trading logic or behavior.
+
+--------------------------------
+3) Mark technical debt locations (no behavior changes)
+--------------------------------
+
+While you’re doing this, and based on the “Known Rough Edges / TODOs” already listed in `ARCHITECTURE_OVERVIEW.md`:
+
+- In code, add very small `# TODO:` comments at the exact locations of:
+  - duplicated state builders (live vs backtest),
+  - duplicated Deribit client logic (trading vs public data),
+  - potential dead code (old backtest `env_simulator`, `server.py`, etc).
+
+Do NOT delete anything yet; just clearly mark them, and list those same TODOs in HEALTHCHECK.md under a section “Technical Debt / Clean-up Targets” so I have a clear checklist.
+
+--------------------------------
+Final expectation
+--------------------------------
+
+When this task is done, I want to be able to:
+
+- Open HEALTHCHECK.md and understand:
+  - which commands to run,
+  - how to run them,
+  - what “it worked” looks like.
+
+- Go to `scripts/` and run:
+  - `bash scripts/smoke_live_agent.sh`
+  - `bash scripts/smoke_backtest.sh`
+  - `bash scripts/smoke_training_export.sh`
+
+and see them complete without errors, with a clear indication of success.

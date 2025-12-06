@@ -10,6 +10,8 @@ This document lists quick commands to verify that core parts of the system are w
 
 **What it does**: Connects to Deribit testnet, fetches current market data, makes a rule-based decision, and checks with the risk engine. No actual trades are placed.
 
+**When to run**: After code changes to the agent loop, policy, or risk engine.
+
 **Command**:
 ```bash
 bash scripts/smoke_live_agent.sh
@@ -42,6 +44,8 @@ Checking risk engine...
 
 **What it does**: Runs a 7-day backtest using synthetic Black-Scholes pricing. Tests the core simulation engine.
 
+**When to run**: After changes to the backtest engine, simulator, or scoring logic.
+
 **Command**:
 ```bash
 bash scripts/smoke_backtest.sh
@@ -72,6 +76,8 @@ Decision points: 8
 
 **What it does**: Runs a tiny 3-day backtest and exports candidate-level training data to CSV. Verifies the training data pipeline.
 
+**When to run**: After changes to the training dataset module or candidate export logic.
+
 **Command**:
 ```bash
 bash scripts/smoke_training_export.sh
@@ -101,6 +107,8 @@ decision_time,underlying,spot,instrument,strike,dte,delta,score...
 ### 4. LLM Decision Test (Research Mode)
 
 **What it does**: Asks the LLM brain to make a trading decision based on current market state. Requires OpenAI API key.
+
+**When to run**: After changes to the LLM brain or prompt engineering. (Optional - requires OpenAI API)
 
 **Command**:
 ```bash
@@ -134,20 +142,46 @@ print('=== LLM TEST PASSED ===')
 
 ---
 
-### 5. Web Dashboard Health Check
+### 5. Web App + API Status Check
 
-**What it does**: Verifies the FastAPI web app is running and responding.
+**What it does**: Verifies the FastAPI web app is running and the API endpoints respond correctly.
 
-**How to check**:
-1. The dashboard should already be running (visible in Replit webview)
-2. Visit the root URL `/` - should show the Live Agent dashboard
-3. Visit `/health` - should return `{"status": "healthy", "service": "options-trading-agent"}`
-4. Visit `/status` - should return JSON with current agent state
+**When to run**: After starting the web app, or if the dashboard seems unresponsive.
+
+**Commands** (run these in the Shell tab while the web app is running):
+
+```bash
+# Check basic health
+curl -s http://localhost:5000/health
+
+# Check agent status
+curl -s http://localhost:5000/status
+
+# Check recent decisions (may be empty if no trades yet)
+curl -s http://localhost:5000/api/agent/decisions
+```
 
 **What success looks like**:
-- Dashboard loads with tabs: Live Agent, Backtesting Lab, Calibration, Chat
-- `/health` returns healthy status
-- `/status` returns JSON with `running`, `iterations`, and other fields
+
+1. `/health` returns HTTP 200 with:
+   ```json
+   {"status": "healthy", "service": "options-trading-agent"}
+   ```
+
+2. `/status` returns HTTP 200 with JSON containing:
+   - `running` (true/false)
+   - `iterations` (number)
+   - `mode` (research/production)
+   - `dry_run` (true/false)
+
+3. `/api/agent/decisions` returns HTTP 200 with JSON containing:
+   - `decisions` (list of recent decisions, may be empty)
+   - `count` (number of decisions)
+
+**Or use the smoke script**:
+```bash
+bash scripts/smoke_web_api.sh
+```
 
 ---
 
@@ -201,9 +235,12 @@ echo "=== Running all smoke tests ==="
 bash scripts/smoke_live_agent.sh && \
 bash scripts/smoke_backtest.sh && \
 bash scripts/smoke_training_export.sh && \
+bash scripts/smoke_web_api.sh && \
 echo "" && \
 echo "=== ALL SMOKE TESTS PASSED ==="
 ```
+
+**Note**: The web API test (`smoke_web_api.sh`) requires the web app to be running.
 
 ---
 
