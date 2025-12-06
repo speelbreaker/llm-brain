@@ -1,0 +1,128 @@
+TASK: Fix P0 – Centralize candidate scoring (safe, minimal refactor)
+
+Goal:
+Make sure that option candidate scoring logic (the “score” used to rank covered call candidates) lives in ONE shared place, so live agent, backtests, and training profiles all use the same scoring function.
+
+Scope:
+Only touch the candidate scoring duplication (P0 item), nothing else.
+
+--------------------------------
+1) Create a shared scoring module
+--------------------------------
+
+Add a new module, for example:
+
+  src/scoring/candidates.py
+
+In this module, define a main function that encapsulates the existing scoring logic, e.g.:
+
+  from typing import Literal, Mapping, Any
+
+  RiskProfile = Literal["conservative", "moderate", "aggressive", "balanced", "ultra_safe"]
+
+  def score_option_candidate(
+      features: Mapping[str, Any],
+      profile: RiskProfile,
+  ) -> float:
+      """
+      Compute a numeric score (higher is better) for a single option candidate.
+
+      `features` is a dict-like object with fields like:
+        - dte_days
+        - delta_abs
+        - iv
+        - ivrv_ratio
+        - premium_usd
+        - otm_pct
+        - market_regime
+        - etc.
+
+      `profile` controls how strict/lenient we are (conservative vs aggressive).
+
+      The implementation should be moved from the existing scoring logic so behavior stays identical.
+      """
+      ...
+
+Implementation notes:
+
+- Start by copy-pasting the existing logic from `_score_candidate()` in `src/backtest/covered_call_simulator.py` (and any closely-related scoring code in `src/training_profiles.py`).
+- Preserve the current scoring “shape”:
+  - IVRV bonuses / penalties
+  - Delta sweet spot
+  - DTE sweet spot
+  - Premium thresholds
+  - Market regime adjustments (if any)
+- If different profiles currently apply different thresholds/weights, keep that behavior inside this shared function, keyed by the `profile` argument.
+
+If you need extra helpers (e.g. `_score_delta()`, `_score_dte()`), keep them private inside `src/scoring/candidates.py`.
+
+--------------------------------
+2) Use the shared scorer everywhere
+--------------------------------
+
+Replace duplicated scoring implementations to call this new function.
+
+Specifically:
+
+- In `src/backtest/covered_call_simulator.py`:
+  - Replace `_score_candidate(...)` with a thin wrapper around `score_option_candidate(features, profile)`.
+  - Or, if possible, remove `_score_candidate` entirely and call `score_option_candidate` directly wherever candidates are scored.
+
+- In `src/training_profiles.py` and `src/training_policy.py`:
+  - Wherever options are scored or ranked based on similar logic (IVRV, delta, DTE, etc.), replace that manual scoring with `score_option_candidate(...)`.
+  - Make sure the profile name used here matches the RiskProfile literal (`"conservative"`, `"moderate"`, `"aggressive"`, `"balanced"`, `"ultra_safe"`) or adjust as needed.
+
+- If the rule-based live policy (`src/policy_rule_based.py`) has its own copy of similar scoring logic, update it to call `score_option_candidate()` too, as long as this does not change behavior.
+
+IMPORTANT:
+- The numeric scores for the same inputs should be the SAME as before.
+- Do NOT change thresholds or weights in this task; only centralize the implementation.
+
+--------------------------------
+3) Keep behavior identical
+--------------------------------
+
+This refactor must NOT change external behavior:
+
+- Backtests should produce the same ordering of candidates and similar metrics as before.
+- Live agent candidate ranking should not change unintentionally.
+- Training data export should still have the same “score” distributions for the same configs.
+
+If you need to keep some differences between profiles (e.g. training mode vs normal live mode), handle that via:
+- the `profile` parameter, and/or
+- explicit arguments (e.g. `profile_mode="ladder"` vs something else)
+
+but do not invent new behavior in this task.
+
+--------------------------------
+4) Re-run all smoke tests
+--------------------------------
+
+After the change, re-run:
+
+  bash scripts/smoke_live_agent.sh
+  bash scripts/smoke_backtest.sh
+  bash scripts/smoke_training_export.sh
+  bash scripts/smoke_web_api.sh
+
+All MUST still pass.
+
+If any metrics in the backtest smoke test change significantly (PnL, trade count) compared to before this change, investigate and adjust so that the behavior is consistent with the previous scoring.
+
+--------------------------------
+5) Update docs
+--------------------------------
+
+In HEALTHCHECK.md:
+
+- Mark the P0 “Duplicate scoring logic” item as FIXED.
+- Note the location of the shared scoring function:
+
+  - `src/scoring/candidates.py: score_option_candidate(...)`
+
+Optionally, in ARCHITECTURE_OVERVIEW.md:
+
+- Add a short bullet under “Known Rough Edges / TODOs” confirming that:
+  - Candidate scoring is now centralized and shared between live agent, backtests, and training profiles.
+
+Do not modify any other P1/P2 items in this task.

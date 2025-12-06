@@ -7,6 +7,7 @@ from __future__ import annotations
 from typing import Any, Optional
 
 from src.models import CandidateOption
+from src.scoring.candidates import score_option_candidate, ScoringProfile
 
 
 TRAINING_PROFILES: dict[str, dict[str, Any]] = {
@@ -60,10 +61,8 @@ def score_candidate_for_profile(
     """
     Score a candidate for a specific training profile.
     
-    Scoring logic:
-    - Penalizes distance from target delta
-    - Rewards higher premium (scaled)
-    - Rewards IVRV > 1.0
+    Uses the centralized scoring function (src/scoring/candidates.py) to ensure
+    consistent scoring across live agent, backtests, and training.
     
     Args:
         candidate: CandidateOption or dict with delta, dte, premium_usd, ivrv
@@ -73,26 +72,37 @@ def score_candidate_for_profile(
         Score value (higher is better)
     """
     if isinstance(candidate, dict):
-        delta = candidate.get("delta", 0.0)
-        dte = candidate.get("dte", 0)
-        premium = candidate.get("premium_usd", 0.0)
-        ivrv = candidate.get("ivrv", 1.0)
+        features = {
+            "delta": candidate.get("delta", 0.0),
+            "dte": candidate.get("dte", 0),
+            "premium_usd": candidate.get("premium_usd", 0.0),
+            "ivrv": candidate.get("ivrv", 1.0),
+        }
     else:
-        delta = candidate.delta
-        dte = candidate.dte
-        premium = candidate.premium_usd
-        ivrv = candidate.ivrv
+        features = {
+            "delta": candidate.delta,
+            "dte": candidate.dte,
+            "premium_usd": candidate.premium_usd,
+            "ivrv": candidate.ivrv,
+        }
 
-    target_delta = profile["target_delta"]
-    delta_distance = abs(delta - target_delta)
+    profile_name = _get_profile_name_from_target_delta(profile.get("target_delta", 0.25))
     
-    score = (
-        premium / 100.0
-        - delta_distance * 10
-        + (ivrv - 1.0) * 5
+    return score_option_candidate(
+        features,
+        profile=profile_name,
+        config_overrides={"target_delta": profile.get("target_delta", 0.25)},
     )
-    
-    return score
+
+
+def _get_profile_name_from_target_delta(target_delta: float) -> ScoringProfile:
+    """Map target delta to scoring profile name."""
+    if target_delta <= 0.22:
+        return "conservative"
+    elif target_delta <= 0.32:
+        return "moderate"
+    else:
+        return "aggressive"
 
 
 def pick_candidate_for_profile(

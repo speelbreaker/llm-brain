@@ -11,6 +11,7 @@ from typing import Any
 
 from src.config import Settings, settings
 from src.models import ActionType, AgentState, CandidateOption, OptionPosition, Side
+from src.scoring.candidates import score_option_candidate
 
 
 def _get_open_covered_calls(
@@ -37,12 +38,11 @@ def _get_open_covered_calls(
 
 def score_candidate(candidate: CandidateOption, cfg: Settings) -> float:
     """
-    Score a candidate covered call. Higher is better.
+    Score a candidate covered call using the centralized scoring function.
+    Higher score = better candidate.
     
-    Rewards:
-    - Higher premium (log-scaled to avoid huge skew)
-    - Closeness to target delta and DTE (based on effective ranges)
-    - IVRV above the minimum threshold
+    Uses the shared scoring module (src/scoring/candidates.py) to ensure
+    consistent scoring across live agent, backtests, and training.
     
     Args:
         candidate: The candidate option to score
@@ -50,25 +50,26 @@ def score_candidate(candidate: CandidateOption, cfg: Settings) -> float:
     
     Returns:
         Score value (higher is better)
-    
-    # TODO: duplicate of src/backtest/covered_call_simulator.py:_score_candidate()
-    # Both implement candidate scoring with different formulas. Consider unifying
-    # into a shared scoring module (src/scoring.py) with configurable weights.
     """
     target_delta = (cfg.effective_delta_min + cfg.effective_delta_max) / 2.0
     target_dte = (cfg.effective_dte_min + cfg.effective_dte_max) / 2.0
 
-    delta_penalty = (candidate.delta - target_delta) ** 2
-    dte_penalty = ((candidate.dte - target_dte) / max(target_dte, 1)) ** 2
-
-    premium_score = math.log1p(max(candidate.premium_usd, 0.0))
-
-    score = premium_score - 5.0 * delta_penalty - 2.0 * dte_penalty
-
-    ivrv_excess = max(candidate.ivrv - cfg.effective_ivrv_min, 0.0)
-    score += 1.0 * ivrv_excess
-
-    return score
+    features = {
+        "delta": candidate.delta,
+        "dte": candidate.dte,
+        "premium_usd": candidate.premium_usd,
+        "ivrv": candidate.ivrv,
+    }
+    
+    return score_option_candidate(
+        features,
+        profile="live",
+        config_overrides={
+            "target_delta": target_delta,
+            "target_dte": target_dte,
+            "ivrv_min": cfg.effective_ivrv_min,
+        },
+    )
 
 
 def choose_candidate_with_exploration(

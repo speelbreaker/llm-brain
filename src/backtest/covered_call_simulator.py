@@ -22,6 +22,7 @@ from .types import CallSimulationConfig, SimulatedTrade, SimulationResult, Train
 from .pricing import bs_call_price, bs_call_delta, get_synthetic_iv, compute_realized_volatility
 from src.models import MarketContext
 from src.metrics.volatility import compute_ivrv_ratio
+from src.scoring.candidates import score_option_candidate
 
 State = Dict[str, Any]
 PolicyFn = Callable[[State], bool]
@@ -197,66 +198,20 @@ class CoveredCallSimulator:
     
     def _score_candidate(self, features: Dict[str, Any]) -> float:
         """
-        Hand-crafted scoring function for option candidates.
+        Score an option candidate using the centralized scoring function.
         Outputs a score in [0, 10]. Higher = more attractive to short.
         
-        Scoring components:
-        1. IVRV: reward juicy implied vol vs realized
-        2. Delta near target (0.25)
-        3. DTE near target (7 days default)
-        4. Premium richness
-        5. Regime adjustments
-        6. Vol regime considerations
-        7. Distance from 200D MA
+        Uses the shared scoring module (src/scoring/candidates.py) to ensure
+        consistent scoring across live agent, backtests, and training.
         """
-        delta = features["delta"]
-        dte = features["dte"]
-        ivrv = features["ivrv"]
-        otm_pct = features["otm_pct"]
-        premium_pct = features["premium_pct"]
-        regime = features["regime"]
-        ret_7d = features["return_7d_pct"]
-        ret_30d = features["return_30d_pct"]
-        rv7 = features["realized_vol_7d"]
-        pct_from_200 = features["pct_from_200d_ma"]
-        
-        score = 0.0
-        
-        ivrv_clamped = max(1.0, min(ivrv, 1.5))
-        score += (ivrv_clamped - 1.0) / 0.5 * 3.0
-        
-        target_delta = self.cfg.target_delta
-        delta_diff = abs(delta - target_delta)
-        delta_score = max(0.0, 1.0 - delta_diff / 0.10) * 2.0
-        score += delta_score
-        
-        target_dte = self.cfg.target_dte
-        dte_diff = abs(dte - target_dte)
-        dte_score = max(0.0, 1.0 - dte_diff / 2.0) * 1.5
-        score += dte_score
-        
-        prem_clamped = max(0.0, min(premium_pct, 1.5))
-        premium_score = (prem_clamped / 1.5) * 2.0 if premium_pct > 0 else 0.0
-        score += premium_score
-        
-        if regime == 1:
-            if otm_pct < 5.0:
-                score -= 1.0
-            if ret_30d > 25.0:
-                score -= 0.5
-        elif regime == -1:
-            if ret_7d < -10.0:
-                score -= 0.5
-        
-        if rv7 > 0 and rv7 < 0.3:
-            score -= 0.5
-        
-        if pct_from_200 > 20.0:
-            score -= 0.5
-        elif pct_from_200 < -20.0:
-            score -= 0.5
-        
-        return max(0.0, min(score, 10.0))
+        return score_option_candidate(
+            features,
+            profile="backtest",
+            config_overrides={
+                "target_delta": self.cfg.target_delta,
+                "target_dte": self.cfg.target_dte,
+            },
+        )
 
     @staticmethod
     def _timeframe_to_timedelta(tf: str) -> timedelta:
