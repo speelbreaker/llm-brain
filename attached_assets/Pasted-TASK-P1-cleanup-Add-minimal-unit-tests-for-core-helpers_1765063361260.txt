@@ -1,0 +1,140 @@
+TASK: P1 cleanup – Add minimal unit tests for core helpers
+
+Goal:
+Introduce a very small `tests/` suite so we have at least a few automated checks for our most critical pure functions (IVRV ratio, candidate scoring, expiry parsing).
+
+Scope:
+Only address the “no unit tests” P1 item by adding a few tiny tests. Do not refactor code.
+
+--------------------------------
+1) Add a tests/ folder and pytest config
+--------------------------------
+
+Create a new folder at the repo root:
+
+  tests/
+
+Inside, add an empty `__init__.py` (if needed) so imports work.
+
+Assume we will run tests using `pytest`.
+
+Optionally add a simple `pytest.ini` or `pyproject.toml` section to set:
+
+  [pytest]
+  testpaths = tests
+
+if this helps Replit/CLI usage, but keep it minimal.
+
+--------------------------------
+2) Test compute_ivrv_ratio
+--------------------------------
+
+Create:
+
+  tests/test_volatility.py
+
+Write tests for `src/metrics/volatility.compute_ivrv_ratio` that cover:
+
+- Normal case:
+  - iv = 0.8, realized_vol = 0.4 → ratio = 2.0
+
+- Realized vol zero or negative:
+  - iv = 0.8, realized_vol = 0.0 → returns default (1.0 in our implementation)
+  - iv = 0.8, realized_vol < 0 → returns default
+
+- None handling:
+  - iv = None, realized_vol = 0.4 → returns default
+  - iv = 0.8, realized_vol = None → returns default
+
+Make sure the tests reflect our actual default behavior (`default=1.0`).
+
+--------------------------------
+3) Test candidate scoring
+--------------------------------
+
+Create:
+
+  tests/test_scoring.py
+
+Write tests for `src/scoring/candidates.score_option_candidate`:
+
+- Use a simple fake `features` dict with:
+  - realistic dte_days, delta_abs, ivrv_ratio, premium_usd, etc.
+
+Test cases:
+
+- For a **conservative** profile vs **aggressive** profile:
+  - The function returns a numeric score (float).
+  - For the same features, if current logic intends aggressive to be more tolerant, assert that:
+    - Either scores are equal, or
+    - aggressive >= conservative (if that matches the actual logic).
+  - At minimum, assert that the function does not raise and returns a sensible float.
+
+- Edge cases:
+  - If ivrv_ratio is None or premium_usd is very small, the score should be low or zero (whatever current behavior is; test for that exact value if obvious).
+
+Goal is not to test every detail, just to lock in basic behavior and prevent crashes.
+
+--------------------------------
+4) Test expiry parsing
+--------------------------------
+
+Create:
+
+  tests/test_expiry.py
+
+Write tests for `src/utils/expiry.parse_deribit_expiry`:
+
+Cases:
+
+- Given a full instrument name like `"BTC-05DEC24-90000-C"`:
+  - Returns a datetime object.
+  - Year/month/day match the encoded date (e.g. 2024-12-05).
+
+- Given a datetime object:
+  - Returns the same datetime (or equivalent, same timestamp).
+
+- Given an invalid string:
+  - Returns None (or raises a clear exception if that’s the chosen behavior; adapt the test to match actual implementation).
+
+--------------------------------
+5) Add a simple test runner script
+--------------------------------
+
+Under `scripts/`, add:
+
+  scripts/run_tests.sh
+
+Content (example):
+
+  #!/usr/bin/env bash
+  set -e
+  pytest -q
+
+Document in HEALTHCHECK.md:
+
+- Under a new subsection “Unit Tests (minimal)”:
+  - Command: `bash scripts/run_tests.sh`
+  - Expected: tests complete with `0 failed`.
+
+--------------------------------
+6) Run tests + smoke tests
+--------------------------------
+
+After adding tests, run:
+
+  bash scripts/run_tests.sh
+
+Then re-run at least one smoke test (e.g. `bash scripts/smoke_backtest.sh`) to ensure nothing else broke.
+
+--------------------------------
+7) Update HEALTHCHECK.md
+--------------------------------
+
+In HEALTHCHECK.md:
+
+- Mark the “no unit tests” P1 item as partially FIXED, with a note like:
+  - “Minimal pytest suite added for core helpers (IVRV, scoring, expiry parsing).”
+- Document how to run the tests in a short “Unit tests” section.
+
+Do not remove the item entirely; instead note that more tests can be added in the future, but the basic framework is now in place.

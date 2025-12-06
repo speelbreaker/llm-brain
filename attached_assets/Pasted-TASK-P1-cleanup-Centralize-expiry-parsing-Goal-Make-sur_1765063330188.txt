@@ -1,0 +1,101 @@
+TASK: P1 cleanup – Centralize expiry parsing
+
+Goal:
+Make sure that conversion from Deribit option metadata / instrument names to Python datetime objects is handled in ONE shared helper, to avoid subtle inconsistencies between live agent and backtests.
+
+Scope:
+Only fix the “duplicate expiry parsing” P1 item. Don’t touch other P1/P2 items in this task.
+
+--------------------------------
+1) Add a shared expiry helper
+--------------------------------
+
+Create a new small module, for example:
+
+  src/utils/expiry.py
+
+In it, define at least one function:
+
+  from datetime import datetime
+  from typing import Optional
+
+  def parse_deribit_expiry(
+      expiry_or_instrument: str | datetime,
+  ) -> Optional[datetime]:
+      """
+      Convert a Deribit option expiry or instrument name into a timezone-aware datetime.
+
+      Accepts either:
+        - a datetime object (returns as-is),
+        - an expiry string, or
+        - a full instrument name like "BTC-05DEC24-90000-C".
+
+      Returns a datetime in UTC, or None if parsing fails.
+      """
+
+      ...
+
+Implementation notes:
+
+- Reuse the existing expiry parsing logic already in the codebase:
+  - Look at `src/backtest/deribit_data_source.py`, `src/backtest/state_builder.py`, `src/state_builder.py`, or any other places that parse Deribit expiries.
+- Handle the common Deribit format:
+  - Instrument name: "BTC-05DEC24-90000-C" (you can split on "-" and use the middle chunk for the date).
+  - Expiry string if it exists separately.
+- Normalize to UTC timezone where applicable.
+
+--------------------------------
+2) Use the helper everywhere expiries are parsed
+--------------------------------
+
+Search for all expiry parsing logic and replace it with calls to `parse_deribit_expiry(...)`.
+
+At minimum, update:
+
+  - src/backtest/deribit_data_source.py
+  - src/backtest/state_builder.py
+  - src/state_builder.py
+
+And any other places identified in HEALTHCHECK.md as having duplicate expiry parsing logic.
+
+Rules:
+
+- Wrap existing logic with the helper instead of re-implementing new behavior.
+- If any place is parsing expiries in a slightly different way due to a different input shape, adjust the helper signature if needed (e.g., allow passing an `Instrument` dict instead of a string) but keep the actual parsing implementation in one place.
+
+--------------------------------
+3) Preserve current behavior
+--------------------------------
+
+This refactor MUST NOT change observable behavior:
+
+- Backtests should still see the same DTE counts (differences only allowed in sub-day rounding if previously inconsistent).
+- Live agent should still treat the same options as the same expiry.
+
+If you need to keep some special-case behavior (e.g. rounding to whole days), keep it in the helper and document it.
+
+--------------------------------
+4) Re-run smoke tests
+--------------------------------
+
+After the change, re-run:
+
+  bash scripts/smoke_live_agent.sh
+  bash scripts/smoke_backtest.sh
+  bash scripts/smoke_training_export.sh
+  bash scripts/smoke_web_api.sh
+
+All must pass.
+
+--------------------------------
+5) Update HEALTHCHECK.md
+--------------------------------
+
+In HEALTHCHECK.md:
+
+- Mark the “duplicate expiry parsing” P1 item as FIXED.
+- Note the location of the shared helper:
+
+  - `src/utils/expiry.py: parse_deribit_expiry(...)`
+
+Do not attempt to touch other P1/P2 items in this task.

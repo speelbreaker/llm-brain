@@ -214,12 +214,12 @@ The following items have been identified as needing cleanup. They are marked wit
 
 ### P1 – Worth Fixing (Not Urgent)
 
-| Item | Risk if Unfixed | Risk of Refactoring |
-|------|-----------------|---------------------|
-| **Duplicate state builders** (live vs backtest) | Makes it harder to add new features—changes must be made in two places, increasing the chance one gets forgotten. | Moderate risk; the live and backtest builders have different data sources, so a hasty merge could break either mode. |
-| **Duplicate Deribit clients** (trading vs public data) | Maintenance burden; any bug fix or API change must be applied twice. | Low-to-moderate risk; the clients serve different purposes (auth vs no-auth), so they can share base code without full merge. |
-| **Duplicate expiry parsing** (`_parse_expiry` vs `parse_deribit_expiry`) | Minor—mostly code clarity. Same logic in two places means potential for subtle date parsing bugs. | Very low risk; simple utility functions that can be extracted without touching core logic. |
-| **No unit tests** | Regressions go undetected until they cause visible problems in production or backtests. | Time investment rather than code risk; tests should be added incrementally without modifying existing code. |
+| Item | Risk if Unfixed | Risk of Refactoring | Status |
+|------|-----------------|---------------------|--------|
+| **Duplicate state builders** (live vs backtest) | Makes it harder to add new features—changes must be made in two places, increasing the chance one gets forgotten. | Moderate risk; the live and backtest builders have different data sources, so a hasty merge could break either mode. | Open |
+| **Duplicate Deribit clients** (trading vs public data) | Maintenance burden; any bug fix or API change must be applied twice. | Low-to-moderate risk; the clients serve different purposes (auth vs no-auth), so they can share base code without full merge. | Open |
+| **Duplicate expiry parsing** (`_parse_expiry` vs `parse_deribit_expiry`) | Minor—mostly code clarity. Same logic in two places means potential for subtle date parsing bugs. | Very low risk; simple utility functions that can be extracted without touching core logic. | **FIXED** – Now uses `src/utils/expiry.py:parse_deribit_expiry()` |
+| **No unit tests** | Regressions go undetected until they cause visible problems in production or backtests. | Time investment rather than code risk; tests should be added incrementally without modifying existing code. | Open |
 
 ---
 

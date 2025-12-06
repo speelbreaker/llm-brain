@@ -17,6 +17,7 @@ from src.config import Settings, settings
 from src.deribit_client import DeribitClient, DeribitAPIError
 from src.market_context import compute_market_context
 from src.metrics.volatility import compute_ivrv_ratio
+from src.utils.expiry import parse_deribit_expiry
 from src.models import (
     AgentState,
     CandidateOption,
@@ -31,25 +32,15 @@ from src.models import (
 
 
 def _parse_expiry(instrument_name: str) -> datetime:
-    """Parse expiry date from instrument name like BTC-27DEC24-100000-C."""
-    parts = instrument_name.split("-")
-    if len(parts) < 3:
+    """Parse expiry date from instrument name like BTC-27DEC24-100000-C.
+    
+    Uses the centralized expiry parser (src/utils/expiry.py) to ensure
+    consistent parsing across live agent, backtests, and position tracking.
+    """
+    result = parse_deribit_expiry(instrument_name)
+    if result is None:
         raise ValueError(f"Invalid instrument name format: {instrument_name}")
-    
-    date_str = parts[1]
-    day = int(date_str[:2])
-    month_str = date_str[2:5].upper()
-    year_str = date_str[5:]
-    
-    months = {
-        "JAN": 1, "FEB": 2, "MAR": 3, "APR": 4, "MAY": 5, "JUN": 6,
-        "JUL": 7, "AUG": 8, "SEP": 9, "OCT": 10, "NOV": 11, "DEC": 12,
-    }
-    
-    month = months.get(month_str, 1)
-    year = 2000 + int(year_str) if len(year_str) == 2 else int(year_str)
-    
-    return datetime(year, month, day, 8, 0, 0, tzinfo=timezone.utc)
+    return result
 
 
 def _parse_strike(instrument_name: str) -> float:

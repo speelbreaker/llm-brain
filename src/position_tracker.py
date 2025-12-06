@@ -19,6 +19,8 @@ from pathlib import Path
 from threading import Lock
 from typing import Dict, List, Optional, Literal, Any
 
+from src.utils.expiry import parse_deribit_expiry
+
 DEFAULT_PERSISTENCE_PATH = Path("data/positions.json")
 
 Side = Literal["SHORT", "LONG"]
@@ -26,48 +28,9 @@ OptionType = Literal["CALL", "PUT"]
 StrategyType = Literal["COVERED_CALL", "CASH_SECURED_PUT"]
 ModeType = Literal["LIVE", "DRY_RUN"]
 
-MONTH_MAP = {
-    "JAN": 1, "FEB": 2, "MAR": 3, "APR": 4,
-    "MAY": 5, "JUN": 6, "JUL": 7, "AUG": 8,
-    "SEP": 9, "OCT": 10, "NOV": 11, "DEC": 12,
-}
-
 
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
-
-
-def parse_deribit_expiry(symbol: str) -> Optional[datetime]:
-    """
-    Try to parse expiry from a Deribit-style option symbol.
-
-    Supported examples:
-      BTC-2025-01-03-90000-C  (ISO style)
-      BTC-6DEC24-90000-C      (Deribit classic style)
-
-    Returns a timezone-aware UTC datetime at 08:00:00 if possible,
-    otherwise None.
-    """
-    if not symbol:
-        return None
-
-    m = re.match(r"^[A-Z]+-(\d{4})-(\d{2})-(\d{2})-", symbol)
-    if m:
-        year, month, day = map(int, m.groups())
-        return datetime(year, month, day, 8, 0, 0, tzinfo=timezone.utc)
-
-    m = re.match(r"^[A-Z]+-(\d{1,2})([A-Z]{3})(\d{2})-", symbol)
-    if m:
-        day_str, mon_str, year_2 = m.groups()
-        day = int(day_str)
-        mon_str = mon_str.upper()
-        month = MONTH_MAP.get(mon_str)
-        if month is None:
-            return None
-        year = 2000 + int(year_2)
-        return datetime(year, month, day, 8, 0, 0, tzinfo=timezone.utc)
-
-    return None
 
 
 @dataclass
