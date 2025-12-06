@@ -20,6 +20,14 @@ from src.chat_with_agent import chat_with_agent
 from src.config import settings
 from src.position_tracker import position_tracker
 from src.calibration import run_calibration
+from src.strategy_status import build_strategy_status, StrategyStatus
+from src.rules_summary import build_rules_summary, build_rules_summary_from_settings
+from src.backtest.config_schema import (
+    BacktestConfig,
+    ResolvedBacktestConfig,
+    BacktestPreset,
+)
+from src.backtest.config_presets import resolve_backtest_config, get_preset_config
 
 
 app = FastAPI(
@@ -129,11 +137,118 @@ def toggle_training_mode(payload: Dict[str, Any] = Body(...)) -> JSONResponse:
     })
 
 
+@app.get("/api/strategy-status", response_model=StrategyStatus)
+def get_strategy_status() -> JSONResponse:
+    """
+    Get current strategy and safeguards status for the UI.
+    Shows mode, network, active rules, and safeguard states.
+    """
+    status = status_store.get() or {}
+    config_snapshot = status.get("config_snapshot") or {}
+    strategy_status = build_strategy_status(config_snapshot)
+    return JSONResponse(content=strategy_status.model_dump())
+
+
+@app.get("/api/rules-summary")
+def get_rules_summary() -> JSONResponse:
+    """Get the current rules summary for UI display."""
+    summary = build_rules_summary_from_settings()
+    return JSONResponse(content=summary)
+
+
+@app.get("/api/backtest/presets")
+def get_backtest_presets() -> JSONResponse:
+    """Get all available backtest preset configurations."""
+    presets = {}
+    for preset in [BacktestPreset.ULTRA_SAFE, BacktestPreset.BALANCED, BacktestPreset.AGGRESSIVE]:
+        cfg = get_preset_config(preset)
+        presets[preset.value] = {
+            "preset": cfg.preset.value,
+            "mode": cfg.mode.value,
+            "rule_toggles": cfg.rule_toggles.model_dump(),
+            "thresholds": {
+                **cfg.thresholds.model_dump(),
+                "delta_range": list(cfg.thresholds.delta_range) if cfg.thresholds.delta_range else None,
+                "dte_range": list(cfg.thresholds.dte_range) if cfg.thresholds.dte_range else None,
+            },
+        }
+    return JSONResponse(content=presets)
+
+
+@app.post("/api/backtest/resolve-config")
+def resolve_backtest_config_endpoint(config: BacktestConfig) -> JSONResponse:
+    """
+    Resolve a backtest config with preset defaults and overrides.
+    Returns the fully resolved config that would be used for a backtest.
+    """
+    resolved = resolve_backtest_config(config)
+    summary = build_rules_summary(resolved)
+    return JSONResponse(content={
+        "resolved_config": {
+            "preset": resolved.preset.value,
+            "mode": resolved.mode.value,
+            "rule_toggles": resolved.rule_toggles.model_dump(),
+            "thresholds": {
+                **resolved.thresholds.model_dump(),
+                "delta_range": list(resolved.thresholds.delta_range) if resolved.thresholds.delta_range else None,
+                "dte_range": list(resolved.thresholds.dte_range) if resolved.thresholds.dte_range else None,
+            },
+        },
+        "rules_summary": summary,
+    })
+
+
 @app.get("/api/positions/open")
 def get_open_positions() -> JSONResponse:
-    """Return open bot-managed positions for the UI."""
+    """
+    Return open positions for the UI.
+    - Prefer bot-managed chains from PositionTracker (those opened via this bot).
+    - If there are none, fall back to live Deribit option positions from
+      the latest status snapshot so you always see your open positions.
+    """
     payload = position_tracker.get_open_positions_payload()
-    return JSONResponse(content=payload)
+    if payload.get("positions"):
+        return JSONResponse(content=payload)
+
+    status = status_store.get() or {}
+    state = status.get("state") or {}
+    portfolio = state.get("portfolio") or {}
+    live_positions = portfolio.get("positions") or []
+
+    positions: List[Dict[str, Any]] = []
+    for p in live_positions:
+        try:
+            side = p.get("side", "sell")
+            option_type = p.get("option_type", "CALL")
+            positions.append({
+                "position_id": f"live-{p.get('symbol')}",
+                "underlying": p.get("underlying", "?"),
+                "symbol": p.get("symbol"),
+                "option_type": option_type,
+                "strategy_type": "LIVE_POSITION",
+                "side": "SHORT" if side == "sell" else "LONG",
+                "quantity": float(p.get("size", 0.0)),
+                "entry_price": float(p.get("avg_price", 0.0)),
+                "mark_price": float(p.get("mark_price") or 0.0),
+                "unrealized_pnl": float(p.get("unrealized_pnl") or 0.0),
+                "unrealized_pnl_pct": float(p.get("unrealized_pnl_pct") or 0.0),
+                "entry_time": None,
+                "expiry": None,
+                "dte": float(p.get("expiry_dte") or 0.0),
+                "num_rolls": 0,
+                "mode": "LIVE",
+                "exit_style": "unknown",
+            })
+        except Exception:
+            continue
+
+    totals = {
+        "positions_count": len(positions),
+        "unrealized_pnl": sum(pos["unrealized_pnl"] for pos in positions) if positions else 0.0,
+        "unrealized_pnl_pct": sum(pos["unrealized_pnl_pct"] for pos in positions) if positions else 0.0,
+    }
+
+    return JSONResponse(content={"positions": positions, "totals": totals})
 
 
 @app.get("/api/positions/closed")
@@ -1071,6 +1186,36 @@ def index() -> str:
       <div class="last-update" id="last-update">Last update: --</div>
     </div>
 
+    <div class="section" id="strategy-status-section">
+      <h2>Strategy & Safeguards</h2>
+      <div id="strategy-status-box" style="border:1px solid #333;border-radius:8px;padding:12px;background:#1e1e1e;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+          <div>
+            <div id="strategy-headline" style="font-weight:bold;font-size:1.1rem;">Loading...</div>
+            <div id="strategy-subtitle" style="font-size:0.9em;color:#888;">--</div>
+          </div>
+          <div id="strategy-badges"></div>
+        </div>
+        <div id="strategy-tagline" style="font-size:0.85em;color:#aaa;margin-bottom:8px;"></div>
+        <div style="display:flex;flex-wrap:wrap;gap:12px;">
+          <div id="training-rules-block" style="flex:1 1 280px;min-width:280px;">
+            <div style="font-weight:bold;margin-bottom:4px;color:#7c4dff;">Training Mode Rules</div>
+            <div id="training-rules-desc" style="font-size:0.9em;color:#aaa;margin-bottom:4px;"></div>
+            <ul id="training-rules-notes" style="list-style:none;padding-left:0;margin:0;font-size:0.85em;color:#ccc;max-height:150px;overflow-y:auto;"></ul>
+          </div>
+          <div id="live-rules-block" style="flex:1 1 280px;min-width:280px;">
+            <div style="font-weight:bold;margin-bottom:4px;color:#00bcd4;">Live Mode Rules</div>
+            <div id="live-rules-desc" style="font-size:0.9em;color:#aaa;margin-bottom:4px;"></div>
+            <ul id="live-rules-notes" style="list-style:none;padding-left:0;margin:0;font-size:0.85em;color:#ccc;max-height:150px;overflow-y:auto;"></ul>
+          </div>
+        </div>
+        <div style="margin-top:12px;">
+          <div style="font-weight:bold;margin-bottom:4px;">Safeguards</div>
+          <div id="safeguards-list" style="display:flex;flex-wrap:wrap;gap:8px;"></div>
+        </div>
+      </div>
+    </div>
+
     <div class="section">
       <h2>Latest Decision</h2>
       <div class="decision-card" id="latest-decision">
@@ -1580,8 +1725,53 @@ def index() -> str:
         
         updateOpenPositions();
         updateClosedPositions();
+        updateStrategyStatus();
       }} catch (err) {{
         console.error('Status fetch error:', err);
+      }}
+    }}
+    
+    async function updateStrategyStatus() {{
+      try {{
+        const res = await fetch('/api/strategy-status');
+        const s = await res.json();
+        
+        const modeLabel = s.training_mode ? `Training (${{s.mode}})` : s.mode.charAt(0).toUpperCase() + s.mode.slice(1);
+        const headline = `${{modeLabel}} on ${{s.network.charAt(0).toUpperCase() + s.network.slice(1)}}`;
+        document.getElementById('strategy-headline').textContent = headline;
+        
+        const subtitle = `Delta: ${{s.effective_delta_range[0]}} - ${{s.effective_delta_range[1]}} | DTE: ${{s.effective_dte_range[0]}} - ${{s.effective_dte_range[1]}} | Risk: ${{s.training_risk_label || 'N/A'}}`;
+        document.getElementById('strategy-subtitle').textContent = subtitle;
+        
+        const badgesHtml = [
+          `<span style="display:inline-block;background:${{s.training_mode ? '#7c4dff' : '#00bcd4'}};color:#fff;font-size:0.75em;padding:2px 8px;border-radius:999px;margin-left:4px;">${{s.training_mode ? 'TRAINING' : 'LIVE'}}</span>`,
+          `<span style="display:inline-block;background:#333;color:#eee;font-size:0.75em;padding:2px 8px;border-radius:999px;margin-left:4px;">${{s.network}}</span>`,
+          `<span style="display:inline-block;background:${{s.dry_run ? '#ff9800' : '#4caf50'}};color:#fff;font-size:0.75em;padding:2px 8px;border-radius:999px;margin-left:4px;">${{s.dry_run ? 'DRY RUN' : 'LIVE'}}</span>`,
+          `<span style="display:inline-block;background:${{s.llm_enabled ? '#9c27b0' : '#666'}};color:#fff;font-size:0.75em;padding:2px 8px;border-radius:999px;margin-left:4px;">LLM: ${{s.llm_enabled ? 'ON' : 'OFF'}}</span>`,
+        ].join('');
+        document.getElementById('strategy-badges').innerHTML = badgesHtml;
+        
+        document.getElementById('strategy-tagline').textContent = s.training_mode 
+          ? 'Training mode: some safeguards may be relaxed for exploration.'
+          : 'Live mode: safeguards enforced according to current config.';
+        
+        document.getElementById('training-rules-desc').textContent = s.training_rules.description;
+        document.getElementById('training-rules-notes').innerHTML = s.training_rules.notes.slice(0, 5).map(n => `<li style="margin-bottom:2px;">- ${{n}}</li>`).join('');
+        
+        document.getElementById('live-rules-desc').textContent = s.live_rules.description;
+        document.getElementById('live-rules-notes').innerHTML = s.live_rules.notes.slice(0, 5).map(n => `<li style="margin-bottom:2px;">- ${{n}}</li>`).join('');
+        
+        const safeguardsHtml = s.safeguards.map(sg => {{
+          const bgColor = sg.status === 'ON' ? '#4caf50' : '#f44336';
+          return `<div style="background:#2a2a2a;border-radius:4px;padding:4px 8px;font-size:0.8em;">
+            <span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${{bgColor}};margin-right:4px;"></span>
+            <strong>${{sg.name}}</strong>: ${{sg.status}}
+            <div style="font-size:0.85em;color:#888;">${{sg.details}}</div>
+          </div>`;
+        }}).join('');
+        document.getElementById('safeguards-list').innerHTML = safeguardsHtml;
+      }} catch (err) {{
+        console.error('Strategy status fetch error:', err);
       }}
     }}
     

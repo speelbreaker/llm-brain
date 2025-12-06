@@ -1,0 +1,398 @@
+Prompt for AI Builder: “Strategy & Safeguards Status Panel”
+
+Goal
+
+Add a “Strategy & Safeguards” status panel to the existing web UI so that at any moment we can see:
+
+Whether the bot is in training mode or normal / research / live mode.
+
+Whether it is on testnet or mainnet and whether dry_run is enabled.
+
+What risk rules and constraints are active (delta range, DTE range, IVRV, risk caps).
+
+What training-specific behavior is active (ladders, multiple legs, risk checks skipping, etc.).
+
+Whether the bot is training aggressively, moderately, or conservatively (which profiles are enabled).
+
+This should be a read-only status box on the main dashboard page; it does not change config itself, it just reflects it.
+
+1. Define a backend status model
+
+Task 1: Create a Pydantic model that summarizes all relevant strategy & safety rules using existing config + runtime state.
+
+You can place it e.g. in src/web/models.py or similar:
+
+# src/web/models.py
+from pydantic import BaseModel
+from typing import Literal, List, Optional, Dict
+
+class SafeguardStatus(BaseModel):
+    name: str
+    status: Literal["ON", "OFF"]
+    details: str
+
+class ModeRules(BaseModel):
+    description: str
+    delta_range: Optional[tuple[float, float]] = None
+    dte_range: Optional[tuple[int, int]] = None
+    ivrv_min: Optional[float] = None
+    notes: List[str] = []
+
+class StrategyStatus(BaseModel):
+    # High-level
+    mode: Literal["training", "research", "live"]
+    network: Literal["testnet", "mainnet"]
+    dry_run: bool
+    llm_enabled: bool
+    policy_version: str
+    explore_prob: float
+    explore_top_k: int
+
+    # Effective trading filters (from config_snapshot / Settings)
+    effective_delta_range: tuple[float, float]
+    effective_dte_range: tuple[int, int]
+
+    # Global risk limits
+    max_margin_used_pct: float
+    max_net_delta_abs: float
+    per_expiry_exposure_limit: Optional[float] = None  # if available
+
+    # Training config / state
+    training_mode: bool
+    training_on_testnet: bool
+    training_strategies_enabled: List[str]
+    training_max_calls_per_underlying: Optional[int] = None
+    training_max_calls_per_expiry: Optional[int] = None
+    ladders_enabled: bool
+
+    # Derived label like "Aggressive", "Moderate", etc.
+    training_risk_label: Optional[str] = None  # e.g. "Aggressive", "Mixed", "Conservative"
+
+    # Rules per mode
+    training_rules: ModeRules
+    live_rules: ModeRules
+
+    # Safeguards
+    safeguards: List[SafeguardStatus]
+
+2. Build a helper to construct StrategyStatus from current config
+
+Task 2: Implement a function that builds a StrategyStatus instance from:
+
+Settings (config)
+
+Any existing config_snapshot structure used in your logs (e.g. the JSON that contains mode, policy_version, effective_delta_range, etc.)
+
+Risk engine settings (e.g. per-expiry exposure cap).
+
+You can put it in src/web/status_builder.py:
+
+# src/web/status_builder.py
+from typing import List
+from src.config import settings
+from src.web.models import StrategyStatus, ModeRules, SafeguardStatus
+from src.risk_engine import get_per_expiry_exposure_limit  # or however it's exposed
+
+def infer_training_risk_label(strategies: List[str]) -> str:
+    # Simple heuristic:
+    if "aggressive" in strategies and "conservative" in strategies:
+        return "Mixed (Conservative + Aggressive)"
+    if "aggressive" in strategies:
+        return "Aggressive"
+    if "moderate" in strategies:
+        return "Moderate"
+    if "conservative" in strategies:
+        return "Conservative"
+    return "Unknown"
+
+def build_strategy_status(config_snapshot: dict) -> StrategyStatus:
+    # config_snapshot is the same object you log in decision logs, e.g.:
+    # {
+    #   "mode": "research",
+    #   "policy_version": "rb_v1_explore",
+    #   "dry_run": true,
+    #   "llm_enabled": true,
+    #   "explore_prob": 0.25,
+    #   "explore_top_k": 3,
+    #   "effective_delta_range": [0.1, 0.4],
+    #   "effective_dte_range": [1, 21],
+    #   "max_margin_used_pct": 80,
+    #   "max_net_delta_abs": 5
+    # }
+
+    delta_range = tuple(config_snapshot.get("effective_delta_range", (0.0, 1.0)))
+    dte_range = tuple(config_snapshot.get("effective_dte_range", (1, 30)))
+
+    per_expiry_limit = get_per_expiry_exposure_limit()
+
+    training_strategies = getattr(settings, "training_strategies", ["conservative", "moderate", "aggressive"])
+    training_risk_label = infer_training_risk_label(training_strategies)
+
+    # Define what rules apply in training mode
+    training_rules = ModeRules(
+        description="Training mode on Deribit testnet: explore behavior and gather data.",
+        delta_range=delta_range,
+        dte_range=dte_range,
+        ivrv_min=getattr(settings, "ivrv_min", 1.0),
+        notes=[
+            "Risk checks for margin / per-expiry exposure may be skipped on testnet.",
+            f"Can open multiple covered calls per underlying (up to {getattr(settings, 'training_max_calls_per_underlying', 5)}).",
+            f"Per-expiry training cap: {getattr(settings, 'training_max_calls_per_expiry', 3)} calls.",
+            "Ladder across conservative / moderate / aggressive profiles when enabled.",
+        ],
+    )
+
+    # Define what rules apply in non-training mode
+    live_rules = ModeRules(
+        description="Normal / live mode: respect full risk engine and portfolio limits.",
+        delta_range=delta_range,
+        dte_range=dte_range,
+        ivrv_min=getattr(settings, "ivrv_min", 1.0),
+        notes=[
+            f"Per-expiry exposure limit enforced: {per_expiry_limit} (notional).",
+            f"Max margin usage: {config_snapshot.get('max_margin_used_pct', settings.max_margin_used_pct)}%.",
+            f"Max net delta (abs): {config_snapshot.get('max_net_delta_abs', settings.max_net_delta_abs)}.",
+            "Only one primary action per decision tick.",
+        ],
+    )
+
+    # Safeguards overview
+    safeguards = [
+        SafeguardStatus(
+            name="Per-expiry exposure limit",
+            status="OFF" if settings.is_training_on_testnet else "ON",
+            details=(
+                "Skipped in training on testnet to allow many legs."
+                if settings.is_training_on_testnet
+                else f"Active: cap per expiry ~{per_expiry_limit} notional."
+            ),
+        ),
+        SafeguardStatus(
+            name="Margin usage cap",
+            status="ON",
+            details=f"Max margin_used_pct: {config_snapshot.get('max_margin_used_pct', settings.max_margin_used_pct)}%.",
+        ),
+        SafeguardStatus(
+            name="Net delta cap",
+            status="ON",
+            details=f"Max |net_delta|: {config_snapshot.get('max_net_delta_abs', settings.max_net_delta_abs)}.",
+        ),
+        SafeguardStatus(
+            name="LLM decision gating",
+            status="ON" if config_snapshot.get("llm_enabled", False) else "OFF",
+            details=f"LLM override enabled: {config_snapshot.get('llm_enabled', False)}.",
+        ),
+        SafeguardStatus(
+            name="Dry run",
+            status="ON" if config_snapshot.get("dry_run", settings.dry_run) else "OFF",
+            details="If ON, orders are simulated. If OFF, orders hit the exchange.",
+        ),
+    ]
+
+    return StrategyStatus(
+        mode=config_snapshot.get("mode", "research"),
+        network="testnet" if settings.is_testnet else "mainnet",
+        dry_run=config_snapshot.get("dry_run", settings.dry_run),
+        llm_enabled=config_snapshot.get("llm_enabled", True),
+        policy_version=config_snapshot.get("policy_version", "unknown"),
+        explore_prob=config_snapshot.get("explore_prob", 0.0),
+        explore_top_k=config_snapshot.get("explore_top_k", 1),
+        effective_delta_range=delta_range,
+        effective_dte_range=dte_range,
+        max_margin_used_pct=config_snapshot.get("max_margin_used_pct", settings.max_margin_used_pct),
+        max_net_delta_abs=config_snapshot.get("max_net_delta_abs", settings.max_net_delta_abs),
+        per_expiry_exposure_limit=per_expiry_limit,
+        training_mode=settings.training_mode,
+        training_on_testnet=settings.is_training_on_testnet,
+        training_strategies_enabled=training_strategies,
+        training_max_calls_per_underlying=getattr(settings, "training_max_calls_per_underlying", None),
+        training_max_calls_per_expiry=getattr(settings, "training_max_calls_per_expiry", None),
+        ladders_enabled=getattr(settings, "training_ladders_enabled", True),
+        training_risk_label=training_risk_label,
+        training_rules=training_rules,
+        live_rules=live_rules,
+        safeguards=safeguards,
+    )
+
+
+Note:
+Reuse the same config_snapshot dict you already log (the one that includes mode, policy_version, effective_delta_range, etc.) so UI and logs always show the same truth.
+
+3. Expose an API endpoint for the UI
+
+Task 3: Add a small API route in the FastAPI app that returns this StrategyStatus.
+
+In app/main.py or wherever the FastAPI app is defined:
+
+from fastapi import FastAPI
+from src.web.models import StrategyStatus
+from src.web.status_builder import build_strategy_status
+from src.config import settings
+from src.state import get_latest_config_snapshot  # or equivalent
+
+app = FastAPI(...)
+
+@app.get("/api/strategy-status", response_model=StrategyStatus)
+def get_strategy_status() -> StrategyStatus:
+    # You already have a way to construct the config_snapshot for logs,
+    # or you can reuse the same builder that logs it.
+    config_snapshot = get_latest_config_snapshot()
+    return build_strategy_status(config_snapshot)
+
+
+If you don’t have get_latest_config_snapshot, create a simple helper that builds the same dict you currently log in decision logs.
+
+4. Add the “Strategy & Safeguards” box to the dashboard UI
+
+Task 4: On the main web UI page (e.g. templates/index.html or the bot dashboard template), add a card/box that:
+
+Shows a headline:
+
+e.g. Mode: Training on Testnet (Aggressive) or
+
+Mode: Research on Testnet (Normal risk) etc.
+
+Two sub-sections:
+
+“When training mode is ON” – list the rules from strategyStatus.training_rules.
+
+“When training mode is OFF” – list the rules from strategyStatus.live_rules.
+
+A “Safeguards” list with colored badges ON/OFF.
+
+Example (Jinja + basic HTML):
+
+<section id="strategy-status" class="card">
+  <div class="card-header">
+    <h2>Strategy & Safeguards</h2>
+    <span class="badge" data-bind="mode-badge"></span>
+  </div>
+  <div class="card-body">
+    <div class="mode-summary">
+      <p>
+        <strong>Current mode:</strong>
+        <span id="mode-label"></span>
+      </p>
+      <p>
+        <strong>Network:</strong> <span id="network-label"></span> ·
+        <strong>Dry run:</strong> <span id="dry-run-label"></span> ·
+        <strong>LLM:</strong> <span id="llm-label"></span>
+      </p>
+      <p>
+        <strong>Training risk level:</strong>
+        <span id="training-risk-label"></span>
+      </p>
+      <p>
+        <strong>Effective filters:</strong>
+        Δ in <span id="delta-range"></span>,
+        DTE in <span id="dte-range"></span>,
+        IVRV ≥ <span id="ivrv-min"></span>
+      </p>
+    </div>
+
+    <div class="mode-rules-grid">
+      <div class="mode-block">
+        <h3>Training mode rules</h3>
+        <p id="training-desc"></p>
+        <ul id="training-notes"></ul>
+      </div>
+      <div class="mode-block">
+        <h3>Live / normal mode rules</h3>
+        <p id="live-desc"></p>
+        <ul id="live-notes"></ul>
+      </div>
+    </div>
+
+    <div class="safeguards">
+      <h3>Safeguards</h3>
+      <ul id="safeguard-list"></ul>
+    </div>
+  </div>
+</section>
+
+5. Fetch and bind data in frontend JS
+
+Task 5: Add a small JS snippet that calls /api/strategy-status and fills in the card.
+
+<script>
+async function loadStrategyStatus() {
+  try {
+    const resp = await fetch("/api/strategy-status");
+    if (!resp.ok) return;
+    const s = await resp.json();
+
+    // Top summary
+    document.getElementById("mode-label").textContent =
+      s.training_mode
+        ? `Training (${s.mode})`
+        : s.mode.charAt(0).toUpperCase() + s.mode.slice(1);
+
+    document.getElementById("network-label").textContent = s.network;
+    document.getElementById("dry-run-label").textContent = s.dry_run ? "ON" : "OFF";
+    document.getElementById("llm-label").textContent = s.llm_enabled ? "ON" : "OFF";
+    document.getElementById("training-risk-label").textContent = s.training_risk_label || "N/A";
+
+    document.getElementById("delta-range").textContent =
+      `${s.effective_delta_range[0]} – ${s.effective_delta_range[1]}`;
+    document.getElementById("dte-range").textContent =
+      `${s.effective_dte_range[0]} – ${s.effective_dte_range[1]}`;
+    document.getElementById("ivrv-min").textContent =
+      (s.training_rules.ivrv_min ?? s.live_rules.ivrv_min ?? 1.0);
+
+    // Mode rules
+    document.getElementById("training-desc").textContent = s.training_rules.description;
+    const trNotes = document.getElementById("training-notes");
+    trNotes.innerHTML = "";
+    (s.training_rules.notes || []).forEach(n => {
+      const li = document.createElement("li");
+      li.textContent = n;
+      trNotes.appendChild(li);
+    });
+
+    document.getElementById("live-desc").textContent = s.live_rules.description;
+    const liveNotes = document.getElementById("live-notes");
+    liveNotes.innerHTML = "";
+    (s.live_rules.notes || []).forEach(n => {
+      const li = document.createElement("li");
+      li.textContent = n;
+      liveNotes.appendChild(li);
+    });
+
+    // Safeguards
+    const sgList = document.getElementById("safeguard-list");
+    sgList.innerHTML = "";
+    (s.safeguards || []).forEach(sg => {
+      const li = document.createElement("li");
+      const badge = document.createElement("span");
+      badge.className = "badge " + (sg.status === "ON" ? "badge-on" : "badge-off");
+      badge.textContent = sg.status;
+      li.appendChild(badge);
+      li.appendChild(document.createTextNode(" " + sg.name + " – " + sg.details));
+      sgList.appendChild(li);
+    });
+  } catch (e) {
+    console.error("Failed to load strategy status", e);
+  }
+}
+
+document.addEventListener("DOMContentLoaded", loadStrategyStatus);
+</script>
+
+
+Styling:
+You can reuse your existing card / badge CSS or add simple .badge-on (green) and .badge-off (red) styles.
+
+6. What this should show in practice
+
+Once this is wired, the panel should answer your original questions directly, e.g.:
+
+“Is training mode enabled?” → training_mode: true, network: testnet.
+
+“Is it training aggressively or moderately?”
+→ training_risk_label: "Mixed (Conservative + Aggressive)" or "Aggressive", and it lists which profiles are enabled.
+
+“What rules are active when training is ON/OFF?”
+→ Training rules box vs Live rules box (notes list).
+
+“Are safeguards on or off?”
+→ Safeguards list with ON/OFF badges and english explanation.

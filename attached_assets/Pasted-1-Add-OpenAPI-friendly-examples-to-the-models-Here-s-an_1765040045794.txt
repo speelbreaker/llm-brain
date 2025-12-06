@@ -1,0 +1,523 @@
+1. Add OpenAPI-friendly examples to the models
+
+Here’s an updated version of the schemas with schema_extra examples for BacktestConfig and ResolvedBacktestConfig. You can drop this into your app/schemas/backtest.py (or equivalent) and it will show up in Swagger UI (/docs).
+
+# app/schemas/backtest.py
+
+from enum import Enum
+from typing import Optional, Tuple
+
+from pydantic import BaseModel, Field
+
+
+class BacktestPreset(str, Enum):
+    ULTRA_SAFE = "ULTRA_SAFE"
+    BALANCED = "BALANCED"
+    AGGRESSIVE = "AGGRESSIVE"
+    CUSTOM = "CUSTOM"
+
+
+class BacktestMode(str, Enum):
+    TRAINING = "training"
+    LIVE = "live"
+
+
+class BacktestRuleToggles(BaseModel):
+    enforce_per_expiry_exposure: Optional[bool] = Field(
+        None, description="Cap exposure per expiry (e.g. notional or BTC amount)."
+    )
+    enforce_margin_cap: Optional[bool] = Field(
+        None, description="Respect max_margin_used_pct limit."
+    )
+    enforce_net_delta_cap: Optional[bool] = Field(
+        None, description="Respect max_net_delta_abs limit."
+    )
+    restrict_single_primary_call_per_expiry: Optional[bool] = Field(
+        None, description="Only one main short call per underlying+expiry."
+    )
+    require_ivrv_filter: Optional[bool] = Field(
+        None, description="Require IV/RV >= min_ivrv to sell premium."
+    )
+    use_synthetic_iv_and_skew: Optional[bool] = Field(
+        None, description="Use synthetic IV/skew engine for scoring."
+    )
+    allow_multi_profile_laddering: Optional[bool] = Field(
+        None, description="Allow conservative/moderate/aggressive ladders together."
+    )
+    respect_min_premium_filter: Optional[bool] = Field(
+        None, description="Skip trades below min_premium_usd."
+    )
+
+    class Config:
+        schema_extra = {
+            "example": {
+                "enforce_per_expiry_exposure": True,
+                "enforce_margin_cap": True,
+                "enforce_net_delta_cap": True,
+                "restrict_single_primary_call_per_expiry": True,
+                "require_ivrv_filter": True,
+                "use_synthetic_iv_and_skew": True,
+                "allow_multi_profile_laddering": True,
+                "respect_min_premium_filter": True,
+            }
+        }
+
+
+class BacktestThresholds(BaseModel):
+    max_margin_used_pct: Optional[float] = Field(
+        None, ge=0, le=100, description="Max margin usage in percent of equity."
+    )
+    max_net_delta_abs: Optional[float] = Field(
+        None, ge=0, description="Absolute portfolio delta limit (in BTC-equivalent)."
+    )
+    per_expiry_exposure_cap: Optional[float] = Field(
+        None,
+        ge=0,
+        description="Cap for total short exposure per expiry (interpretation is up to engine).",
+    )
+    min_ivrv: Optional[float] = Field(
+        None, ge=0, description="Minimum IV/RV to consider selling premium."
+    )
+    delta_range: Optional[Tuple[float, float]] = Field(
+        None, description="Allowed delta range for short calls (min, max)."
+    )
+    dte_range: Optional[Tuple[int, int]] = Field(
+        None, description="Allowed DTE range in days (min, max)."
+    )
+    min_premium_usd: Optional[float] = Field(
+        None, ge=0, description="Minimum option premium in USD to accept."
+    )
+
+    class Config:
+        schema_extra = {
+            "example": {
+                "max_margin_used_pct": 60.0,
+                "max_net_delta_abs": 3.5,
+                "per_expiry_exposure_cap": 0.25,
+                "min_ivrv": 1.15,
+                "delta_range": [0.15, 0.35],
+                "dte_range": [3, 21],
+                "min_premium_usd": 200.0,
+            }
+        }
+
+
+class BacktestConfig(BaseModel):
+    """
+    Incoming payload from UI for a backtest.
+    If preset != CUSTOM, server will fill missing fields from preset defaults
+    and then apply user overrides.
+    """
+
+    preset: BacktestPreset = Field(
+        BacktestPreset.BALANCED,
+        description="High-level preset for risk rules. ULTRA_SAFE / BALANCED / AGGRESSIVE / CUSTOM.",
+    )
+    mode: BacktestMode = Field(
+        BacktestMode.TRAINING,
+        description="Interpretation of rules: training (looser) vs live (stricter).",
+    )
+
+    rule_toggles: BacktestRuleToggles = Field(
+        default_factory=BacktestRuleToggles,
+        description="Optional overrides for which rule families are active.",
+    )
+    thresholds: BacktestThresholds = Field(
+        default_factory=BacktestThresholds,
+        description="Optional overrides for numeric thresholds.",
+    )
+
+    class Config:
+        schema_extra = {
+            "example": {
+                "preset": "BALANCED",
+                "mode": "training",
+                "rule_toggles": {
+                    "enforce_per_expiry_exposure": True,
+                    "enforce_margin_cap": True,
+                    "enforce_net_delta_cap": True,
+                    "restrict_single_primary_call_per_expiry": True,
+                    "require_ivrv_filter": True,
+                    "use_synthetic_iv_and_skew": True,
+                    "allow_multi_profile_laddering": True,
+                    "respect_min_premium_filter": True
+                },
+                "thresholds": {
+                    "max_margin_used_pct": 60.0,
+                    "max_net_delta_abs": 3.5,
+                    "per_expiry_exposure_cap": 0.25,
+                    "min_ivrv": 1.15,
+                    "delta_range": [0.15, 0.35],
+                    "dte_range": [3, 21],
+                    "min_premium_usd": 200.0
+                }
+            }
+        }
+
+
+class ResolvedBacktestConfig(BaseModel):
+    """
+    Fully-resolved config that the backtest engine actually uses
+    (after applying preset defaults + overrides).
+    """
+
+    preset: BacktestPreset
+    mode: BacktestMode
+    rule_toggles: BacktestRuleToggles
+    thresholds: BacktestThresholds
+
+    class Config:
+        schema_extra = {
+            "example": {
+                "preset": "BALANCED",
+                "mode": "training",
+                "rule_toggles": {
+                    "enforce_per_expiry_exposure": True,
+                    "enforce_margin_cap": True,
+                    "enforce_net_delta_cap": True,
+                    "restrict_single_primary_call_per_expiry": True,
+                    "require_ivrv_filter": True,
+                    "use_synthetic_iv_and_skew": True,
+                    "allow_multi_profile_laddering": True,
+                    "respect_min_premium_filter": True
+                },
+                "thresholds": {
+                    "max_margin_used_pct": 60.0,
+                    "max_net_delta_abs": 3.5,
+                    "per_expiry_exposure_cap": 0.25,
+                    "min_ivrv": 1.15,
+                    "delta_range": [0.15, 0.35],
+                    "dte_range": [3, 21],
+                    "min_premium_usd": 200.0
+                }
+            }
+        }
+
+
+Once this is in place, your /docs for POST /backtests/run will show a nice example payload and example response.
+
+2. Frontend sketch: presets, checkboxes, API call
+
+You’ve got two main pieces here:
+
+UI controls (mode toggle, preset selector, checkboxes, number inputs).
+
+API call to /backtests/run with BacktestConfig JSON.
+
+I’ll sketch both in a way you can adapt to Jinja2 or a small React/Vue component.
+
+2.1. Shape of the payload from the frontend
+
+What the frontend should send:
+
+{
+  "preset": "BALANCED",
+  "mode": "training",
+  "rule_toggles": {
+    "enforce_per_expiry_exposure": true,
+    "enforce_margin_cap": true,
+    "enforce_net_delta_cap": true,
+    "restrict_single_primary_call_per_expiry": true,
+    "require_ivrv_filter": true,
+    "use_synthetic_iv_and_skew": true,
+    "allow_multi_profile_laddering": true,
+    "respect_min_premium_filter": true
+  },
+  "thresholds": {
+    "max_margin_used_pct": 60.0,
+    "max_net_delta_abs": 3.5,
+    "per_expiry_exposure_cap": 0.25,
+    "min_ivrv": 1.15,
+    "delta_range": [0.15, 0.35],
+    "dte_range": [3, 21],
+    "min_premium_usd": 200.0
+  }
+}
+
+
+Note: for non-edited fields, you can either:
+
+send null so the backend knows “use preset default”, or
+
+just omit them from JSON (FastAPI will treat as None).
+
+Easiest: initialize from preset on the client so you always send full config.
+
+2.2. Simple cURL example (helps test before UI)
+curl -X POST "http://localhost:8000/backtests/run" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "preset": "AGGRESSIVE",
+    "mode": "training",
+    "rule_toggles": {
+      "enforce_per_expiry_exposure": false,
+      "enforce_margin_cap": true,
+      "enforce_net_delta_cap": true,
+      "restrict_single_primary_call_per_expiry": false,
+      "require_ivrv_filter": false,
+      "use_synthetic_iv_and_skew": true,
+      "allow_multi_profile_laddering": true,
+      "respect_min_premium_filter": false
+    },
+    "thresholds": {
+      "max_margin_used_pct": 80.0,
+      "max_net_delta_abs": 5.0,
+      "per_expiry_exposure_cap": 0.6,
+      "min_ivrv": 1.0,
+      "delta_range": [0.10, 0.40],
+      "dte_range": [1, 21],
+      "min_premium_usd": 100.0
+    }
+  }'
+
+2.3. UI layout sketch
+
+Conceptually:
+
+Top row:
+
+Mode toggle: Training / Live
+
+Preset buttons: Ultra Safe, Balanced, Aggressive, Custom
+
+Main panel (visible always, but disabled when preset ≠ CUSTOM if you like):
+
+Checkboxes for rule_toggles
+
+Sliders / numeric inputs for thresholds
+
+Run backtest button
+
+You already have a “rules summary” box; this panel is essentially the editable version of that.
+
+Example: simple HTML + JS (Jinja compatible)
+
+This is deliberately minimal so you can drop it into your current template and wire up.
+
+<div id="backtest-config">
+  <!-- Mode toggle -->
+  <div>
+    <label>
+      <input type="radio" name="mode" value="training" checked>
+      Training
+    </label>
+    <label>
+      <input type="radio" name="mode" value="live">
+      Live
+    </label>
+  </div>
+
+  <!-- Preset buttons -->
+  <div>
+    <button type="button" data-preset="ULTRA_SAFE">Ultra Safe</button>
+    <button type="button" data-preset="BALANCED" class="active">Balanced</button>
+    <button type="button" data-preset="AGGRESSIVE">Aggressive</button>
+    <button type="button" data-preset="CUSTOM">Custom</button>
+  </div>
+
+  <!-- Rule checkboxes -->
+  <fieldset>
+    <legend>Rule toggles</legend>
+    <label>
+      <input type="checkbox" id="enforce_per_expiry_exposure" checked>
+      Enforce per-expiry exposure cap
+    </label><br>
+    <label>
+      <input type="checkbox" id="enforce_margin_cap" checked>
+      Enforce margin usage cap
+    </label><br>
+    <label>
+      <input type="checkbox" id="enforce_net_delta_cap" checked>
+      Enforce net delta cap
+    </label><br>
+    <label>
+      <input type="checkbox" id="restrict_single_primary_call_per_expiry" checked>
+      Only one primary short call per expiry
+    </label><br>
+    <label>
+      <input type="checkbox" id="require_ivrv_filter" checked>
+      Require IV/RV ≥ min IVRV
+    </label><br>
+    <label>
+      <input type="checkbox" id="use_synthetic_iv_and_skew" checked>
+      Use synthetic IV & skew engine
+    </label><br>
+    <label>
+      <input type="checkbox" id="allow_multi_profile_laddering" checked>
+      Allow multi-profile laddering
+    </label><br>
+    <label>
+      <input type="checkbox" id="respect_min_premium_filter" checked>
+      Respect minimum premium filter
+    </label>
+  </fieldset>
+
+  <!-- Thresholds -->
+  <fieldset>
+    <legend>Thresholds</legend>
+    <label>
+      Max margin used %:
+      <input type="number" id="max_margin_used_pct" value="60" step="1">
+    </label><br>
+    <label>
+      Max |net delta|:
+      <input type="number" id="max_net_delta_abs" value="3.5" step="0.1">
+    </label><br>
+    <label>
+      Per-expiry exposure cap:
+      <input type="number" id="per_expiry_exposure_cap" value="0.25" step="0.05">
+    </label><br>
+    <label>
+      Min IV/RV:
+      <input type="number" id="min_ivrv" value="1.15" step="0.05">
+    </label><br>
+    <label>
+      Delta range:
+      <input type="number" id="delta_min" value="0.15" step="0.01"> –
+      <input type="number" id="delta_max" value="0.35" step="0.01">
+    </label><br>
+    <label>
+      DTE range:
+      <input type="number" id="dte_min" value="3" step="1"> –
+      <input type="number" id="dte_max" value="21" step="1">
+    </label><br>
+    <label>
+      Min premium (USD):
+      <input type="number" id="min_premium_usd" value="200" step="10">
+    </label>
+  </fieldset>
+
+  <button type="button" id="run-backtest">Run backtest</button>
+
+  <pre id="backtest-result"></pre>
+</div>
+
+<script>
+  const presetButtons = document.querySelectorAll('#backtest-config [data-preset]');
+  let currentPreset = 'BALANCED';
+
+  const PRESET_DEFAULTS = {
+    ULTRA_SAFE: {
+      max_margin_used_pct: 40,
+      max_net_delta_abs: 2.5,
+      per_expiry_exposure_cap: 0.15,
+      min_ivrv: 1.3,
+      delta_min: 0.15,
+      delta_max: 0.30,
+      dte_min: 7,
+      dte_max: 21,
+      min_premium_usd: 300
+    },
+    BALANCED: {
+      max_margin_used_pct: 60,
+      max_net_delta_abs: 3.5,
+      per_expiry_exposure_cap: 0.25,
+      min_ivrv: 1.15,
+      delta_min: 0.15,
+      delta_max: 0.35,
+      dte_min: 3,
+      dte_max: 21,
+      min_premium_usd: 200
+    },
+    AGGRESSIVE: {
+      max_margin_used_pct: 80,
+      max_net_delta_abs: 5.0,
+      per_expiry_exposure_cap: 0.6,
+      min_ivrv: 1.0,
+      delta_min: 0.10,
+      delta_max: 0.40,
+      dte_min: 1,
+      dte_max: 21,
+      min_premium_usd: 100
+    }
+  };
+
+  function applyPreset(preset) {
+    currentPreset = preset;
+
+    // UI highlighting
+    presetButtons.forEach(btn => {
+      btn.classList.toggle('active', btn.dataset.preset === preset);
+    });
+
+    if (preset === 'CUSTOM') return; // don't overwrite user values
+
+    const p = PRESET_DEFAULTS[preset];
+
+    document.getElementById('max_margin_used_pct').value = p.max_margin_used_pct;
+    document.getElementById('max_net_delta_abs').value = p.max_net_delta_abs;
+    document.getElementById('per_expiry_exposure_cap').value = p.per_expiry_exposure_cap;
+    document.getElementById('min_ivrv').value = p.min_ivrv;
+    document.getElementById('delta_min').value = p.delta_min;
+    document.getElementById('delta_max').value = p.delta_max;
+    document.getElementById('dte_min').value = p.dte_min;
+    document.getElementById('dte_max').value = p.dte_max;
+    document.getElementById('min_premium_usd').value = p.min_premium_usd;
+  }
+
+  presetButtons.forEach(btn => {
+    btn.addEventListener('click', () => applyPreset(btn.dataset.preset));
+  });
+
+  applyPreset('BALANCED'); // initial
+
+  document.getElementById('run-backtest').addEventListener('click', async () => {
+    const mode = document.querySelector('input[name="mode"]:checked').value;
+
+    const body = {
+      preset: currentPreset,
+      mode: mode,
+      rule_toggles: {
+        enforce_per_expiry_exposure: document.getElementById('enforce_per_expiry_exposure').checked,
+        enforce_margin_cap: document.getElementById('enforce_margin_cap').checked,
+        enforce_net_delta_cap: document.getElementById('enforce_net_delta_cap').checked,
+        restrict_single_primary_call_per_expiry: document.getElementById('restrict_single_primary_call_per_expiry').checked,
+        require_ivrv_filter: document.getElementById('require_ivrv_filter').checked,
+        use_synthetic_iv_and_skew: document.getElementById('use_synthetic_iv_and_skew').checked,
+        allow_multi_profile_laddering: document.getElementById('allow_multi_profile_laddering').checked,
+        respect_min_premium_filter: document.getElementById('respect_min_premium_filter').checked
+      },
+      thresholds: {
+        max_margin_used_pct: parseFloat(document.getElementById('max_margin_used_pct').value),
+        max_net_delta_abs: parseFloat(document.getElementById('max_net_delta_abs').value),
+        per_expiry_exposure_cap: parseFloat(document.getElementById('per_expiry_exposure_cap').value),
+        min_ivrv: parseFloat(document.getElementById('min_ivrv').value),
+        delta_range: [
+          parseFloat(document.getElementById('delta_min').value),
+          parseFloat(document.getElementById('delta_max').value)
+        ],
+        dte_range: [
+          parseInt(document.getElementById('dte_min').value, 10),
+          parseInt(document.getElementById('dte_max').value, 10)
+        ],
+        min_premium_usd: parseFloat(document.getElementById('min_premium_usd').value)
+      }
+    };
+
+    const res = await fetch('/backtests/run', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(body)
+    });
+
+    const json = await res.json();
+    document.getElementById('backtest-result').textContent = JSON.stringify(json, null, 2);
+  });
+</script>
+
+
+This:
+
+Mirrors the Pydantic model exactly.
+
+Lets you click presets (which auto-fill thresholds).
+
+Lets you edit checkboxes & numbers.
+
+POSTs to /backtests/run and prints the resolved config (or later, job id / summary) as JSON.
+
+You can then:
+
+Reuse the same config object to display a “Rules summary” block on your main dashboard.
+
+Wire the resolved config into your backtest runner or into the agent’s training mode.

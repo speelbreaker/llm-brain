@@ -1,0 +1,133 @@
+Why the 6 open positions don’t show in Bot Positions
+
+In the UI:
+
+The “Positions: 6” number in Market Overview comes from the live Deribit portfolio:
+
+It’s built in agent_loop.py from
+agent_state.portfolio.option_positions and sent out in /status.
+
+The “Bot Positions → Open Positions” table comes from a completely different place:
+
+The frontend calls GET /api/positions/open
+
+That endpoint in src/web_app.py does:
+
+@app.get("/api/positions/open")
+def get_open_positions() -> JSONResponse:
+    """Return open bot-managed positions for the UI."""
+    payload = position_tracker.get_open_positions_payload()
+    return JSONResponse(content=payload)
+
+
+position_tracker.get_open_positions_payload() (in src/position_tracker.py) only knows about positions created by this bot’s execution module, i.e. things that went through:
+
+src.execution.execute_action(...)
+  -> position_tracker.process_execution_result(result)
+
+
+So:
+
+Any positions you opened manually, or before the new PositionTracker module existed, or via some other script → they show up in Deribit and in the Positions: 6 count, but not in position_tracker, so the “Bot Positions” table stays empty.
+
+That’s why you see Positions: 6 at the top, but No open positions in the table.
+
+Nothing is actually “disappearing” on browser refresh – the table is just tied to a narrower data source (bot-managed chains only), which is currently empty.
+
+Why Recent Decisions can be empty
+
+Recent decisions are stored in-memory in src/decisions_store.py (DecisionsStore).
+
+The agent loop (agent_loop.py) calls decisions_store.add(decision_entry) each iteration when it makes a decision.
+
+The frontend calls GET /api/agent/decisions, which reads from that in-memory store.
+
+So:
+
+As long as the Replit process is running, reloading the page should still show the recent decisions.
+
+If the app itself restarts (Replit autoscale, you hit “Run” again, deployment restart, etc.), DecisionsStore is wiped and the table becomes empty again. There’s no persistence for decisions yet.
+
+Your screenshot actually shows one decision (04:15 PM … DO NOTHING), so that part is wired correctly — it just won’t survive a backend restart.
+
+How to make your 6 live positions show up in the table
+
+Right now, the backend never syncs Deribit’s live positions into PositionTracker. That’s the missing link.
+
+Quick, minimal fix: fall back to live portfolio positions
+
+You can change /api/positions/open so that:
+
+It first tries position_tracker.get_open_positions_payload() (bot-managed chains).
+
+If that’s empty, it falls back to the latest portfolio snapshot in status_store (which already includes all open Deribit option positions).
+
+In src/web_app.py, replace the existing /api/positions/open endpoint with something like this:
+
+from src.status_store import status_store
+from src.position_tracker import position_tracker
+
+@app.get("/api/positions/open")
+def get_open_positions() -> JSONResponse:
+    """
+    Return open positions for the UI.
+
+    - Prefer bot-managed chains from PositionTracker (those opened via this bot).
+    - If there are none, fall back to live Deribit option positions from
+      the latest status snapshot so you always see your 6 open positions.
+    """
+    # 1) Try bot-managed positions first
+    payload = position_tracker.get_open_positions_payload()
+    if payload.get("positions"):
+        return JSONResponse(content=payload)
+
+    # 2) Fallback: build rows from live portfolio positions in status_store
+    status = status_store.get() or {}
+    state = status.get("state") or {}
+    portfolio = state.get("portfolio") or {}
+    live_positions = portfolio.get("positions") or []
+
+    positions: list[dict] = []
+    for p in live_positions:
+        try:
+            side = p.get("side", "sell")  # "buy" or "sell"
+            option_type = p.get("option_type", "CALL")
+            positions.append({
+                "position_id": f"live-{p.get('symbol')}",
+                "underlying": p.get("underlying", "?"),
+                "symbol": p.get("symbol"),
+                "option_type": option_type,
+                "strategy_type": "LIVE_POSITION",
+                "side": "SHORT" if side == "sell" else "LONG",
+                "quantity": float(p.get("size", 0.0)),
+                "entry_price": float(p.get("avg_price", 0.0)),
+                "mark_price": float(p.get("mark_price") or 0.0),
+                "unrealized_pnl": float(p.get("unrealized_pnl") or 0.0),
+                "unrealized_pnl_pct": float(p.get("unrealized_pnl_pct") or 0.0),
+                "entry_time": None,
+                "expiry": None,
+                "dte": float(p.get("expiry_dte") or 0.0),
+                "num_rolls": 0,
+                "mode": "LIVE",
+                "exit_style": "unknown",
+            })
+        except Exception:
+            # Skip any malformed entry so one bad record doesn't break the whole table
+            continue
+
+    totals = {
+        "positions_count": len(positions),
+        "unrealized_pnl": sum(p["unrealized_pnl"] for p in positions) if positions else 0.0,
+        "unrealized_pnl_pct": sum(p["unrealized_pnl_pct"] for p in positions) if positions else 0.0,
+    }
+
+    return JSONResponse(content={"positions": positions, "totals": totals})
+
+
+This:
+
+Keeps the “Bot Positions” table structure exactly as your JS expects (side, option_type, quantity, entry_price, etc.).
+
+Makes your current 6 Deribit positions show up there even if the bot didn’t open them.
+
+Still supports the full “bot-managed chains” logic once you start letting the bot open and roll calls itself.

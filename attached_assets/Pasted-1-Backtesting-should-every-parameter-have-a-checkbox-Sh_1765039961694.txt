@@ -1,0 +1,115 @@
+1. Backtesting: should every parameter have a checkbox?
+
+Short version:
+Yes to toggles, but not for every tiny parameter.
+Do toggles for rule families, not raw numbers.
+
+Why not a checkbox for everything?
+
+If you can independently toggle 15+ constraints you get:
+
+A combinatorial explosion of possible configurations.
+
+Very noisy results (you forget what combination produced what backtest).
+
+A UI that feels like the cockpit of a 747.
+
+Better pattern:
+
+High-level scenario presets (radio buttons or dropdown):
+
+Ultra Safe – All risk checks ON, conservative delta/DTE, per-expiry limits enforced.
+
+Balanced – Most risk checks ON, but slightly looser margins, a bit more aggressive delta/DTE.
+
+Aggressive – Looser constraints, per-expiry limits relaxed, more ladders, more positions.
+
+An “Advanced / Override” section with checklists for rule groups, e.g.:
+
+✅ Enforce per-expiry exposure cap
+
+✅ Enforce margin_used_pct limit
+
+✅ Enforce max |net_delta|
+
+✅ Restrict to 1 primary short call per expiry
+
+✅ Require IV/RV ≥ threshold
+
+✅ Use synthetic IV + skew engine
+
+✅ Allow multi-profile laddering (conservative/moderate/aggressive in parallel)
+
+✅ Respect min premium filter
+
+So during backtesting, you say:
+
+“Run the last 6 months with Aggressive preset, but turn off per-expiry cap and 1-call-per-expiry rule and see what happens.”
+
+Or, “Run Ultra Safe but turn off IV/RV filter, just to see the impact.”
+
+That’s flexible but not insane.
+
+2. Exact text for training_rules and live_rules
+
+Below is plug-and-play wording you can drop into your ModeRules:
+
+2.1. Training rules (for training_rules)
+
+Description
+
+training_rules.description = (
+    "Training mode on Deribit testnet: let the bot explore, open multiple covered "
+    "calls, and gather experience data without putting real capital at risk."
+)
+
+
+Notes – short, human-readable bullets:
+
+training_rules.notes = [
+    "Runs on Deribit testnet only. No real capital is used.",
+    "Risk checks for margin, per-expiry exposure, and position size are relaxed so the bot can open many trades and learn.",
+    "Can open multiple covered calls per underlying and per expiry to build ladders across different strikes and deltas.",
+    "Uses all enabled risk profiles (Conservative / Moderate / Aggressive) in parallel for richer training data.",
+    "Still respects basic sanity checks: requires valid prices, greeks, and IV/RV data before placing any order.",
+    "Uses the same delta and DTE windows as live mode, but is allowed to operate near the edges of those ranges when exploring.",
+    "IV/RV filters are applied but can be slightly loosened in training to see behavior in borderline conditions.",
+    "Orders are sent with dry_run = False on TESTNET so trades show up as real positions in the Deribit testnet UI.",
+]
+
+
+If you want slightly shorter, you can trim, but that’s the core idea: “relaxed but not insane”.
+
+2.2. Live / normal rules (for live_rules)
+
+Description
+
+live_rules.description = (
+    "Normal / live mode: prioritize capital preservation, enforce full risk checks, "
+    "and keep the number of open positions manageable."
+)
+
+
+Notes – focused on “real money, strict rules”:
+
+live_rules.notes = [
+    "Trades only on the configured network (typically mainnet) and can use real capital when dry_run is disabled.",
+    "Enforces full risk engine: margin_used_pct must stay below the configured cap, and |net_delta| must remain within limits.",
+    "Per-expiry exposure limit is enforced so a single expiry cannot dominate the portfolio risk.",
+    "Restricts the number of open short calls per underlying and expiry to keep the position set simple and easy to manage.",
+    "Requires candidates to pass delta and DTE filters before trading (e.g. within the configured delta and days-to-expiry ranges).",
+    "Requires IV/RV to be attractive enough before selling premium; if volatility is not juicy, the bot will not trade.",
+    "Chooses a single best action per decision tick (no aggressive laddering across multiple profiles in one go).",
+    "If any critical risk check fails, the decision is downgraded to DO_NOTHING instead of forcing a trade.",
+    "Dry run mode can be enabled for shadow trading on live data; when dry_run = True, all orders are simulated only.",
+]
+
+2.3. Optional: show the differences visually
+
+If you want the UI text to highlight contrast, you can add a small line in the card that compares the two:
+
+Training mode: “Relaxed limits, multiple calls and ladders allowed, goal = learn.”
+
+Live mode: “Strict limits, few calls, goal = protect capital.”
+
+But in terms of app internals, the key bits are those description + notes arrays.

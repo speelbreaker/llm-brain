@@ -1,0 +1,395 @@
+I’ll do two things:
+
+A simple Backtest config JSON shape that mirrors the rule checkboxes & presets.
+
+A Pydantic model + FastAPI endpoint that uses those presets and lets you override anything.
+
+You can adapt names/paths to your existing project layout.
+
+1. Backtest config JSON design
+1.1. Shape
+{
+  "preset": "BALANCED",              // ULTRA_SAFE | BALANCED | AGGRESSIVE | CUSTOM
+  "mode": "training",                // training | live (for how to interpret risk)
+  "rule_toggles": {
+    "enforce_per_expiry_exposure": true,
+    "enforce_margin_cap": true,
+    "enforce_net_delta_cap": true,
+    "restrict_single_primary_call_per_expiry": true,
+    "require_ivrv_filter": true,
+    "use_synthetic_iv_and_skew": true,
+    "allow_multi_profile_laddering": false,
+    "respect_min_premium_filter": true
+  },
+  "thresholds": {
+    "max_margin_used_pct": 80.0,
+    "max_net_delta_abs": 5.0,
+    "per_expiry_exposure_cap": 0.3,         // e.g. 0.3 BTC or 30% of BTC stack, depending on your internal units
+    "min_ivrv": 1.2,
+    "delta_range": [0.15, 0.35],
+    "dte_range": [3, 21],
+    "min_premium_usd": 250.0
+  }
+}
+
+
+This mirrors the “checkbox families” we talked about:
+
+rule_toggles.* → UI checkboxes
+
+thresholds.* → numeric sliders/inputs.
+
+1.2. Example presets
+
+You don’t have to expose all of this to the user; you can let them pick preset and only show the checkboxes when they switch to CUSTOM / Advanced.
+
+ULTRA_SAFE
+{
+  "preset": "ULTRA_SAFE",
+  "mode": "live",
+  "rule_toggles": {
+    "enforce_per_expiry_exposure": true,
+    "enforce_margin_cap": true,
+    "enforce_net_delta_cap": true,
+    "restrict_single_primary_call_per_expiry": true,
+    "require_ivrv_filter": true,
+    "use_synthetic_iv_and_skew": true,
+    "allow_multi_profile_laddering": false,
+    "respect_min_premium_filter": true
+  },
+  "thresholds": {
+    "max_margin_used_pct": 40.0,
+    "max_net_delta_abs": 2.5,
+    "per_expiry_exposure_cap": 0.15,
+    "min_ivrv": 1.3,
+    "delta_range": [0.15, 0.3],
+    "dte_range": [7, 21],
+    "min_premium_usd": 300.0
+  }
+}
+
+BALANCED
+{
+  "preset": "BALANCED",
+  "mode": "live",
+  "rule_toggles": {
+    "enforce_per_expiry_exposure": true,
+    "enforce_margin_cap": true,
+    "enforce_net_delta_cap": true,
+    "restrict_single_primary_call_per_expiry": true,
+    "require_ivrv_filter": true,
+    "use_synthetic_iv_and_skew": true,
+    "allow_multi_profile_laddering": true,
+    "respect_min_premium_filter": true
+  },
+  "thresholds": {
+    "max_margin_used_pct": 60.0,
+    "max_net_delta_abs": 3.5,
+    "per_expiry_exposure_cap": 0.25,
+    "min_ivrv": 1.15,
+    "delta_range": [0.15, 0.35],
+    "dte_range": [3, 21],
+    "min_premium_usd": 200.0
+  }
+}
+
+AGGRESSIVE
+{
+  "preset": "AGGRESSIVE",
+  "mode": "training",
+  "rule_toggles": {
+    "enforce_per_expiry_exposure": false,
+    "enforce_margin_cap": true,
+    "enforce_net_delta_cap": true,
+    "restrict_single_primary_call_per_expiry": false,
+    "require_ivrv_filter": false,
+    "use_synthetic_iv_and_skew": true,
+    "allow_multi_profile_laddering": true,
+    "respect_min_premium_filter": false
+  },
+  "thresholds": {
+    "max_margin_used_pct": 80.0,
+    "max_net_delta_abs": 5.0,
+    "per_expiry_exposure_cap": 0.6,
+    "min_ivrv": 1.0,
+    "delta_range": [0.10, 0.40],
+    "dte_range": [1, 21],
+    "min_premium_usd": 100.0
+  }
+}
+
+CUSTOM (what the UI edits)
+
+For CUSTOM you just send whatever the UI has built; server doesn’t impose preset defaults.
+
+2. Pydantic model + FastAPI endpoint
+
+Below is a self-contained example you can drop into e.g. app/schemas/backtest.py and app/api/backtests.py (adapt file structure to yours).
+
+2.1. Pydantic models
+
+Assuming Pydantic v1.x style (FastAPI classic):
+
+# app/schemas/backtest.py
+
+from enum import Enum
+from typing import Optional, Tuple
+
+from pydantic import BaseModel, Field
+
+
+class BacktestPreset(str, Enum):
+    ULTRA_SAFE = "ULTRA_SAFE"
+    BALANCED = "BALANCED"
+    AGGRESSIVE = "AGGRESSIVE"
+    CUSTOM = "CUSTOM"
+
+
+class BacktestMode(str, Enum):
+    TRAINING = "training"
+    LIVE = "live"
+
+
+class BacktestRuleToggles(BaseModel):
+    enforce_per_expiry_exposure: Optional[bool] = Field(
+        None, description="Cap exposure per expiry (e.g. notional or BTC amount)."
+    )
+    enforce_margin_cap: Optional[bool] = Field(
+        None, description="Respect max_margin_used_pct limit."
+    )
+    enforce_net_delta_cap: Optional[bool] = Field(
+        None, description="Respect max_net_delta_abs limit."
+    )
+    restrict_single_primary_call_per_expiry: Optional[bool] = Field(
+        None, description="Only one main short call per underlying+expiry."
+    )
+    require_ivrv_filter: Optional[bool] = Field(
+        None, description="Require IV/RV >= min_ivrv to sell premium."
+    )
+    use_synthetic_iv_and_skew: Optional[bool] = Field(
+        None, description="Use synthetic IV/skew engine for scoring."
+    )
+    allow_multi_profile_laddering: Optional[bool] = Field(
+        None, description="Allow conservative/moderate/aggressive ladders together."
+    )
+    respect_min_premium_filter: Optional[bool] = Field(
+        None, description="Skip trades below min_premium_usd."
+    )
+
+
+class BacktestThresholds(BaseModel):
+    max_margin_used_pct: Optional[float] = Field(
+        None, ge=0, le=100, description="Max margin usage in percent of equity."
+    )
+    max_net_delta_abs: Optional[float] = Field(
+        None, ge=0, description="Absolute portfolio delta limit (in BTC-equivalent)."
+    )
+    per_expiry_exposure_cap: Optional[float] = Field(
+        None,
+        ge=0,
+        description="Cap for total short exposure per expiry (interpretation is up to engine).",
+    )
+    min_ivrv: Optional[float] = Field(
+        None, ge=0, description="Minimum IV/RV to consider selling premium."
+    )
+    delta_range: Optional[Tuple[float, float]] = Field(
+        None, description="Allowed delta range for short calls (min, max)."
+    )
+    dte_range: Optional[Tuple[int, int]] = Field(
+        None, description="Allowed DTE range in days (min, max)."
+    )
+    min_premium_usd: Optional[float] = Field(
+        None, ge=0, description="Minimum option premium in USD to accept."
+    )
+
+
+class BacktestConfig(BaseModel):
+    """
+    Incoming payload from UI for a backtest.
+    If preset != CUSTOM, server will fill missing fields from preset defaults
+    and then apply user overrides.
+    """
+
+    preset: BacktestPreset = BacktestPreset.BALANCED
+    mode: BacktestMode = BacktestMode.TRAINING
+
+    rule_toggles: BacktestRuleToggles = Field(
+        default_factory=BacktestRuleToggles,
+        description="Optional overrides for which rule families are active.",
+    )
+    thresholds: BacktestThresholds = Field(
+        default_factory=BacktestThresholds,
+        description="Optional overrides for numeric thresholds.",
+    )
+
+
+class ResolvedBacktestConfig(BaseModel):
+    """
+    Fully-resolved config that the backtest engine actually uses
+    (after applying preset defaults + overrides).
+    """
+
+    preset: BacktestPreset
+    mode: BacktestMode
+    rule_toggles: BacktestRuleToggles
+    thresholds: BacktestThresholds
+
+2.2. Preset defaults + merge helper
+# app/services/backtest_presets.py
+
+from .schemas.backtest import (
+    BacktestPreset,
+    BacktestRuleToggles,
+    BacktestThresholds,
+    BacktestConfig,
+    ResolvedBacktestConfig,
+)
+
+
+PRESET_RULES = {
+    BacktestPreset.ULTRA_SAFE: BacktestRuleToggles(
+        enforce_per_expiry_exposure=True,
+        enforce_margin_cap=True,
+        enforce_net_delta_cap=True,
+        restrict_single_primary_call_per_expiry=True,
+        require_ivrv_filter=True,
+        use_synthetic_iv_and_skew=True,
+        allow_multi_profile_laddering=False,
+        respect_min_premium_filter=True,
+    ),
+    BacktestPreset.BALANCED: BacktestRuleToggles(
+        enforce_per_expiry_exposure=True,
+        enforce_margin_cap=True,
+        enforce_net_delta_cap=True,
+        restrict_single_primary_call_per_expiry=True,
+        require_ivrv_filter=True,
+        use_synthetic_iv_and_skew=True,
+        allow_multi_profile_laddering=True,
+        respect_min_premium_filter=True,
+    ),
+    BacktestPreset.AGGRESSIVE: BacktestRuleToggles(
+        enforce_per_expiry_exposure=False,
+        enforce_margin_cap=True,
+        enforce_net_delta_cap=True,
+        restrict_single_primary_call_per_expiry=False,
+        require_ivrv_filter=False,
+        use_synthetic_iv_and_skew=True,
+        allow_multi_profile_laddering=True,
+        respect_min_premium_filter=False,
+    ),
+}
+
+PRESET_THRESHOLDS = {
+    BacktestPreset.ULTRA_SAFE: BacktestThresholds(
+        max_margin_used_pct=40.0,
+        max_net_delta_abs=2.5,
+        per_expiry_exposure_cap=0.15,
+        min_ivrv=1.3,
+        delta_range=(0.15, 0.30),
+        dte_range=(7, 21),
+        min_premium_usd=300.0,
+    ),
+    BacktestPreset.BALANCED: BacktestThresholds(
+        max_margin_used_pct=60.0,
+        max_net_delta_abs=3.5,
+        per_expiry_exposure_cap=0.25,
+        min_ivrv=1.15,
+        delta_range=(0.15, 0.35),
+        dte_range=(3, 21),
+        min_premium_usd=200.0,
+    ),
+    BacktestPreset.AGGRESSIVE: BacktestThresholds(
+        max_margin_used_pct=80.0,
+        max_net_delta_abs=5.0,
+        per_expiry_exposure_cap=0.6,
+        min_ivrv=1.0,
+        delta_range=(0.10, 0.40),
+        dte_range=(1, 21),
+        min_premium_usd=100.0,
+    ),
+}
+
+
+def resolve_backtest_config(config: BacktestConfig) -> ResolvedBacktestConfig:
+    """
+    Apply preset defaults and then overlay any user-provided overrides.
+    If preset == CUSTOM, we just treat everything the user sent as-is and
+    trust that your engine has sensible fallbacks.
+    """
+
+    if config.preset == BacktestPreset.CUSTOM:
+        # Use whatever the user sent.
+        return ResolvedBacktestConfig(
+            preset=config.preset,
+            mode=config.mode,
+            rule_toggles=config.rule_toggles,
+            thresholds=config.thresholds,
+        )
+
+    base_rules = PRESET_RULES[config.preset].dict()
+    base_thresholds = PRESET_THRESHOLDS[config.preset].dict()
+
+    # Overlay overrides (only non-None values)
+    overrides_rules = config.rule_toggles.dict()
+    overrides_thresholds = config.thresholds.dict()
+
+    for key, value in overrides_rules.items():
+        if value is not None:
+            base_rules[key] = value
+
+    for key, value in overrides_thresholds.items():
+        if value is not None:
+            base_thresholds[key] = value
+
+    return ResolvedBacktestConfig(
+        preset=config.preset,
+        mode=config.mode,
+        rule_toggles=BacktestRuleToggles(**base_rules),
+        thresholds=BacktestThresholds(**base_thresholds),
+    )
+
+2.3. FastAPI endpoint
+# app/api/backtests.py
+
+from fastapi import APIRouter, Depends
+
+from app.schemas.backtest import BacktestConfig, ResolvedBacktestConfig
+from app.services.backtest_presets import resolve_backtest_config
+
+router = APIRouter(prefix="/backtests", tags=["backtests"])
+
+
+@router.post("/run", response_model=ResolvedBacktestConfig)
+async def run_backtest(config: BacktestConfig) -> ResolvedBacktestConfig:
+    """
+    Accepts a high-level backtest config (preset + optional overrides),
+    resolves it into a full config, and then kicks off a backtest.
+
+    For now, this returns the resolved config so you can verify that
+    the preset/override logic is working as expected. In your real
+    app you'll call your backtest engine instead and return a job_id
+    or results summary.
+    """
+    resolved = resolve_backtest_config(config)
+
+    # TODO: plug into your existing backtest runner, e.g.:
+    # job_id = backtest_service.submit(resolved)
+    # return {"job_id": job_id, "config": resolved}
+
+    return resolved
+
+
+Then wire it into your main app:
+
+# app/main.py
+
+from fastapi import FastAPI
+
+from app.api import backtests
+
+app = FastAPI()
+
+app.include_router(backtests.router)
+
+
+If you want, next step I can:
