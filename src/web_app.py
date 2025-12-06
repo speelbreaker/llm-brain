@@ -209,6 +209,7 @@ def get_open_positions() -> JSONResponse:
     state = status.get("state") or {}
     portfolio = state.get("portfolio") or {}
     live_positions = portfolio.get("positions") or []
+    spot_prices = state.get("spot") or {}
     
     live_by_symbol: Dict[str, Dict[str, Any]] = {}
     for p in live_positions:
@@ -224,33 +225,38 @@ def get_open_positions() -> JSONResponse:
         for pos in bot_positions:
             enriched = dict(pos)
             symbol = enriched.get("symbol")
+            underlying = enriched.get("underlying", "BTC")
+            spot = float(spot_prices.get(underlying, 0.0))
             live_data = live_by_symbol.get(symbol, {})
             
             if live_data:
                 live_mark = float(live_data.get("mark_price") or 0.0)
                 live_pnl = float(live_data.get("unrealized_pnl") or 0.0)
-                entry_price = float(enriched.get("entry_price") or 0.0)
+                entry_price_btc = float(enriched.get("entry_price") or 0.0)
                 qty = abs(float(enriched.get("quantity") or 1.0))
                 
                 if live_mark > 0:
                     enriched["mark_price"] = live_mark
                     enriched["unrealized_pnl"] = live_pnl
-                    if entry_price > 0 and qty > 0:
-                        notional = entry_price * qty
-                        enriched["unrealized_pnl_pct"] = (live_pnl / notional) * 100.0 if notional > 0 else 0.0
+                    if entry_price_btc > 0 and qty > 0 and spot > 0:
+                        notional_usd = entry_price_btc * qty * spot
+                        enriched["unrealized_pnl_pct"] = (live_pnl / notional_usd) * 100.0 if notional_usd > 0 else 0.0
             
             enriched_positions.append(enriched)
         
         total_pnl = sum(float(p.get("unrealized_pnl", 0.0)) for p in enriched_positions)
-        total_notional = sum(
-            abs(float(p.get("entry_price", 0.0))) * abs(float(p.get("quantity", 0.0)))
-            for p in enriched_positions
-        )
+        total_notional_usd = 0.0
+        for p in enriched_positions:
+            underlying = p.get("underlying", "BTC")
+            spot = float(spot_prices.get(underlying, 0.0))
+            entry = abs(float(p.get("entry_price", 0.0)))
+            qty = abs(float(p.get("quantity", 0.0)))
+            total_notional_usd += entry * qty * spot
         
         totals = {
             "positions_count": len(enriched_positions),
             "unrealized_pnl": total_pnl,
-            "unrealized_pnl_pct": (total_pnl / total_notional * 100.0) if total_notional > 0 else 0.0,
+            "unrealized_pnl_pct": (total_pnl / total_notional_usd * 100.0) if total_notional_usd > 0 else 0.0,
         }
         
         return JSONResponse(content={"positions": enriched_positions, "totals": totals})
@@ -263,12 +269,14 @@ def get_open_positions() -> JSONResponse:
             pnl = float(p.get("unrealized_pnl") or 0.0)
             entry = float(p.get("avg_price", 0.0))
             size = abs(float(p.get("size", 0.0)))
-            notional = entry * size if entry > 0 and size > 0 else 1.0
-            pnl_pct = (pnl / notional * 100.0) if notional > 0 else 0.0
+            underlying = p.get("underlying", "BTC")
+            spot = float(spot_prices.get(underlying, 0.0))
+            notional_usd = entry * size * spot if entry > 0 and size > 0 and spot > 0 else 1.0
+            pnl_pct = (pnl / notional_usd * 100.0) if notional_usd > 0 else 0.0
             
             positions.append({
                 "position_id": f"live-{p.get('symbol')}",
-                "underlying": p.get("underlying", "?"),
+                "underlying": underlying,
                 "symbol": p.get("symbol"),
                 "option_type": option_type,
                 "strategy_type": "LIVE_POSITION",
@@ -289,12 +297,16 @@ def get_open_positions() -> JSONResponse:
             continue
 
     total_pnl = sum(pos["unrealized_pnl"] for pos in positions) if positions else 0.0
-    total_notional = sum(pos["entry_price"] * pos["quantity"] for pos in positions) if positions else 0.0
+    total_notional_usd = 0.0
+    for pos in positions:
+        underlying = pos.get("underlying", "BTC")
+        spot = float(spot_prices.get(underlying, 0.0))
+        total_notional_usd += pos["entry_price"] * pos["quantity"] * spot
 
     totals = {
         "positions_count": len(positions),
         "unrealized_pnl": total_pnl,
-        "unrealized_pnl_pct": (total_pnl / total_notional * 100.0) if total_notional > 0 else 0.0,
+        "unrealized_pnl_pct": (total_pnl / total_notional_usd * 100.0) if total_notional_usd > 0 else 0.0,
     }
 
     return JSONResponse(content={"positions": positions, "totals": totals})

@@ -61,10 +61,15 @@ def _build_status_snapshot(
                 "positions": [
                     {
                         "symbol": p.symbol,
+                        "underlying": p.underlying,
                         "side": p.side.value,
                         "size": p.size,
                         "strike": p.strike,
                         "expiry_dte": p.expiry_dte,
+                        "avg_price": p.avg_price,
+                        "mark_price": p.mark_price,
+                        "unrealized_pnl": p.unrealized_pnl,
+                        "delta": p.delta,
                     }
                     for p in (agent_state.portfolio.option_positions if agent_state else [])
                 ],
