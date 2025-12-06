@@ -1,0 +1,213 @@
+You are working inside the LLMAgentBrain repo.
+
+Goal
+=====
+
+Take the existing candidate-level training datasets:
+
+  data/training_candidates_BTC_20190101_20251206_hold_to_expiry_20251206_171134.csv
+  data/training_candidates_BTC_20190101_20251206_tp_and_roll_20251206_171134.csv
+
+and convert them into **chat-style JSONL corpora** for LLM fine-tuning.
+
+Produce TWO flavors of training data:
+
+1) Per-candidate classification:
+   - One JSONL record per candidate.
+   - Task: decide ACTION = SELL_CALL or SKIP.
+
+2) Per-decision ranking:
+   - One JSONL record per decision_time (and exit_style).
+   - Task: pick the best candidate index (1..N) or NO_TRADE.
+
+Do NOT modify the original CSV files. Only read them and write new JSONL files.
+
+────────────────────────────────────────
+A. Inputs (CSV schema)
+────────────────────────────────────────
+
+The candidate CSVs have columns:
+
+  decision_time, underlying, spot, instrument, strike, dte, delta, score,
+  iv, ivrv_ratio, exit_style, trade_executed, chosen, action,
+  strategy, reward, pnl_vs_hodl, max_drawdown_pct
+
+Semantics:
+
+- Each row = one candidate at a given decision_time.
+- For each (decision_time, exit_style), there may be many candidates.
+- chosen = 1 and action = "SELL_CALL" only for the candidate actually traded by the teacher policy at that time (if any).
+- For all others, action = "SKIP".
+- trade_executed = 1 if the teacher opened any trade at that decision_time; 0 for pure no-trade steps.
+
+────────────────────────────────────────
+B. Implement the transformer script
+────────────────────────────────────────
+
+Create a Python script, e.g.:
+
+  scripts/build_llm_training_from_candidates.py
+
+that:
+
+1) Loads a given candidate CSV.
+2) Optionally filters by:
+   - underlying (e.g. BTC)
+   - exit_style (e.g. tp_and_roll)
+3) Writes:
+   - <stem>_per_candidate.jsonl
+   - <stem>_per_decision_ranking.jsonl
+
+You can follow this structure:
+
+  - Function load_candidate_rows(path, exit_style_filter, underlying_filter) -> List[Dict]
+  - Function build_per_candidate_jsonl(rows, out_path)
+  - Function build_per_decision_ranking_jsonl(rows, out_path)
+  - main() parses CLI args and calls the above.
+
+Details for each flavor:
+
+(1) Per-candidate JSONL
+-----------------------
+
+One record per CSV row, like:
+
+  {
+    "messages": [
+      {
+        "role": "system",
+        "content": "You are an automated BTC covered-call policy. For each candidate option, decide whether to SELL_CALL or SKIP based on the state. Do not use hindsight PnL to answer; treat it as teacher labels only."
+      },
+      {
+        "role": "user",
+        "content": "<multi-line description of the state + candidate>"
+      },
+      {
+        "role": "assistant",
+        "content": "SELL_CALL"   # or "SKIP", taken from row['action']
+      }
+    ]
+  }
+
+The user content should include (based on row fields):
+
+  Decision time: <decision_time>
+  Underlying: <underlying>
+  Spot price: <spot>
+  Teacher policy (exit_style): <exit_style>
+  Candidate option: <instrument>
+    - Strike: <strike>
+    - DTE (days): <dte>
+    - Delta: <delta>
+    - Score: <score>
+    - IV: <iv>
+    - IV/RV ratio: <ivrv_ratio>
+
+Optionally include hindsight metrics for analysis only:
+
+  Risk snapshot (teacher hindsight):
+    - Max drawdown on this chain: <max_drawdown_pct>%
+  PnL outcome for this candidate if chosen (teacher hindsight):
+    - Reward (USD): <reward>
+    - PnL vs HODL (USD): <pnl_vs_hodl>
+
+Then end with:
+
+  Question: Based only on the information available at decision time (ignore the realized outcome), what ACTION should the policy take on this candidate? Reply with exactly one token: SELL_CALL or SKIP.
+
+Use row['action'] as the assistant label ("SELL_CALL" or "SKIP").
+
+(2) Per-decision ranking JSONL
+------------------------------
+
+Group rows by (decision_time, underlying, exit_style). For each group:
+
+  - Sort candidates deterministically (e.g. by instrument name, then strike).
+  - Let N = number of candidates.
+  - Determine if a trade was executed: any row in group has trade_executed = 1.
+  - Determine chosen_idx: the 1-based index of the row with chosen = 1, else None.
+  - Optionally, record chosen_reward and chosen_pnl for the chosen candidate.
+
+Create a JSON record:
+
+  {
+    "messages": [
+      { "role": "system", "content": "You are an automated BTC covered-call strategy. At each decision, you see multiple candidate options and may either pick exactly one to SELL_CALL or decide NO_TRADE. Choose the single best candidate index, imitating the teacher policy." },
+      { "role": "user", "content": "<multi-line text listing state + all candidates>" },
+      { "role": "assistant", "content": "<answer>" }
+    ]
+  }
+
+User content template:
+
+  Decision time: <decision_time>
+  Underlying: <underlying>
+  Spot: <spot>
+  Teacher policy (exit_style): <exit_style>
+  Candidates:
+    [1] <instrument_1> — Strike: <strike_1>, DTE: <dte_1>, Delta: <delta_1>, Score: <score_1>
+    [2] <instrument_2> — Strike: <strike_2>, DTE: <dte_2>, Delta: <delta_2>, Score: <score_2>
+    ...
+    [N] <instrument_N> — Strike: <strike_N>, DTE: <dte_N>, Delta: <delta_N>, Score: <score_N>
+
+If a chosen candidate exists (chosen=1):
+
+  Outcome (teacher hindsight for the chosen candidate only):
+    - Chosen candidate index: <chosen_idx>
+    - Reward (USD): <chosen_reward>
+    - PnL vs HODL (USD): <chosen_pnl>
+
+Then:
+
+  Question: Before seeing the outcome, which candidate index should the policy choose to SELL_CALL? Reply with exactly one token: 1, 2, ..., N, or NO_TRADE.
+
+Assistant label:
+
+  - If trade_executed and chosen_idx is not None -> answer = str(chosen_idx)
+  - Else -> answer = "NO_TRADE"
+
+────────────────────────────────────────
+C. CLI & file naming
+────────────────────────────────────────
+
+The script should be runnable like:
+
+  python scripts/build_llm_training_from_candidates.py \
+    --input data/training_candidates_BTC_20190101_20251206_tp_and_roll_20251206_171134.csv \
+    --exit-style tp_and_roll \
+    --underlying BTC
+
+It should produce:
+
+  data/training_candidates_BTC_20190101_20251206_tp_and_roll_20251206_171134_per_candidate.jsonl
+  data/training_candidates_BTC_20190101_20251206_tp_and_roll_20251206_171134_per_decision_ranking.jsonl
+
+Repeatable for the hold_to_expiry file as well.
+
+Do not alter the backtest logic or the existing CSV exporters; only add this transformation script.
+You can use this as-is; the Builder will write the Python and wire it up.
+
+5. After the JSONL is ready: how your LLM agent uses it
+Once you have the JSONL:
+
+Fine-tune a small policy LLM on:
+
+*_per_candidate.jsonl to learn SELL_CALL vs SKIP.
+
+Optionally augment with *_per_decision_ranking.jsonl to learn step-level choice.
+
+Integrate in the bot:
+
+At each decision step:
+
+State builder generates list of candidates (exactly like in backtest).
+
+For each candidate:
+
+Build the same text features as in the training examples.
+
+Call the LLM → get SELL_CALL or SKIP.
+
+Or (ranking mode) send all candidates at once and let LLM return index or NO_TRADE.
+
+Pass the chosen action into the risk engine → send orders to Deribit testnet.
