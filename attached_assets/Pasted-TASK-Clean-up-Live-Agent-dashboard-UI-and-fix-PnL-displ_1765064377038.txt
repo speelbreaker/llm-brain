@@ -1,0 +1,152 @@
+TASK: Clean up Live Agent dashboard UI and fix PnL display
+
+Goal:
+Make the Live Agent home tab easier to read and more useful, and ensure that PnL values in the positions table are actually wired up to real data instead of showing 0.00.
+
+Scope:
+Only change the Live Agent tab in the web dashboard (src/web_app.py templates / related helpers). Do not touch Backtesting Lab or other tabs in this task.
+
+--------------------------------
+1) Simplify top layout (Market Overview + header)
+--------------------------------
+
+- Keep a compact top strip with:
+  - BTC price
+  - ETH price
+  - Portfolio equity (USD)
+  - Margin used (%)
+  - Net delta
+  - Training mode ON/OFF indicator
+  - LLM mode indicator (e.g. “LLM: research (25% explore)”)
+
+- Make sure this section is visually light and uses consistent spacing and font sizes (no huge blocks of text).
+
+--------------------------------
+2) Strategy & Safeguards card – compress + collapse
+--------------------------------
+
+Current card is a large wall of text. Please:
+
+- Replace it with a cleaner layout:
+  - Left column: short summary of current mode, e.g.:
+
+    - “Training Mode: ON (ladder). Profiles: conservative + moderate + aggressive.”
+    - “Live Mode Rules active: risk engine ON, real capital OFF (testnet).”
+
+  - Right column: three bullet groups with icons:
+
+    1) “Training Mode Rules” – 3–4 concise bullets pulled from the existing text.
+    2) “Live Mode Rules” – 3–4 concise bullets.
+    3) “Safeguards” – 3–4 concise bullets (margin caps, net delta caps, position limits, etc.).
+
+- Add a small “View full rules” button or link at the bottom of the card that opens:
+  - either a modal, or
+  - a separate route/tab that shows the full long-form text that we currently display (so we don’t lose that explanation).
+
+- Ensure the card fits nicely on screen without requiring a lot of scrolling.
+
+--------------------------------
+3) Latest Decision card – mini timeline
+--------------------------------
+
+- Keep the main pill for the **latest** decision:
+
+  - Big text: ACTION (e.g. DO_NOTHING, OPEN_COVERED_CALL, ROLL_COVERED_CALL)
+  - Subtext: timestamp, strategy/profile, decision source (rule-based / LLM / training).
+
+- Underneath, add a small “Recent decisions” mini-timeline or list:
+
+  - Show the last 3–5 decisions with:
+    - time,
+    - action,
+    - symbol (if any),
+    - mode (live / training),
+    - decision source (rule vs LLM).
+  - Use color tags:
+    - Green if a trade was actually executed.
+    - Grey if DO_NOTHING.
+
+- Data source: reuse `/api/agent/decisions` which already returns an array of recent decisions. You can compress it for display (we just need high-level info, not full JSON).
+
+--------------------------------
+4) Fix PnL columns in Bot Positions table
+--------------------------------
+
+Right now Unrealized PnL shows as 0.00. Please:
+
+A) Backend
+
+- In whatever helper builds the “Open Positions” rows for the Live Agent tab (likely using position_tracker + Deribit client):
+
+  - Pull per-position PnL fields from the Deribit API response if available. For example (names may differ, adapt to the real response):
+
+    - `floating_profit_loss`
+    - `total_profit_loss`
+    - `realized_profit_loss`
+
+  - Map them to fields like:
+
+    - `unreal_pnl_usd`
+    - `unreal_pnl_pct`
+    - `realized_pnl_usd`
+
+  - If the Deribit data does NOT include per-position PnL, compute approximate unrealized PnL:
+
+    - Use entry mark vs current mark and size.
+    - Respect position direction (short vs long).
+    - For linear options, PnL ≈ (entry_price - mark_price) * size for short calls (invert sign as needed).
+    - For inverse options, prefer Deribit’s own PnL numbers if available; otherwise use a simple approximation consistent with how we display PnL elsewhere.
+
+  - Make sure these values are included in the JSON state that the template uses for the “Bot Positions” table.
+
+B) Frontend
+
+- Update the “Open Positions” table columns to show:
+
+  - Symbol
+  - Type (CALL/PUT)
+  - Strategy or Mode (e.g. LIVE POSITION / TRAINING)
+  - Qty
+  - Entry
+  - Mark
+  - **Unreal PnL $**
+  - **Unreal PnL %**
+  - DTE
+  - Rolls
+  - Mode (LIVE/TRAINING)
+
+- Format PnL columns:
+
+  - 2 decimal places for USD,
+  - 2 decimal places + “%” for percentage,
+  - Green for positive, red for negative, muted/grey for ~0.
+
+- Add a small summary row at the bottom of the table:
+
+  - “Total unrealized PnL (USD): …”
+
+--------------------------------
+5) Minor UI polish
+--------------------------------
+
+- Ensure consistent font sizes and spacing across the Live Agent page.
+- Avoid long single-line paragraphs; break text into bullets where appropriate.
+- Make sure the layout still looks good on a laptop-sized screen (no horizontal scroll).
+
+--------------------------------
+6) Validation
+--------------------------------
+
+- After implementing, run:
+
+  bash scripts/smoke_live_agent.sh
+  bash scripts/smoke_web_api.sh
+
+to ensure nothing breaks in the agent loop or API.
+
+- Then manually check in the web UI that:
+  - Open positions show non-zero PnL values (assuming market moved since entry).
+  - Strategy & Safeguards is readable at a glance, with the full rules still accessible somewhere.
+  - Latest Decision shows the latest action plus a short list of recent decisions.
+
+Do not modify Backtesting Lab, training export, or multi-strategy logic in this task.

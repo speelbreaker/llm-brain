@@ -201,25 +201,71 @@ def resolve_backtest_config_endpoint(config: BacktestConfig) -> JSONResponse:
 @app.get("/api/positions/open")
 def get_open_positions() -> JSONResponse:
     """
-    Return open positions for the UI.
-    - Prefer bot-managed chains from PositionTracker (those opened via this bot).
-    - If there are none, fall back to live Deribit option positions from
-      the latest status snapshot so you always see your open positions.
+    Return open positions for the UI with live mark prices and PnL from Deribit.
+    - Merges bot-managed chains from PositionTracker with live Deribit data.
+    - Falls back to live Deribit positions if no bot-managed chains exist.
     """
-    payload = position_tracker.get_open_positions_payload()
-    if payload.get("positions"):
-        return JSONResponse(content=payload)
-
     status = status_store.get() or {}
     state = status.get("state") or {}
     portfolio = state.get("portfolio") or {}
     live_positions = portfolio.get("positions") or []
-
+    
+    live_by_symbol: Dict[str, Dict[str, Any]] = {}
+    for p in live_positions:
+        symbol = p.get("symbol")
+        if symbol:
+            live_by_symbol[symbol] = p
+    
+    payload = position_tracker.get_open_positions_payload()
+    bot_positions = payload.get("positions") or []
+    
+    if bot_positions:
+        enriched_positions: List[Dict[str, Any]] = []
+        for pos in bot_positions:
+            enriched = dict(pos)
+            symbol = enriched.get("symbol")
+            live_data = live_by_symbol.get(symbol, {})
+            
+            if live_data:
+                live_mark = float(live_data.get("mark_price") or 0.0)
+                live_pnl = float(live_data.get("unrealized_pnl") or 0.0)
+                entry_price = float(enriched.get("entry_price") or 0.0)
+                qty = abs(float(enriched.get("quantity") or 1.0))
+                
+                if live_mark > 0:
+                    enriched["mark_price"] = live_mark
+                    enriched["unrealized_pnl"] = live_pnl
+                    if entry_price > 0 and qty > 0:
+                        notional = entry_price * qty
+                        enriched["unrealized_pnl_pct"] = (live_pnl / notional) * 100.0 if notional > 0 else 0.0
+            
+            enriched_positions.append(enriched)
+        
+        total_pnl = sum(float(p.get("unrealized_pnl", 0.0)) for p in enriched_positions)
+        total_notional = sum(
+            abs(float(p.get("entry_price", 0.0))) * abs(float(p.get("quantity", 0.0)))
+            for p in enriched_positions
+        )
+        
+        totals = {
+            "positions_count": len(enriched_positions),
+            "unrealized_pnl": total_pnl,
+            "unrealized_pnl_pct": (total_pnl / total_notional * 100.0) if total_notional > 0 else 0.0,
+        }
+        
+        return JSONResponse(content={"positions": enriched_positions, "totals": totals})
+    
     positions: List[Dict[str, Any]] = []
     for p in live_positions:
         try:
             side = p.get("side", "sell")
             option_type = p.get("option_type", "CALL")
+            pnl = float(p.get("unrealized_pnl") or 0.0)
+            entry = float(p.get("avg_price", 0.0))
+            size = abs(float(p.get("size", 0.0)))
+            notional = entry * size if entry > 0 and size > 0 else 1.0
+            pnl_pct = (pnl / notional * 100.0) if notional > 0 else 0.0
+            
             positions.append({
                 "position_id": f"live-{p.get('symbol')}",
                 "underlying": p.get("underlying", "?"),
@@ -227,11 +273,11 @@ def get_open_positions() -> JSONResponse:
                 "option_type": option_type,
                 "strategy_type": "LIVE_POSITION",
                 "side": "SHORT" if side == "sell" else "LONG",
-                "quantity": float(p.get("size", 0.0)),
-                "entry_price": float(p.get("avg_price", 0.0)),
+                "quantity": size,
+                "entry_price": entry,
                 "mark_price": float(p.get("mark_price") or 0.0),
-                "unrealized_pnl": float(p.get("unrealized_pnl") or 0.0),
-                "unrealized_pnl_pct": float(p.get("unrealized_pnl_pct") or 0.0),
+                "unrealized_pnl": pnl,
+                "unrealized_pnl_pct": pnl_pct,
                 "entry_time": None,
                 "expiry": None,
                 "dte": float(p.get("expiry_dte") or 0.0),
@@ -242,10 +288,13 @@ def get_open_positions() -> JSONResponse:
         except Exception:
             continue
 
+    total_pnl = sum(pos["unrealized_pnl"] for pos in positions) if positions else 0.0
+    total_notional = sum(pos["entry_price"] * pos["quantity"] for pos in positions) if positions else 0.0
+
     totals = {
         "positions_count": len(positions),
-        "unrealized_pnl": sum(pos["unrealized_pnl"] for pos in positions) if positions else 0.0,
-        "unrealized_pnl_pct": sum(pos["unrealized_pnl_pct"] for pos in positions) if positions else 0.0,
+        "unrealized_pnl": total_pnl,
+        "unrealized_pnl_pct": (total_pnl / total_notional * 100.0) if total_notional > 0 else 0.0,
     }
 
     return JSONResponse(content={"positions": positions, "totals": totals})
@@ -1189,29 +1238,50 @@ def index() -> str:
     <div class="section" id="strategy-status-section">
       <h2>Strategy & Safeguards</h2>
       <div id="strategy-status-box" style="border:1px solid #333;border-radius:8px;padding:12px;background:#1e1e1e;">
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
-          <div>
-            <div id="strategy-headline" style="font-weight:bold;font-size:1.1rem;">Loading...</div>
-            <div id="strategy-subtitle" style="font-size:0.9em;color:#888;">--</div>
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+          <div style="display:flex;align-items:center;gap:12px;">
+            <div id="strategy-headline" style="font-weight:bold;font-size:1rem;">Loading...</div>
+            <div id="strategy-badges"></div>
           </div>
-          <div id="strategy-badges"></div>
+          <button onclick="showRulesModal()" style="background:#2a2a2a;border:1px solid #444;color:#888;padding:4px 10px;border-radius:4px;font-size:0.8em;cursor:pointer;">View full rules</button>
         </div>
-        <div id="strategy-tagline" style="font-size:0.85em;color:#aaa;margin-bottom:8px;"></div>
-        <div style="display:flex;flex-wrap:wrap;gap:12px;">
-          <div id="training-rules-block" style="flex:1 1 280px;min-width:280px;">
-            <div style="font-weight:bold;margin-bottom:4px;color:#7c4dff;">Training Mode Rules</div>
-            <div id="training-rules-desc" style="font-size:0.9em;color:#aaa;margin-bottom:4px;"></div>
-            <ul id="training-rules-notes" style="list-style:none;padding-left:0;margin:0;font-size:0.85em;color:#ccc;max-height:150px;overflow-y:auto;"></ul>
+        <div style="display:grid;grid-template-columns:repeat(3, 1fr);gap:12px;font-size:0.85em;">
+          <div style="background:#2a2a2a;border-radius:6px;padding:8px;">
+            <div style="color:#7c4dff;font-weight:600;margin-bottom:4px;">Training Mode</div>
+            <ul id="training-rules-compact" style="list-style:none;padding:0;margin:0;color:#ccc;"></ul>
           </div>
-          <div id="live-rules-block" style="flex:1 1 280px;min-width:280px;">
-            <div style="font-weight:bold;margin-bottom:4px;color:#00bcd4;">Live Mode Rules</div>
-            <div id="live-rules-desc" style="font-size:0.9em;color:#aaa;margin-bottom:4px;"></div>
-            <ul id="live-rules-notes" style="list-style:none;padding-left:0;margin:0;font-size:0.85em;color:#ccc;max-height:150px;overflow-y:auto;"></ul>
+          <div style="background:#2a2a2a;border-radius:6px;padding:8px;">
+            <div style="color:#00bcd4;font-weight:600;margin-bottom:4px;">Live Mode</div>
+            <ul id="live-rules-compact" style="list-style:none;padding:0;margin:0;color:#ccc;"></ul>
+          </div>
+          <div style="background:#2a2a2a;border-radius:6px;padding:8px;">
+            <div style="color:#4caf50;font-weight:600;margin-bottom:4px;">Safeguards</div>
+            <div id="safeguards-compact" style="display:flex;flex-wrap:wrap;gap:4px;"></div>
           </div>
         </div>
-        <div style="margin-top:12px;">
-          <div style="font-weight:bold;margin-bottom:4px;">Safeguards</div>
-          <div id="safeguards-list" style="display:flex;flex-wrap:wrap;gap:8px;"></div>
+      </div>
+    </div>
+    
+    <!-- Rules Modal -->
+    <div id="rules-modal" class="modal" style="display:none;">
+      <div class="modal-content" style="max-width:800px;background:#1e1e1e;color:#fff;">
+        <span class="modal-close" onclick="closeRulesModal()" style="color:#888;">&times;</span>
+        <h3 style="margin-top:0;">Full Rules & Safeguards</h3>
+        <div style="display:flex;gap:16px;flex-wrap:wrap;">
+          <div style="flex:1;min-width:280px;">
+            <h4 style="color:#7c4dff;margin-bottom:8px;">Training Mode Rules</h4>
+            <p id="training-rules-desc" style="font-size:0.9em;color:#aaa;margin-bottom:8px;"></p>
+            <ul id="training-rules-notes" style="list-style:disc;padding-left:20px;margin:0;font-size:0.85em;color:#ccc;"></ul>
+          </div>
+          <div style="flex:1;min-width:280px;">
+            <h4 style="color:#00bcd4;margin-bottom:8px;">Live Mode Rules</h4>
+            <p id="live-rules-desc" style="font-size:0.9em;color:#aaa;margin-bottom:8px;"></p>
+            <ul id="live-rules-notes" style="list-style:disc;padding-left:20px;margin:0;font-size:0.85em;color:#ccc;"></ul>
+          </div>
+        </div>
+        <div style="margin-top:16px;">
+          <h4 style="color:#4caf50;margin-bottom:8px;">Active Safeguards</h4>
+          <div id="safeguards-full" style="display:flex;flex-wrap:wrap;gap:8px;"></div>
         </div>
       </div>
     </div>
@@ -1222,14 +1292,21 @@ def index() -> str:
         <h3 id="decision-time">Waiting for first decision...</h3>
         <div class="action" id="decision-action">--</div>
         <div class="details" id="decision-details">--</div>
-        <div class="reasoning" id="decision-reasoning">Agent is starting up...</div>
+        <div class="reasoning" id="decision-reasoning" style="font-size:0.9em;max-height:60px;overflow:hidden;text-overflow:ellipsis;">Agent is starting up...</div>
+      </div>
+      <div style="margin-top:12px;">
+        <h4 style="font-size:0.9rem;margin-bottom:8px;color:#888;">Recent Decisions</h4>
+        <div id="mini-timeline" style="display:flex;flex-wrap:wrap;gap:6px;"></div>
       </div>
     </div>
 
     <div class="section">
       <h2>Bot Positions</h2>
       
-      <h3 style="margin-bottom: 0.5rem;">Open Positions</h3>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.5rem;">
+        <h3 style="margin:0;">Open Positions</h3>
+        <div id="positions-pnl-summary" style="font-size:0.9rem;color:#888;"></div>
+      </div>
       <div style="overflow-x: auto; max-height: 260px; overflow-y: auto; margin-bottom: 1.5rem;">
         <table class="steps-table">
           <thead>
@@ -1731,6 +1808,14 @@ def index() -> str:
       }}
     }}
     
+    function showRulesModal() {{
+      document.getElementById('rules-modal').style.display = 'flex';
+    }}
+    
+    function closeRulesModal() {{
+      document.getElementById('rules-modal').style.display = 'none';
+    }}
+    
     async function updateStrategyStatus() {{
       try {{
         const res = await fetch('/api/strategy-status');
@@ -1740,36 +1825,43 @@ def index() -> str:
         const headline = `${{modeLabel}} on ${{s.network.charAt(0).toUpperCase() + s.network.slice(1)}}`;
         document.getElementById('strategy-headline').textContent = headline;
         
-        const subtitle = `Delta: ${{s.effective_delta_range[0]}} - ${{s.effective_delta_range[1]}} | DTE: ${{s.effective_dte_range[0]}} - ${{s.effective_dte_range[1]}} | Risk: ${{s.training_risk_label || 'N/A'}}`;
-        document.getElementById('strategy-subtitle').textContent = subtitle;
-        
         const badgesHtml = [
-          `<span style="display:inline-block;background:${{s.training_mode ? '#7c4dff' : '#00bcd4'}};color:#fff;font-size:0.75em;padding:2px 8px;border-radius:999px;margin-left:4px;">${{s.training_mode ? 'TRAINING' : 'LIVE'}}</span>`,
-          `<span style="display:inline-block;background:#333;color:#eee;font-size:0.75em;padding:2px 8px;border-radius:999px;margin-left:4px;">${{s.network}}</span>`,
-          `<span style="display:inline-block;background:${{s.dry_run ? '#ff9800' : '#4caf50'}};color:#fff;font-size:0.75em;padding:2px 8px;border-radius:999px;margin-left:4px;">${{s.dry_run ? 'DRY RUN' : 'LIVE'}}</span>`,
-          `<span style="display:inline-block;background:${{s.llm_enabled ? '#9c27b0' : '#666'}};color:#fff;font-size:0.75em;padding:2px 8px;border-radius:999px;margin-left:4px;">LLM: ${{s.llm_enabled ? 'ON' : 'OFF'}}</span>`,
-        ].join('');
+          `<span style="display:inline-block;background:${{s.training_mode ? '#7c4dff' : '#00bcd4'}};color:#fff;font-size:0.7em;padding:2px 6px;border-radius:999px;">${{s.training_mode ? 'TRAINING' : 'LIVE'}}</span>`,
+          `<span style="display:inline-block;background:#333;color:#eee;font-size:0.7em;padding:2px 6px;border-radius:999px;">${{s.network}}</span>`,
+          `<span style="display:inline-block;background:${{s.dry_run ? '#ff9800' : '#4caf50'}};color:#fff;font-size:0.7em;padding:2px 6px;border-radius:999px;">${{s.dry_run ? 'DRY' : 'LIVE'}}</span>`,
+        ].join(' ');
         document.getElementById('strategy-badges').innerHTML = badgesHtml;
         
-        document.getElementById('strategy-tagline').textContent = s.training_mode 
-          ? 'Training mode: some safeguards may be relaxed for exploration.'
-          : 'Live mode: safeguards enforced according to current config.';
+        const trainingCompact = s.training_rules.notes.slice(0, 3).map(n => `<li style="margin:2px 0;font-size:0.8em;">${{n.length > 40 ? n.slice(0, 40) + '...' : n}}</li>`).join('');
+        document.getElementById('training-rules-compact').innerHTML = trainingCompact;
+        
+        const liveCompact = s.live_rules.notes.slice(0, 3).map(n => `<li style="margin:2px 0;font-size:0.8em;">${{n.length > 40 ? n.slice(0, 40) + '...' : n}}</li>`).join('');
+        document.getElementById('live-rules-compact').innerHTML = liveCompact;
+        
+        const safeguardsCompact = s.safeguards.slice(0, 4).map(sg => {{
+          const bgColor = sg.status === 'ON' ? '#4caf50' : '#f44336';
+          return `<span style="display:inline-flex;align-items:center;gap:3px;background:#333;padding:2px 6px;border-radius:4px;font-size:0.75em;">
+            <span style="width:6px;height:6px;border-radius:50%;background:${{bgColor}};"></span>
+            ${{sg.name}}
+          </span>`;
+        }}).join('');
+        document.getElementById('safeguards-compact').innerHTML = safeguardsCompact;
         
         document.getElementById('training-rules-desc').textContent = s.training_rules.description;
-        document.getElementById('training-rules-notes').innerHTML = s.training_rules.notes.slice(0, 5).map(n => `<li style="margin-bottom:2px;">- ${{n}}</li>`).join('');
+        document.getElementById('training-rules-notes').innerHTML = s.training_rules.notes.map(n => `<li style="margin-bottom:4px;">${{n}}</li>`).join('');
         
         document.getElementById('live-rules-desc').textContent = s.live_rules.description;
-        document.getElementById('live-rules-notes').innerHTML = s.live_rules.notes.slice(0, 5).map(n => `<li style="margin-bottom:2px;">- ${{n}}</li>`).join('');
+        document.getElementById('live-rules-notes').innerHTML = s.live_rules.notes.map(n => `<li style="margin-bottom:4px;">${{n}}</li>`).join('');
         
-        const safeguardsHtml = s.safeguards.map(sg => {{
+        const safeguardsFull = s.safeguards.map(sg => {{
           const bgColor = sg.status === 'ON' ? '#4caf50' : '#f44336';
-          return `<div style="background:#2a2a2a;border-radius:4px;padding:4px 8px;font-size:0.8em;">
+          return `<div style="background:#2a2a2a;border-radius:4px;padding:4px 8px;font-size:0.85em;">
             <span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${{bgColor}};margin-right:4px;"></span>
             <strong>${{sg.name}}</strong>: ${{sg.status}}
             <div style="font-size:0.85em;color:#888;">${{sg.details}}</div>
           </div>`;
         }}).join('');
-        document.getElementById('safeguards-list').innerHTML = safeguardsHtml;
+        document.getElementById('safeguards-full').innerHTML = safeguardsFull;
       }} catch (err) {{
         console.error('Strategy status fetch error:', err);
       }}
@@ -1781,11 +1873,18 @@ def index() -> str:
         const data = await res.json();
         const tbody = document.getElementById('live-open-positions-body');
         const positions = data.positions || [];
+        const totals = data.totals || {{}};
+        const summaryEl = document.getElementById('positions-pnl-summary');
 
         if (positions.length === 0) {{
           tbody.innerHTML = '<tr><td colspan="12" style="text-align:center;color:#666;">No open positions</td></tr>';
+          summaryEl.innerHTML = '';
           return;
         }}
+
+        const totalPnl = totals.unrealized_pnl || 0;
+        const pnlColor = totalPnl >= 0 ? '#26a69a' : '#ef5350';
+        summaryEl.innerHTML = `Total Unrealized: <span style="color:${{pnlColor}};font-weight:600;">${{totalPnl >= 0 ? '+' : ''}}${{totalPnl.toFixed(2)}}</span>`;
 
         tbody.innerHTML = positions.map(pos => {{
           const typeLabel = (pos.side || 'SHORT') + ' ' + (pos.option_type || 'CALL');
@@ -1889,7 +1988,38 @@ def index() -> str:
           if (params.size) details += 'x' + params.size;
           document.getElementById('decision-details').innerText = details || 'No params';
           
-          document.getElementById('decision-reasoning').innerText = proposed.reasoning || final.reasoning || 'No reasoning provided';
+          const reasoning = proposed.reasoning || final.reasoning || 'No reasoning provided';
+          document.getElementById('decision-reasoning').innerText = reasoning.length > 150 ? reasoning.slice(0, 150) + '...' : reasoning;
+        }}
+        
+        const miniTimeline = document.getElementById('mini-timeline');
+        const recentDecs = decisions.slice(0, 5);
+        if (recentDecs.length === 0) {{
+          miniTimeline.innerHTML = '<span style="color:#666;font-size:0.85em;">No recent decisions</span>';
+        }} else {{
+          miniTimeline.innerHTML = recentDecs.map(d => {{
+            const action = (d.final_action || {{}}).action || (d.proposed_action || {{}}).action || 'UNKNOWN';
+            const isDoNothing = action === 'DO_NOTHING';
+            const isTrade = action.includes('OPEN') || action.includes('ROLL') || action.includes('CLOSE');
+            const params = (d.final_action || {{}}).params || (d.proposed_action || {{}}).params || {{}};
+            const symbol = params.symbol || '';
+            const shortSymbol = symbol ? symbol.split('-').slice(0, 2).join('-') : '';
+            
+            let bgColor = '#555';
+            let textColor = '#ccc';
+            if (isTrade) {{ bgColor = '#2e7d32'; textColor = '#fff'; }}
+            else if (isDoNothing) {{ bgColor = '#424242'; textColor = '#888'; }}
+            
+            const source = (d.decision_source || '').toUpperCase();
+            const sourceIcon = source === 'LLM' ? 'AI' : source === 'RULE_BASED' ? 'RB' : source === 'TRAINING_MODE' ? 'TR' : '';
+            
+            return `<div style="display:inline-flex;align-items:center;gap:4px;background:${{bgColor}};color:${{textColor}};padding:4px 8px;border-radius:4px;font-size:0.75em;">
+              <span style="opacity:0.7;">${{formatTime(d.timestamp)}}</span>
+              <span style="font-weight:600;">${{action.replace(/_/g, ' ').slice(0, 12)}}</span>
+              ${{shortSymbol ? `<span style="opacity:0.7;">${{shortSymbol}}</span>` : ''}}
+              ${{sourceIcon ? `<span style="background:rgba(255,255,255,0.2);padding:1px 4px;border-radius:2px;font-size:0.85em;">${{sourceIcon}}</span>` : ''}}
+            </div>`;
+          }}).join('');
         }}
         
         const tbody = document.getElementById('decisions-tbody');
