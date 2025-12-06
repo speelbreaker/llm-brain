@@ -16,6 +16,7 @@ from typing import Optional
 from src.config import Settings, settings
 from src.deribit_client import DeribitClient, DeribitAPIError
 from src.market_context import compute_market_context
+from src.metrics.volatility import compute_ivrv_ratio
 from src.models import (
     AgentState,
     CandidateOption,
@@ -298,7 +299,7 @@ def build_agent_state(
                     continue
                 
                 rv_placeholder = mark_iv * 0.8
-                ivrv = mark_iv / rv_placeholder if rv_placeholder > 0 else 1.0
+                ivrv = compute_ivrv_ratio(mark_iv, rv_placeholder)
                 
                 candidate = CandidateOption(
                     symbol=instrument_name,
@@ -333,14 +334,17 @@ def build_agent_state(
         elif c.underlying == "ETH" and eth_iv == 0:
             eth_iv = c.iv
     
+    btc_rv = btc_iv * 0.8 if btc_iv > 0 else 0.0
+    eth_rv = eth_iv * 0.8 if eth_iv > 0 else 0.0
+    
     vol_state = VolState(
         btc_iv=btc_iv,
-        btc_rv=btc_iv * 0.8 if btc_iv > 0 else 0.0,
-        btc_ivrv=1.25 if btc_iv > 0 else 1.0,
+        btc_rv=btc_rv,
+        btc_ivrv=compute_ivrv_ratio(btc_iv, btc_rv),
         btc_skew=0.0,
         eth_iv=eth_iv,
-        eth_rv=eth_iv * 0.8 if eth_iv > 0 else 0.0,
-        eth_ivrv=1.25 if eth_iv > 0 else 1.0,
+        eth_rv=eth_rv,
+        eth_ivrv=compute_ivrv_ratio(eth_iv, eth_rv),
         eth_skew=0.0,
     )
     

@@ -21,6 +21,7 @@ from .data_source import MarketDataSource
 from .types import CallSimulationConfig, SimulatedTrade, SimulationResult, TrainingExample, OptionSnapshot, ExitStyle, ChainData, ChainLeg, RollTrigger
 from .pricing import bs_call_price, bs_call_delta, get_synthetic_iv, compute_realized_volatility
 from src.models import MarketContext
+from src.metrics.volatility import compute_ivrv_ratio
 
 State = Dict[str, Any]
 PolicyFn = Callable[[State], bool]
@@ -168,7 +169,7 @@ class CoveredCallSimulator:
             premium_pct = (mark / spot) * 100.0 if mark > 0 else 0.0
         
         rv30 = mc.get("realized_vol_30d") or mc.get("realized_vol_30") or 0.0
-        ivrv = (iv / rv30) if (iv > 0 and rv30 > 0) else 1.0
+        ivrv = compute_ivrv_ratio(iv, rv30)
         
         regime_label = mc.get("regime", "sideways")
         if regime_label == "bull":

@@ -1,0 +1,66 @@
+TASK: Fix P0 – Centralize IVRV calculation (safe, minimal refactor)
+
+Goal:
+Make sure that IV/RV ratio (“ivrv_ratio”) is calculated in ONE shared place, so the live agent, backtests, and training data all use exactly the same formula.
+
+Scope:
+Only touch the IVRV calculation duplication (P0 item), nothing else.
+
+1) Add a shared helper module
+
+Create a small module, for example:
+
+  src/metrics/volatility.py
+
+In it, define at least:
+
+  - def compute_ivrv_ratio(iv: float | None, realized_vol: float | None) -> float | None:
+      - Handle None / zero safely:
+        - if iv is None or realized_vol is None or realized_vol <= 0: return None
+      - Return iv / realized_vol as a float.
+
+Add a short docstring in plain English explaining what IVRV is: “how much option implied vol exceeds realized vol (iv / rv).”
+
+2) Use this helper everywhere IVRV is computed
+
+Search the codebase for all places that compute IVRV or ivrv_ratio manually, especially in:
+
+  - src/state_builder.py
+  - src/backtest/covered_call_simulator.py
+  - src/training_profiles.py
+  - any other files identified in HEALTHCHECK.md as duplicating IVRV logic
+
+Replace those inline calculations with calls to:
+
+  compute_ivrv_ratio(iv, realized_vol)
+
+Make sure the names of the variables still reflect what’s going on, but the formula itself must live in the shared helper.
+
+3) Keep behavior the same
+
+This refactor must **not** change any external behavior:
+
+  - If previously code treated missing IV or RV as “no score / skip candidate”, keep that behavior.
+  - If previously ivrv_ratio was rounded or capped, preserve that logic around the helper.
+
+In other words, only move the core division and safety checks into the helper function.
+
+4) Re-run all smoke tests
+
+After the change, re-run:
+
+  bash scripts/smoke_live_agent.sh
+  bash scripts/smoke_backtest.sh
+  bash scripts/smoke_training_export.sh
+  bash scripts/smoke_web_api.sh
+
+All of them MUST still pass.
+
+5) Update docs
+
+In HEALTHCHECK.md:
+
+  - Mark the P0 “duplicate IVRV calculation” item as FIXED.
+  - Briefly note where the shared function now lives (src/metrics/volatility.py).
+
+Do not attempt to fix any other P0/P1/P2 items in this task.

@@ -205,10 +205,10 @@ The following items have been identified as needing cleanup. They are marked wit
 
 ### P0 – Must Fix Soon
 
-| Item | Risk if Unfixed | Risk of Refactoring |
-|------|-----------------|---------------------|
-| **Duplicate scoring functions** (`policy_rule_based.py` vs `covered_call_simulator.py`) | Live agent and backtester may score candidates differently, leading to strategy drift where backtest results don't match live behavior. | Could break both backtests and live trading if the unified scorer has bugs or different default parameters. |
-| **IVRV calculated in multiple places** (state_builder, simulator, training_profiles) | Inconsistent IVRV values could cause the agent to make different decisions than the backtester, making training data unreliable. | Minor risk if done carefully; mainly need to update all call sites to use the centralized version. |
+| Item | Risk if Unfixed | Risk of Refactoring | Status |
+|------|-----------------|---------------------|--------|
+| **Duplicate scoring functions** (`policy_rule_based.py` vs `covered_call_simulator.py`) | Live agent and backtester may score candidates differently, leading to strategy drift where backtest results don't match live behavior. | Could break both backtests and live trading if the unified scorer has bugs or different default parameters. | Open |
+| **IVRV calculated in multiple places** (state_builder, simulator, training_profiles) | Inconsistent IVRV values could cause the agent to make different decisions than the backtester, making training data unreliable. | Minor risk if done carefully; mainly need to update all call sites to use the centralized version. | **FIXED** – Now uses `src/metrics/volatility.py:compute_ivrv_ratio()` |
 
 ---
 
