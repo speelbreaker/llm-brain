@@ -48,3 +48,9 @@ A standalone process (`scripts/data_harvester.py`) continuously collects real De
 ## External Dependencies
 - **Deribit API**: Used for real-time market data (testnet), historical data (mainnet public API for backtesting and data harvesting).
 - **OpenAI**: Integrated for LLM-powered decision-making and generating insights.
+
+## Related Documents
+- **ARCHITECTURE_OVERVIEW.md** – Technical details on how the system works
+- **HEALTHCHECK.md** – Smoke tests, unit tests, and technical debt status
+- **ROADMAP.md** – Project roadmap, phases, and next steps
+- **ROADMAP_BACKLOG.md** – Unprioritized ideas and future work items
