@@ -15,3 +15,5 @@ uvicorn
 pytest
 pyarrow
 requests
+psycopg2-binary
+sqlalchemy

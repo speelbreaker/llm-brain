@@ -48,6 +48,12 @@ def _agent_thread_target() -> None:
 @app.on_event("startup")
 def start_background_agent() -> None:
     """Start the agent loop in a background thread on FastAPI startup."""
+    try:
+        from src.db import init_db
+        init_db()
+    except Exception as e:
+        print(f"[DB] Warning: Could not initialize database: {e}")
+    
     thread = threading.Thread(target=_agent_thread_target, daemon=True)
     thread.start()
     print("Agent loop started in background thread")
@@ -510,12 +516,13 @@ def resume_backtest() -> JSONResponse:
 
 @app.post("/api/backtest/run")
 def run_backtest(req: BacktestRequest) -> JSONResponse:
-    """Run a backtest using the CoveredCallSimulator."""
+    """Run a backtest using the CoveredCallSimulator and save to database."""
     from src.backtest.types import CallSimulationConfig
     from src.backtest.data_source import Timeframe
     from src.backtest.covered_call_simulator import CoveredCallSimulator, always_trade_policy
     from src.backtest.deribit_data_source import DeribitDataSource
-    from src.backtest.run_store import create_run, update_run_status, save_run_result, BacktestRunResult
+    from src.db import get_db_session
+    from src.db.backtest_service import create_backtest_run, complete_run, fail_run
     
     valid_timeframes = ["1m", "5m", "15m", "1h", "4h", "1d"]
     if req.timeframe not in valid_timeframes:
@@ -546,9 +553,20 @@ def run_backtest(req: BacktestRequest) -> JSONResponse:
         "target_delta": req.target_delta,
         "decision_interval_bars": req.decision_interval_bars,
     }
-    run_entry = create_run(config_dict)
-    run_id = run_entry.run_id
-    update_run_status(run_id, "running")
+    
+    with get_db_session() as db:
+        run = create_backtest_run(
+            db=db,
+            underlying=req.underlying,
+            start_ts=start_dt,
+            end_ts=end_dt,
+            data_source="synthetic",
+            decision_interval_minutes=req.decision_interval_bars * 60,
+            config_json=config_dict,
+        )
+        run_id = run.run_id
+        run.status = "running"
+        db.commit()
     
     config = CallSimulationConfig(
         underlying=req.underlying,
@@ -572,7 +590,11 @@ def run_backtest(req: BacktestRequest) -> JSONResponse:
         result = simulator.simulate_policy(policy=always_trade_policy, size=req.initial_position)
     except Exception as e:
         ds.close()
-        update_run_status(run_id, "failed", str(e))
+        with get_db_session() as db:
+            from src.db.models_backtest import BacktestRun as BacktestRunModel
+            run = db.query(BacktestRunModel).filter(BacktestRunModel.run_id == run_id).first()
+            if run:
+                fail_run(db, run, str(e))
         raise HTTPException(status_code=500, detail=f"Backtest simulation failed: {str(e)}")
     finally:
         ds.close()
@@ -601,22 +623,25 @@ def run_backtest(req: BacktestRequest) -> JSONResponse:
         "avg_pnl": round(result.metrics.get("avg_pnl", 0), 4),
         "max_drawdown_pct": round(result.metrics.get("max_drawdown_pct", 0), 2),
         "win_rate": round(result.metrics.get("win_rate", 0) * 100, 1),
+        "net_profit_pct": round(result.metrics.get("final_pnl", 0) * 100, 2),
+        "sharpe_ratio": round(result.metrics.get("sharpe_ratio", 0), 2),
+        "sortino_ratio": round(result.metrics.get("sortino_ratio", 0), 2),
     }
     
-    run_result = BacktestRunResult(
-        run_id=run_id,
-        created_at=run_entry.created_at,
-        status="finished",
-        config=config_dict,
-        metrics={"default": metrics_data},
-        recent_steps={},
-        recent_chains={"default": trades_sample},
-        equity_curves={"default": equity_curve},
-        finished_at=datetime.utcnow().isoformat(),
-    )
-    save_run_result(run_result)
+    with get_db_session() as db:
+        from src.db.models_backtest import BacktestRun as BacktestRunModel
+        run = db.query(BacktestRunModel).filter(BacktestRunModel.run_id == run_id).first()
+        if run:
+            complete_run(
+                db=db,
+                run=run,
+                metrics_by_style={"default": metrics_data},
+                chains_by_style={"default": trades_sample},
+                primary_exit_style="default",
+            )
     
     response_data = {
+        "run_id": run_id,
         "config": config_dict,
         "metrics": metrics_data,
         "equity_curve": equity_curve,
@@ -686,54 +711,67 @@ Please analyze these results and provide insights."""
 
 
 @app.get("/api/backtests")
-def list_backtest_runs() -> JSONResponse:
-    """List all backtest runs, sorted by created_at descending."""
-    from src.backtest.run_store import load_index
+def list_backtest_runs(
+    underlying: Optional[str] = None,
+    status: Optional[str] = None,
+) -> JSONResponse:
+    """List all backtest runs from database, sorted by created_at descending."""
+    from src.db import get_db_session
+    from src.db.backtest_service import list_runs
     
-    entries = load_index()
-    return JSONResponse(content=[e.to_dict() for e in entries])
+    with get_db_session() as db:
+        runs = list_runs(db, underlying=underlying, status=status)
+        return JSONResponse(content=[run.to_dict() for run in runs])
 
 
 @app.get("/api/backtests/{run_id}")
 def get_backtest_run(run_id: str) -> JSONResponse:
-    """Get the full result for a specific backtest run."""
-    from src.backtest.run_store import load_result
+    """Get the full result for a specific backtest run from database."""
+    from src.db import get_db_session
+    from src.db.backtest_service import get_run_with_details
     
-    result = load_result(run_id)
-    if result is None:
-        raise HTTPException(status_code=404, detail=f"Backtest run '{run_id}' not found")
-    
-    return JSONResponse(content=result.to_dict())
+    with get_db_session() as db:
+        result = get_run_with_details(db, run_id)
+        if result is None:
+            raise HTTPException(status_code=404, detail=f"Backtest run '{run_id}' not found")
+        
+        return JSONResponse(content=result)
 
 
 @app.get("/api/backtests/{run_id}/download")
-def download_backtest_run(run_id: str):
-    """Download the result.json file for a backtest run."""
-    from fastapi.responses import FileResponse
-    from src.backtest.run_store import get_result_path
+def download_backtest_run(run_id: str) -> JSONResponse:
+    """Download the backtest run data as JSON."""
+    from src.db import get_db_session
+    from src.db.backtest_service import get_run_with_details
     
-    result_path = get_result_path(run_id)
-    if not result_path.exists():
-        raise HTTPException(status_code=404, detail=f"Backtest run '{run_id}' not found")
-    
-    return FileResponse(
-        path=str(result_path),
-        media_type="application/json",
-        filename=f"{run_id}_backtest_result.json",
-    )
+    with get_db_session() as db:
+        result = get_run_with_details(db, run_id)
+        if result is None:
+            raise HTTPException(status_code=404, detail=f"Backtest run '{run_id}' not found")
+        
+        from fastapi.responses import Response
+        import json
+        
+        return Response(
+            content=json.dumps(result, indent=2, default=str),
+            media_type="application/json",
+            headers={"Content-Disposition": f'attachment; filename="{run_id}_backtest_result.json"'},
+        )
 
 
 @app.delete("/api/backtests/{run_id}")
 def delete_backtest_run(run_id: str) -> JSONResponse:
-    """Delete a backtest run."""
-    from src.backtest.run_store import delete_run, load_result
+    """Delete a backtest run from database."""
+    from src.db import get_db_session
+    from src.db.backtest_service import delete_run, get_run_by_id
     
-    result = load_result(run_id)
-    if result is None:
-        raise HTTPException(status_code=404, detail=f"Backtest run '{run_id}' not found")
-    
-    delete_run(run_id)
-    return JSONResponse(content={"deleted": True, "run_id": run_id})
+    with get_db_session() as db:
+        run = get_run_by_id(db, run_id)
+        if run is None:
+            raise HTTPException(status_code=404, detail=f"Backtest run '{run_id}' not found")
+        
+        delete_run(db, run_id)
+        return JSONResponse(content={"deleted": True, "run_id": run_id})
 
 
 @app.get("/", response_class=HTMLResponse)

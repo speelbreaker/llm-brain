@@ -44,12 +44,12 @@ The agent is built with a clear separation of concerns, featuring modules for co
   - **Per-decision ranking** (`*_per_decision_ranking.jsonl`): One record per decision_time with task to pick best candidate index or NO_TRADE
   Usage: `python scripts/build_llm_training_from_candidates.py --input <csv> --exit-style <style> --underlying <asset>`
 - **Web Dashboard**: A FastAPI application offers a "Live Agent" view with real-time status and recent decisions, a "Backtesting Lab" with TradingView-style summary panel, equity curve charts, a "Backtest Runs" panel for viewing/downloading historical backtest results, a "Calibration" tab for comparing synthetic BS prices vs live Deribit marks, and a "Chat" interface for natural language interaction with the agent.
-- **Persistent Backtest Runs**: Backtest results are automatically saved to `data/backtests/<run_id>/result.json` with:
-  - Full configuration, metrics (per exit style), equity curves, and recent chain data
-  - Index file at `data/backtests/index.jsonl` for quick listing
+- **Persistent Backtest Runs (PostgreSQL)**: Backtest results are stored in PostgreSQL using SQLAlchemy ORM:
+  - **Database Tables**: `backtest_runs` (one row per run), `backtest_metrics` (per exit style), `backtest_chains` (trade chains)
   - Status tracking: queued, running, finished, failed
-  - API endpoints: `GET /api/backtests` (list), `GET /api/backtests/{run_id}` (view), `GET /api/backtests/{run_id}/download` (download)
-  - UI panel showing all runs with Net PnL %, Max DD, Sharpe, and View/Download actions
+  - API endpoints: `GET /api/backtests` (list with optional filters), `GET /api/backtests/{run_id}` (view with metrics and chains), `GET /api/backtests/{run_id}/download` (download JSON), `DELETE /api/backtests/{run_id}` (delete)
+  - UI panel showing all runs with Net PnL %, Max DD, Sharpe, and View/Download/Delete actions
+  - **Data Source Types**: `synthetic` (Black-Scholes), `live_deribit` (captured data), `real_scraper` (future real-time scraper)
 - **State-Aware Chat Assistant**: The Chat tab is a multi-turn, state-aware assistant that:
   - Knows current trading state (positions, unrealized PnL, training vs live mode, spot prices)
   - Maintains conversation history across messages (up to 20 turns)

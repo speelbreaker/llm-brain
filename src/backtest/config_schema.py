@@ -22,6 +22,13 @@ class BacktestMode(str, Enum):
     LIVE = "live"
 
 
+class DataSourceType(str, Enum):
+    """Data source for backtest market data."""
+    SYNTHETIC = "synthetic"
+    LIVE_DERIBIT = "live_deribit"
+    REAL_SCRAPER = "real_scraper"
+
+
 class BacktestRuleToggles(BaseModel):
     enforce_per_expiry_exposure: Optional[bool] = Field(
         None, description="Cap exposure per expiry (e.g. notional or BTC amount)."
