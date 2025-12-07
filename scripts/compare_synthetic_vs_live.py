@@ -45,122 +45,143 @@ def run_backtest_with_data_source(
     Run a backtest and return the run_id.
     """
     from src.backtest.covered_call_simulator import CoveredCallSimulator
-    from src.backtest.manager import _compute_equity_curve, _compute_enhanced_metrics, EquityCurvePoint
+    from src.backtest.deribit_data_source import DeribitDataSource
+    from src.backtest.types import CallSimulationConfig
+    from src.backtest.manager import _compute_equity_curve, _compute_enhanced_metrics
     
-    db = get_db_session()
-    
-    try:
-        run = create_backtest_run(
-            db=db,
-            underlying=underlying,
-            start_ts=start_ts,
-            end_ts=end_ts,
-            data_source=data_source.value,
-            decision_interval_minutes=decision_interval_minutes,
-            primary_exit_style=exit_style,
-            config_json={
-                "underlying": underlying,
-                "data_source": data_source.value,
-                "decision_interval_minutes": decision_interval_minutes,
-                "exit_style": exit_style,
-            },
-        )
-        
-        print(f"  Created run: {run.run_id} (data_source={data_source.value})")
-        
-        if data_source == DataSourceType.LIVE_DERIBIT:
-            from src.backtest.live_deribit_data_source import LiveDeribitDataSource
-            
-            data_src = LiveDeribitDataSource(
+    with get_db_session() as db:
+        try:
+            run = create_backtest_run(
+                db=db,
                 underlying=underlying,
-                start_date=start_ts.date(),
-                end_date=end_ts.date(),
+                start_ts=start_ts,
+                end_ts=end_ts,
+                data_source=data_source.value,
+                decision_interval_minutes=decision_interval_minutes,
+                primary_exit_style=exit_style,
+                config_json={
+                    "underlying": underlying,
+                    "data_source": data_source.value,
+                    "decision_interval_minutes": decision_interval_minutes,
+                    "exit_style": exit_style,
+                },
             )
-        else:
-            data_src = None
-        
-        simulator = CoveredCallSimulator(
-            underlying=underlying,
-            start=start_ts,
-            end=end_ts,
-            decision_interval_minutes=decision_interval_minutes,
-            position_size=1.0,
-            data_source=data_src,
-        )
-        
-        trades_hte, trades_tpr = simulator.run()
-        
-        if exit_style == "hold_to_expiry":
-            trades = trades_hte
-        else:
-            trades = trades_tpr
-        
-        spot_at_times = simulator.get_spot_at_times()
-        
-        equity_curve = _compute_equity_curve(
-            trades=trades,
-            spot_at_times=spot_at_times,
-            position_size=1.0,
-            start_time=start_ts,
-            end_time=end_ts,
-        )
-        
-        metrics = _compute_enhanced_metrics(
-            trades=trades,
-            equity_curve=equity_curve,
-            position_size=1.0,
-        )
-        
-        chains_list = []
-        for trade in trades:
-            chain = getattr(trade, "chain", None)
-            if chain:
-                chains_list.append({
-                    "open_time": chain.decision_time.isoformat(),
-                    "instrument_name": getattr(chain, "instrument_name", None),
-                    "num_legs": len(getattr(chain, "legs", [])),
-                    "num_rolls": max(0, len(getattr(chain, "legs", [])) - 1),
-                    "pnl": float(chain.total_pnl),
-                    "pnl_vs_hodl": float(getattr(chain, "pnl_vs_hodl", 0)),
-                    "max_drawdown_pct": float(chain.max_drawdown_pct),
-                })
-        
-        metrics_by_style = {exit_style: metrics}
-        chains_by_style = {exit_style: chains_list}
-        
-        complete_run(
-            db=db,
-            run=run,
-            metrics_by_style=metrics_by_style,
-            chains_by_style=chains_by_style,
-            primary_exit_style=exit_style,
-        )
-        
-        print(f"  Completed run: {run.run_id}")
-        return run.run_id
-        
-    except Exception as e:
-        import traceback
-        traceback.print_exc()
-        if 'run' in locals():
-            fail_run(db, run, str(e))
-        raise
-    finally:
-        db.close()
+            
+            print(f"  Created run: {run.run_id} (data_source={data_source.value})")
+            
+            decision_interval_hours = decision_interval_minutes / 60
+            decision_interval_bars = max(1, int(decision_interval_hours))
+            
+            pricing_mode = "deribit_live" if data_source == DataSourceType.LIVE_DERIBIT else "synthetic_bs"
+            
+            config = CallSimulationConfig(
+                underlying=underlying,
+                start=start_ts,
+                end=end_ts,
+                timeframe="1h",
+                decision_interval_bars=decision_interval_bars,
+                initial_spot_position=1.0,
+                contract_size=1.0,
+                fee_rate=0.0003,
+                target_dte=7,
+                dte_tolerance=3,
+                target_delta=0.25,
+                delta_tolerance=0.10,
+                min_dte=1,
+                max_dte=21,
+                delta_min=0.10,
+                delta_max=0.40,
+                option_margin_type="linear",
+                option_settlement_ccy="USDC",
+                tp_threshold_pct=80.0,
+                min_score_to_trade=3.0,
+                pricing_mode=pricing_mode,
+            )
+            
+            if data_source == DataSourceType.LIVE_DERIBIT:
+                from src.backtest.live_deribit_data_source import LiveDeribitDataSource
+                
+                data_src = LiveDeribitDataSource(
+                    underlying=underlying,
+                    start_date=start_ts.date(),
+                    end_date=end_ts.date(),
+                )
+            else:
+                data_src = DeribitDataSource()
+            
+            simulator = CoveredCallSimulator(data_source=data_src, config=config)
+            
+            def always_trade_policy(candidates, state):
+                return True
+            
+            result = simulator.simulate_policy(policy=always_trade_policy, size=1.0)
+            
+            trades = result.trades if hasattr(result, 'trades') else []
+            
+            metrics = result.metrics if hasattr(result, 'metrics') else {}
+            
+            chains_list = []
+            for trade in trades:
+                chain = getattr(trade, "chain", None)
+                if chain:
+                    chains_list.append({
+                        "open_time": chain.decision_time.isoformat(),
+                        "instrument_name": getattr(chain, "instrument_name", None),
+                        "num_legs": len(getattr(chain, "legs", [])),
+                        "num_rolls": max(0, len(getattr(chain, "legs", [])) - 1),
+                        "pnl": float(chain.total_pnl),
+                        "pnl_vs_hodl": float(getattr(chain, "pnl_vs_hodl", 0)),
+                        "max_drawdown_pct": float(chain.max_drawdown_pct),
+                    })
+            
+            formatted_metrics = {
+                "initial_equity": metrics.get("initial_equity", 0),
+                "final_equity": metrics.get("final_equity", 0),
+                "net_profit_usd": metrics.get("final_pnl", 0),
+                "net_profit_pct": metrics.get("total_return_pct", 0),
+                "max_drawdown_pct": metrics.get("max_drawdown_pct", 0),
+                "num_trades": metrics.get("num_trades", 0),
+                "win_rate": metrics.get("win_rate", 0) * 100 if metrics.get("win_rate") else 0,
+                "sharpe_ratio": metrics.get("sharpe_ratio", 0),
+                "sortino_ratio": metrics.get("sortino_ratio", 0),
+                "profit_factor": metrics.get("profit_factor", 0),
+                "final_pnl_vs_hodl": metrics.get("total_pnl_vs_hodl", 0),
+            }
+            
+            metrics_by_style = {exit_style: formatted_metrics}
+            chains_by_style = {exit_style: chains_list}
+            
+            complete_run(
+                db=db,
+                run=run,
+                metrics_by_style=metrics_by_style,
+                chains_by_style=chains_by_style,
+                primary_exit_style=exit_style,
+            )
+            
+            if hasattr(data_src, 'close'):
+                data_src.close()
+            
+            print(f"  Completed run: {run.run_id}")
+            return run.run_id
+            
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            if 'run' in locals():
+                fail_run(db, run, str(e))
+            raise
 
 
 def get_metrics_for_run(run_id: str, exit_style: str) -> Optional[Dict[str, Any]]:
     """Get metrics for a completed run."""
-    db = get_db_session()
-    try:
+    with get_db_session() as db:
         result = get_run_with_details(db, run_id)
         if not result:
             return None
         
         metrics = result.get("metrics", {})
         return metrics.get(exit_style, {})
-    finally:
-        db.close()
 
 
 def print_comparison(
