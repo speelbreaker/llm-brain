@@ -241,8 +241,7 @@ def process_and_save(currency: str, raw_data: list[dict[str, Any]]) -> None:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce")
     
-    final_cols = [c for c in CANONICAL_COLUMNS if c in df.columns]
-    df = df[final_cols]
+    df = df.reindex(columns=CANONICAL_COLUMNS)
     
     year = now.strftime("%Y")
     month = now.strftime("%m")
