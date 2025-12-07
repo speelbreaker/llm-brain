@@ -1,0 +1,21 @@
+{
+  "run_id": "2025-12-07T20-55-46Z_BTC_32aa8f68",
+  "created_at": "2025-12-07T20:55:46.688121+00:00",
+  "status": "running",
+  "config": {
+    "underlying": "BTC",
+    "start": "2024-01-01",
+    "end": "2024-01-15",
+    "timeframe": "1h",
+    "target_dte": 7,
+    "target_delta": 0.25,
+    "decision_interval_bars": 24
+  },
+  "metrics": {},
+  "recent_steps": {},
+  "recent_chains": {},
+  "equity_curves": {},
+  "error": null,
+  "finished_at": null,
+  "duration_seconds": null
+}

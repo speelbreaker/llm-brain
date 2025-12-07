@@ -515,6 +515,7 @@ def run_backtest(req: BacktestRequest) -> JSONResponse:
     from src.backtest.data_source import Timeframe
     from src.backtest.covered_call_simulator import CoveredCallSimulator, always_trade_policy
     from src.backtest.deribit_data_source import DeribitDataSource
+    from src.backtest.run_store import create_run, update_run_status, save_run_result, BacktestRunResult
     
     valid_timeframes = ["1m", "5m", "15m", "1h", "4h", "1d"]
     if req.timeframe not in valid_timeframes:
@@ -535,6 +536,19 @@ def run_backtest(req: BacktestRequest) -> JSONResponse:
         raise HTTPException(status_code=400, detail="Start date must be before end date")
     
     timeframe: Timeframe = cast(Timeframe, req.timeframe)
+    
+    config_dict = {
+        "underlying": req.underlying,
+        "start": req.start,
+        "end": req.end,
+        "timeframe": req.timeframe,
+        "target_dte": req.target_dte,
+        "target_delta": req.target_delta,
+        "decision_interval_bars": req.decision_interval_bars,
+    }
+    run_entry = create_run(config_dict)
+    run_id = run_entry.run_id
+    update_run_status(run_id, "running")
     
     config = CallSimulationConfig(
         underlying=req.underlying,
@@ -558,6 +572,7 @@ def run_backtest(req: BacktestRequest) -> JSONResponse:
         result = simulator.simulate_policy(policy=always_trade_policy, size=req.initial_position)
     except Exception as e:
         ds.close()
+        update_run_status(run_id, "failed", str(e))
         raise HTTPException(status_code=500, detail=f"Backtest simulation failed: {str(e)}")
     finally:
         ds.close()
@@ -580,25 +595,35 @@ def run_backtest(req: BacktestRequest) -> JSONResponse:
         for t in result.trades[:20]
     ]
     
-    return JSONResponse(content={
-        "config": {
-            "underlying": req.underlying,
-            "start": req.start,
-            "end": req.end,
-            "timeframe": req.timeframe,
-            "target_dte": req.target_dte,
-            "target_delta": req.target_delta,
-        },
-        "metrics": {
-            "num_trades": result.metrics.get("num_trades", 0),
-            "final_pnl": round(result.metrics.get("final_pnl", 0), 4),
-            "avg_pnl": round(result.metrics.get("avg_pnl", 0), 4),
-            "max_drawdown_pct": round(result.metrics.get("max_drawdown_pct", 0), 2),
-            "win_rate": round(result.metrics.get("win_rate", 0) * 100, 1),
-        },
+    metrics_data = {
+        "num_trades": result.metrics.get("num_trades", 0),
+        "final_pnl": round(result.metrics.get("final_pnl", 0), 4),
+        "avg_pnl": round(result.metrics.get("avg_pnl", 0), 4),
+        "max_drawdown_pct": round(result.metrics.get("max_drawdown_pct", 0), 2),
+        "win_rate": round(result.metrics.get("win_rate", 0) * 100, 1),
+    }
+    
+    run_result = BacktestRunResult(
+        run_id=run_id,
+        created_at=run_entry.created_at,
+        status="finished",
+        config=config_dict,
+        metrics={"default": metrics_data},
+        recent_steps={},
+        recent_chains={"default": trades_sample},
+        equity_curves={"default": equity_curve},
+        finished_at=datetime.utcnow().isoformat(),
+    )
+    save_run_result(run_result)
+    
+    response_data = {
+        "config": config_dict,
+        "metrics": metrics_data,
         "equity_curve": equity_curve,
         "trades_sample": trades_sample,
-    })
+    }
+    
+    return JSONResponse(content=response_data)
 
 
 class InsightsRequest(BaseModel):

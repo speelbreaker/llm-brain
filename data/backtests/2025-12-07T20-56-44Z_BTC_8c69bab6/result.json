@@ -1,0 +1,33 @@
+{
+  "run_id": "2025-12-07T20-56-44Z_BTC_8c69bab6",
+  "created_at": "2025-12-07T20:56:44.461699+00:00",
+  "status": "finished",
+  "config": {
+    "underlying": "BTC",
+    "start": "2024-01-01",
+    "end": "2024-01-15",
+    "timeframe": "1h",
+    "target_dte": 7,
+    "target_delta": 0.25,
+    "decision_interval_bars": 24
+  },
+  "metrics": {
+    "default": {
+      "num_trades": 0,
+      "final_pnl": 0.0,
+      "avg_pnl": 0.0,
+      "max_drawdown_pct": 0.0,
+      "win_rate": 0.0
+    }
+  },
+  "recent_steps": {},
+  "recent_chains": {
+    "default": []
+  },
+  "equity_curves": {
+    "default": []
+  },
+  "error": null,
+  "finished_at": "2025-12-07T20:56:49.049212",
+  "duration_seconds": null
+}

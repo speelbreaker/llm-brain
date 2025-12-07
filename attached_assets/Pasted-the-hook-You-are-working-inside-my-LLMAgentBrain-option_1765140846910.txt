@@ -1,0 +1,367 @@
+the hook).
+
+You are working inside my LLMAgentBrain options-bot repository.
+
+Goal
+====
+
+1. Persist all backtest runs and their results in **MySQL** using SQLAlchemy models:
+   - backtest_runs (one row per run)
+   - backtest_metrics (per run, per exit_style)
+   - backtest_chains (multi-leg chain summaries)
+
+2. Refactor the backtest worker and API endpoints to:
+   - Write to/read from these MySQL tables instead of JSON files on disk.
+   - Provide a clean API for listing and inspecting runs.
+
+3. Add a new data source enum value `REAL_SCRAPER` and a stub loader hook so
+   we can later plug in real historical Deribit data (e.g. May 26, 2023 sample).
+
+Assumptions
+===========
+
+- The project already uses FastAPI.
+- There is already some DB layer using SQLAlchemy (e.g. a `database.py`,
+  `db.py`, or `models.py` file with an `engine`, `SessionLocal`, and Base).
+- There is existing backtesting code that:
+  - Runs a backtest given a config,
+  - Returns `hold_to_expiry` and `tp_and_roll` metrics,
+  - Can produce “recent steps” and “recent chains” for the current run.
+
+If any of the assumptions about DB structure are slightly off, adapt the code
+to the existing patterns in the repo.
+
+────────────────────────
+A. SQLAlchemy models for backtest_runs, backtest_metrics, backtest_chains
+────────────────────────
+
+1) Locate the central place where SQLAlchemy models live
+   (for example `src/db/models.py` or similar). If none exists, create a
+   `src/db/models_backtest.py` or similar and ensure it imports the shared Base.
+
+2) Define a `BacktestRun` model with roughly this schema:
+
+- Table name: `backtest_runs`
+- Columns:
+
+  - id: BIGINT primary key, auto-increment
+  - run_id: string identifier (visible to API / UI), unique. Can be a UUID or
+    timestamp-based slug.
+  - created_at: datetime, default now (UTC)
+  - updated_at: datetime, auto-updating on change
+  - status: enum or varchar with values:
+      'queued', 'running', 'finished', 'failed', 'cancelled'
+  - underlying: short string, e.g. 'BTC', 'ETH'
+  - data_source: string, e.g. 'synthetic', 'live_deribit', 'real_scraper'
+  - start_ts: datetime (UTC) for backtest start
+  - end_ts: datetime (UTC) for backtest end
+  - decision_interval_minutes: integer (e.g. 60, 1440)
+  - primary_exit_style: string, e.g. 'tp_and_roll'
+
+  - initial_equity: numeric (DECIMAL or Float)
+  - final_equity_primary: numeric
+  - net_profit_pct_primary: numeric
+  - max_drawdown_pct_primary: numeric
+  - sharpe_primary: numeric
+  - sortino_primary: numeric
+
+  - config_json: JSON (SQLAlchemy JSON type) for full backtest config
+  - notes: optional TEXT
+
+- Relationships:
+  - `metrics = relationship("BacktestMetric", back_populates="run", cascade="all, delete-orphan")`
+  - `chains = relationship("BacktestChain", back_populates="run", cascade="all, delete-orphan")`
+
+3) Define a `BacktestMetric` model:
+
+- Table name: `backtest_metrics`
+- Columns:
+
+  - id: BIGINT PK, auto-increment
+  - run_id: BIGINT FK to `backtest_runs.id`
+  - exit_style: string, e.g. 'hold_to_expiry', 'tp_and_roll'
+  - is_primary: boolean/int (0/1)
+
+  - initial_equity
+  - final_equity
+  - net_profit_usd
+  - net_profit_pct
+  - hodl_profit_usd
+  - hodl_profit_pct
+  - max_drawdown_pct
+  - max_drawdown_usd
+  - num_trades
+  - win_rate
+  - avg_trade_usd
+  - profit_factor
+  - gross_profit
+  - gross_loss
+  - avg_winner
+  - avg_loser
+  - sharpe_ratio
+  - sortino_ratio
+  - final_pnl
+  - final_pnl_vs_hodl
+  - avg_pnl
+
+- Relationship:
+  - `run = relationship("BacktestRun", back_populates="metrics")`
+
+- Unique constraint on (run_id, exit_style) so each run has at most one metric
+  row per exit style.
+
+4) Define a `BacktestChain` model:
+
+- Table name: `backtest_chains`
+- Columns:
+
+  - id: BIGINT PK, auto-increment
+  - run_id: BIGINT FK to `backtest_runs.id`
+  - exit_style: string, e.g. 'tp_and_roll'
+  - decision_time: datetime (UTC)
+  - underlying: string, e.g. 'BTC'
+
+  - chain_label: optional string (e.g. instrument_name or chain id)
+  - num_legs: int
+  - num_rolls: int
+
+  - total_pnl_usd: numeric
+  - pnl_vs_hodl_usd: numeric
+  - max_drawdown_pct: numeric
+  - max_drawdown_usd: numeric
+
+  - details_json: JSON with optional leg-by-leg structure
+
+- Relationship:
+  - `run = relationship("BacktestRun", back_populates="chains")`
+
+- Indices:
+  - Index on (run_id)
+  - Index on (run_id, exit_style)
+  - Index on (run_id, decision_time)
+
+5) Migrations
+
+If the project uses Alembic or another migration system:
+
+- Create a migration that generates these three tables.
+- Ensure tables use InnoDB and utf8mb4.
+
+If there is no migration system, add a small bootstrap function that can be invoked
+to call Base.metadata.create_all(engine) for these models, but prefer using the
+existing migration story.
+
+────────────────────────
+B. Refactor backtest worker to write to MySQL
+────────────────────────
+
+Find the code path that:
+
+- Receives a backtest request (FastAPI endpoint),
+- Currently runs a backtest synchronously and returns a JSON result
+  with metrics, recent steps, recent chains.
+
+Refactor to the following pattern:
+
+1) Backtest start (API layer)
+
+When a client POSTs to "run backtest":
+
+- Parse the request into a `backtest_config` object (you already have this).
+- Generate a new `run_id` string (e.g. UUID4 or timestamp-based).
+- Create a `BacktestRun` row:
+
+  - status = 'queued'
+  - underlying, data_source, start_ts, end_ts, decision_interval_minutes
+  - primary_exit_style (if known from config, otherwise null for now)
+  - config_json = full config dict (use SQLAlchemy JSON)
+
+- Commit and get the DB `id` for the run.
+
+- Enqueue a background task (FastAPI BackgroundTasks or your worker) to perform
+  the actual backtest. Pass the DB run.id (or run_id string) and config.
+
+- Return to the client:
+
+  {
+    "run_id": "<string>",
+    "status": "queued"
+  }
+
+If there is already an async/backround mechanism from a previous task,
+adapt it to use the DB table instead of filesystem JSON.
+
+2) Backtest execution (background worker)
+
+Create or update a function like:
+
+  def execute_backtest(run_db_id: int, config: BacktestConfig) -> None:
+
+- Inside a DB session:
+
+  - Fetch the BacktestRun row by id.
+  - Set status = 'running', updated_at = now, commit.
+
+- Call the existing backtesting engine to produce result metrics:
+
+  This function already returns something like:
+
+  {
+    "hold_to_expiry": { ... metrics ... },
+    "tp_and_roll": { ... metrics ... },
+    "recent_steps": { ... },
+    "recent_chains": { ... }
+  }
+
+- From this result:
+
+  - For each exit style present (e.g. "hold_to_expiry", "tp_and_roll"):
+    - Create a BacktestMetric row with all numeric metrics copied over.
+    - Mark is_primary = 1 for the one matching run.primary_exit_style (or choose
+      "tp_and_roll" as default primary if config dictates).
+
+  - For recent chains:
+    - For each chain in result["recent_chains"]["tp_and_roll"], create a
+      BacktestChain row:
+        - run_id = BacktestRun.id
+        - exit_style = "tp_and_roll"
+        - decision_time = parsed from the chain record
+        - underlying = from config or chain data
+        - num_legs, num_rolls, total_pnl, max_drawdown_pct, etc.
+        - details_json = full original chain dict
+
+- Update the BacktestRun row with:
+
+  - status = 'finished'
+  - primary_exit_style (if not yet set, choose e.g. "tp_and_roll")
+  - initial_equity (from metrics)
+  - final_equity_primary
+  - net_profit_pct_primary
+  - max_drawdown_pct_primary
+  - sharpe_primary
+  - sortino_primary
+
+- Commit.
+
+- If any exception occurs:
+  - Catch it, log it.
+  - Update BacktestRun.status = 'failed'
+  - Optionally store error message in notes.
+  - Commit and re-raise or swallow depending on your logging policy.
+
+After this refactor, nothing should be writing result.json files on disk.
+All results live in MySQL.
+
+────────────────────────
+C. API endpoints for listing & inspecting backtests
+────────────────────────
+
+Add (or refactor) FastAPI endpoints, e.g.:
+
+1) GET /api/backtests
+
+- Query `BacktestRun` rows, optionally join `BacktestMetric` for primary metrics.
+- Return a list of objects like:
+
+  {
+    "run_id": "...",
+    "created_at": "...",
+    "status": "finished",
+    "underlying": "BTC",
+    "data_source": "synthetic",
+    "start_ts": "...",
+    "end_ts": "...",
+    "primary_exit_style": "tp_and_roll",
+    "initial_equity": ...,
+    "final_equity_primary": ...,
+    "net_profit_pct_primary": ...,
+    "max_drawdown_pct_primary": ...,
+    "sharpe_primary": ...,
+    "sortino_primary": ...
+  }
+
+- Support optional query params (e.g. `underlying=BTC`, `status=finished`) if
+  convenient, but not required.
+
+2) GET /api/backtests/{run_id}
+
+- Look up the `BacktestRun` by its run_id string (not numeric PK).
+- Also load `BacktestMetric` rows for that run.
+- Also load a limited set of `BacktestChain` rows for that run (e.g. last 50,
+  sorted by decision_time desc, per exit_style).
+- Return a JSON object:
+
+  {
+    "run": { ... BacktestRun fields ... },
+    "metrics": {
+      "<exit_style>": { ... metric fields ... },
+      ...
+    },
+    "chains": {
+      "<exit_style>": [
+        { ... summary fields & maybe details_json ... },
+        ...
+      ]
+    }
+  }
+
+3) (Optional, but nice) GET /api/backtests/{run_id}/chains?exit_style=tp_and_roll
+
+- For pagination of chains if needed; can be implemented later.
+
+Update the existing UI Backtesting Lab to call these endpoints instead of
+reading from JSON files if any previous task added filesystem-based storage.
+
+────────────────────────
+D. Add REAL_SCRAPER data source enum + stub loader
+────────────────────────
+
+1) Locate where the backtesting config defines the data source, e.g.:
+
+   class DataSource(str, Enum):
+       SYNTHETIC = "synthetic"
+       LIVE_DERIBIT_CAPTURED = "live_deribit"
+
+Add:
+
+       REAL_SCRAPER = "real_scraper"
+
+2) Locate the module that loads market data for a given data source.
+
+Implement a stub for REAL_SCRAPER:
+
+- Something like:
+
+    def load_market_data(config: BacktestConfig) -> DataFrame:
+        if config.data_source == DataSource.SYNTHETIC:
+            return load_synthetic_data(config)
+        elif config.data_source == DataSource.LIVE_DERIBIT_CAPTURED:
+            return load_live_deribit_data(config)
+        elif config.data_source == DataSource.REAL_SCRAPER:
+            # TEMPORARY STUB: we will wire actual Real Scraper data later.
+            # For now, raise a clear error or return an empty DataFrame.
+            raise NotImplementedError("REAL_SCRAPER data source loader not implemented yet")
+        else:
+            raise ValueError(f"Unknown data_source: {config.data_source}")
+
+- Do NOT implement the actual import logic for Real Scraper in this task.
+  Just add the enum and stub so we can plug in the loader later.
+
+────────────────────────
+E. Keep existing behavior working
+────────────────────────
+
+- The existing backtest UI that triggers a backtest and then displays results
+  should still work, but now it will:
+  - Start a background job.
+  - Poll /api/backtests/{run_id} until status == "finished".
+  - Display metrics based on the DB rows.
+
+- If any previous task added filesystem-based result.json storage, refactor
+  those parts to use the new SQL-backed models and remove obsolete JSON-only
+  paths.
+
+After this task, we should have:
+- A proper MySQL-backed registry of all backtest runs.
+- Easy API access to list view and detailed metrics/chains per run.
+- A clean hook for `REAL_SCRAPER` as a future data source.
