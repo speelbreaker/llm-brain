@@ -530,5 +530,74 @@ class PositionTracker:
             self._save_to_disk()
             print("[PositionTracker] Cleared all positions")
 
+    def rebuild_from_exchange(self, exchange_positions: List[Dict[str, Any]]) -> int:
+        """
+        Rebuild local position tracker from exchange positions.
+        
+        Used for auto-healing when local state is out of sync with exchange.
+        Creates a fresh position chain for each exchange position.
+        PnL tracking restarts from current state (no historical data).
+        
+        Args:
+            exchange_positions: List of position dicts from Deribit.
+                Expected keys: symbol, size/quantity, direction/side, 
+                average_price, mark_price, underlying, delta
+        
+        Returns:
+            Number of positions rebuilt.
+        """
+        with self._lock:
+            self._chains.clear()
+            now = _utc_now()
+            rebuilt = 0
+            
+            for pos in exchange_positions:
+                symbol = pos.get("symbol", "") or pos.get("instrument_name", "")
+                if not symbol:
+                    continue
+                    
+                size = abs(float(pos.get("size", 0) or pos.get("quantity", 0) or 0))
+                if size <= 0:
+                    continue
+                
+                direction = pos.get("direction", "") or pos.get("side", "sell")
+                side: Side = "SHORT" if direction in ("sell", "SHORT") else "LONG"
+                
+                underlying = pos.get("underlying", "BTC")
+                entry_price = float(pos.get("average_price", 0) or pos.get("avg_price", 0) or 0)
+                mark_price = float(pos.get("mark_price", 0) or entry_price)
+                
+                position_id = f"healed-{underlying}-{symbol}-{now.strftime('%Y%m%d%H%M%S%f')}"
+                
+                leg = PositionLeg(
+                    symbol=symbol,
+                    underlying=underlying,
+                    option_type="CALL",
+                    side=side,
+                    quantity=size,
+                    entry_price=entry_price,
+                    entry_time=now,
+                    mark_price=mark_price,
+                )
+                
+                expiry = parse_deribit_expiry(symbol)
+                chain = PositionChain(
+                    position_id=position_id,
+                    underlying=underlying,
+                    option_type="CALL",
+                    strategy_type="COVERED_CALL",
+                    mode="LIVE",
+                    exit_style="healed_from_exchange",
+                    legs=[leg],
+                    open_time=now,
+                    expiry=expiry,
+                )
+                self._chains[position_id] = chain
+                rebuilt += 1
+            
+            self._save_to_disk()
+            print(f"[PositionTracker] Rebuilt {rebuilt} positions from exchange")
+            return rebuilt
+
 
 position_tracker = PositionTracker(notional_multiplier=1.0)

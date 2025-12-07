@@ -185,6 +185,61 @@ bash scripts/smoke_web_api.sh
 
 ---
 
+### 6. Position Reconciliation Test
+
+**What it does**: Tests the position reconciliation logic that compares local tracker with Deribit exchange positions. Uses mock data (no API calls).
+
+**When to run**: After changes to position tracking, reconciliation logic, or agent loop.
+
+**Command**:
+```bash
+bash scripts/smoke_reconciliation.sh
+```
+
+**What success looks like**:
+```
+=== Smoke Test: Position Reconciliation ===
+
+Test 1: Detect divergence (halt mode)
+----------------------------------------
+Reconciliation: DIVERGENT
+  Exchange positions: 2
+  Local positions: 2
+  Missing in local (1): BTC-20DEC24-110000-C
+  Missing on exchange (1): BTC-27DEC24-105000-C
+
+PASS: Divergence detected correctly in halt mode
+
+Test 2: Auto-heal mode
+----------------------------------------
+Healed positions: 2
+  - BTC-20DEC24-100000-C: qty=0.1
+  - BTC-20DEC24-110000-C: qty=0.2
+
+PASS: Auto-heal rebuilt positions from exchange
+
+...
+
+ALL RECONCILIATION TESTS PASSED
+
+=== SMOKE TEST PASSED ===
+```
+
+**Manual reconciliation** (with live API):
+```bash
+# Dry-run: report divergence only
+python scripts/reconcile_positions_once.py
+
+# Auto-heal: rebuild local state from exchange
+python scripts/reconcile_positions_once.py --heal
+```
+
+**Config flag**: `POSITION_RECONCILE_ACTION` (default: `halt`)
+- `halt`: On divergence, trading halts until manually resolved
+- `auto_heal`: On divergence, local positions are rebuilt from exchange
+
+---
+
 ## Technical Debt
 
 The following items have been identified as needing cleanup. They are marked with `TODO` comments in the code.

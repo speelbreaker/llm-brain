@@ -23,6 +23,8 @@ from src.execution import execute_action, execute_actions
 from src.logging_utils import log_decision, log_error, print_decision_summary
 from src.models import ActionType
 from src.decisions_store import decisions_store
+from src.reconciliation import reconcile_positions, format_reconciliation_summary
+from src.position_tracker import position_tracker
 
 StatusCallback = Callable[[Dict[str, Any]], None]
 
@@ -165,6 +167,7 @@ def run_agent_loop_forever(
     print(f"DTE Range: {settings.effective_dte_min} - {settings.effective_dte_max}")
     print(f"Max Margin: {settings.max_margin_used_pct}%")
     print(f"Max Delta: {settings.max_net_delta_abs}")
+    print(f"Position Reconcile: {settings.position_reconcile_action.upper()}")
     print("=" * 60)
     
     client = DeribitClient()
@@ -209,7 +212,7 @@ def run_agent_loop_forever(
                     for i, c in enumerate(agent_state.candidate_options[:3], 1):
                         print(f"  {i}. {c.symbol} - DTE:{c.dte}, "
                               f"delta:{c.delta:.2f}, premium:${c.premium_usd:.2f}")
-                
+
             except DeribitAPIError as e:
                 error_msg = f"Failed to build agent state: {e}"
                 print(f"ERROR: {error_msg}")
@@ -223,10 +226,106 @@ def run_agent_loop_forever(
                 log_error("state_build_error", error_msg, {"traceback": traceback.format_exc()})
                 time.sleep(settings.loop_interval_sec)
                 continue
+
+            reconciliation_stats: Dict[str, Any] = {"divergent": False}
+            reconciliation_halted = False
+            try:
+                exchange_positions = [
+                    {
+                        "symbol": p.symbol,
+                        "size": p.size,
+                        "direction": "sell" if p.side.value == "sell" else "buy",
+                        "average_price": p.avg_price,
+                        "mark_price": p.mark_price,
+                        "unrealized_pnl": p.unrealized_pnl,
+                        "delta": p.delta,
+                        "underlying": p.underlying,
+                        "option_type": "call",
+                    }
+                    for p in agent_state.portfolio.option_positions
+                ]
+                
+                local_payload = position_tracker.get_open_positions_payload()
+                local_positions = local_payload.get("positions", [])
+                
+                _, reconciliation_stats = reconcile_positions(
+                    exchange_positions=exchange_positions,
+                    local_positions=local_positions,
+                    action=settings.position_reconcile_action,
+                )
+                
+                if reconciliation_stats["divergent"]:
+                    print(f"\n{format_reconciliation_summary(reconciliation_stats)}")
+                    
+                    if settings.position_reconcile_action == "halt":
+                        reconciliation_halted = True
+                        print("Trading HALTED due to position divergence.")
+                    else:
+                        rebuilt_count = position_tracker.rebuild_from_exchange(exchange_positions)
+                        print(f"Auto-healed: rebuilt {rebuilt_count} positions from exchange.")
+                else:
+                    print(f"\nPositions: IN SYNC (exchange={reconciliation_stats['exchange_count']}, local={reconciliation_stats['local_count']})")
+                    
+            except Exception as e:
+                print(f"Reconciliation error (continuing): {e}")
+                log_error("reconciliation_error", str(e))
             
             training_actions: list = []
             is_training = settings.is_training_enabled
             
+            if reconciliation_halted:
+                final_action = {
+                    "action": ActionType.DO_NOTHING.value,
+                    "params": {},
+                    "reasoning": "Position divergence detected - trading halted",
+                    "decision_source": "reconciliation_halt",
+                }
+                allowed = False
+                reasons = ["Position divergence - trading halted"]
+                execution_result = {"status": "halted", "message": "Position divergence"}
+                
+                snapshot = _build_status_snapshot(
+                    agent_state=agent_state,
+                    proposed_action=final_action,
+                    final_action=final_action,
+                    risk_allowed=allowed,
+                    risk_reasons=reasons,
+                    execution_result=execution_result,
+                )
+                snapshot["reconciliation"] = reconciliation_stats
+                
+                try:
+                    log_decision(
+                        agent_state=agent_state,
+                        proposed_action=final_action,
+                        final_action=final_action,
+                        risk_allowed=allowed,
+                        risk_reasons=reasons,
+                        execution_result=execution_result,
+                    )
+                except Exception:
+                    pass
+                
+                decision_entry = {
+                    "timestamp": datetime.utcnow().isoformat(),
+                    "decision_source": "reconciliation_halt",
+                    "proposed_action": final_action,
+                    "final_action": final_action,
+                    "risk_check": {"allowed": allowed, "reasons": reasons},
+                    "execution": execution_result,
+                    "reconciliation": reconciliation_stats,
+                }
+                decisions_store.add(decision_entry)
+                
+                if status_callback:
+                    status_callback(snapshot)
+                
+                elapsed = time.time() - loop_start
+                sleep_time = max(0, settings.loop_interval_sec - elapsed)
+                print(f"\nIteration complete in {elapsed:.1f}s, sleeping {sleep_time:.0f}s...")
+                time.sleep(sleep_time)
+                continue
+
             try:
                 print("\nMaking decision...")
                 
@@ -333,6 +432,7 @@ def run_agent_loop_forever(
                 risk_reasons=reasons,
                 execution_result=execution_result,
             )
+            snapshot["reconciliation"] = reconciliation_stats
             
             if is_training and training_actions:
                 decision_source = "training_mode"
