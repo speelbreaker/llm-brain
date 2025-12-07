@@ -1,0 +1,165 @@
+{
+  "generated_at": "2025-12-07T23:48:47.109954+00:00",
+  "period": {
+    "start_date": "2025-12-04",
+    "end_date": "2025-12-06",
+    "days": 3
+  },
+  "exit_style": "tp_and_roll",
+  "tests": [
+    {
+      "underlying": "BTC",
+      "decision_interval_minutes": 1440,
+      "label": "BTC daily decisions",
+      "status": "success",
+      "synth_run_id": "2025-12-07T23-48-46Z_BTC_72b413d1",
+      "live_run_id": "2025-12-07T23-48-47Z_BTC_3d0422c3",
+      "optimism_factor": null,
+      "metrics": {
+        "net_profit_pct": {
+          "a": 0.0,
+          "b": 0.0,
+          "diff": 0.0,
+          "fmt_type": "pct"
+        },
+        "net_profit_usd": {
+          "a": 0.0,
+          "b": 0.0,
+          "diff": 0.0,
+          "fmt_type": "usd"
+        },
+        "final_pnl_vs_hodl": {
+          "a": 0.0,
+          "b": 0.0,
+          "diff": 0.0,
+          "fmt_type": "usd"
+        },
+        "max_drawdown_pct": {
+          "a": 0.0,
+          "b": 0.0,
+          "diff": 0.0,
+          "fmt_type": "pct"
+        },
+        "max_drawdown_usd": {
+          "a": 0.0,
+          "b": 0.0,
+          "diff": 0.0,
+          "fmt_type": "usd"
+        },
+        "num_trades": {
+          "a": 0.0,
+          "b": 0.0,
+          "diff": 0.0,
+          "fmt_type": "int"
+        },
+        "win_rate": {
+          "a": 0.0,
+          "b": 0.0,
+          "diff": 0.0,
+          "fmt_type": "pct"
+        },
+        "profit_factor": {
+          "a": 0.0,
+          "b": 0.0,
+          "diff": 0.0,
+          "fmt_type": "float"
+        },
+        "avg_trade_usd": {
+          "a": 0.0,
+          "b": 0.0,
+          "diff": 0.0,
+          "fmt_type": "usd"
+        },
+        "sharpe_ratio": {
+          "a": 0.0,
+          "b": 0.0,
+          "diff": 0.0,
+          "fmt_type": "float"
+        },
+        "sortino_ratio": {
+          "a": 0.0,
+          "b": 0.0,
+          "diff": 0.0,
+          "fmt_type": "float"
+        }
+      }
+    },
+    {
+      "underlying": "BTC",
+      "decision_interval_minutes": 240,
+      "label": "BTC 4h decisions",
+      "status": "success",
+      "synth_run_id": "2025-12-07T23-48-47Z_BTC_5fdadc3f",
+      "live_run_id": "2025-12-07T23-48-47Z_BTC_05adc036",
+      "optimism_factor": null,
+      "metrics": {
+        "net_profit_pct": {
+          "a": 0.0,
+          "b": 0.0,
+          "diff": 0.0,
+          "fmt_type": "pct"
+        },
+        "net_profit_usd": {
+          "a": 0.0,
+          "b": 0.0,
+          "diff": 0.0,
+          "fmt_type": "usd"
+        },
+        "final_pnl_vs_hodl": {
+          "a": 0.0,
+          "b": 0.0,
+          "diff": 0.0,
+          "fmt_type": "usd"
+        },
+        "max_drawdown_pct": {
+          "a": 0.0,
+          "b": 0.0,
+          "diff": 0.0,
+          "fmt_type": "pct"
+        },
+        "max_drawdown_usd": {
+          "a": 0.0,
+          "b": 0.0,
+          "diff": 0.0,
+          "fmt_type": "usd"
+        },
+        "num_trades": {
+          "a": 0.0,
+          "b": 0.0,
+          "diff": 0.0,
+          "fmt_type": "int"
+        },
+        "win_rate": {
+          "a": 0.0,
+          "b": 0.0,
+          "diff": 0.0,
+          "fmt_type": "pct"
+        },
+        "profit_factor": {
+          "a": 0.0,
+          "b": 0.0,
+          "diff": 0.0,
+          "fmt_type": "float"
+        },
+        "avg_trade_usd": {
+          "a": 0.0,
+          "b": 0.0,
+          "diff": 0.0,
+          "fmt_type": "usd"
+        },
+        "sharpe_ratio": {
+          "a": 0.0,
+          "b": 0.0,
+          "diff": 0.0,
+          "fmt_type": "float"
+        },
+        "sortino_ratio": {
+          "a": 0.0,
+          "b": 0.0,
+          "diff": 0.0,
+          "fmt_type": "float"
+        }
+      }
+    }
+  ]
+}
