@@ -79,7 +79,7 @@ The agent is built with a clear separation of concerns, featuring modules for co
 
 ### Data Harvester
 - **Standalone Process**: `scripts/data_harvester.py` runs independently from the trading bot, continuously collecting real Deribit options data.
-- **Multi-Asset Support**: Fetches option chains for BTC, ETH, SOL, XRP, DOGE, MATIC from Deribit mainnet public API.
+- **Multi-Asset Support**: Fetches option chains for BTC and ETH from Deribit mainnet public API (only assets with active options markets).
 - **Parquet Storage**: Saves snapshots to `data/live_deribit/<ASSET>/<YYYY>/<MM>/<DD>/<ASSET>_<YYYY-MM-DD_HHMM>.parquet`.
 - **Data Fields**: Includes instrument info, pricing (mark, bid, ask), volume, open interest, IV, and Greeks (delta, gamma, theta, vega).
 - **Configurable Interval**: Default 15-minute polling, adjustable via `HARVESTER_INTERVAL_MINUTES` env var.

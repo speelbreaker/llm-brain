@@ -3,7 +3,7 @@
 Deribit Data Harvester
 
 A standalone script that continuously collects real Deribit options data
-for multiple assets (BTC, ETH, SOL, XRP, DOGE, MATIC) and saves them as
+for assets with active options markets (BTC, ETH) and saves them as
 Parquet files for backtesting and analysis.
 
 This script runs independently from the trading bot / FastAPI server.
@@ -22,7 +22,7 @@ from typing import Any
 import pandas as pd
 import requests
 
-ASSETS = ["BTC", "ETH", "SOL", "XRP", "DOGE", "MATIC"]
+ASSETS = ["BTC", "ETH"]
 
 INTERVAL_MINUTES = int(os.getenv("HARVESTER_INTERVAL_MINUTES", "15"))
 
