@@ -1,0 +1,224 @@
+You are working inside my LLMAgentBrain options-bot repository.
+
+Goal
+====
+
+1. Wire a new backtest data source that uses our **captured Deribit snapshots**
+   (from the harvester) via the existing exam dataset format.
+
+   Let's call this data source: LIVE_DERIBIT_CAPTURED, with string value
+   "live_deribit".
+
+2. Refactor the exam dataset builder so that:
+   - There is a reusable Python function for building an exam dataset,
+   - The backtester can call that function directly (not just through CLI).
+
+3. Add a small comparison script that:
+   - Runs one backtest with SYNTHETIC data,
+   - Runs another backtest with LIVE_DERIBIT_CAPTURED data over the same period,
+   - Prints a side-by-side comparison of metrics.
+
+We already have:
+- A harvester writing Parquet snapshots to data/live_deribit/<UNDERLYING>/YYYY/MM/DD/...
+- A script: scripts/build_exam_dataset_from_live_deribit.py that can stitch
+  these into:
+    data/exams/<UNDERLYING>_<START>_<END>_live_deribit.parquet
+    data/exams/<UNDERLYING>_<START>_<END>_live_deribit_summary.json
+- BacktestRuns / BacktestMetrics / BacktestChains stored in Postgres.
+- A DataSource enum with SYNTHETIC and REAL_SCRAPER; LIVE_DERIBIT may be present
+  or stubbed already.
+
+Part A – Refactor exam dataset builder into a reusable function
+===============================================================
+
+1) Locate scripts/build_exam_dataset_from_live_deribit.py.
+
+2) Move the **core logic** (loading raw Parquet snapshots, concatenating,
+   enforcing schema, computing dte_days, writing exam Parquet + JSON summary)
+   into a reusable function in a module under src, for example:
+
+   - New module: src/data/live_deribit_exam.py
+
+   In that module, implement:
+
+   def build_live_deribit_exam_dataset(
+       underlying: str,
+       start_date: datetime.date,
+       end_date: datetime.date,
+       base_dir: Path | str = "data/live_deribit",
+       exams_dir: Path | str = "data/exams",
+       write_files: bool = True,
+   ) -> tuple[pd.DataFrame, dict]:
+       """
+       - Find all snapshot Parquet files for <underlying> between start_date and end_date
+         under data/live_deribit/<UNDERLYING>/YYYY/MM/DD/.
+       - Load and concatenate them into a single DataFrame.
+       - Enforce the canonical schema (same 22 columns we validated earlier,
+         including harvest_time, instrument_name, expiry_timestamp, mark_price,
+         underlying_price, mark_iv, greek_delta, dte_days, etc).
+       - Compute a summary dict with:
+           {
+             "num_files": ...,
+             "num_rows": ...,
+             "num_instruments": ...,
+             "time_min": ...,
+             "time_max": ...,
+             "dte_min": ...,
+             "dte_max": ...,
+             "columns": [...],
+           }
+       - If write_files is True:
+           - Write the DataFrame to data/exams/<UNDERLYING>_<START>_<END>_live_deribit.parquet
+           - Write the summary dict to data/exams/<UNDERLYING>_<START>_<END>_live_deribit_summary.json
+       - Return (df, summary).
+       """
+
+   Reuse as much code as possible from the existing script, just move it into
+   this function.
+
+3) Update scripts/build_exam_dataset_from_live_deribit.py so it becomes a thin CLI
+   wrapper that:
+
+   - Parses --underlying, --start, --end
+   - Calls build_live_deribit_exam_dataset(...)
+   - Prints the summary dict to stdout.
+
+Part B – Implement LIVE_DERIBIT_CAPTURED data source in the backtester
+======================================================================
+
+1) Locate the DataSource enum used by the backtester configuration. Ensure it
+   includes:
+
+   class DataSource(str, Enum):
+       SYNTHETIC = "synthetic"
+       LIVE_DERIBIT_CAPTURED = "live_deribit"
+       REAL_SCRAPER = "real_scraper"
+       # (other values if already present)
+
+2) Locate the main market data loader function used by backtests, something like:
+
+   def load_market_data(config: BacktestConfig) -> pd.DataFrame:
+       ...
+
+   Extend it to handle LIVE_DERIBIT_CAPTURED:
+
+   - When config.data_source == DataSource.LIVE_DERIBIT_CAPTURED:
+
+     * Convert config.start_ts and config.end_ts to date objects:
+         start_date = config.start_ts.date()
+         end_date   = config.end_ts.date()
+
+     * Call the new reusable function:
+
+         from src.data.live_deribit_exam import build_live_deribit_exam_dataset
+
+         df, summary = build_live_deribit_exam_dataset(
+             underlying=config.underlying,
+             start_date=start_date,
+             end_date=end_date,
+             base_dir="data/live_deribit",
+             exams_dir="data/exams",
+             write_files=False,   # no need to re-write files when called from backtester
+         )
+
+     * Return df as the historical universe for this backtest.
+
+   Ensure that df’s schema matches what the backtester expects for its pricing /
+   candidate selection logic (instrument_name, expiry_timestamp, mark_price,
+   mark_iv, underlying_price, greek_delta, dte_days, etc.). If needed, add
+   small adapters (e.g., converting harvest_time to proper datetime) so the
+   downstream code doesn’t break.
+
+3) Do NOT change the existing behavior for SYNTHETIC or REAL_SCRAPER; just add
+   LIVE_DERIBIT_CAPTURED as another branch.
+
+Part C – Comparison script: synthetic vs live_deribit over same period
+======================================================================
+
+Create a new script:
+
+  scripts/compare_synthetic_vs_live.py
+
+This script should:
+
+1) Accept CLI arguments:
+
+   - --underlying (default BTC)
+   - --start (e.g. 2025-12-01)
+   - --end   (e.g. 2025-12-07)
+   - --decision-interval-minutes (default: 1440 or current default)
+   - --exit-style (optional, default "tp_and_roll" or the primary style)
+
+2) Build two BacktestConfig objects:
+
+   - cfg_synth:
+       - underlying = arg.underlying
+       - data_source = DataSource.SYNTHETIC
+       - start_ts = start date at 00:00 UTC
+       - end_ts   = end date at 23:59:59 UTC
+       - decision_interval_minutes = passed value
+       - other fields set so it matches your current “covered call” default config.
+
+   - cfg_live:
+       - identical to cfg_synth, but:
+         data_source = DataSource.LIVE_DERIBIT_CAPTURED
+
+3) For each config:
+
+   - Create a BacktestRun row in Postgres with status='queued' and the config
+     (reuse the same code path as the FastAPI backtest endpoint).
+   - Invoke the backtest worker function (e.g. execute_backtest) directly so the
+     script is synchronous:
+       - execute_backtest(db_run_id, cfg_synth)
+       - execute_backtest(db_run_id, cfg_live)
+
+   This ensures both runs go through the same DB persistence code and we end up
+   with two rows in backtest_runs, two sets of backtest_metrics, etc.
+
+4) After both runs finish, query Postgres for their metrics:
+
+   - For each run_id and chosen exit_style (e.g. "tp_and_roll"), fetch:
+
+       net_profit_pct
+       max_drawdown_pct
+       sharpe_ratio
+       num_trades
+       profit_factor
+       final_pnl_vs_hodl
+
+   - Print a simple comparison table to stdout, for example:
+
+       Underlying: BTC
+       Period: 2025-12-01 → 2025-12-07
+       Exit style: tp_and_roll
+
+       SYNTHETIC:
+         net_profit_pct: X%
+         max_drawdown_pct: Y%
+         sharpe_ratio: ...
+         num_trades: ...
+         profit_factor: ...
+         final_pnl_vs_hodl: ...
+
+       LIVE_DERIBIT_CAPTURED:
+         net_profit_pct: X2%
+         max_drawdown_pct: Y2%
+         sharpe_ratio: ...
+         num_trades: ...
+         profit_factor: ...
+         final_pnl_vs_hodl: ...
+
+   You can also print the run_id strings so we can inspect them later via the
+   API/UI.
+
+5) Ensure the script exits with code 0 and doesn’t rely on FastAPI; it should
+   just use the same backtest engine + DB functions already implemented.
+
+Part D – Keep everything else working
+=====================================
+
+- The Backtesting Lab UI should still work for SYNTHETIC runs as before.
+- The new LIVE_DERIBIT_CAPTURED data source is primarily for research /
+  comparison runs; don’t change the default in the UI unless explicitly asked.
+- The comparison script is a developer tool; no need to expose it in the web UI
+  in this task.

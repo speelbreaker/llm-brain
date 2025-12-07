@@ -49,7 +49,9 @@ The agent is built with a clear separation of concerns, featuring modules for co
   - Status tracking: queued, running, finished, failed
   - API endpoints: `GET /api/backtests` (list with optional filters), `GET /api/backtests/{run_id}` (view with metrics and chains), `GET /api/backtests/{run_id}/download` (download JSON), `DELETE /api/backtests/{run_id}` (delete)
   - UI panel showing all runs with Net PnL %, Max DD, Sharpe, and View/Download/Delete actions
-  - **Data Source Types**: `synthetic` (Black-Scholes), `live_deribit` (captured data), `real_scraper` (future real-time scraper)
+  - **Data Source Types**: `synthetic` (Black-Scholes), `live_deribit` (captured harvester data), `real_scraper` (external normalized data)
+- **LIVE_DERIBIT Comparison Script**: `scripts/compare_synthetic_vs_live.py` runs side-by-side backtests comparing SYNTHETIC vs LIVE_DERIBIT data sources over the same period, saving both runs to PostgreSQL and printing a detailed metrics comparison table.
+- **Reusable Exam Builder**: `src/data/live_deribit_exam.py` provides `build_live_deribit_exam_dataset()` function that can be called programmatically from the backtester or CLI scripts.
 - **State-Aware Chat Assistant**: The Chat tab is a multi-turn, state-aware assistant that:
   - Knows current trading state (positions, unrealized PnL, training vs live mode, spot prices)
   - Maintains conversation history across messages (up to 20 turns)
