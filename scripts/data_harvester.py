@@ -19,6 +19,7 @@ Usage:
 import datetime
 import logging
 import os
+import re
 import sys
 import time
 from typing import Any
@@ -59,28 +60,97 @@ stream_handler.setFormatter(logging.Formatter(
 logger.addHandler(file_handler)
 logger.addHandler(stream_handler)
 
-DESIRED_COLUMNS = [
+CANONICAL_COLUMNS = [
     "harvest_time",
     "instrument_name",
-    "expiration_timestamp",
-    "strike",
+    "underlying",
+    "expiry",
+    "expiry_timestamp",
     "option_type",
-    "mark_price",
+    "strike",
     "underlying_price",
-    "underlying_index",
+    "mark_price",
     "best_bid_price",
     "best_ask_price",
-    "open_interest",
-    "volume",
     "bid_iv",
     "ask_iv",
     "mark_iv",
+    "open_interest",
+    "volume",
     "greek_delta",
     "greek_gamma",
     "greek_theta",
     "greek_vega",
-    "greek_rho",
 ]
+
+NUMERIC_COLUMNS = [
+    "expiry_timestamp",
+    "strike",
+    "underlying_price",
+    "mark_price",
+    "best_bid_price",
+    "best_ask_price",
+    "bid_iv",
+    "ask_iv",
+    "mark_iv",
+    "open_interest",
+    "volume",
+    "greek_delta",
+    "greek_gamma",
+    "greek_theta",
+    "greek_vega",
+]
+
+
+def parse_instrument_name(name: str) -> dict[str, Any]:
+    """
+    Parse Deribit option instrument name like BTC-12DEC25-90000-C into:
+    {
+        "underlying": "BTC",
+        "expiry": "2025-12-12",
+        "expiry_timestamp": <float seconds>,
+        "strike": 90000.0,
+        "option_type": "C"
+    }
+    
+    Also handles linear options like SOL_USDC-12DEC25-200-C.
+    
+    Returns {} or sensible defaults if parsing fails.
+    """
+    if not name or not isinstance(name, str):
+        return {}
+    
+    pattern = r"^([A-Z_]+)-(\d{1,2}[A-Z]{3}\d{2})-(\d+(?:\.\d+)?)-([CP])$"
+    match = re.match(pattern, name)
+    
+    if not match:
+        return {}
+    
+    underlying = match.group(1)
+    raw_expiry = match.group(2)
+    raw_strike = match.group(3)
+    opt_type = match.group(4)
+    
+    try:
+        expiry_dt = datetime.datetime.strptime(raw_expiry, "%d%b%y")
+        expiry_dt = expiry_dt.replace(hour=8, minute=0, second=0, tzinfo=datetime.timezone.utc)
+        expiry_str = expiry_dt.strftime("%Y-%m-%d")
+        expiry_ts = expiry_dt.timestamp()
+    except ValueError:
+        return {}
+    
+    try:
+        strike = float(raw_strike)
+    except ValueError:
+        return {}
+    
+    return {
+        "underlying": underlying,
+        "expiry": expiry_str,
+        "expiry_timestamp": expiry_ts,
+        "strike": strike,
+        "option_type": opt_type,
+    }
 
 
 def fetch_option_chain(currency: str) -> list[dict[str, Any]]:
@@ -121,9 +191,15 @@ def fetch_option_chain(currency: str) -> list[dict[str, Any]]:
         return []
 
 
+FIELD_MAPPINGS = {
+    "bid_price": "best_bid_price",
+    "ask_price": "best_ask_price",
+}
+
+
 def process_and_save(currency: str, raw_data: list[dict[str, Any]]) -> None:
     """
-    Process raw option data and save to Parquet file.
+    Process raw option data and save to Parquet file with canonical schema.
     
     Args:
         currency: The currency symbol
@@ -138,6 +214,10 @@ def process_and_save(currency: str, raw_data: list[dict[str, Any]]) -> None:
     now = datetime.datetime.now(datetime.timezone.utc)
     df["harvest_time"] = now
     
+    for src, dst in FIELD_MAPPINGS.items():
+        if src in df.columns and dst not in df.columns:
+            df[dst] = df[src]
+    
     if "greeks" in df.columns:
         greeks_df = df["greeks"].apply(
             lambda x: pd.Series(x) if isinstance(x, dict) else pd.Series()
@@ -145,8 +225,24 @@ def process_and_save(currency: str, raw_data: list[dict[str, Any]]) -> None:
         greeks_df = greeks_df.rename(columns=lambda c: f"greek_{c}")
         df = pd.concat([df.drop(columns=["greeks"]), greeks_df], axis=1)
     
-    existing_cols = [c for c in DESIRED_COLUMNS if c in df.columns]
-    df = df[existing_cols]
+    for col in ["delta", "gamma", "theta", "vega"]:
+        greek_col = f"greek_{col}"
+        if col in df.columns and greek_col not in df.columns:
+            df[greek_col] = df[col]
+    
+    if "instrument_name" in df.columns:
+        meta = df["instrument_name"].apply(parse_instrument_name)
+        meta_df = pd.DataFrame(list(meta))
+        for col in meta_df.columns:
+            if col not in df.columns:
+                df[col] = meta_df[col]
+    
+    for col in NUMERIC_COLUMNS:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+    
+    final_cols = [c for c in CANONICAL_COLUMNS if c in df.columns]
+    df = df[final_cols]
     
     year = now.strftime("%Y")
     month = now.strftime("%m")

@@ -24,7 +24,20 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
+import numpy as np
 import pandas as pd
+
+REQUIRED_COLUMNS = [
+    "instrument_name",
+    "underlying",
+    "expiry_timestamp",
+    "option_type",
+    "strike",
+    "underlying_price",
+    "mark_price",
+    "mark_iv",
+    "greek_delta",
+]
 
 
 def parse_timestamp_from_filename(filepath: Path, underlying: str) -> Optional[datetime]:
@@ -128,6 +141,37 @@ def discover_files(
     return valid_files
 
 
+def validate_schema(df: pd.DataFrame) -> list[str]:
+    """
+    Validate that required columns exist in the DataFrame.
+    
+    Returns:
+        List of missing column names (empty if all present).
+    """
+    missing = [col for col in REQUIRED_COLUMNS if col not in df.columns]
+    return missing
+
+
+def compute_dte_days(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Add dte_days column: days to expiry from harvest_time.
+    
+    Args:
+        df: DataFrame with harvest_time and expiry_timestamp columns.
+        
+    Returns:
+        DataFrame with dte_days column added (or unchanged if columns missing).
+    """
+    if "expiry_timestamp" not in df.columns or "harvest_time" not in df.columns:
+        return df
+    
+    harvest_dt = pd.to_datetime(df["harvest_time"], utc=True)
+    harvest_ts = harvest_dt.view("int64") / 1e9
+    df["dte_days"] = (df["expiry_timestamp"] - harvest_ts) / 86400.0
+    
+    return df
+
+
 def load_and_stitch(files: list[tuple[Path, datetime]]) -> pd.DataFrame:
     """
     Load all Parquet files and concatenate into a single DataFrame.
@@ -152,6 +196,17 @@ def load_and_stitch(files: list[tuple[Path, datetime]]) -> pd.DataFrame:
     
     if "harvest_time" in combined.columns:
         combined["harvest_time"] = pd.to_datetime(combined["harvest_time"], utc=True)
+    
+    missing_cols = validate_schema(combined)
+    if missing_cols:
+        print("\n" + "!" * 60)
+        print("WARNING: MISSING REQUIRED COLUMNS")
+        print("!" * 60)
+        for col in missing_cols:
+            print(f"  - {col}")
+        print("!" * 60 + "\n")
+    
+    combined = compute_dte_days(combined)
     
     sort_cols = []
     if "harvest_time" in combined.columns:
@@ -189,6 +244,16 @@ def print_summary(
     if "instrument_name" in df.columns and num_rows > 0:
         num_instruments = df["instrument_name"].nunique()
     
+    unique_underlyings = None
+    if "underlying" in df.columns and num_rows > 0:
+        unique_underlyings = df["underlying"].dropna().unique().tolist()[:10]
+    
+    min_dte = None
+    max_dte = None
+    if "dte_days" in df.columns and num_rows > 0:
+        min_dte = df["dte_days"].min()
+        max_dte = df["dte_days"].max()
+    
     print("\n" + "=" * 60)
     print("EXAM DATASET SUMMARY")
     print("=" * 60)
@@ -202,22 +267,26 @@ def print_summary(
     if num_instruments is not None:
         print(f"Unique instruments:   {num_instruments}")
     
+    if unique_underlyings is not None:
+        print(f"Unique underlyings:   {unique_underlyings}")
+    
     if min_harvest is not None:
         print(f"Min harvest_time:     {min_harvest}")
         print(f"Max harvest_time:     {max_harvest}")
+    
+    if min_dte is not None and max_dte is not None:
+        print(f"Min dte_days:         {min_dte:.2f}")
+        print(f"Max dte_days:         {max_dte:.2f}")
     
     print(f"\nColumns ({len(columns)}):")
     for col in columns:
         print(f"  - {col}")
     
-    if "instrument_name" not in df.columns:
-        print("\nWARNING: 'instrument_name' column is missing!")
-    
-    if "mark_price" not in df.columns:
-        print("WARNING: 'mark_price' column is missing!")
-    
-    if "underlying_price" not in df.columns and "underlying_index" not in df.columns:
-        print("WARNING: 'underlying_price' (or 'underlying_index') column is missing!")
+    missing = validate_schema(df)
+    if missing:
+        print("\nWARNINGS:")
+        for col in missing:
+            print(f"  - Missing required column: {col}")
     
     print("=" * 60)
     
@@ -227,9 +296,13 @@ def print_summary(
         "num_rows": num_rows,
         "num_snapshots": num_snapshots,
         "num_instruments": num_instruments,
+        "unique_underlyings": unique_underlyings,
         "min_harvest_time": min_harvest.isoformat() if min_harvest else None,
         "max_harvest_time": max_harvest.isoformat() if max_harvest else None,
+        "min_dte_days": float(min_dte) if min_dte is not None else None,
+        "max_dte_days": float(max_dte) if max_dte is not None else None,
         "columns": columns,
+        "missing_required_columns": missing,
     }
     
     return summary

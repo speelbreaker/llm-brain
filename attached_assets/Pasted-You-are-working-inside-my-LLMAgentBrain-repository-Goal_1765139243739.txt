@@ -1,0 +1,203 @@
+You are working inside my LLMAgentBrain repository.
+
+Goal
+====
+
+Update the Deribit data harvester and the exam dataset builder so that:
+
+- Every snapshot row has a consistent schema with all the key fields needed for
+  backtesting (instrument metadata, prices, IVs, greeks).
+- The exam dataset builder verifies these columns and warns loudly if something
+  is missing or malformed.
+
+We already have:
+- scripts/data_harvester.py   (collecting from get_book_summary_by_currency)
+- scripts/build_exam_dataset_from_live_deribit.py (stitches Parquet to an exam set)
+
+Part A – Update scripts/data_harvester.py
+=========================================
+
+1) Canonical columns
+
+Ensure that, after processing, each snapshot DataFrame contains at least:
+
+- harvest_time               (UTC datetime)
+- instrument_name            (string)
+- underlying                 (e.g. "BTC")
+- expiry                     (date string "YYYY-MM-DD" or None)
+- expiry_timestamp           (float or int: seconds since epoch, UTC)
+- option_type                ("C" or "P")
+- strike                     (float)
+
+- underlying_price           (float, from Deribit result)
+- mark_price                 (float)
+- best_bid_price             (float)
+- best_ask_price             (float)
+
+- bid_iv                     (float)
+- ask_iv                     (float)
+- mark_iv                    (float)
+
+- open_interest              (float)
+- volume                     (float)
+
+- greek_delta                (float)
+- greek_gamma                (float)
+- greek_theta                (float)
+- greek_vega                 (float)
+
+2) Parse instrument_name
+
+Implement a helper function inside data_harvester.py:
+
+  def parse_instrument_name(name: str) -> dict:
+      """
+      Parse Deribit option instrument name like BTC-12DEC25-90000-C into:
+      {
+        "underlying": "BTC",
+        "expiry": "2025-12-12",
+        "expiry_timestamp": <float seconds>,
+        "strike": 90000.0,
+        "option_type": "C"
+      }
+      Return {} or sensible defaults if parsing fails.
+      """
+
+Use a regex or simple split:
+
+- Split by "-" -> [underlying, raw_expiry, raw_strike, opt_type]
+- raw_expiry is like "12DEC25". Use datetime.strptime(raw_expiry, "%d%b%y")
+  and convert to "YYYY-MM-DD" string and a UTC timestamp.
+- raw_strike -> float(raw_strike)
+- opt_type -> "C" or "P"
+
+In process_and_save(), after creating the DataFrame:
+
+- Apply this parsing to each instrument_name:
+
+    meta = df["instrument_name"].apply(parse_instrument_name)
+    meta_df = pd.DataFrame(list(meta))  # underlying, expiry, expiry_timestamp, strike, option_type
+    df = pd.concat([df, meta_df], axis=1)
+
+3) Flatten greeks from the API response
+
+The Deribit get_book_summary_by_currency endpoint can deliver greeks either as
+a nested "greeks" dict or as top-level fields.
+
+Implement logic:
+
+- If there is a "greeks" column:
+
+    greeks_df = df["greeks"].apply(pd.Series)
+    greeks_df = greeks_df.rename(columns=lambda c: f"greek_{c}")
+    df = pd.concat([df.drop(columns=["greeks"]), greeks_df], axis=1)
+
+- If there are top-level "delta", "gamma", "theta", "vega" columns and
+  "greek_delta" etc. are not present yet, copy:
+
+    if "delta" in df.columns and "greek_delta" not in df.columns:
+        df["greek_delta"] = df["delta"]
+    (repeat for gamma/theta/vega)
+
+This ensures that, after processing, df has columns:
+
+- greek_delta
+- greek_gamma
+- greek_theta
+- greek_vega
+
+4) Column selection and types
+
+At the end of process_and_save(), before writing Parquet:
+
+- Define a canonical "keep_cols" list:
+
+    keep_cols = [
+      "harvest_time",
+      "instrument_name",
+      "underlying",
+      "expiry",
+      "expiry_timestamp",
+      "option_type",
+      "strike",
+      "underlying_price",
+      "mark_price",
+      "best_bid_price",
+      "best_ask_price",
+      "bid_iv",
+      "ask_iv",
+      "mark_iv",
+      "open_interest",
+      "volume",
+      "greek_delta",
+      "greek_gamma",
+      "greek_theta",
+      "greek_vega",
+    ]
+
+- Filter to only the columns that exist in df:
+
+    final_cols = [c for c in keep_cols if c in df.columns]
+    df = df[final_cols]
+
+- Cast obvious numeric fields using pd.to_numeric with errors="coerce":
+
+    numeric_cols = [
+      "expiry_timestamp", "strike", "underlying_price", "mark_price",
+      "best_bid_price", "best_ask_price", "bid_iv", "ask_iv", "mark_iv",
+      "open_interest", "volume", "greek_delta", "greek_gamma",
+      "greek_theta", "greek_vega"
+    ]
+    for col in numeric_cols:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+
+Keep the existing directory structure (data/live_deribit/<UNDERLYING>/YYYY/MM/DD/…)
+and filename style; just make the schema consistent.
+
+Part B – Update build_exam_dataset_from_live_deribit.py
+=======================================================
+
+Update the exam builder script so that it:
+
+1) After concatenating all Parquet files into a single DataFrame, checks:
+
+- That the following columns exist:
+
+    instrument_name,
+    underlying,
+    expiry_timestamp,
+    option_type,
+    strike,
+    underlying_price,
+    mark_price,
+    mark_iv,
+    greek_delta
+
+- If any of these are missing, print a clear WARNING with which columns are missing.
+
+2) Add a derived column:
+
+- If there is both expiry_timestamp and harvest_time:
+
+    df["dte_days"] = (df["expiry_timestamp"] - df["harvest_time"].astype("int64") / 1e9) / 86400.0
+
+  or, better: convert harvest_time to datetime and compute:
+
+    harvest_dt = pd.to_datetime(df["harvest_time"], utc=True)
+    df["dte_days"] = (df["expiry_timestamp"] - harvest_dt.view("int64") / 1e9) / 86400.0
+
+(Use a safe conversion that works with the actual dtype in your code.)
+
+3) When printing the summary (columns, min/max times, etc.), include:
+
+- A line that prints the first few unique underlying values.
+- A line that prints min and max dte_days, if that column exists.
+
+4) Keep the output format the same as previously defined
+   (exam Parquet + JSON summary); just enrich the schema and summary checks.
+
+Do not change the existing CLI interface of build_exam_dataset_from_live_deribit.py.
+
+This task is ONLY about making the schema consistent and verifying it; do NOT
+modify any database or backtesting logic here.

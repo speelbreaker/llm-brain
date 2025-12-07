@@ -1,0 +1,280 @@
+You are working inside my LLMAgentBrain options-bot repository.
+
+I want to upgrade the Backtesting Lab so that:
+
+1. Backtests run in the background (asynchronous, long-running jobs).
+2. Each backtest run is saved as a persistent artifact (JSON file on disk).
+3. There is a "Backtest Runs" panel in the UI that lists all runs, with:
+   - config summary,
+   - performance summary (PnL, DD, Sharpe, etc.),
+   - a download link for the full result file.
+4. The same "Recent Chains" / multi-leg results we already show in the UI
+   (e.g. chains for tp_and_roll) are stored inside each backtest run file.
+5. This does NOT break the existing single-run Backtesting Lab view.
+
+Please implement the following.
+
+────────────────────────
+A. BacktestRun storage model
+────────────────────────
+
+Implement a simple file-based storage for backtest runs under:
+
+  data/backtests/
+
+For each run, create a directory:
+
+  data/backtests/<run_id>/
+
+where run_id is a unique ID such as:
+
+  - a UUID4 string, or
+  - a timestamp-based slug like "2025-12-07T10-35-22Z_BTC".
+
+Inside that directory, save one canonical JSON file:
+
+  data/backtests/<run_id>/result.json
+
+This JSON should contain:
+
+  {
+    "run_id": "<string>",
+    "created_at": "<ISO8601 UTC>",
+    "status": "finished" | "failed" | "running" | "queued",
+    "config": {
+      ... full backtest config: underlying, start/end dates, interval, DTE range, delta range, exit styles, etc ...
+    },
+    "metrics": {
+      "hold_to_expiry": {
+        "initial_equity": ...,
+        "final_equity": ...,
+        "net_profit_usd": ...,
+        "net_profit_pct": ...,
+        "hodl_profit_usd": ...,
+        "hodl_profit_pct": ...,
+        "max_drawdown_pct": ...,
+        "num_trades": ...,
+        "win_rate": ...,
+        "profit_factor": ...,
+        "sharpe_ratio": ...,
+        "sortino_ratio": ...
+      },
+      "tp_and_roll": {
+        ... same fields as above ...
+      }
+    },
+    "recent_steps": {
+      "tp_and_roll": [ ... recent steps data you already show in the UI ... ],
+      "hold_to_expiry": [ ... if available ... ]
+    },
+    "recent_chains": {
+      "tp_and_roll": [
+        {
+          "decision_time": "<ISO8601>",
+          "underlying": "BTC",
+          "legs": <int>,       // number of legs in the chain
+          "rolls": <int>,      // number of rolls
+          "total_pnl": <float>,
+          "max_drawdown_pct": <float>,
+          "details": "<optional short description or id>"
+        },
+        ...
+      ],
+      "hold_to_expiry": [ ... same structure if available ... ]
+    }
+  }
+
+Important:
+
+- Reuse the data structures you already build for:
+  - the "hold_to_expiry" and "tp_and_roll" summary metrics,
+  - the "Recent Steps" table,
+  - the "Recent Chains" table.
+
+Do NOT invent separate logic; just reuse existing objects and serialize them.
+
+Additionally, maintain an index file:
+
+  data/backtests/index.jsonl
+
+Each line is a JSON object with a minimal summary per run:
+
+  {
+    "run_id": "...",
+    "created_at": "...",
+    "underlying": "BTC",
+    "start_date": "...",
+    "end_date": "...",
+    "status": "finished" | "failed" | "running" | "queued",
+    "primary_exit_style": "tp_and_roll",
+    "net_profit_pct": <float>,        // from primary exit style
+    "max_drawdown_pct": <float>,
+    "sharpe_ratio": <float>
+  }
+
+When a run finishes successfully:
+
+- Append a line to index.jsonl with status = "finished".
+
+If a run fails:
+
+- Save a result.json with status = "failed" and an "error" field, and
+- append a line with status = "failed" to index.jsonl.
+
+────────────────────────
+B. Background backtest execution
+────────────────────────
+
+Find the FastAPI endpoint currently used by the Backtesting Lab to start a backtest.
+It likely accepts a JSON payload with config and returns the final result synchronously.
+
+Refactor it to:
+
+1) Generate a new run_id and create a "run record" with status = "queued".
+
+2) Immediately return a response like:
+
+  {
+    "run_id": "<id>",
+    "status": "queued"
+  }
+
+3) Use FastAPI's BackgroundTasks (or the existing background worker mechanism,
+   if one already exists) to execute the backtest in the background:
+
+   - The background task should:
+     - Update run status to "running" (in result.json and index.jsonl).
+     - Execute the backtest with the given config, using the same logic as before.
+     - Build the result.json structure (metrics, recent_steps, recent_chains).
+     - Save result.json under data/backtests/<run_id>/.
+     - Append summary line to data/backtests/index.jsonl.
+     - Update status to "finished".
+
+   - If an exception occurs:
+     - Catch it, log it.
+     - Save result.json with status = "failed" and an "error" message.
+     - Append a "failed" line to index.jsonl.
+
+This way, the HTTP request returns quickly and the actual work happens in the background,
+allowing long backtests to run overnight without keeping the browser open.
+
+────────────────────────
+C. Backtesting API endpoints for listing & download
+────────────────────────
+
+Add FastAPI endpoints under a path like /api/backtests, for example:
+
+1) GET /api/backtests
+
+Return a JSON list of all runs from data/backtests/index.jsonl, sorted by created_at
+(descending). Example response element:
+
+  {
+    "run_id": "...",
+    "created_at": "...",
+    "underlying": "BTC",
+    "start_date": "...",
+    "end_date": "...",
+    "status": "finished",
+    "primary_exit_style": "tp_and_roll",
+    "net_profit_pct": 972.24,
+    "max_drawdown_pct": 57.11,
+    "sharpe_ratio": 0.31
+  }
+
+2) GET /api/backtests/{run_id}
+
+Read data/backtests/<run_id>/result.json and return the full JSON, including
+config, metrics, recent_steps, recent_chains, etc.
+
+3) GET /api/backtests/{run_id}/download
+
+Return result.json as a downloadable file attachment (Content-Disposition header set
+to "attachment; filename=<run_id>_backtest_result.json").
+
+────────────────────────
+D. Frontend UI – Backtest Runs panel
+────────────────────────
+
+Add a new section/page in the web UI (Jinja or whatever the current templating is)
+for "Backtest Runs".
+
+Requirements:
+
+- It should call GET /api/backtests and render a table with:
+
+  Columns (example):
+    - Run ID (shortened or clickable)
+    - Created At
+    - Underlying
+    - Start Date
+    - End Date
+    - Status (color-coded: finished / running / failed)
+    - Exit Style (primary, e.g. tp_and_roll)
+    - Net PnL % (like TradingView's Strategy Tester)
+    - Max DD %
+    - Sharpe Ratio
+    - Actions: [View] [Download]
+
+- The "View" action can link to a detail view or modal that calls
+  GET /api/backtests/{run_id} and shows:
+
+    - Config summary (dates, DTE, delta, etc.)
+    - Metrics for hold_to_expiry and tp_and_roll (like the cards you show now).
+    - Recent Chains table (from result.json.recent_chains.tp_and_roll), same
+      columns we already use in the existing backtest view.
+    - Maybe Recent Steps (truncated to last 20).
+
+- The "Download" link should hit /api/backtests/{run_id}/download and allow the
+  user to save result.json to their machine.
+
+Use the existing styles/layout you are already using for the Backtesting Lab.
+The goal is a simple "TradingView Strategy Tester-style" list of runs with key
+performance stats at a glance.
+
+────────────────────────
+E. Recent Chains / multi-leg recording
+────────────────────────
+
+Ensure that whatever logic currently builds the "Recent Chains" table in the
+Backtesting Lab (for tp_and_roll and hold_to_expiry) is:
+
+- Available in the backtest execution code (server-side).
+- Capturing chains with:
+    - decision_time,
+    - underlying,
+    - number of legs in the chain,
+    - number of rolls,
+    - total PnL for the chain,
+    - max drawdown % over the chain,
+    - any other fields you already have.
+
+Add these chain summaries into the result.json under:
+
+  result["recent_chains"]["tp_and_roll"] = [...]
+  result["recent_chains"]["hold_to_expiry"] = [...]
+
+This means the multi-leg information is stored alongside the main summary,
+not lost in logs, and can be shown in the Backtest Runs UI and downloaded.
+
+────────────────────────
+F. Do not break existing Backtesting Lab
+────────────────────────
+
+- The current single-run Backtesting Lab page (the one that immediately shows
+  metrics after you click "Run Backtest") should continue to work.
+- You can internally switch it to use the first version of this background-run
+  API, but make sure:
+    - If the user stays on the page and the backtest is quick, they still see
+      the metrics as usual.
+    - The new Backtest Runs panel is an additional feature, not a replacement
+      for the current view.
+
+────────────────────────
+
+After implementing this, I should be able to:
+
+1) Start a backtest from the UI, close the browser, and come back later.
+2) Open the "Backtest Runs" panel and see all runs with net PnL %, DD, Sharpe.
+3) Click "Download" to get the full result.json for any run.
+4) Confirm that recent chains / multi-leg chains are recorded in that result.json.
