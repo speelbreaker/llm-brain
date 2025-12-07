@@ -166,8 +166,10 @@ def compute_dte_days(df: pd.DataFrame) -> pd.DataFrame:
         return df
     
     harvest_dt = pd.to_datetime(df["harvest_time"], utc=True)
-    harvest_ts = harvest_dt.view("int64") / 1e9
-    df["dte_days"] = (df["expiry_timestamp"] - harvest_ts) / 86400.0
+    harvest_ts = harvest_dt.apply(lambda x: x.timestamp() if pd.notna(x) else np.nan)
+    
+    expiry_ts = pd.to_numeric(df["expiry_timestamp"], errors="coerce")
+    df["dte_days"] = (expiry_ts - harvest_ts) / 86400.0
     
     return df
 
