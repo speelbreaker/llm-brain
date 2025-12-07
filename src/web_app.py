@@ -660,6 +660,57 @@ Please analyze these results and provide insights."""
         return JSONResponse(content={"insights": f"Error generating insights: {str(e)}"})
 
 
+@app.get("/api/backtests")
+def list_backtest_runs() -> JSONResponse:
+    """List all backtest runs, sorted by created_at descending."""
+    from src.backtest.run_store import load_index
+    
+    entries = load_index()
+    return JSONResponse(content=[e.to_dict() for e in entries])
+
+
+@app.get("/api/backtests/{run_id}")
+def get_backtest_run(run_id: str) -> JSONResponse:
+    """Get the full result for a specific backtest run."""
+    from src.backtest.run_store import load_result
+    
+    result = load_result(run_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail=f"Backtest run '{run_id}' not found")
+    
+    return JSONResponse(content=result.to_dict())
+
+
+@app.get("/api/backtests/{run_id}/download")
+def download_backtest_run(run_id: str):
+    """Download the result.json file for a backtest run."""
+    from fastapi.responses import FileResponse
+    from src.backtest.run_store import get_result_path
+    
+    result_path = get_result_path(run_id)
+    if not result_path.exists():
+        raise HTTPException(status_code=404, detail=f"Backtest run '{run_id}' not found")
+    
+    return FileResponse(
+        path=str(result_path),
+        media_type="application/json",
+        filename=f"{run_id}_backtest_result.json",
+    )
+
+
+@app.delete("/api/backtests/{run_id}")
+def delete_backtest_run(run_id: str) -> JSONResponse:
+    """Delete a backtest run."""
+    from src.backtest.run_store import delete_run, load_result
+    
+    result = load_result(run_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail=f"Backtest run '{run_id}' not found")
+    
+    delete_run(run_id)
+    return JSONResponse(content={"deleted": True, "run_id": run_id})
+
+
 @app.get("/", response_class=HTMLResponse)
 def index() -> str:
     """Full HTML dashboard with Live Agent view and Backtesting Lab."""
@@ -1223,6 +1274,7 @@ def index() -> str:
   <div class="tabs">
     <button class="tab active" onclick="showTab('live')">Live Agent</button>
     <button class="tab" onclick="showTab('backtest')">Backtesting Lab</button>
+    <button class="tab" onclick="showTab('runs')">Backtest Runs</button>
     <button class="tab" onclick="showTab('calibration')">Calibration</button>
     <button class="tab" onclick="showTab('chat')">Chat</button>
   </div>
@@ -1769,6 +1821,86 @@ def index() -> str:
     </div>
   </div>
 
+  <!-- BACKTEST RUNS TAB -->
+  <div id="tab-runs" class="tab-content">
+    <div class="section">
+      <h2>Backtest Run History</h2>
+      <p style="color: #888; margin-bottom: 15px;">View all saved backtest runs with performance metrics. Each run is saved automatically when completed.</p>
+      
+      <div style="margin-bottom: 12px;">
+        <button onclick="fetchBacktestRuns()" style="background:#2196f3;color:#fff;border:none;padding:8px 16px;border-radius:4px;cursor:pointer;">Refresh Runs</button>
+      </div>
+      
+      <div style="overflow-x:auto;">
+        <table class="steps-table" id="runs-table">
+          <thead>
+            <tr>
+              <th>Run ID</th>
+              <th>Created</th>
+              <th>Underlying</th>
+              <th>Date Range</th>
+              <th>Status</th>
+              <th>Exit Style</th>
+              <th>Net PnL %</th>
+              <th>Max DD %</th>
+              <th>Sharpe</th>
+              <th>Trades</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody id="runs-table-body">
+            <tr><td colspan="11" style="text-align:center;color:#666;">Loading...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+    
+    <!-- Run Detail Modal -->
+    <div id="run-detail-modal" class="modal" style="display:none;">
+      <div class="modal-content" style="max-width:900px;background:#1e1e1e;color:#fff;max-height:90vh;overflow-y:auto;">
+        <span class="modal-close" onclick="closeRunDetailModal()" style="color:#888;">&times;</span>
+        <h3 id="run-detail-title" style="margin-top:0;">Backtest Run Details</h3>
+        
+        <div id="run-detail-config" style="margin-bottom:16px;padding:12px;background:#2a2a2a;border-radius:6px;">
+          <h4 style="margin:0 0 8px 0;color:#4fc3f7;">Configuration</h4>
+          <div id="run-config-grid" style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;font-size:0.85em;"></div>
+        </div>
+        
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px;">
+          <div id="run-metrics-hte" style="padding:12px;background:#2a2a2a;border-radius:6px;">
+            <h4 style="margin:0 0 8px 0;color:#81c784;">Hold to Expiry</h4>
+            <div id="run-metrics-hte-content"></div>
+          </div>
+          <div id="run-metrics-tpr" style="padding:12px;background:#2a2a2a;border-radius:6px;">
+            <h4 style="margin:0 0 8px 0;color:#ffb74d;">TP & Roll</h4>
+            <div id="run-metrics-tpr-content"></div>
+          </div>
+        </div>
+        
+        <div style="margin-bottom:16px;">
+          <h4 style="margin:0 0 8px 0;color:#ce93d8;">Recent Chains (TP & Roll)</h4>
+          <div style="overflow-x:auto;max-height:200px;overflow-y:auto;">
+            <table class="steps-table">
+              <thead>
+                <tr>
+                  <th>Decision Time</th>
+                  <th>Underlying</th>
+                  <th>Legs</th>
+                  <th>Rolls</th>
+                  <th>Total PnL</th>
+                  <th>Max DD %</th>
+                </tr>
+              </thead>
+              <tbody id="run-chains-body">
+                <tr><td colspan="6" style="text-align:center;color:#666;">No chains</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <!-- CHAT TAB -->
   <div id="tab-chat" class="tab-content">
     <div class="section">
@@ -1804,6 +1936,9 @@ def index() -> str:
       
       if (name === 'chat') {{
         loadChatHistory();
+      }}
+      if (name === 'runs') {{
+        fetchBacktestRuns();
       }}
     }}
     
@@ -2128,6 +2263,138 @@ def index() -> str:
       
       const chatContainer = document.getElementById('chat-messages');
       chatContainer.scrollTop = chatContainer.scrollHeight;
+    }}
+    
+    async function fetchBacktestRuns() {{
+      try {{
+        const res = await fetch('/api/backtests');
+        const runs = await res.json();
+        renderBacktestRuns(runs);
+      }} catch (err) {{
+        console.error('Failed to fetch backtest runs:', err);
+        document.getElementById('runs-table-body').innerHTML = '<tr><td colspan="11" style="text-align:center;color:#ff5252;">Error loading runs</td></tr>';
+      }}
+    }}
+    
+    function renderBacktestRuns(runs) {{
+      const tbody = document.getElementById('runs-table-body');
+      if (!runs || runs.length === 0) {{
+        tbody.innerHTML = '<tr><td colspan="11" style="text-align:center;color:#666;">No backtest runs yet. Run a backtest from the Backtesting Lab to see results here.</td></tr>';
+        return;
+      }}
+      
+      tbody.innerHTML = runs.map(run => {{
+        const shortId = run.run_id.length > 20 ? run.run_id.substring(0, 20) + '...' : run.run_id;
+        const createdDate = new Date(run.created_at).toLocaleString();
+        const startDate = run.start_date ? run.start_date.split('T')[0] : '--';
+        const endDate = run.end_date ? run.end_date.split('T')[0] : '--';
+        const dateRange = startDate + ' to ' + endDate;
+        
+        let statusColor = '#888';
+        if (run.status === 'finished') statusColor = '#4caf50';
+        else if (run.status === 'running') statusColor = '#2196f3';
+        else if (run.status === 'failed') statusColor = '#f44336';
+        else if (run.status === 'queued') statusColor = '#ff9800';
+        
+        const netPnl = (run.net_profit_pct || 0).toFixed(2);
+        const netPnlColor = parseFloat(netPnl) >= 0 ? '#4caf50' : '#f44336';
+        const maxDD = (run.max_drawdown_pct || 0).toFixed(2);
+        const sharpe = (run.sharpe_ratio || 0).toFixed(2);
+        const numTrades = run.num_trades || 0;
+        
+        return `
+          <tr>
+            <td title="${{run.run_id}}">${{shortId}}</td>
+            <td>${{createdDate}}</td>
+            <td>${{run.underlying || '--'}}</td>
+            <td style="font-size:0.85em;">${{dateRange}}</td>
+            <td><span style="color:${{statusColor}};font-weight:600;">${{run.status}}</span></td>
+            <td>${{run.primary_exit_style || '--'}}</td>
+            <td style="color:${{netPnlColor}};font-weight:600;">${{netPnl}}%</td>
+            <td style="color:#f44336;">${{maxDD}}%</td>
+            <td>${{sharpe}}</td>
+            <td>${{numTrades}}</td>
+            <td>
+              <button onclick="viewRunDetail('${{run.run_id}}')" style="background:#2196f3;color:#fff;border:none;padding:4px 8px;border-radius:3px;cursor:pointer;margin-right:4px;font-size:0.8em;">View</button>
+              <a href="/api/backtests/${{run.run_id}}/download" style="background:#4caf50;color:#fff;border:none;padding:4px 8px;border-radius:3px;cursor:pointer;text-decoration:none;font-size:0.8em;">Download</a>
+            </td>
+          </tr>
+        `;
+      }}).join('');
+    }}
+    
+    async function viewRunDetail(runId) {{
+      try {{
+        const res = await fetch('/api/backtests/' + runId);
+        if (!res.ok) {{
+          alert('Failed to load run details');
+          return;
+        }}
+        const data = await res.json();
+        showRunDetailModal(data);
+      }} catch (err) {{
+        alert('Error loading run: ' + err);
+      }}
+    }}
+    
+    function showRunDetailModal(run) {{
+      document.getElementById('run-detail-title').innerText = 'Run: ' + run.run_id;
+      
+      const configGrid = document.getElementById('run-config-grid');
+      const cfg = run.config || {{}};
+      configGrid.innerHTML = `
+        <div><span style="color:#888;">Underlying:</span> ${{cfg.underlying || '--'}}</div>
+        <div><span style="color:#888;">Start:</span> ${{cfg.start_date || '--'}}</div>
+        <div><span style="color:#888;">End:</span> ${{cfg.end_date || '--'}}</div>
+        <div><span style="color:#888;">Timeframe:</span> ${{cfg.timeframe || '--'}}</div>
+        <div><span style="color:#888;">Exit Style:</span> ${{cfg.exit_style || '--'}}</div>
+        <div><span style="color:#888;">Target DTE:</span> ${{cfg.target_dte || '--'}}</div>
+        <div><span style="color:#888;">Target Delta:</span> ${{cfg.target_delta || '--'}}</div>
+        <div><span style="color:#888;">Status:</span> ${{run.status}}</div>
+      `;
+      
+      const renderMetrics = (m) => {{
+        if (!m) return '<div style="color:#666;">No data</div>';
+        return `
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px;font-size:0.85em;">
+            <div><span style="color:#888;">Net PnL:</span> ${{(m.net_profit_pct || 0).toFixed(2)}}%</div>
+            <div><span style="color:#888;">Net USD:</span> $${{(m.net_profit_usd || 0).toFixed(2)}}</div>
+            <div><span style="color:#888;">Max DD:</span> ${{(m.max_drawdown_pct || 0).toFixed(2)}}%</div>
+            <div><span style="color:#888;">Trades:</span> ${{m.num_trades || 0}}</div>
+            <div><span style="color:#888;">Win Rate:</span> ${{(m.win_rate || 0).toFixed(1)}}%</div>
+            <div><span style="color:#888;">Sharpe:</span> ${{(m.sharpe_ratio || 0).toFixed(2)}}</div>
+            <div><span style="color:#888;">Sortino:</span> ${{(m.sortino_ratio || 0).toFixed(2)}}</div>
+            <div><span style="color:#888;">PF:</span> ${{(m.profit_factor || 0).toFixed(2)}}</div>
+          </div>
+        `;
+      }};
+      
+      const metrics = run.metrics || {{}};
+      document.getElementById('run-metrics-hte-content').innerHTML = renderMetrics(metrics.hold_to_expiry || metrics);
+      document.getElementById('run-metrics-tpr-content').innerHTML = renderMetrics(metrics.tp_and_roll || metrics);
+      
+      const chains = (run.recent_chains || {{}}).tp_and_roll || [];
+      const chainsBody = document.getElementById('run-chains-body');
+      if (chains.length === 0) {{
+        chainsBody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:#666;">No chains recorded</td></tr>';
+      }} else {{
+        chainsBody.innerHTML = chains.slice(0, 20).map(c => `
+          <tr>
+            <td>${{c.decision_time}}</td>
+            <td>${{c.underlying}}</td>
+            <td>${{c.num_legs}}</td>
+            <td>${{c.num_rolls}}</td>
+            <td style="color:${{c.total_pnl >= 0 ? '#4caf50' : '#f44336'}};">${{c.total_pnl.toFixed(2)}}</td>
+            <td>${{c.max_drawdown_pct.toFixed(2)}}%</td>
+          </tr>
+        `).join('');
+      }}
+      
+      document.getElementById('run-detail-modal').style.display = 'block';
+    }}
+    
+    function closeRunDetailModal() {{
+      document.getElementById('run-detail-modal').style.display = 'none';
     }}
     
     async function loadChatHistory() {{

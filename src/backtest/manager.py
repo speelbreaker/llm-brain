@@ -304,6 +304,9 @@ class BacktestStatus:
     recent_chains: List[BacktestChainSummary] = field(default_factory=list)
     equity_curve: List[EquityCurvePoint] = field(default_factory=list)
     error: Optional[str] = None
+    run_id: Optional[str] = None
+    timeframe: Optional[str] = None
+    config: Dict[str, Any] = field(default_factory=dict)
 
 
 class BacktestManager:
@@ -378,6 +381,7 @@ class BacktestManager:
                 "recent_chains": chains_json,
                 "equity_curve": equity_curve_json,
                 "error": self._status.error,
+                "run_id": self._status.run_id,
             }
             return status_dict
     
@@ -440,6 +444,103 @@ class BacktestManager:
             self._status.running = False
             self._status.paused = False
             self._status.finished_at = datetime.utcnow()
+            if self._status.run_id:
+                self._save_run_to_store(failed=True, error=msg)
+    
+    def _save_run_to_store(self, failed: bool = False, error: Optional[str] = None) -> None:
+        """Save the current backtest run to persistent storage."""
+        try:
+            from src.backtest.run_store import (
+                BacktestRunResult,
+                save_run_result,
+                update_run_status,
+            )
+            
+            run_id = self._status.run_id
+            if not run_id:
+                return
+            
+            if failed:
+                update_run_status(run_id, "failed", error)
+                return
+            
+            chains_by_style: Dict[str, List[Dict[str, Any]]] = {}
+            for chain in self._status.recent_chains:
+                style = chain.exit_style
+                if style not in chains_by_style:
+                    chains_by_style[style] = []
+                chains_by_style[style].append({
+                    "decision_time": chain.decision_time.isoformat(),
+                    "underlying": chain.underlying,
+                    "num_legs": chain.num_legs,
+                    "num_rolls": chain.num_rolls,
+                    "total_pnl": _sanitize_float(chain.total_pnl),
+                    "max_drawdown_pct": _sanitize_float(chain.max_drawdown_pct),
+                    "exit_style": chain.exit_style,
+                    "legs": [
+                        {
+                            "index": leg.index,
+                            "open_time": leg.open_time.isoformat(),
+                            "close_time": leg.close_time.isoformat(),
+                            "strike": _sanitize_float(leg.strike),
+                            "dte_open": _sanitize_float(leg.dte_open),
+                            "pnl": _sanitize_float(leg.pnl),
+                            "trigger": leg.trigger,
+                        }
+                        for leg in chain.legs
+                    ],
+                })
+            
+            steps_by_style: Dict[str, List[Dict[str, Any]]] = {}
+            for step in self._status.recent_steps:
+                style = step.exit_style
+                if style not in steps_by_style:
+                    steps_by_style[style] = []
+                steps_by_style[style].append({
+                    "time": step.time.isoformat(),
+                    "candidates": step.candidates,
+                    "best_score": _sanitize_float(step.best_score),
+                    "traded": step.traded,
+                })
+            
+            equity_curves_json: Dict[str, List[List[Any]]] = {}
+            for style, curve in getattr(self, '_all_equity_curves', {}).items():
+                equity_curves_json[style] = [
+                    [pt.time.isoformat(), _sanitize_float(pt.equity), _sanitize_float(pt.hodl_equity)]
+                    for pt in curve
+                ]
+            
+            if not equity_curves_json and self._status.equity_curve:
+                primary_style = self._status.exit_style or "tp_and_roll"
+                if primary_style == "both":
+                    primary_style = "tp_and_roll"
+                equity_curves_json[primary_style] = [
+                    [pt.time.isoformat(), _sanitize_float(pt.equity), _sanitize_float(pt.hodl_equity)]
+                    for pt in self._status.equity_curve
+                ]
+            
+            result = BacktestRunResult(
+                run_id=run_id,
+                created_at=self._status.started_at.isoformat() if self._status.started_at else "",
+                status="finished",
+                config=self._status.config,
+                metrics=_sanitize_dict(self._status.metrics) if self._status.metrics else {},
+                recent_steps=steps_by_style,
+                recent_chains=chains_by_style,
+                equity_curves=equity_curves_json,
+                finished_at=self._status.finished_at.isoformat() if self._status.finished_at else None,
+            )
+            
+            if self._status.started_at and self._status.finished_at:
+                result.duration_seconds = (self._status.finished_at - self._status.started_at).total_seconds()
+            
+            save_run_result(result)
+            print(f"[BacktestManager] Saved run {run_id} to persistent storage")
+            
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            print(f"[BacktestManager] Error saving run to store: {e}")
 
     def _update_status_step(
         self,
@@ -577,11 +678,34 @@ class BacktestManager:
         margin_type: MarginType = "inverse",
         settlement_ccy: SettlementCcy = "ANY",
     ) -> bool:
+        from src.backtest.run_store import create_run, update_run_status
+        
         with self._lock:
             if self._status.running:
                 return False
             self._cancel_requested = False
             self._pause_event.set()
+            
+            config_dict = {
+                "underlying": underlying,
+                "start_date": start_date.isoformat(),
+                "end_date": end_date.isoformat(),
+                "timeframe": timeframe,
+                "decision_interval_hours": decision_interval_hours,
+                "exit_style": exit_style,
+                "target_dte": target_dte,
+                "target_delta": target_delta,
+                "min_dte": min_dte,
+                "max_dte": max_dte,
+                "delta_min": delta_min,
+                "delta_max": delta_max,
+                "margin_type": margin_type,
+                "settlement_ccy": settlement_ccy,
+            }
+            
+            run_result = create_run(config_dict)
+            run_id = run_result.run_id
+            
             self._status = BacktestStatus(
                 running=True,
                 paused=False,
@@ -599,7 +723,12 @@ class BacktestManager:
                 metrics={},
                 recent_steps=[],
                 error=None,
+                run_id=run_id,
+                timeframe=timeframe,
+                config=config_dict,
             )
+            
+            update_run_status(run_id, "running")
 
         def worker() -> None:
             try:
@@ -901,6 +1030,8 @@ class BacktestManager:
                     self._status.paused = False
                     self._status.finished_at = datetime.utcnow()
                     self._status.current_phase = None
+                    self._all_equity_curves = all_equity_curves
+                    self._save_run_to_store()
 
             except Exception as e:
                 import traceback
