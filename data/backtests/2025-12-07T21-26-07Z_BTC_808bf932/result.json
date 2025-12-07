@@ -1,0 +1,382 @@
+{
+  "run_id": "2025-12-07T21-26-07Z_BTC_808bf932",
+  "created_at": "2025-12-07T21:26:07.503606",
+  "status": "finished",
+  "config": {
+    "underlying": "BTC",
+    "start_date": "2025-12-01T00:00:00+00:00",
+    "end_date": "2025-12-07T00:00:00+00:00",
+    "timeframe": "1d",
+    "decision_interval_hours": 24,
+    "exit_style": "both",
+    "target_dte": 7,
+    "target_delta": 0.25,
+    "min_dte": 3,
+    "max_dte": 21,
+    "delta_min": 0.15,
+    "delta_max": 0.35,
+    "margin_type": "inverse",
+    "settlement_ccy": "ANY"
+  },
+  "metrics": {
+    "hold_to_expiry": {
+      "initial_equity": 86576.5,
+      "final_equity": 92908.66,
+      "net_profit_usd": 6332.16,
+      "net_profit_pct": 7.31,
+      "hodl_profit_usd": 2824.0,
+      "hodl_profit_pct": 3.26,
+      "max_drawdown_pct": 0.51,
+      "max_drawdown_usd": 476.86,
+      "num_trades": 7,
+      "win_rate": 57.1,
+      "avg_trade_usd": 1478.4,
+      "profit_factor": 5.37,
+      "gross_profit": 12718.66,
+      "gross_loss": 2369.87,
+      "avg_winner": 3179.67,
+      "avg_loser": 789.96,
+      "sharpe_ratio": 0.68,
+      "sortino_ratio": 2.44,
+      "final_pnl": 10348.7934,
+      "final_pnl_vs_hodl": 3508.1589,
+      "avg_pnl": 1478.3991
+    },
+    "tp_and_roll": {
+      "initial_equity": 86576.5,
+      "final_equity": 90652.17,
+      "net_profit_usd": 4075.67,
+      "net_profit_pct": 4.71,
+      "hodl_profit_usd": 2824.0,
+      "hodl_profit_pct": 3.26,
+      "max_drawdown_pct": 1.1,
+      "max_drawdown_usd": 977.94,
+      "num_trades": 6,
+      "win_rate": 66.7,
+      "avg_trade_usd": 208.61,
+      "profit_factor": 1.7,
+      "gross_profit": 3046.39,
+      "gross_loss": 1794.72,
+      "avg_winner": 761.6,
+      "avg_loser": 897.36,
+      "sharpe_ratio": 0.56,
+      "sortino_ratio": 0.59,
+      "final_pnl": 1251.6685,
+      "final_pnl_vs_hodl": 1251.6685,
+      "avg_pnl": 208.6114
+    }
+  },
+  "recent_steps": {
+    "tp_and_roll": [
+      {
+        "time": "2025-12-01T00:00:00+00:00",
+        "candidates": 6,
+        "best_score": 4.95,
+        "traded": true
+      },
+      {
+        "time": "2025-12-02T00:00:00+00:00",
+        "candidates": 6,
+        "best_score": 4.82,
+        "traded": true
+      },
+      {
+        "time": "2025-12-03T00:00:00+00:00",
+        "candidates": 6,
+        "best_score": 4.3,
+        "traded": true
+      },
+      {
+        "time": "2025-12-04T00:00:00+00:00",
+        "candidates": 6,
+        "best_score": 4.32,
+        "traded": true
+      },
+      {
+        "time": "2025-12-05T00:00:00+00:00",
+        "candidates": 6,
+        "best_score": 4.46,
+        "traded": true
+      },
+      {
+        "time": "2025-12-06T00:00:00+00:00",
+        "candidates": 6,
+        "best_score": 4.4,
+        "traded": true
+      },
+      {
+        "time": "2025-12-07T00:00:00+00:00",
+        "candidates": 6,
+        "best_score": 4.4,
+        "traded": false
+      }
+    ]
+  },
+  "recent_chains": {
+    "tp_and_roll": [
+      {
+        "decision_time": "2025-12-01T00:00:00+00:00",
+        "underlying": "BTC",
+        "num_legs": 3,
+        "num_rolls": 2,
+        "total_pnl": -816.780841579538,
+        "max_drawdown_pct": 3.2112994357584386,
+        "exit_style": "tp_and_roll",
+        "legs": [
+          {
+            "index": 0,
+            "open_time": "2025-12-01T00:00:00+00:00",
+            "close_time": "2025-12-02T08:00:00+00:00",
+            "strike": 93000.0,
+            "dte_open": 7.0,
+            "pnl": -2105.054121657209,
+            "trigger": "defensive_roll"
+          },
+          {
+            "index": 1,
+            "open_time": "2025-12-02T08:00:00+00:00",
+            "close_time": "2025-12-05T08:00:00+00:00",
+            "strike": 100000.0,
+            "dte_open": 7.0,
+            "pnl": 1040.17704228184,
+            "trigger": "tp_roll"
+          },
+          {
+            "index": 2,
+            "open_time": "2025-12-05T08:00:00+00:00",
+            "close_time": "2025-12-06T08:00:00+00:00",
+            "strike": 96000.0,
+            "dte_open": 7.0,
+            "pnl": 248.09623779583126,
+            "trigger": "none"
+          }
+        ]
+      },
+      {
+        "decision_time": "2025-12-02T00:00:00+00:00",
+        "underlying": "BTC",
+        "num_legs": 3,
+        "num_rolls": 2,
+        "total_pnl": -977.9424012583559,
+        "max_drawdown_pct": 3.2169673024334067,
+        "exit_style": "tp_and_roll",
+        "legs": [
+          {
+            "index": 0,
+            "open_time": "2025-12-02T00:00:00+00:00",
+            "close_time": "2025-12-02T08:00:00+00:00",
+            "strike": 93000.0,
+            "dte_open": 7.0,
+            "pnl": -2266.215681336027,
+            "trigger": "defensive_roll"
+          },
+          {
+            "index": 1,
+            "open_time": "2025-12-02T08:00:00+00:00",
+            "close_time": "2025-12-05T08:00:00+00:00",
+            "strike": 100000.0,
+            "dte_open": 7.0,
+            "pnl": 1040.17704228184,
+            "trigger": "tp_roll"
+          },
+          {
+            "index": 2,
+            "open_time": "2025-12-05T08:00:00+00:00",
+            "close_time": "2025-12-06T08:00:00+00:00",
+            "strike": 96000.0,
+            "dte_open": 7.0,
+            "pnl": 248.09623779583126,
+            "trigger": "none"
+          }
+        ]
+      },
+      {
+        "decision_time": "2025-12-03T00:00:00+00:00",
+        "underlying": "BTC",
+        "num_legs": 2,
+        "num_rolls": 1,
+        "total_pnl": 1088.7764861730184,
+        "max_drawdown_pct": 3.1518593455662804,
+        "exit_style": "tp_and_roll",
+        "legs": [
+          {
+            "index": 0,
+            "open_time": "2025-12-03T00:00:00+00:00",
+            "close_time": "2025-12-06T08:00:00+00:00",
+            "strike": 100000.0,
+            "dte_open": 7.0,
+            "pnl": 1088.7764861730184,
+            "trigger": "tp_roll"
+          },
+          {
+            "index": 1,
+            "open_time": "2025-12-06T08:00:00+00:00",
+            "close_time": "2025-12-06T08:00:00+00:00",
+            "strike": 96000.0,
+            "dte_open": 7.0,
+            "pnl": 0.0,
+            "trigger": "none"
+          }
+        ]
+      },
+      {
+        "decision_time": "2025-12-04T00:00:00+00:00",
+        "underlying": "BTC",
+        "num_legs": 2,
+        "num_rolls": 1,
+        "total_pnl": 1079.462517559119,
+        "max_drawdown_pct": 2.2651955885110997,
+        "exit_style": "tp_and_roll",
+        "legs": [
+          {
+            "index": 0,
+            "open_time": "2025-12-04T00:00:00+00:00",
+            "close_time": "2025-12-06T08:00:00+00:00",
+            "strike": 100000.0,
+            "dte_open": 7.0,
+            "pnl": 1079.462517559119,
+            "trigger": "tp_roll"
+          },
+          {
+            "index": 1,
+            "open_time": "2025-12-06T08:00:00+00:00",
+            "close_time": "2025-12-06T08:00:00+00:00",
+            "strike": 96000.0,
+            "dte_open": 7.0,
+            "pnl": 0.0,
+            "trigger": "none"
+          }
+        ]
+      },
+      {
+        "decision_time": "2025-12-05T00:00:00+00:00",
+        "underlying": "BTC",
+        "num_legs": 1,
+        "num_rolls": 0,
+        "total_pnl": 763.0113824576401,
+        "max_drawdown_pct": 0.023165592954257266,
+        "exit_style": "tp_and_roll",
+        "legs": [
+          {
+            "index": 0,
+            "open_time": "2025-12-05T00:00:00+00:00",
+            "close_time": "2025-12-06T08:00:00+00:00",
+            "strike": 99000.0,
+            "dte_open": 7.0,
+            "pnl": 763.0113824576401,
+            "trigger": "none"
+          }
+        ]
+      },
+      {
+        "decision_time": "2025-12-06T00:00:00+00:00",
+        "underlying": "BTC",
+        "num_legs": 1,
+        "num_rolls": 0,
+        "total_pnl": 115.14131175804141,
+        "max_drawdown_pct": 0.0,
+        "exit_style": "tp_and_roll",
+        "legs": [
+          {
+            "index": 0,
+            "open_time": "2025-12-06T00:00:00+00:00",
+            "close_time": "2025-12-06T08:00:00+00:00",
+            "strike": 96000.0,
+            "dte_open": 7.0,
+            "pnl": 115.14131175804141,
+            "trigger": "none"
+          }
+        ]
+      }
+    ]
+  },
+  "equity_curves": {
+    "hold_to_expiry": [
+      [
+        "2025-12-01T00:00:00+00:00",
+        86576.5,
+        86576.5
+      ],
+      [
+        "2025-12-08T00:00:00+00:00",
+        90178.91001286039,
+        89400.5
+      ],
+      [
+        "2025-12-09T00:00:00+00:00",
+        90525.98116792257,
+        89400.5
+      ],
+      [
+        "2025-12-10T00:00:00+00:00",
+        91627.38159481516,
+        89400.5
+      ],
+      [
+        "2025-12-11T00:00:00+00:00",
+        92691.11416659581,
+        89400.5
+      ],
+      [
+        "2025-12-12T00:00:00+00:00",
+        93385.51975959219,
+        89400.5
+      ],
+      [
+        "2025-12-13T00:00:00+00:00",
+        93287.9246710297,
+        89400.5
+      ],
+      [
+        "2025-12-14T00:00:00+00:00",
+        92908.65894724148,
+        89400.5
+      ]
+    ],
+    "tp_and_roll": [
+      [
+        "2025-12-01T00:00:00+00:00",
+        86576.5,
+        86576.5
+      ],
+      [
+        "2025-12-06T08:00:00+00:00",
+        88782.71915842047,
+        89599.5
+      ],
+      [
+        "2025-12-06T08:00:00+00:00",
+        87804.77675716212,
+        89599.5
+      ],
+      [
+        "2025-12-06T08:00:00+00:00",
+        88893.55324333515,
+        89599.5
+      ],
+      [
+        "2025-12-06T08:00:00+00:00",
+        89973.01576089427,
+        89599.5
+      ],
+      [
+        "2025-12-06T08:00:00+00:00",
+        90736.02714335191,
+        89599.5
+      ],
+      [
+        "2025-12-06T08:00:00+00:00",
+        90851.16845510995,
+        89599.5
+      ],
+      [
+        "2025-12-07T00:00:00+00:00",
+        90652.16845510995,
+        89400.5
+      ]
+    ]
+  },
+  "error": null,
+  "finished_at": "2025-12-07T21:26:28.678942",
+  "duration_seconds": 21.175336
+}
