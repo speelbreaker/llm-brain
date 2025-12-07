@@ -135,9 +135,9 @@ def _format_positions_summary(positions: List[Dict[str, Any]], limit: int = 5) -
     lines = []
     for p in positions[:limit]:
         symbol = p.get("symbol", "?")
-        qty = p.get("qty", 0)
-        pnl = p.get("unrealized_pnl", 0)
-        pnl_pct = p.get("unrealized_pnl_pct", 0)
+        qty = p.get("quantity", 0) or p.get("qty", 0)
+        pnl = p.get("unrealized_pnl", 0) or 0
+        pnl_pct = p.get("unrealized_pnl_pct", 0) or 0
         dte = p.get("dte", "?")
         lines.append(f"  - {symbol}: qty={qty}, PnL=${pnl:.2f} ({pnl_pct:+.2f}%), DTE={dte}")
     
