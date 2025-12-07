@@ -1,0 +1,41 @@
+{
+  "underlying": "BTC",
+  "num_files": 13,
+  "num_rows": 7708,
+  "num_snapshots": 13,
+  "num_instruments": 698,
+  "unique_underlyings": [
+    "BTC"
+  ],
+  "min_harvest_time": "2025-12-07T20:30:52.776331+00:00",
+  "max_harvest_time": "2025-12-07T22:47:57.813293+00:00",
+  "min_dte_days": 0.4599875326040718,
+  "max_dte_days": 291.4785558295029,
+  "columns": [
+    "ask_iv",
+    "best_ask_price",
+    "best_bid_price",
+    "bid_iv",
+    "dte_days",
+    "expiry",
+    "expiry_timestamp",
+    "greek_delta",
+    "greek_gamma",
+    "greek_theta",
+    "greek_vega",
+    "harvest_time",
+    "instrument_name",
+    "mark_iv",
+    "mark_price",
+    "open_interest",
+    "option_type",
+    "strike",
+    "underlying",
+    "underlying_index",
+    "underlying_price",
+    "volume"
+  ],
+  "missing_required_columns": [],
+  "start_date": "2025-12-07",
+  "end_date": "2025-12-07"
+}

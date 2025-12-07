@@ -1,0 +1,134 @@
+1.3 Run a tiny backtest and see if it lands in MySQL
+
+From the UI:
+
+Open your Backtesting Lab page.
+
+Configure a very small run (e.g. BTC, a few days, synthetic data).
+
+Hit “Run backtest”.
+
+What should happen now:
+
+The UI gets back something like { run_id: "...", status: "queued" } quickly.
+
+After a bit (depending on how heavy the run is), you should be able to:
+
+a) See it in backtest_runs
+
+In MySQL:
+
+SELECT id, run_id, underlying, data_source, status,
+       net_profit_pct_primary, max_drawdown_pct_primary
+FROM backtest_runs
+ORDER BY created_at DESC
+LIMIT 5;
+
+
+You should see your latest run with:
+
+status eventually = finished (or failed if something broke),
+
+underlying = BTC (or ETH),
+
+data_source = whatever default the config used (likely synthetic for now),
+
+and primary metrics populated.
+
+b) See metrics per exit style in backtest_metrics
+
+Take the id of the latest run (say it’s 42):
+
+SELECT exit_style, is_primary,
+       initial_equity, final_equity, net_profit_usd,
+       net_profit_pct, max_drawdown_pct, sharpe_ratio
+FROM backtest_metrics
+WHERE run_id = 42;
+
+
+You should see rows like:
+
+hold_to_expiry, tp_and_roll, etc.
+
+One of them with is_primary = 1 (probably tp_and_roll).
+
+c) See multi-leg chains in backtest_chains
+
+Still for the same run:
+
+SELECT exit_style, decision_time, num_legs, num_rolls,
+       total_pnl_usd, max_drawdown_pct
+FROM backtest_chains
+WHERE run_id = 42
+ORDER BY decision_time DESC
+LIMIT 10;
+
+
+You should see entries that correspond to the “Recent Chains (TP & Roll)” table the UI shows.
+
+If you see rows there, your multi-leg chain summaries are now persisted.
+
+1.4 Hit the new API endpoints
+
+From the shell:
+
+curl -s http://localhost:5000/api/backtests | jq .
+
+
+You should get a list with the same runs you saw in SQL.
+
+Pick one run_id and:
+
+curl -s http://localhost:5000/api/backtests/<RUN_ID> | jq .
+
+
+You should see:
+
+"run": {...} → data from backtest_runs
+
+"metrics": { "tp_and_roll": {...}, "hold_to_expiry": {...} }
+
+"chains": { "tp_and_roll": [...], ... }
+
+If that’s all working, Builder nailed the DB + API wiring.
+
+2. Quick check of harvester + exam reader
+
+Since the harvester is clearly writing files like:
+
+data/live_deribit/BTC/2025/12/07/BTC_2025-12-07_2002.parquet
+
+
+do this:
+
+python scripts/build_exam_dataset_from_live_deribit.py \
+  --underlying BTC \
+  --start 2025-12-07 \
+  --end 2025-12-07
+
+
+You want it to:
+
+NOT crash.
+
+Print something like:
+
+number of files,
+
+number of rows,
+
+list of columns,
+
+min/max harvest_time,
+
+min/max dte_days if we added that.
+
+And it should write:
+
+data/exams/BTC_2025-12-07_2025-12-07_live_deribit.parquet
+
+data/exams/BTC_2025-12-07_2025-12-07_live_deribit_summary.json
+
+That proves that the writer and reader agree on schema.
+
+If it complains about missing columns, that’s our cue to tweak the harvester now while the dataset is still small.
