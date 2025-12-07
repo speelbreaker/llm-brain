@@ -76,6 +76,15 @@ The agent is built with a clear separation of concerns, featuring modules for co
 - **Order Execution**: `execution.py` handles order translation, supporting dry-run simulations.
 - **UI/UX**: The web dashboard provides a user-friendly interface for monitoring and interaction, with specific tabs for live agent status, backtesting, and chat.
 
+### Data Harvester
+- **Standalone Process**: `scripts/data_harvester.py` runs independently from the trading bot, continuously collecting real Deribit options data.
+- **Multi-Asset Support**: Fetches option chains for BTC, ETH, SOL, XRP, DOGE, MATIC from Deribit mainnet public API.
+- **Parquet Storage**: Saves snapshots to `data/live_deribit/<ASSET>/<YYYY>/<MM>/<DD>/<ASSET>_<YYYY-MM-DD_HHMM>.parquet`.
+- **Data Fields**: Includes instrument info, pricing (mark, bid, ask), volume, open interest, IV, and Greeks (delta, gamma, theta, vega).
+- **Configurable Interval**: Default 15-minute polling, adjustable via `HARVESTER_INTERVAL_MINUTES` env var.
+- **Usage**: Run `python -m scripts.data_harvester` in a separate process/terminal.
+- **Documentation**: See `docs/DATA_HARVESTER.md` for full details.
+
 ## External Dependencies
-- **Deribit API**: Used for fetching real-time market data (testnet) and historical data (mainnet public API for backtesting).
+- **Deribit API**: Used for fetching real-time market data (testnet) and historical data (mainnet public API for backtesting and data harvesting).
 - **OpenAI**: Integrated via Replit AI Integrations for the LLM-powered decision mode and for generating insights from backtest results.

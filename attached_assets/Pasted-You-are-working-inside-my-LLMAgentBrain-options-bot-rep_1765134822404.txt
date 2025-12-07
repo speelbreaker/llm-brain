@@ -1,0 +1,189 @@
+You are working inside my LLMAgentBrain options-bot repository.
+
+Goal
+====
+
+Create a script that can read and stitch together the Deribit options data
+captured by our new data harvester (stored in Parquet files under
+data/live_deribit/...), and produce a single "exam dataset" file for a given
+underlying and date range.
+
+This lets us:
+- Verify that the data harvester is writing usable data.
+- Build a canonical, backtest-friendly dataset (the "exam paper") that multiple
+  strategies / bots can be tested against later.
+
+Important:
+- Keep everything inside the SAME repository.
+- Do NOT change existing trading/bot logic.
+- Assume pandas + pyarrow are already installed (from the harvester task).
+
+Part 1 – Create scripts/build_exam_dataset_from_live_deribit.py
+================================================================
+
+Create a new file:
+
+  scripts/build_exam_dataset_from_live_deribit.py
+
+It should be a CLI tool with roughly this usage:
+
+  python scripts/build_exam_dataset_from_live_deribit.py \
+    --underlying BTC \
+    --start 2025-02-01 \
+    --end 2025-03-01 \
+    [--data-root data/live_deribit] \
+    [--out-dir data/exams]
+
+Behavior:
+
+1) Arguments
+
+Use argparse with the following options:
+
+- --underlying (required): e.g. BTC, ETH, SOL, etc.
+- --start (required): start date in YYYY-MM-DD (UTC) inclusive.
+- --end   (required): end date in YYYY-MM-DD (UTC) inclusive.
+- --data-root (optional, default: "data/live_deribit"):
+    root directory where the harvester stores data.
+- --out-dir (optional, default: "data/exams"):
+    directory to write the combined exam dataset and summary.
+
+2) File discovery
+
+Directory structure written by harvester is assumed to be:
+
+  data/live_deribit/<UNDERLYING>/<YYYY>/<MM>/<DD>/*.parquet
+
+Steps:
+
+- Construct base_dir = Path(data_root) / underlying.
+- Recursively glob for all "*.parquet" files under base_dir.
+- For each file, determine its snapshot time:
+
+  Option A (preferred):
+    - Try to parse from filename pattern:
+      "<UNDERLYING>_<YYYY-MM-DD_HHMM>.parquet"
+      extracting the datetime string part.
+    - Use datetime.strptime with "%Y-%m-%d_%H%M" and set tzinfo=UTC.
+
+  Option B (fallback):
+    - If parsing filename fails, read just the "harvest_time" column from the
+      Parquet file (if present) and derive min/mean timestamp for that file
+      (e.g. the minimum harvest_time).
+    - Use that as the file's snapshot timestamp.
+
+- Filter files so that their snapshot timestamp falls within [start_date, end_date]
+  inclusive (treat dates as UTC).
+
+- If no files are found in this date range, print a clear message and exit with
+  a non-zero status code.
+
+3) Loading and stitching
+
+- Read all selected Parquet files into a list of DataFrames:
+
+    dfs = [pd.read_parquet(p) for p in selected_files]
+
+- Concatenate into a single DataFrame:
+
+    df = pd.concat(dfs, ignore_index=True)
+
+- Ensure "harvest_time" is present and converted to a timezone-aware datetime
+  (UTC) if possible. If missing, create a naive field from the file timestamp.
+
+- Sort rows by:
+    harvest_time ascending, then instrument_name ascending (if present).
+
+4) Basic schema / column checks
+
+To validate the harvester:
+
+- Print to stdout:
+    - Underlying
+    - Number of files stitched
+    - Total rows
+    - Number of unique harvest_time values
+    - Number of unique instrument_name values (if instrument_name exists)
+    - Minimum and maximum harvest_time values (if present)
+    - A sorted list of all DataFrame columns
+
+- If key columns are missing, emit warnings but do not crash:
+    - If "instrument_name" is missing, print a warning.
+    - If "mark_price" or "underlying_price" is missing, print a warning.
+
+This is deliberate: we want to see misalignments early and adjust the harvester
+schema if necessary.
+
+5) Output files
+
+- Ensure out_dir exists:
+
+    os.makedirs(out_dir, exist_ok=True)
+
+- Build an output filename of the form:
+
+    <out_dir>/<UNDERLYING>_<START>_<END>_live_deribit.parquet
+
+  For example:
+
+    data/exams/BTC_2025-02-01_2025-03-01_live_deribit.parquet
+
+- Save the combined DataFrame as Parquet:
+
+    df.to_parquet(out_path, engine="pyarrow", index=False)
+
+- Also write a small JSON summary next to it, e.g.:
+
+    data/exams/BTC_2025-02-01_2025-03-01_live_deribit_summary.json
+
+  with contents similar to:
+
+    {
+      "underlying": "BTC",
+      "start_date": "2025-02-01",
+      "end_date": "2025-03-01",
+      "num_files": <int>,
+      "num_rows": <int>,
+      "num_snapshots": <int>,          # unique harvest_time
+      "num_instruments": <int>,        # unique instrument_name if available
+      "min_harvest_time": "<ISO8601 or null>",
+      "max_harvest_time": "<ISO8601 or null>",
+      "columns": ["col1", "col2", ...]
+    }
+
+Print the output paths at the end:
+
+  - "Wrote exam dataset to: <path>"
+  - "Wrote summary to: <path>"
+
+6) Error handling
+
+- If data_root/underlying directory doesn't exist, print a clear message and exit.
+- If there are parsing errors on some files, log them but continue with the
+  remaining files.
+- If the final DataFrame is empty (no rows), do NOT write output files; just
+  print a warning and exit with non-zero status.
+
+Part 2 – Minimal docs
+=====================
+
+Add a short section to README.md (or an appropriate docs file) describing:
+
+"Building exam datasets from live Deribit captures"
+
+- Show example:
+
+    python scripts/build_exam_dataset_from_live_deribit.py \
+      --underlying BTC \
+      --start 2025-02-01 \
+      --end 2025-03-01
+
+- Explain that this will:
+
+  - Read Parquet snapshots from data/live_deribit/BTC/...
+  - Stitch them into a single Parquet file in data/exams/
+  - Produce a JSON summary and print a quick overview of the dataset.
+
+Do NOT modify existing backtesting logic in this task. We will wire this exam
+dataset into the backtesting lab as a new data source (LIVE_DERIBIT_CAPTURED)
+in a separate step.

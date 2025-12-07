@@ -13,3 +13,5 @@ gunicorn
 fastapi
 uvicorn
 pytest
+pyarrow
+requests
