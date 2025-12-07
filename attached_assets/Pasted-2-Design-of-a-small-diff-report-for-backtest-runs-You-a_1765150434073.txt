@@ -1,0 +1,260 @@
+2. Design of a small “diff report” for backtest runs
+
+You already have:
+
+Backtest runs in Postgres:
+
+backtest_runs (one row per run).
+
+backtest_metrics (per run, per exit style).
+
+A comparison script that runs two backtests (synthetic vs live) and prints their metrics.
+
+Now we want a generic diff report:
+
+Input: two run_id strings (e.g. 2025-12-07T23-17-31Z_BTC_414864df and ..._f3f6156a) and an exit_style.
+
+Output: one compact table of A vs B vs Δ for key metrics.
+
+2.1. What the diff report should show
+
+For a given exit_style (e.g. tp_and_roll):
+
+Run-level info:
+
+run_id
+
+data_source (synthetic vs live_deribit)
+
+underlying
+
+start_ts / end_ts
+
+decision_interval_minutes
+
+Metrics to compare:
+
+For each:
+
+net_profit_pct
+
+net_profit_usd
+
+final_pnl_vs_hodl
+
+max_drawdown_pct
+
+max_drawdown_usd
+
+num_trades
+
+win_rate
+
+profit_factor
+
+avg_trade_usd
+
+sharpe_ratio
+
+sortino_ratio
+
+Format (example):
+
+Comparing runs:
+  A: 2025-12-07T23-17-31Z_BTC_414864df  (data_source=synthetic)
+  B: 2025-12-07T23-17-31Z_BTC_f3f6156a  (data_source=live_deribit)
+  Underlying: BTC, Exit style: tp_and_roll
+  Period: 2025-12-01 → 2025-12-07
+  Decision interval: 1440 minutes
+
+Metric                  A (synthetic)      B (live_deribit)    Diff (B - A)
+--------------------------------------------------------------------------
+net_profit_pct          120.5 %            92.3 %              -28.2 pp
+net_profit_usd          12,050             9,230               -2,820
+final_pnl_vs_hodl       8,000              6,500               -1,500
+max_drawdown_pct        35.0 %             42.8 %              +7.8 pp
+max_drawdown_usd        -4,000             -6,000              -2,000
+num_trades              125                118                 -7
+win_rate                78.0 %             74.6 %              -3.4 pp
+profit_factor           2.9                2.1                 -0.8
+avg_trade_usd           96.4               78.2                -18.2
+sharpe_ratio            0.35               0.27                -0.08
+sortino_ratio           0.25               0.19                -0.06
+
+
+That gives you an immediate “how optimistic is synthetic vs live?” answer.
+
+2.2. Script design: scripts/diff_backtest_runs.py
+
+Here’s the design you (or the Builder) can implement:
+
+CLI:
+
+python scripts/diff_backtest_runs.py \
+  --run-a 2025-12-07T23-17-31Z_BTC_414864df \
+  --run-b 2025-12-07T23-17-31Z_BTC_f3f6156a \
+  --exit-style tp_and_roll
+
+
+Steps:
+
+Connect to Postgres using the same config as the main app (e.g. DATABASE_URL env + SQLAlchemy).
+
+Fetch run rows for A and B:
+
+SELECT id, run_id, underlying, data_source,
+       start_ts, end_ts, decision_interval_minutes,
+       primary_exit_style
+FROM backtest_runs
+WHERE run_id = :run_id;
+
+
+Determine exit_style:
+
+Use the --exit-style argument if provided.
+
+Otherwise, default to primary_exit_style from each run (and assert they match).
+
+Fetch metrics for that exit_style:
+
+For run A:
+
+SELECT *
+FROM backtest_metrics
+WHERE run_id = :run_id_numeric AND exit_style = :exit_style;
+
+
+Same for run B.
+
+Build two dicts of metrics:
+
+fields = [
+    "net_profit_pct", "net_profit_usd",
+    "final_pnl_vs_hodl",
+    "max_drawdown_pct", "max_drawdown_usd",
+    "num_trades", "win_rate", "profit_factor",
+    "avg_trade_usd", "sharpe_ratio", "sortino_ratio",
+]
+
+
+For each field, get a_val and b_val as Python floats / ints (or None).
+
+Pretty-print the diff table:
+
+Print a header with run IDs, data_source, underlying, period, decision_interval.
+
+For each metric:
+
+For percentages, print with % and “pp” for the diff.
+
+For floats, print to e.g. 2–4 decimals.
+
+For num_trades, diff is simple integer difference.
+
+Exit code 0 if both runs/metrics found; non-zero + message if something’s missing.
+
+2.3. Builder prompt (if you want to hand this off)
+
+If you want the AI Builder to implement this script, here’s a small prompt you can paste:
+
+You are working inside my LLMAgentBrain options-bot repository.
+
+Goal
+====
+
+Add a small CLI script that prints a human-readable diff report between two
+backtest runs stored in Postgres.
+
+Create: scripts/diff_backtest_runs.py
+
+Requirements
+============
+
+1) CLI interface:
+
+   python scripts/diff_backtest_runs.py \
+     --run-a <run_id_A> \
+     --run-b <run_id_B> \
+     [--exit-style <exit_style>]
+
+   - If --exit-style is omitted, use the primary_exit_style from backtest_runs
+     for each run, and assert they are identical (otherwise show a clear error).
+
+2) DB access:
+
+   - Use the same DB configuration as the main app (DATABASE_URL env variable
+     and SQLAlchemy engine/session helper if available).
+   - Query backtest_runs by run_id (string) to get:
+       id, run_id, underlying, data_source, start_ts, end_ts,
+       decision_interval_minutes, primary_exit_style
+   - Use the numeric id from backtest_runs to query backtest_metrics.
+
+3) Metrics to compare:
+
+   For a given exit_style, fetch one row from backtest_metrics for each run and
+   extract at least:
+
+   - net_profit_pct
+   - net_profit_usd
+   - final_pnl_vs_hodl
+   - max_drawdown_pct
+   - max_drawdown_usd
+   - num_trades
+   - win_rate
+   - profit_factor
+   - avg_trade_usd
+   - sharpe_ratio
+   - sortino_ratio
+
+4) Output format:
+
+   Print something like:
+
+     Comparing runs:
+       A: <run_id_A>  (data_source=<A.data_source>)
+       B: <run_id_B>  (data_source=<B.data_source>)
+       Underlying: <underlying>
+       Exit style: <exit_style>
+       Period A: <A.start_ts> → <A.end_ts>
+       Period B: <B.start_ts> → <B.end_ts>
+       Decision interval: <A.decision_interval_minutes> minutes
+
+     Metric                  A (run A)           B (run B)           Diff (B - A)
+     ---------------------------------------------------------------------------
+     net_profit_pct          120.5 %             92.3 %              -28.2 pp
+     net_profit_usd          12050.00            9230.00             -2820.00
+     final_pnl_vs_hodl       8000.00             6500.00             -1500.00
+     max_drawdown_pct        35.0 %              42.8 %              +7.8 pp
+     max_drawdown_usd        -4000.00            -6000.00            -2000.00
+     num_trades              125                 118                 -7
+     win_rate                78.0 %              74.6 %              -3.4 pp
+     profit_factor           2.90                2.10                -0.80
+     avg_trade_usd           96.40               78.20               -18.20
+     sharpe_ratio            0.35                0.27                -0.08
+     sortino_ratio           0.25                0.19                -0.06
+
+   - For percentage fields (net_profit_pct, max_drawdown_pct, win_rate), append
+     '%' and show the diff as 'pp' (percentage points).
+   - For numeric fields, show to 2 decimal places.
+   - Align columns for readability.
+
+5) Error handling:
+
+   - If a run_id is not found, print a clear message and exit with code 1.
+   - If metrics for the requested exit_style are missing for either run, print
+     a clear message and exit with code 1.
+
+6) Dependencies:
+
+   - Use only libraries already in the project (SQLAlchemy, etc.).
+   - No changes to the main app required; this is a standalone utility that
+     reads from the existing backtest_runs / backtest_metrics tables.
+
+Afterwards I should be able to run:
+
+   python scripts/diff_backtest_runs.py \
+     --run-a 2025-12-07T23-17-31Z_BTC_414864df \
+     --run-b 2025-12-07T23-17-31Z_BTC_f3f6156a \
+     --exit-style tp_and_roll
+
+and see a diff table printed in the terminal.

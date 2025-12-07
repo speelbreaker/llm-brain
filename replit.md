@@ -51,6 +51,7 @@ The agent is built with a clear separation of concerns, featuring modules for co
   - UI panel showing all runs with Net PnL %, Max DD, Sharpe, and View/Download/Delete actions
   - **Data Source Types**: `synthetic` (Black-Scholes), `live_deribit` (captured harvester data), `real_scraper` (external normalized data)
 - **LIVE_DERIBIT Comparison Script**: `scripts/compare_synthetic_vs_live.py` runs side-by-side backtests comparing SYNTHETIC vs LIVE_DERIBIT data sources over the same period, saving both runs to PostgreSQL and printing a detailed metrics comparison table.
+- **Backtest Diff Report**: `scripts/diff_backtest_runs.py` generates a human-readable diff report comparing any two existing backtest runs from PostgreSQL. Shows A vs B vs Diff for all key metrics (net profit, max drawdown, Sharpe, Sortino, win rate, profit factor, etc.). Usage: `python scripts/diff_backtest_runs.py --run-a <run_id_A> --run-b <run_id_B> [--exit-style <style>]`
 - **Reusable Exam Builder**: `src/data/live_deribit_exam.py` provides `build_live_deribit_exam_dataset()` function that can be called programmatically from the backtester or CLI scripts.
 - **State-Aware Chat Assistant**: The Chat tab is a multi-turn, state-aware assistant that:
   - Knows current trading state (positions, unrealized PnL, training vs live mode, spot prices)
