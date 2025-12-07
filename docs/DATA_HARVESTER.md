@@ -130,6 +130,30 @@ For long-running deployment, consider:
 
 3. **Separate Replit workflow** (if running on Replit)
 
+## Building Exam Datasets from Live Captures
+
+Once the harvester has collected data, you can stitch multiple snapshots into a single "exam dataset" for backtesting:
+
+```bash
+python scripts/build_exam_dataset_from_live_deribit.py \
+    --underlying BTC \
+    --start 2025-02-01 \
+    --end 2025-03-01
+```
+
+This will:
+1. Read all Parquet snapshots from `data/live_deribit/BTC/...` within the date range
+2. Stitch them into a single Parquet file in `data/exams/`
+3. Produce a JSON summary with dataset statistics
+
+**Output files:**
+- `data/exams/BTC_2025-02-01_2025-03-01_live_deribit.parquet` - Combined dataset
+- `data/exams/BTC_2025-02-01_2025-03-01_live_deribit_summary.json` - Summary metadata
+
+**Options:**
+- `--data-root <path>` - Custom harvester data directory (default: `data/live_deribit`)
+- `--out-dir <path>` - Custom output directory (default: `data/exams`)
+
 ## Notes
 
 - This script uses Deribit's **public mainnet API** (no authentication required)
