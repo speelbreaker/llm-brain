@@ -121,14 +121,9 @@ class RealScraperDataSource(MarketDataSource):
         if snapshot_df.empty:
             return []
         
-        calls_only = snapshot_df[snapshot_df["option_type"].str.upper() == "C"].copy()
-        
-        if calls_only.empty:
-            return []
-        
         options: List[OptionSnapshot] = []
         
-        for _, row in calls_only.iterrows():
+        for _, row in snapshot_df.iterrows():
             try:
                 expiry_ts = row.get("expiry_timestamp")
                 if pd.notna(expiry_ts):
@@ -158,10 +153,13 @@ class RealScraperDataSource(MarketDataSource):
                 else:
                     mark_price = float(mark_price)
                 
+                option_type = row.get("option_type", "C")
+                kind = "call" if str(option_type).upper().startswith("C") else "put"
+                
                 opt = OptionSnapshot(
                     instrument_name=str(row["instrument_name"]),
                     underlying=underlying.upper(),
-                    kind="call",
+                    kind=kind,
                     strike=float(row["strike"]),
                     expiry=expiry_dt,
                     delta=delta,
