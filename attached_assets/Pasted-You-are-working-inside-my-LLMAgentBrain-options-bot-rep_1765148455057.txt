@@ -1,0 +1,200 @@
+You are working inside my LLMAgentBrain options-bot repository.
+
+Goal
+====
+
+1. Add a concrete data loader for the REAL_SCRAPER data source.
+2. Implement a small importer script that converts a Real Scraper Deribit BTC
+   sample (e.g. 2023-05-26) into our internal snapshot format.
+3. Allow the backtester to run using this REAL_SCRAPER data source over that date.
+4. Make it easy to compare a REAL_SCRAPER run vs a SYNTHETIC run over the same period.
+
+We already have:
+- PostgreSQL tables: backtest_runs, backtest_metrics, backtest_chains.
+- Data source enum with REAL_SCRAPER stubbed out.
+- Harvester + exam builder for live_deribit snapshots (BTC).
+- A sample Real Scraper dataset for BTC on 2023-05-26 in a ZIP file
+  (I will place the unzipped file under data/real_scraper/raw/BTC_2023-05-26.*).
+
+Part A – Import script for Real Scraper BTC options (2023-05-26)
+================================================================
+
+Create a script:
+
+  scripts/import_real_scraper_deribit.py
+
+This script should:
+
+1) Take CLI arguments:
+
+   - --underlying (default BTC)
+   - --date (default 2023-05-26)
+   - --input (path to the Real Scraper file)
+   - --output-dir (default data/real_scraper)
+
+   Example usage:
+
+   python scripts/import_real_scraper_deribit.py \
+     --underlying BTC \
+     --date 2023-05-26 \
+     --input data/real_scraper/raw/DeriBit_BTC_26MAY23_allStrikes_aggregated.csv
+
+2) Read the input file into a pandas DataFrame. Support both CSV and Parquet:
+
+   - If the extension is .csv or .gz, use read_csv.
+   - If it is .parquet, use read_parquet.
+
+3) Map Real Scraper columns to our canonical snapshot schema used by
+   live_deribit and the exam builder. The final DataFrame must contain (at least):
+
+   - harvest_time        (UTC datetime of snapshot)
+   - instrument_name     (e.g. "BTC-26MAY23-30000-C")
+   - underlying          (e.g. "BTC")
+   - expiry              (YYYY-MM-DD)
+   - expiry_timestamp    (float or int seconds since epoch, UTC)
+   - option_type         ("C" or "P")
+   - strike              (float)
+
+   - underlying_price    (float)
+   - mark_price          (float)
+   - best_bid_price      (float, if available, else NaN)
+   - best_ask_price      (float, if available, else NaN)
+
+   - bid_iv              (float, if available, else NaN)
+   - ask_iv              (float, if available, else NaN)
+   - mark_iv             (float)
+
+   - open_interest       (float, if available)
+   - volume              (float, if available)
+
+   - greek_delta         (float, if available)
+   - greek_gamma         (float, if available)
+   - greek_theta         (float, if available)
+   - greek_vega          (float, if available)
+
+4) Parsing rules:
+
+   - Use the Real Scraper timestamp as harvest_time and localize to UTC.
+   - If instrument_name is not present but equivalent fields exist, construct it
+     as "UNDERLYING-<EXPIRY>-<STRIKE>-C/P" using the same Deribit naming style
+     (e.g. 26MAY23 -> 2023-05-26).
+   - Implement a helper parse_instrument_name() if needed, or reuse logic from
+     data_harvester.py to derive expiry, expiry_timestamp, strike, option_type.
+
+5) Add dte_days:
+
+   - dte_days = (expiry_timestamp - harvest_time) / 86400.0
+
+6) Save the normalized DataFrame as a Parquet file in:
+
+   data/real_scraper/BTC/2023-05-26/BTC_2023-05-26.parquet
+
+   Make sure to create directories if they do not exist.
+
+7) Print a small summary to stdout:
+
+   - number of rows
+   - number of unique instruments
+   - min/max harvest_time
+   - min/max dte_days
+
+Part B – REAL_SCRAPER data loader in the backtester
+===================================================
+
+Find the module that handles loading market data for backtests
+(whatever currently implements the SYNTHETIC and LIVE_DERIBIT data loading).
+
+1) Ensure the DataSource enum includes:
+
+   class DataSource(str, Enum):
+       SYNTHETIC = "synthetic"
+       LIVE_DERIBIT = "live_deribit"
+       REAL_SCRAPER = "real_scraper"
+
+2) Implement a loader function to load REAL_SCRAPER data for BTC on a given date range:
+
+   Something like:
+
+   def load_real_scraper_data(config: BacktestConfig) -> pd.DataFrame:
+       """
+       Load normalized Real Scraper BTC data from data/real_scraper directory
+       for the requested date range.
+       """
+
+   - Use config.underlying, config.start_ts, config.end_ts.
+   - For now, assume daily files partitioned like:
+       data/real_scraper/<UNDERLYING>/<YYYY-MM-DD>/<UNDERLYING>_<YYYY-MM-DD>.parquet
+   - For a date range, loop days between start_ts.date() and end_ts.date() and
+     read all matching Parquet files.
+   - Concatenate them into one DataFrame and return.
+
+3) Integrate into the main data loader:
+
+   def load_market_data(config: BacktestConfig) -> pd.DataFrame:
+       if config.data_source == DataSource.SYNTHETIC:
+           return load_synthetic_data(config)
+       elif config.data_source == DataSource.LIVE_DERIBIT:
+           return load_live_deribit_data(config)
+       elif config.data_source == DataSource.REAL_SCRAPER:
+           return load_real_scraper_data(config)
+       else:
+           raise ValueError(f"Unknown data_source: {config.data_source}")
+
+4) Ensure the REAL_SCRAPER loader returns a DataFrame with the same
+   canonical schema used elsewhere (instrument_name, expiry_timestamp,
+   mark_price, mark_iv, underlying_price, greek_delta, dte_days, etc.).
+
+Part C – Quick test backtest over 2023-05-26 using REAL_SCRAPER
+================================================================
+
+Add a small convenience script:
+
+  scripts/run_backtest_real_scraper_example.py
+
+This should:
+
+1) Build a BacktestConfig equivalent to:
+
+   - underlying = BTC
+   - data_source = REAL_SCRAPER
+   - start_ts = 2023-05-26 00:00:00 UTC
+   - end_ts   = 2023-05-26 23:59:59 UTC
+   - decision_interval_minutes = 60 (or whatever default is used now)
+   - other params matching your current standard covered-call config.
+
+2) Call the same backtest engine as the FastAPI endpoint uses.
+
+3) Persist the run and metrics into PostgreSQL through the existing code path
+   (i.e., reuse execute_backtest / BacktestRun / BacktestMetric logic, do not
+   bypass the DB).
+
+4) Print to stdout:
+
+   - run_id
+   - summary metrics for each exit style (net_profit_pct, max_drawdown_pct, sharpe_ratio)
+
+This script lets us manually verify that:
+
+- REAL_SCRAPER data can be loaded and fed into the backtester.
+- A run appears in backtest_runs with data_source = "real_scraper".
+
+Part D – Do not break existing behavior
+=======================================
+
+- Keep the existing behavior for SYNTHETIC and LIVE_DERIBIT data sources unchanged.
+- UI should still work for synthetic backtests and for listing runs.
+- REAL_SCRAPER is a new option we can use for research and cross-checking,
+  not a replacement.
+
+After completing this task, I should be able to:
+
+1) Import the 26-MAY-2023 BTC Real Scraper sample into
+   data/real_scraper/BTC/2023-05-26/BTC_2023-05-26.parquet.
+
+2) Run:
+
+   python scripts/run_backtest_real_scraper_example.py
+
+   and see a new backtest_runs row with data_source = "real_scraper".
+
+3) Compare that run's metrics to a synthetic run over the same dates.
