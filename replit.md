@@ -83,6 +83,14 @@ The agent is built with a clear separation of concerns, featuring modules for co
 - **Order Execution**: `execution.py` handles order translation, supporting dry-run simulations.
 - **UI/UX**: The web dashboard provides a user-friendly interface for monitoring and interaction, with specific tabs for live agent status, backtesting, and chat.
 
+### Real Scraper Data Source
+- **External Dataset Support**: Imports Real Scraper datasets (e.g., Kaggle Deribit options data) for backtesting with historical data.
+- **Import Script**: `scripts/import_real_scraper_deribit.py` converts external CSV/Parquet files to canonical schema.
+- **Data Loader**: `src/backtest/real_scraper_data_source.py` implements `MarketDataSource` protocol for Real Scraper data.
+- **Storage Format**: `data/real_scraper/<UNDERLYING>/<YYYY-MM-DD>/<UNDERLYING>_<YYYY-MM-DD>.parquet`
+- **Test Script**: `scripts/run_backtest_real_scraper_example.py` runs backtests with REAL_SCRAPER data source.
+- **Comparison**: Enables comparing REAL_SCRAPER vs SYNTHETIC backtests over the same date ranges.
+
 ### Data Harvester
 - **Standalone Process**: `scripts/data_harvester.py` runs independently from the trading bot, continuously collecting real Deribit options data.
 - **Multi-Asset Support**: Fetches option chains from Deribit mainnet public API:
