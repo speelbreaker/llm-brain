@@ -1,0 +1,168 @@
+TASK: Implement robust position reconciliation with Deribit (safety feature)
+
+Goal:
+Ensure that on every agent loop, the bot reconciles its internal position tracking with the official positions from Deribit. If there is a mismatch, the bot should:
+
+- Either auto-heal its local position state from the exchange, or
+- Halt and refuse to open new positions (configurable behavior).
+
+Scope:
+Only implement reconciliation + divergence guardrails. Do NOT change backtest logic or web UI in this task.
+
+--------------------------------
+1) Add a reconciliation helper
+--------------------------------
+
+Add a new module or helper, e.g.:
+
+  src/reconciliation.py
+
+Define a function like:
+
+  from typing import Literal, Sequence
+
+  DivergenceAction = Literal["halt", "auto_heal"]
+
+  def reconcile_positions(
+      exchange_positions: Sequence[dict],
+      local_positions: Sequence[dict],
+      action: DivergenceAction,
+  ) -> tuple[list[dict], dict]:
+      """
+      Compare Deribit positions with our local position tracker.
+
+      - `exchange_positions`: raw or normalized positions from Deribit private API
+      - `local_positions`: positions as stored by position_tracker
+
+      Returns: (new_local_positions, stats)
+
+      Where `stats` includes:
+        - "divergent": bool
+        - "missing_in_local": list of symbols (present on exchange, not in local)
+        - "missing_in_exchange": list of symbols (present in local, not on exchange)
+        - "size_mismatches": list of (symbol, local_size, exchange_size)
+      """
+
+Behavior:
+
+- If `action == "auto_heal"`:
+  - New local positions should be rebuilt to match `exchange_positions` as closely as possible.
+  - Missing local positions are added.
+  - Positions that no longer exist on exchange are removed.
+- If `action == "halt"`:
+  - Do NOT change `local_positions`.
+  - Just set `stats["divergent"] = True` and record all mismatches for logging / UI.
+
+Use symbol (instrument_name) and side/size to compare.
+
+--------------------------------
+2) Wire reconciliation into the live agent loop
+--------------------------------
+
+In the live agent path (agent_loop / wherever we build `AgentState` for live trading):
+
+- After fetching the latest state (spot, account, positions), but BEFORE making a decision:
+
+  1) Fetch current positions from Deribit private API (we already do this for the live state).
+  2) Fetch current local positions from `position_tracker`.
+  3) Call `reconcile_positions(...)`, using a new config flag:
+
+     - Add to config:
+
+       - POSITION_RECONCILE_ACTION: "halt" or "auto_heal"
+         - Default: "halt" for safety.
+
+  4) Log reconciliation stats into the flight recorder:
+
+     - Include:
+       - divergent: bool
+       - counts of missing_in_local / missing_in_exchange / size_mismatches
+
+  5) If `POSITION_RECONCILE_ACTION == "halt"` and `stats["divergent"]` is True:
+
+     - The agent MUST:
+       - skip trading for this iteration (final_action = DO_NOTHING, reason = "Position divergence").
+       - set a prominent flag in the status (e.g. `state["reconciliation_status"] = "DIVERGENT"`).
+
+     - No new orders must be sent while divergence persists.
+
+  6) If `POSITION_RECONCILE_ACTION == "auto_heal"`:
+
+     - Use the returned `new_local_positions` to update the `position_tracker` state.
+     - Continue as normal.
+
+--------------------------------
+3) Add a small CLI / script for manual reconciliation
+--------------------------------
+
+Add a simple script under scripts/, e.g.:
+
+  scripts/reconcile_positions_once.py
+
+Behavior:
+
+- Connect to Deribit testnet.
+- Fetch exchange positions.
+- Load local positions from `position_tracker`.
+- Run reconciliation with `action="auto_heal"`.
+- Write back the healed local positions.
+- Print a human-readable summary of what changed.
+
+This is for manual recovery in case we ever need to repair state by hand.
+
+--------------------------------
+4) Add a smoke-style check for reconciliation
+--------------------------------
+
+Add a minimal smoke script, e.g.:
+
+  scripts/smoke_reconciliation.sh
+
+Approx behavior:
+
+- Mock or simulate:
+  - Local positions has one position that exchange does not.
+  - Exchange has one position that local does not.
+- Call `reconcile_positions(..., action="halt")`.
+- Assert that:
+  - stats["divergent"] is True
+  - missing lists are non-empty.
+- Then call `reconcile_positions(..., action="auto_heal")`.
+- Assert that:
+  - new_local_positions now match exchange_positions.
+  - stats["divergent"] is False (after “pretend” healing).
+
+This can be a pure-Python test without hitting the real API.
+
+--------------------------------
+5) Update HEALTHCHECK / ROADMAP
+--------------------------------
+
+In HEALTHCHECK.md or ROADMAP.md:
+
+- Mark “Position reconciliation / divergence guardrail” as implemented.
+- Document:
+
+  - Config flag: POSITION_RECONCILE_ACTION = "halt" or "auto_heal"
+  - What happens on divergence
+  - How to run the manual reconciliation script:
+
+      bash scripts/reconcile_positions_once.py
+
+--------------------------------
+6) Validation
+--------------------------------
+
+After implementation:
+
+- Re-run the main smoke tests:
+
+  bash scripts/smoke_live_agent.sh
+  bash scripts/smoke_backtest.sh
+  bash scripts/smoke_training_export.sh
+  bash scripts/smoke_web_api.sh
+
+- Confirm the live /status or dashboard includes an indicator for reconciliation status
+  (e.g. “Positions in sync” vs “DIVERGENCE – trading halted”).
+
+Do NOT modify backtest behavior, multi-strategy logic, or database/storage in this task.

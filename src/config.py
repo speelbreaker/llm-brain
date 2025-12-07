@@ -223,6 +223,11 @@ class Settings(BaseSettings):
         description="Directory for JSON decision logs",
     )
 
+    position_reconcile_action: Literal["halt", "auto_heal"] = Field(
+        default="halt",
+        description="Action on position divergence: 'halt' stops trading, 'auto_heal' rebuilds local state from exchange",
+    )
+
     @property
     def is_research(self) -> bool:
         """Check if running in research mode."""
