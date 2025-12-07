@@ -16,15 +16,13 @@ from src.config import settings
 from src.deribit_client import DeribitClient, DeribitAPIError
 from src.state_builder import build_agent_state
 from src.risk_engine import check_action_allowed
-from src.policy_rule_based import decide_action as rule_decide_action
-from src.agent_brain_llm import choose_action_with_llm
-from src.training_policy import build_actions as build_training_actions
 from src.execution import execute_action, execute_actions
 from src.logging_utils import log_decision, log_error, print_decision_summary
 from src.models import ActionType
 from src.decisions_store import decisions_store
 from src.reconciliation import reconcile_positions, format_reconciliation_summary
 from src.position_tracker import position_tracker
+from src.strategies import build_default_registry, StrategyRegistry
 
 StatusCallback = Callable[[Dict[str, Any]], None]
 
@@ -171,6 +169,10 @@ def run_agent_loop_forever(
     print("=" * 60)
     
     client = DeribitClient()
+    
+    strategy_registry = build_default_registry(settings)
+    active_strategies = strategy_registry.get_active_strategies()
+    print(f"Strategies: {[s.name for s in active_strategies]}")
     
     print("\nStarting agent loop...\n")
     
@@ -329,31 +331,36 @@ def run_agent_loop_forever(
             try:
                 print("\nMaking decision...")
                 
-                if is_training:
-                    training_actions = build_training_actions(agent_state, settings)
-                    if training_actions:
-                        print(f"Training mode: {len(training_actions)} actions across profiles")
-                        for ta in training_actions:
-                            strat = ta.get("strategy", "?")
-                            sym = ta.get("params", {}).get("symbol", "?")
-                            diag = ta.get("diagnostics", {})
-                            delta = diag.get("delta", 0)
-                            dte = diag.get("dte", 0)
-                            premium = diag.get("premium_usd", 0)
-                            print(f"  [{strat}] {sym} Δ={delta:.3f} DTE={dte} ${premium:.2f}")
-                        proposed_action = training_actions[0]
-                    else:
-                        proposed_action = rule_decide_action(agent_state, settings)
-                        print(f"Training mode: No suitable candidates, falling back to rule-based")
-                elif settings.llm_enabled:
-                    proposed_action = choose_action_with_llm(
-                        agent_state,
-                        agent_state.candidate_options,
-                    )
-                    print(f"LLM proposed: {proposed_action.get('action')}")
+                all_proposed_actions: list[dict[str, Any]] = []
+                for strategy in strategy_registry.get_active_strategies():
+                    actions = strategy.propose_actions(agent_state)
+                    all_proposed_actions.extend(actions)
+                
+                if is_training and len(all_proposed_actions) > 1:
+                    training_actions = all_proposed_actions
+                    print(f"Training mode: {len(training_actions)} actions across profiles")
+                    for ta in training_actions:
+                        strat = ta.get("strategy", "?")
+                        sym = ta.get("params", {}).get("symbol", "?")
+                        diag = ta.get("diagnostics", {})
+                        delta = diag.get("delta", 0)
+                        dte = diag.get("dte", 0)
+                        premium = diag.get("premium_usd", 0)
+                        print(f"  [{strat}] {sym} Δ={delta:.3f} DTE={dte} ${premium:.2f}")
+                    proposed_action = training_actions[0]
+                elif all_proposed_actions:
+                    proposed_action = all_proposed_actions[0]
+                    training_actions = []
+                    action_type = proposed_action.get('action', 'DO_NOTHING')
+                    mode_label = "LLM" if settings.llm_enabled else "Rule-based"
+                    print(f"{mode_label} proposed: {action_type}")
                 else:
-                    proposed_action = rule_decide_action(agent_state, settings)
-                    print(f"Rule-based proposed: {proposed_action.get('action')}")
+                    proposed_action = {
+                        "action": ActionType.DO_NOTHING.value,
+                        "params": {},
+                        "reasoning": "No actions proposed by strategies",
+                    }
+                    training_actions = []
                 
             except Exception as e:
                 error_msg = f"Decision error: {e}"

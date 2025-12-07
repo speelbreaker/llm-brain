@@ -24,6 +24,7 @@ This is an automated options trading system that sells "covered calls" on Bitcoi
 | `src/execution.py` | Actually sends orders to Deribit. Has a "dry run" mode where it pretends to trade without actually doing anything. |
 | `src/training_policy.py` | Special mode for collecting training data. Opens multiple positions with different strategies (conservative, moderate, aggressive) to see what works. |
 | `src/training_profiles.py` | Defines the three training strategy profiles and how to score option candidates for each. |
+| `src/strategies/` | Strategy layer providing a pluggable interface for trading strategies (see "Strategy Layer" section below). |
 | `src/market_context.py` | Calculates "big picture" market metrics like whether we're in a bull/bear market, recent volatility, and distance from moving averages. |
 | `src/deribit_client.py` | Talks to the Deribit exchange API. Handles authentication, fetching prices, getting account info, and placing orders. |
 | `src/position_tracker.py` | Remembers which positions the bot has opened. Saves to disk so it survives restarts. |
@@ -47,6 +48,37 @@ This is an automated options trading system that sells "covered calls" on Bitcoi
 | `manager.py` | Coordinates running backtests in the background and tracking their status. |
 | `config_schema.py` + `config_presets.py` | Backtest configuration system with presets (ULTRA_SAFE, BALANCED, AGGRESSIVE). |
 | `types.py` | Data structures used throughout backtesting. |
+
+---
+
+## Strategy Layer
+
+The agent uses a pluggable strategy architecture that allows multiple trading strategies to run side by side while sharing the same market data and risk controls.
+
+### Core Components
+
+| Component | What It Does |
+|-----------|--------------|
+| `StrategyConfig` | Dataclass holding all configuration for a strategy (underlyings, delta range, DTE range, mode, etc.) |
+| `Strategy` | Base interface that all trading strategies implement. Has a single method `propose_actions(state)` that returns a list of proposed trades. |
+| `StrategyRegistry` | Container that holds all registered strategies and provides methods to get active strategies. |
+| `CoveredCallStrategy` | The current (and only) strategy. Wraps the existing rule-based, LLM, and training policy logic. |
+
+### How It Works
+
+1. At startup, `build_default_registry(settings)` creates a registry with one `CoveredCallStrategy`
+2. Each agent loop iteration calls `strategy.propose_actions(state)` for each active strategy
+3. The strategy delegates to the appropriate policy module based on its mode (training/llm/rule_based)
+4. All proposed actions go through the risk engine before execution
+
+### Future Strategies
+
+The strategy layer is designed to support additional strategies in the future:
+- **WheelStrategy** – Sell puts until assigned, then sell calls until exercised
+- **CrashHedgeStrategy** – Maintain protective puts for downside protection
+- **SpreadStrategy** – Trade credit spreads or debit spreads
+
+Each new strategy would implement the `Strategy` interface and be registered alongside `CoveredCallStrategy`.
 
 ---
 

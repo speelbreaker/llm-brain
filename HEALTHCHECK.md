@@ -185,7 +185,38 @@ bash scripts/smoke_web_api.sh
 
 ---
 
-### 6. Position Reconciliation Test
+### 6. Strategy Layer Test
+
+**What it does**: Verifies the strategy layer is working correctly - that strategies are registered and can propose actions.
+
+**When to run**: After changes to the strategy layer, registry, or agent loop.
+
+**Command**:
+```bash
+python -c "
+from src.strategies import build_default_registry, StrategyConfig, CoveredCallStrategy
+from src.config import settings
+
+registry = build_default_registry(settings)
+print(f'Active strategies: {len(registry.get_active_strategies())}')
+
+for s in registry.get_active_strategies():
+    print(f'  - {s.name}: mode={s.config.mode}, underlyings={s.config.underlyings}')
+    
+print('Strategy layer OK')
+"
+```
+
+**What success looks like**:
+```
+Active strategies: 1
+  - CoveredCallLadder: mode=training, underlyings=['BTC', 'ETH']
+Strategy layer OK
+```
+
+---
+
+### 7. Position Reconciliation Test
 
 **What it does**: Tests the position reconciliation logic that compares local tracker with Deribit exchange positions. Uses mock data (no API calls).
 

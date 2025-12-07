@@ -54,7 +54,7 @@ These are nice-to-have, not blocking:
 
 ## 3. Phase 2 – Multi-Strategy Architecture
 
-**Status: Not started**
+**Status: Foundation complete (Strategy interface and registry in place)**
 
 ### The Big Idea
 Instead of one trading strategy, we want to run several "mini-bots" that each have their own personality but share the same market data and risk controls.
@@ -144,10 +144,12 @@ Right now, we use synthetic (calculated) option prices for backtesting. Real his
 ## 6. Priorities & Next Steps
 
 ### Near-Term (Next 2-4 Weeks)
-- [ ] Implement multi-strategy support
-  - Add `strategy_id` field to all decisions and positions
-  - Create a strategy registry (config-based, not code changes)
-  - Update risk engine to track limits per strategy
+- [x] Implement strategy interface foundation
+  - [x] Create `StrategyConfig` dataclass and `Strategy` base class
+  - [x] Create `StrategyRegistry` for managing strategies
+  - [x] Wrap existing logic in `CoveredCallStrategy`
+  - [x] Update agent loop to use strategy registry
+- [ ] Add `strategy_id` field to all decisions and positions
 - [ ] Add strategy status table to Live Agent dashboard
 - [ ] Allow backtests to filter by strategy name
 
