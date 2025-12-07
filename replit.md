@@ -60,6 +60,15 @@ The agent is built with a clear separation of concerns, featuring modules for co
 - **Structured Logging**: Uses JSONL for structured logging of all decisions and actions, facilitating future analysis and ML/RL training.
 - **Position Persistence**: Bot-managed positions are automatically saved to `data/positions.json` and restored on restart, ensuring position tracking survives workflow restarts.
 
+### Strategy Layer
+- **Pluggable Architecture**: The agent uses a strategy layer (`src/strategies/`) that allows multiple trading strategies to run side by side while sharing market data and risk controls.
+- **Core Components**:
+  - `StrategyConfig`: Dataclass holding all configuration for a strategy (underlyings, delta range, DTE range, mode)
+  - `Strategy`: Base interface with `propose_actions(state)` method that returns proposed trades
+  - `StrategyRegistry`: Container holding all registered strategies with methods to get active strategies
+  - `CoveredCallStrategy`: The current (and only) strategy, wrapping existing rule-based, LLM, and training logic
+- **Future Strategies**: Designed to support WheelStrategy, CrashHedgeStrategy, SpreadStrategy, etc. Each new strategy implements the Strategy interface and is registered alongside existing strategies.
+
 ### Technical Implementations
 - **Configuration**: Pydantic settings are used for managing application configuration and switching between research/production modes.
 - **API Wrapper**: `deribit_client.py` provides an `httpx`-based wrapper for the Deribit testnet API.
