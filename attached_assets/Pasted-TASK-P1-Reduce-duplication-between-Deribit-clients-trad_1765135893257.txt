@@ -1,0 +1,125 @@
+TASK: P1 – Reduce duplication between Deribit clients (trading vs backtest)
+
+Goal:
+Extract shared Deribit HTTP + response parsing logic into a base module so that:
+- src/deribit_client.py (live/trading) and src/backtest/deribit_client.py
+  reuse the same core code.
+- Behaviour stays identical (no changes to public methods or API semantics).
+
+We are NOT redesigning the Deribit API wrapper; just moving common code to one place.
+
+--------------------------------------------------
+1) Create a base client module
+--------------------------------------------------
+
+Add:
+
+  src/deribit/base_client.py
+
+Implement a lightweight base class:
+
+  import httpx
+  from typing import Any, Dict
+
+  class DeribitBaseClient:
+      def __init__(self, base_url: str, timeout: float = 10.0):
+          self.base_url = base_url.rstrip("/")
+          self._client = httpx.Client(timeout=timeout)
+
+      def _request(self, method: str, params: Dict[str, Any]) -> Dict[str, Any]:
+          """
+          Low-level JSON-RPC request to Deribit.
+          Should be reused by both trading and backtest/public clients.
+          """
+          # Implement the JSON-RPC POST request and error handling here,
+          # using the existing logic from src/deribit_client.py.
+          ...
+
+      def _ensure_success(self, response: Dict[str, Any]) -> Dict[str, Any]:
+          """
+          Raise an exception if Deribit returned an error.
+          Shared by both clients.
+          """
+          ...
+
+Also extract any generic parsing helpers from the two existing clients into this base module, for example:
+
+- `_parse_instrument_name(...)`
+- `_parse_option_instrument(...)`
+- Anything that converts Deribit JSON into your internal models.
+
+Do NOT change their semantics; just move them.
+
+--------------------------------------------------
+2) Update live trading client to extend the base
+--------------------------------------------------
+
+Open:
+
+  src/deribit_client.py
+
+Refactor it so:
+
+- The main class (e.g. DeribitClient or DeribitTradingClient) subclasses DeribitBaseClient.
+- It implements authentication (client_id/secret) on top of the base class.
+- All API calls (`get_index_price`, `get_book_summary_by_currency`, `get_positions`, `place_order`, etc.) use `self._request(...)` and shared parsing helpers from base_client.
+
+Avoid duplicating the HTTP/post/error-handling logic here; that logic should now live in DeribitBaseClient.
+
+Keep the public method names and signatures the same so other modules do not need changes.
+
+--------------------------------------------------
+3) Update backtest Deribit client to extend the base
+--------------------------------------------------
+
+Open:
+
+  src/backtest/deribit_client.py
+
+Refactor it to:
+
+- Subclass DeribitBaseClient as well.
+- Use `self._request(...)` for calling public/mainnet endpoints used in backtesting.
+- Reuse the shared parsing helpers from base_client.py where applicable (instrument parsing, etc.).
+
+This backtest client does NOT need authentication; it can simply ignore auth fields or never call private endpoints.
+
+--------------------------------------------------
+4) Keep deribit_data_source intact but using the unified client
+--------------------------------------------------
+
+Ensure that:
+
+- src/backtest/deribit_data_source.py continues to depend on src/backtest/deribit_client.py’s public API.
+- Its behaviour does not change; it just benefits from the shared HTTP/parsing logic.
+
+--------------------------------------------------
+5) Verify that behaviour is unchanged
+--------------------------------------------------
+
+Run the full test + smoke suite:
+
+  bash scripts/run_tests.sh
+  bash scripts/smoke_live_agent.sh
+  bash scripts/smoke_backtest.sh
+  bash scripts/smoke_training_export.sh
+  bash scripts/smoke_web_api.sh
+
+Check that:
+
+- Live agent smoke test still connects and produces the same spot prices / basic state.
+- Backtest smoke test results (PnL, trades, decisions) match pre-refactor values.
+- No new exceptions are thrown from DeribitBaseClient.
+
+--------------------------------------------------
+6) Documentation
+--------------------------------------------------
+
+Update HEALTHCHECK.md:
+
+- Mark “Duplicate Deribit clients (trading vs public)” as FIXED.
+- Briefly describe DeribitBaseClient.
+
+Update ARCHITECTURE_OVERVIEW.md:
+
+- Mention the shared Deribit base client in the “Main Modules” or “Data Source” section.

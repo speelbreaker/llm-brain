@@ -302,7 +302,7 @@ The following items have been identified as needing cleanup. They are marked wit
 
 | Item | Risk if Unfixed | Risk of Refactoring | Status |
 |------|-----------------|---------------------|--------|
-| **Duplicate state builders** (live vs backtest) | Makes it harder to add new features—changes must be made in two places, increasing the chance one gets forgotten. | Moderate risk; the live and backtest builders have different data sources, so a hasty merge could break either mode. | Open |
+| **Duplicate state builders** (live vs backtest) | Makes it harder to add new features—changes must be made in two places, increasing the chance one gets forgotten. | Moderate risk; the live and backtest builders have different data sources, so a hasty merge could break either mode. | **FIXED** – Now uses `src/state_core.py` for shared logic |
 | **Duplicate Deribit clients** (trading vs public data) | Maintenance burden; any bug fix or API change must be applied twice. | Low-to-moderate risk; the clients serve different purposes (auth vs no-auth), so they can share base code without full merge. | Open |
 | **Duplicate expiry parsing** (`_parse_expiry` vs `parse_deribit_expiry`) | Minor—mostly code clarity. Same logic in two places means potential for subtle date parsing bugs. | Very low risk; simple utility functions that can be extracted without touching core logic. | **FIXED** – Now uses `src/utils/expiry.py:parse_deribit_expiry()` |
 | **No unit tests** | Regressions go undetected until they cause visible problems in production or backtests. | Time investment rather than code risk; tests should be added incrementally without modifying existing code. | **FIXED** – Minimal pytest suite added (30 tests for IVRV, scoring, expiry) |
@@ -341,13 +341,13 @@ The following items have been identified as needing cleanup. They are marked wit
 
 ### Duplicated Logic (Reference Table)
 
-| Duplication | Files Involved | Suggestion |
-|-------------|----------------|------------|
-| **Candidate scoring** | `src/policy_rule_based.py:score_candidate()` vs `src/backtest/covered_call_simulator.py:_score_candidate()` | Create a shared `src/scoring.py` module with configurable scoring logic. |
-| **State building** | `src/state_builder.py:build_agent_state()` vs `src/backtest/state_builder.py:build_historical_state()` | Unify with a shared interface that handles both live and historical data sources. |
-| **Deribit clients** | `src/deribit_client.py:DeribitClient` vs `src/backtest/deribit_client.py:DeribitPublicClient` | Add public endpoints to main client, or create shared base class. |
-| **Expiry parsing** | `src/state_builder.py:_parse_expiry()` vs `src/backtest/state_builder.py:parse_deribit_expiry()` | Extract to a shared utility module (e.g., `src/utils/deribit_utils.py`). |
-| **IVRV calculation** | Computed in `src/state_builder.py`, `src/backtest/covered_call_simulator.py`, `src/training_profiles.py` | Centralize IVRV calculation in one place. |
+| Duplication | Files Involved | Suggestion | Status |
+|-------------|----------------|------------|--------|
+| **Candidate scoring** | `src/policy_rule_based.py:score_candidate()` vs `src/backtest/covered_call_simulator.py:_score_candidate()` | Create a shared `src/scoring.py` module with configurable scoring logic. | **FIXED** – Uses `src/scoring/candidates.py` |
+| **State building** | `src/state_builder.py:build_agent_state()` vs `src/backtest/state_builder.py:build_historical_state()` | Unify with a shared interface that handles both live and historical data sources. | **FIXED** – Uses `src/state_core.py` for shared logic |
+| **Deribit clients** | `src/deribit_client.py:DeribitClient` vs `src/backtest/deribit_client.py:DeribitPublicClient` | Add public endpoints to main client, or create shared base class. | Open |
+| **Expiry parsing** | `src/state_builder.py:_parse_expiry()` vs `src/backtest/state_builder.py:parse_deribit_expiry()` | Extract to a shared utility module (e.g., `src/utils/deribit_utils.py`). | **FIXED** – Uses `src/utils/expiry.py` |
+| **IVRV calculation** | Computed in `src/state_builder.py`, `src/backtest/covered_call_simulator.py`, `src/training_profiles.py` | Centralize IVRV calculation in one place. | **FIXED** – Uses `src/metrics/volatility.py` |
 
 ### Large Files That Could Be Split
 

@@ -1,0 +1,187 @@
+TASK: P1 – Reduce duplication between live and backtest state builders
+
+Goal:
+Unify the core state-building logic so that:
+- Live and backtest use the SAME “agent state” construction rules.
+- Only the data *sources* differ (live Deribit vs historical/synthetic).
+- Behaviour remains identical (smoke tests & backtests must not change results).
+
+We are NOT changing the public API of the existing state builder functions that other code calls. We are only extracting shared logic into a core module.
+
+--------------------------------------------------
+1) Introduce a shared core for state building
+--------------------------------------------------
+
+Create a new module:
+
+  src/state_core.py
+
+Define simple data structures that represent the raw inputs needed to build an AgentState:
+
+  from dataclasses import dataclass
+  from typing import Dict, List, Any
+
+  @dataclass
+  class RawOption:
+      instrument_name: str
+      expiry: "datetime"
+      strike: float
+      option_type: str   # "call" or "put"
+      mark_price: float
+      mark_iv: float
+      delta: float
+      underlying_price: float
+
+  @dataclass
+  class RawPortfolio:
+      equity_usd: float
+      margin_used_pct: float
+      balances: Dict[str, float]     # BTC, ETH, etc.
+      positions: List[Dict[str, Any]]  # raw Deribit/backtest positions
+
+  @dataclass
+  class RawMarketSnapshot:
+      timestamp: "datetime"
+      underlyings: List[str]
+      spot: Dict[str, float]
+      portfolio: RawPortfolio
+      options: List[RawOption]        # full option universe at this time
+      realized_vol: Dict[str, float]  # key: underlying, value: annualized RV or None
+
+Then implement a single function that turns RawMarketSnapshot into the AgentState that both live and backtest use:
+
+  from src.models import AgentState, CandidateOption
+  from src.metrics.volatility import compute_ivrv_ratio
+
+  def build_agent_state_from_raw(
+      raw: RawMarketSnapshot,
+      settings: "Settings",
+      *,
+      source: str,  # "live" or "backtest"
+  ) -> AgentState:
+      """
+      Build an AgentState from raw data, applying:
+      - delta filters
+      - DTE filters
+      - IVRV filters
+      - candidate scoring hooks
+      - vol_state computation
+      Mirrors existing logic in src/state_builder.py and src/backtest/state_builder.py.
+      """
+
+      # Implementation steps:
+      # - Compute DTE for each RawOption using parse_deribit_expiry / expiry field
+      # - Filter by settings.effective_delta_min/max and dte_min/max
+      # - Compute ivrv_ratio via compute_ivrv_ratio(iv, realized_vol)
+      # - Build CandidateOption objects (same fields as before)
+      # - Build vol_state (e.g. realized_vol, ivrv, moving averages) as currently done.
+      # - Assemble AgentState with:
+      #   - timestamp
+      #   - spot
+      #   - portfolio (equity_usd, margin_used_pct, balances)
+      #   - options/candidates and candidates_count
+      #   - vol_state
+      #   - any other fields previously set by both state builders.
+
+      # IMPORTANT: Use as much existing logic as possible by moving duplicated code
+      # from src/state_builder.py and src/backtest/state_builder.py into this function
+      # rather than rewriting from scratch.
+
+--------------------------------------------------
+2) Refactor live state builder to use the core
+--------------------------------------------------
+
+Open:
+
+  src/state_builder.py
+
+Currently this file:
+- Talks to src/deribit_client.py to fetch live data.
+- Computes deltas/DTE/IVRV and builds AgentState.
+
+Refactor it to:
+
+1) Keep the existing public function signature (e.g. build_state_for_agent(settings, client, ...) or similar), so callers do not change.
+
+2) In that function:
+
+   - Fetch live data as before: spot prices, account summary, positions, option chain.
+   - Construct RawPortfolio from the live data.
+   - Construct a list of RawOption from the Deribit option instruments + greeks.
+   - Construct RawMarketSnapshot.
+
+3) Call:
+
+   state = build_agent_state_from_raw(raw_snapshot, settings, source="live")
+
+4) Return that state.
+
+Remove any duplicated filtering / IVRV / DTE logic that now lives in state_core.py.
+
+--------------------------------------------------
+3) Refactor backtest state builder to use the core
+--------------------------------------------------
+
+Open:
+
+  src/backtest/state_builder.py
+
+It currently:
+- Uses the backtest data source to fetch historical spot, synthetic prices, etc.
+- Computes similar filters and builds a backtest AgentState.
+
+Refactor it to:
+
+1) Keep the existing public API (whatever `build_historical_state(...)` is called by the simulator).
+
+2) In that function:
+
+   - Fetch historical spot/candles, synthetic option chain, realized volatility from the backtest data source.
+   - Map that into RawPortfolio and RawOption objects (using the same fields as in the live path, but with synthetic mark_price/iv/delta).
+   - Construct RawMarketSnapshot with source="backtest".
+
+3) Call:
+
+   state = build_agent_state_from_raw(raw_snapshot, settings, source="backtest")
+
+4) Return that state.
+
+Remove duplicated DTE/delta/IVRV/candidate-filter logic; rely on state_core.
+
+--------------------------------------------------
+4) Ensure behaviour is unchanged
+--------------------------------------------------
+
+After refactor, run all tests and smoke scripts:
+
+  bash scripts/run_tests.sh
+  bash scripts/smoke_live_agent.sh
+  bash scripts/smoke_backtest.sh
+  bash scripts/smoke_training_export.sh
+  bash scripts/smoke_web_api.sh
+
+The following must remain the same as BEFORE the refactor:
+
+- Live agent smoke test:
+  - Same number of candidates.
+  - Same proposed action.
+- Backtest smoke test:
+  - Same number of decisions.
+  - Same PnL, win rate, and basic stats.
+- Training export smoke test:
+  - Same number of candidate examples.
+
+If there is any change, adjust build_agent_state_from_raw until the outputs match the original behaviour.
+
+--------------------------------------------------
+5) Documentation
+--------------------------------------------------
+
+Update HEALTHCHECK.md:
+
+- Mark “Duplicate state builders (live vs backtest)” as FIXED.
+- Briefly describe state_core.py and RawMarketSnapshot.
+
+Update ARCHITECTURE_OVERVIEW.md:
+
+- Add a short note in the “Data Flow” or “Main Modules” section mentioning state_core and the fact that live/backtest share a common state builder now.

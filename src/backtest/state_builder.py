@@ -2,12 +2,13 @@
 Historical state builder for backtests.
 Constructs state dicts that mirror live AgentState for scoring and simulation.
 
-# TODO: duplicate of src/state_builder.py? Both build agent state snapshots.
-# Consider unifying with a shared interface: build_state(source, time, mode="live"|"historical")
+This module:
+1. Fetches historical/synthetic data from DeribitDataSource
+2. Uses shared filtering logic from state_core
+3. Returns Dict format for backward compatibility with backtest simulator
 """
 from __future__ import annotations
 
-import re
 import logging
 from datetime import datetime, timezone, timedelta
 from dataclasses import replace
@@ -18,6 +19,12 @@ from .market_context_backtest import compute_market_context_from_ds, market_cont
 from .types import OptionSnapshot, CallSimulationConfig
 from .pricing import bs_call_delta, get_synthetic_iv
 from src.utils.expiry import parse_deribit_expiry
+from src.state_core import (
+    _calculate_dte,
+    _calculate_dte_float,
+    _calculate_moneyness,
+    _calculate_otm_pct,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -97,6 +104,61 @@ def _generate_synthetic_candidates(
     return candidates
 
 
+def _filter_option_chain(
+    all_options: List[OptionSnapshot],
+    t: datetime,
+    min_dte: int,
+    max_dte: int,
+    delta_min: float,
+    delta_max: float,
+) -> List[OptionSnapshot]:
+    """
+    Filter option chain using shared logic from state_core.
+    
+    Args:
+        all_options: Full option chain
+        t: Reference time for DTE calculation
+        min_dte: Minimum DTE filter
+        max_dte: Maximum DTE filter
+        delta_min: Minimum delta filter
+        delta_max: Maximum delta filter
+    
+    Returns:
+        Filtered list of OptionSnapshot
+    """
+    candidates: List[OptionSnapshot] = []
+    
+    for opt in all_options:
+        if opt.kind != "call":
+            continue
+        
+        expiry = getattr(opt, "expiry", None)
+        if expiry is None:
+            instrument = getattr(opt, "instrument_name", None) or getattr(opt, "symbol", "")
+            expiry = parse_deribit_expiry(str(instrument))
+        
+        if expiry is None:
+            continue
+        
+        dte = _calculate_dte_float(expiry, t)
+        if dte < min_dte or dte > max_dte:
+            continue
+        
+        if opt.delta is None:
+            continue
+        delta_abs = abs(float(opt.delta))
+        if delta_abs < delta_min or delta_abs > delta_max:
+            continue
+        
+        if getattr(opt, "expiry", None) is None:
+            opt_with_expiry = replace(opt, expiry=expiry)
+            candidates.append(opt_with_expiry)
+        else:
+            candidates.append(opt)
+    
+    return candidates
+
+
 def build_historical_state(
     ds: DeribitDataSource,
     cfg: CallSimulationConfig,
@@ -166,38 +228,14 @@ def build_historical_state(
             margin_type=cfg.option_margin_type,
         )
         
-        min_dte = cfg.min_dte
-        max_dte = cfg.max_dte
-        delta_min = cfg.delta_min
-        delta_max = cfg.delta_max
-
-        for opt in all_options:
-            if opt.kind != "call":
-                continue
-
-            expiry = getattr(opt, "expiry", None)
-            if expiry is None:
-                instrument = getattr(opt, "instrument_name", None) or getattr(opt, "symbol", "")
-                expiry = parse_deribit_expiry(str(instrument))
-
-            if expiry is None:
-                continue
-
-            dte = (expiry - t).total_seconds() / 86400.0
-            if dte < min_dte or dte > max_dte:
-                continue
-
-            if opt.delta is None:
-                continue
-            delta_abs = abs(float(opt.delta))
-            if delta_abs < delta_min or delta_abs > delta_max:
-                continue
-
-            if getattr(opt, "expiry", None) is None:
-                opt_with_expiry = replace(opt, expiry=expiry)
-                candidates.append(opt_with_expiry)
-            else:
-                candidates.append(opt)
+        candidates = _filter_option_chain(
+            all_options=all_options,
+            t=t,
+            min_dte=cfg.min_dte,
+            max_dte=cfg.max_dte,
+            delta_min=cfg.delta_min,
+            delta_max=cfg.delta_max,
+        )
 
     portfolio = {
         "spot_position": cfg.initial_spot_position,

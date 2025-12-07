@@ -17,7 +17,8 @@ This is an automated options trading system that sells "covered calls" on Bitcoi
 | `src/web_app.py` | The main web dashboard. Shows live status, recent decisions, open positions, a chat interface to ask the agent questions, and the Backtesting Lab for testing strategies on historical data. |
 | `agent_loop.py` | The "heartbeat" of the live agent. Runs continuously, fetching market data, making trading decisions, and executing trades every few minutes. |
 | `src/config.py` | Central settings hub. Controls everything from which cryptocurrencies to trade, to risk limits, to whether the AI is enabled. All settings can be changed via environment variables. |
-| `src/state_builder.py` | Gathers all current market information (prices, account balances, available options) into a single snapshot that the decision-making code uses. |
+| `src/state_builder.py` | Gathers all current market information (prices, account balances, available options) into a single snapshot that the decision-making code uses. Uses `state_core.py` for shared logic. |
+| `src/state_core.py` | Shared state-building core used by both live and backtest agents. Contains `RawMarketSnapshot`, `RawOption`, `RawPortfolio` dataclasses and `build_agent_state_from_raw()` function. Only data sources differ; construction rules are unified. |
 | `src/policy_rule_based.py` | The "rule-based brain." Makes trading decisions using handwritten rules like "if the option premium is juicy and risk is low, sell the call." |
 | `src/agent_brain_llm.py` | The "AI brain." Sends the current market snapshot to OpenAI's GPT and asks it what trade to make. The AI's response is validated before execution. |
 | `src/risk_engine.py` | The safety guard. Before any trade goes through, this checks margin limits, position limits, and other safeguards. Can block trades that are too risky. |
@@ -336,9 +337,9 @@ See `HEALTHCHECK.md` for the full prioritized list with risk assessments. Below 
 
 ### P1 – Worth Fixing (Not Urgent)
 
-| Item | Risk if Unfixed | Risk of Refactoring |
-|------|-----------------|---------------------|
-| **Duplicate state builders** (live vs backtest) | Makes it harder to add new features—changes must be made in two places, increasing the chance one gets forgotten. | Moderate risk; the live and backtest builders have different data sources, so a hasty merge could break either mode. |
+| Item | Risk if Unfixed | Risk of Refactoring | Status |
+|------|-----------------|---------------------|--------|
+| **Duplicate state builders** (live vs backtest) | Makes it harder to add new features—changes must be made in two places, increasing the chance one gets forgotten. | Moderate risk; the live and backtest builders have different data sources, so a hasty merge could break either mode. | **FIXED** – Uses `src/state_core.py` |
 | **Duplicate Deribit clients** (trading vs public data) | Maintenance burden; any bug fix or API change must be applied twice. | Low-to-moderate risk; the clients serve different purposes (auth vs no-auth), so they can share base code without full merge. |
 | **Duplicate expiry parsing** | Minor—mostly code clarity. Same logic in two places means potential for subtle date parsing bugs. | Very low risk; simple utility functions that can be extracted without touching core logic. |
 | **No unit tests** | Regressions go undetected until they cause visible problems in production or backtests. | Time investment rather than code risk; tests should be added incrementally without modifying existing code. |

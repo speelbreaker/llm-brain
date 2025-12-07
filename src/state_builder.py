@@ -1,42 +1,33 @@
 """
-State builder module.
-Fetches market data and positions to construct the AgentState.
+State builder module for LIVE agent.
+Fetches market data from Deribit API and constructs AgentState via state_core.
 
-# TODO: duplicate logic with src/backtest/state_builder.py
-# Both parse expiry dates and build state snapshots. Consider:
-# 1. Shared expiry parsing utility
-# 2. Unified state builder interface for live vs historical
+This module:
+1. Fetches live data from Deribit (spot, portfolio, options)
+2. Converts to RawMarketSnapshot format
+3. Delegates to state_core.build_agent_state_from_raw() for unified processing
 """
 from __future__ import annotations
 
-import math
 from datetime import datetime, timezone
 from typing import Optional
 
 from src.config import Settings, settings
 from src.deribit_client import DeribitClient, DeribitAPIError
 from src.market_context import compute_market_context
-from src.metrics.volatility import compute_ivrv_ratio
 from src.utils.expiry import parse_deribit_expiry
-from src.models import (
-    AgentState,
-    CandidateOption,
-    MarketContext,
-    OptionInstrument,
-    OptionPosition,
-    OptionType,
-    PortfolioState,
-    Side,
-    VolState,
+from src.models import AgentState, MarketContext, OptionType
+from src.state_core import (
+    RawOption,
+    RawPosition,
+    RawPortfolio,
+    RawMarketSnapshot,
+    build_agent_state_from_raw,
 )
 
 
 def _parse_expiry(instrument_name: str) -> datetime:
-    """Parse expiry date from instrument name like BTC-27DEC24-100000-C.
-    
-    Uses the centralized expiry parser (src/utils/expiry.py) to ensure
-    consistent parsing across live agent, backtests, and position tracking.
-    """
+    """Parse expiry date from instrument name like BTC-27DEC24-100000-C."""
     result = parse_deribit_expiry(instrument_name)
     if result is None:
         raise ValueError(f"Invalid instrument name format: {instrument_name}")
@@ -51,41 +42,36 @@ def _parse_strike(instrument_name: str) -> float:
     return float(parts[2])
 
 
-def _parse_option_type(instrument_name: str) -> OptionType:
-    """Parse option type from instrument name."""
+def _parse_option_type(instrument_name: str) -> str:
+    """Parse option type from instrument name as string."""
     if instrument_name.endswith("-C"):
-        return OptionType.CALL
+        return "call"
     elif instrument_name.endswith("-P"):
-        return OptionType.PUT
+        return "put"
     raise ValueError(f"Cannot determine option type from: {instrument_name}")
 
 
-def _calculate_dte(expiry: datetime) -> int:
-    """Calculate days to expiry."""
-    now = datetime.now(timezone.utc)
-    delta = expiry - now
-    return max(0, delta.days)
-
-
-def _approximate_delta(
+def _approximate_delta_for_ticker(
     spot: float,
     strike: float,
     dte: int,
-    option_type: OptionType,
+    option_type: str,
     iv: float = 0.6,
 ) -> float:
     """
     Approximate option delta using simplified Black-Scholes.
-    This is a placeholder - should be replaced with proper Greeks calculation.
+    Used when Deribit doesn't provide delta in ticker response.
     """
+    import math
+    
     if dte <= 0:
-        if option_type == OptionType.CALL:
+        if option_type == "call":
             return 1.0 if spot > strike else 0.0
         else:
             return -1.0 if spot < strike else 0.0
     
     t = dte / 365.0
-    moneyness = math.log(spot / strike)
+    moneyness = math.log(spot / strike) if spot > 0 and strike > 0 else 0
     vol_sqrt_t = iv * math.sqrt(t)
     
     if vol_sqrt_t == 0:
@@ -96,68 +82,39 @@ def _approximate_delta(
     def norm_cdf(x: float) -> float:
         return 0.5 * (1 + math.erf(x / math.sqrt(2)))
     
-    if option_type == OptionType.CALL:
+    if option_type == "call":
         return norm_cdf(d1)
     else:
         return norm_cdf(d1) - 1
 
 
-def _calculate_moneyness(spot: float, strike: float, option_type: OptionType) -> str:
-    """Determine if option is ITM, ATM, or OTM."""
-    pct_diff = abs(spot - strike) / spot
-    
-    if pct_diff < 0.02:
-        return "ATM"
-    
-    if option_type == OptionType.CALL:
-        return "OTM" if strike > spot else "ITM"
-    else:
-        return "OTM" if strike < spot else "ITM"
-
-
-def _calculate_otm_pct(spot: float, strike: float, option_type: OptionType) -> float:
-    """Calculate percentage out of the money."""
-    if option_type == OptionType.CALL:
-        if strike > spot:
-            return (strike - spot) / spot * 100
-        return 0.0
-    else:
-        if strike < spot:
-            return (spot - strike) / spot * 100
-        return 0.0
-
-
-def build_agent_state(
+def _fetch_spot_prices(
     client: DeribitClient,
-    config: Optional[Settings] = None,
-) -> AgentState:
-    """
-    Build the complete agent state by fetching market data and positions.
-    
-    Args:
-        client: Deribit API client
-        config: Settings configuration (uses default if None)
-    
-    Returns:
-        AgentState with portfolio, candidates, and market snapshot
-    """
-    cfg = config or settings
-    now = datetime.now(timezone.utc)
-    
+    underlyings: list[str],
+) -> dict[str, float]:
+    """Fetch spot prices for all underlyings."""
     spot_prices: dict[str, float] = {}
-    for underlying in cfg.underlyings:
+    for underlying in underlyings:
         try:
             spot_prices[underlying] = client.get_index_price(underlying)
         except DeribitAPIError as e:
             print(f"Warning: Could not fetch {underlying} spot price: {e}")
             spot_prices[underlying] = 0.0
-    
+    return spot_prices
+
+
+def _fetch_portfolio(
+    client: DeribitClient,
+    underlyings: list[str],
+    spot_prices: dict[str, float],
+) -> RawPortfolio:
+    """Fetch portfolio data and positions from Deribit."""
     balances: dict[str, float] = {}
     equity_usd = 0.0
     margin_used_usd = 0.0
     margin_available_usd = 0.0
     
-    for underlying in cfg.underlyings:
+    for underlying in underlyings:
         try:
             summary = client.get_account_summary(underlying)
             balances[underlying] = summary.get("equity", 0.0)
@@ -174,15 +131,15 @@ def build_agent_state(
     if equity_usd > 0:
         margin_used_pct = (margin_used_usd / equity_usd) * 100
     
-    option_positions: list[OptionPosition] = []
+    positions: list[RawPosition] = []
     net_delta = 0.0
     
-    for underlying in cfg.underlyings:
+    for underlying in underlyings:
         try:
-            positions = client.get_positions(underlying, kind="option")
+            deribit_positions = client.get_positions(underlying, kind="option")
             spot = spot_prices.get(underlying, 0.0)
             
-            for pos in positions:
+            for pos in deribit_positions:
                 if pos.get("size", 0) == 0:
                     continue
                 
@@ -195,46 +152,50 @@ def build_agent_state(
                 except ValueError:
                     continue
                 
-                dte = _calculate_dte(expiry)
                 size = pos.get("size", 0)
                 delta = pos.get("delta", 0.0)
                 
-                position = OptionPosition(
-                    symbol=instrument_name,
+                raw_pos = RawPosition(
+                    instrument_name=instrument_name,
                     underlying=underlying,
                     strike=strike,
                     expiry=expiry,
                     option_type=opt_type,
-                    side=Side.SELL if size < 0 else Side.BUY,
-                    size=abs(size),
-                    avg_price=pos.get("average_price", 0.0),
+                    size=size,
+                    average_price=pos.get("average_price", 0.0),
                     mark_price=pos.get("mark_price", 0.0),
-                    unrealized_pnl=pos.get("floating_profit_loss_usd", 0.0),
-                    expiry_dte=dte,
-                    moneyness=_calculate_moneyness(spot, strike, opt_type),
                     delta=delta,
+                    unrealized_pnl_usd=pos.get("floating_profit_loss_usd", 0.0),
                 )
-                option_positions.append(position)
+                positions.append(raw_pos)
                 
                 if delta:
                     net_delta += delta
         except DeribitAPIError as e:
             print(f"Warning: Could not fetch {underlying} positions: {e}")
     
-    portfolio = PortfolioState(
-        balances=balances,
-        spot_positions=balances.copy(),
+    return RawPortfolio(
         equity_usd=equity_usd,
+        margin_used_pct=margin_used_pct,
+        balances=balances,
+        positions=positions,
         margin_used_usd=margin_used_usd,
         margin_available_usd=margin_available_usd,
-        margin_used_pct=margin_used_pct,
         net_delta=net_delta,
-        option_positions=option_positions,
     )
+
+
+def _fetch_options(
+    client: DeribitClient,
+    underlyings: list[str],
+    spot_prices: dict[str, float],
+    cfg: Settings,
+) -> list[RawOption]:
+    """Fetch option chain data from Deribit."""
+    now = datetime.now(timezone.utc)
+    options: list[RawOption] = []
     
-    candidate_options: list[CandidateOption] = []
-    
-    for underlying in cfg.underlyings:
+    for underlying in underlyings:
         try:
             instruments = client.get_instruments(underlying, kind="option")
             spot = spot_prices.get(underlying, 0.0)
@@ -255,15 +216,13 @@ def build_agent_state(
                 except ValueError:
                     continue
                 
-                dte = _calculate_dte(expiry)
+                dte = max(0, (expiry - now).days)
                 
                 if dte < cfg.effective_dte_min or dte > cfg.effective_dte_max:
                     continue
                 
                 if strike <= spot:
                     continue
-                
-                otm_pct = _calculate_otm_pct(spot, strike, opt_type)
                 
                 try:
                     ticker = client.get_ticker(instrument_name)
@@ -276,68 +235,58 @@ def build_agent_state(
                 if bid <= 0 or ask <= 0:
                     continue
                 
-                mid_price = (bid + ask) / 2
+                mark_price = (bid + ask) / 2
                 mark_iv = ticker.get("mark_iv", 60.0) or 60.0
                 
-                premium_usd = mid_price * spot
-                
-                if premium_usd < cfg.premium_min_usd:
-                    continue
-                
-                delta = _approximate_delta(spot, strike, dte, opt_type, mark_iv / 100)
-                
-                if delta < cfg.effective_delta_min or delta > cfg.effective_delta_max:
-                    continue
+                delta = _approximate_delta_for_ticker(spot, strike, dte, opt_type, mark_iv / 100)
                 
                 rv_placeholder = mark_iv * 0.8
-                ivrv = compute_ivrv_ratio(mark_iv, rv_placeholder)
                 
-                candidate = CandidateOption(
-                    symbol=instrument_name,
-                    underlying=underlying,
-                    strike=strike,
+                raw_opt = RawOption(
+                    instrument_name=instrument_name,
                     expiry=expiry,
+                    strike=strike,
                     option_type=opt_type,
-                    dte=dte,
+                    mark_price=mark_price,
+                    mark_iv=mark_iv,
                     delta=delta,
-                    otm_pct=otm_pct,
+                    underlying_price=spot,
+                    underlying=underlying,
                     bid=bid,
                     ask=ask,
-                    mid_price=mid_price,
-                    premium_usd=premium_usd,
-                    iv=mark_iv,
                     rv=rv_placeholder,
-                    ivrv=ivrv,
                 )
-                candidate_options.append(candidate)
+                options.append(raw_opt)
         except DeribitAPIError as e:
             print(f"Warning: Could not fetch {underlying} instruments: {e}")
     
-    candidate_options.sort(key=lambda x: x.premium_usd, reverse=True)
-    candidate_options = candidate_options[:5]
+    return options
+
+
+def build_agent_state(
+    client: DeribitClient,
+    config: Optional[Settings] = None,
+) -> AgentState:
+    """
+    Build the complete agent state by fetching market data and positions.
     
-    btc_iv = 0.0
-    eth_iv = 0.0
+    This is the main entry point for live agent state construction.
+    It fetches data from Deribit, converts to RawMarketSnapshot,
+    and delegates to state_core for unified processing.
     
-    for c in candidate_options:
-        if c.underlying == "BTC" and btc_iv == 0:
-            btc_iv = c.iv
-        elif c.underlying == "ETH" and eth_iv == 0:
-            eth_iv = c.iv
+    Args:
+        client: Deribit API client
+        config: Settings configuration (uses default if None)
     
-    btc_rv = btc_iv * 0.8 if btc_iv > 0 else 0.0
-    eth_rv = eth_iv * 0.8 if eth_iv > 0 else 0.0
+    Returns:
+        AgentState with portfolio, candidates, and market snapshot
+    """
+    cfg = config or settings
+    now = datetime.now(timezone.utc)
     
-    vol_state = VolState(
-        btc_iv=btc_iv,
-        btc_rv=btc_rv,
-        btc_ivrv=compute_ivrv_ratio(btc_iv, btc_rv),
-        btc_skew=0.0,
-        eth_iv=eth_iv,
-        eth_rv=eth_rv,
-        eth_ivrv=compute_ivrv_ratio(eth_iv, eth_rv),
-        eth_skew=0.0,
-    )
+    spot_prices = _fetch_spot_prices(client, cfg.underlyings)
+    portfolio = _fetch_portfolio(client, cfg.underlyings, spot_prices)
+    options = _fetch_options(client, cfg.underlyings, spot_prices, cfg)
     
     market_ctx: Optional[MarketContext] = None
     primary_underlying = "BTC" if "BTC" in cfg.underlyings else (cfg.underlyings[0] if cfg.underlyings else None)
@@ -348,12 +297,23 @@ def build_agent_state(
         except Exception as e:
             print(f"Warning: Could not compute market context: {e}")
     
-    return AgentState(
+    raw_snapshot = RawMarketSnapshot(
         timestamp=now,
         underlyings=cfg.underlyings,
         spot=spot_prices,
         portfolio=portfolio,
-        vol_state=vol_state,
-        candidate_options=candidate_options,
+        options=options,
+        realized_vol={},
         market_context=market_ctx,
+    )
+    
+    return build_agent_state_from_raw(
+        raw_snapshot,
+        delta_min=cfg.effective_delta_min,
+        delta_max=cfg.effective_delta_max,
+        dte_min=cfg.effective_dte_min,
+        dte_max=cfg.effective_dte_max,
+        premium_min_usd=cfg.premium_min_usd,
+        max_candidates=5,
+        source="live",
     )
