@@ -1,0 +1,237 @@
+You are working inside my LLMAgentBrain options-bot repository.
+
+Goal
+====
+
+Create a robust "Deribit Data Harvester" script that runs as a **separate process**
+and continuously collects real Deribit options data for multiple assets (BTC, ETH,
+SOL, XRP, DOGE, MATIC). The data will be saved as Parquet files and later used
+for backtesting and "exam mode" for trading bots.
+
+Important constraints:
+- Keep all code in the SAME repo.
+- The harvester MUST be runnable as its own long-running process
+  (separate from the trading bot / FastAPI server).
+- Use Deribit public REST API (mainnet) for now.
+- Do NOT interfere with the existing trading bot loops.
+
+Part 1 – Dependencies
+=====================
+
+1. Update the project dependencies to include:
+   - pandas
+   - pyarrow
+   - requests
+
+If there is a requirements.txt or pyproject.toml, add them there.
+
+Part 2 – Create scripts/data_harvester.py
+=========================================
+
+Create (or replace) a file:
+
+  scripts/data_harvester.py
+
+This script should:
+
+- Use Python 3.11+.
+- Continuously fetch options book summary data from Deribit for a list of assets.
+- Save each snapshot as a Parquet file under a structured directory tree.
+- Log its activity to logs/data_harvester.log and stdout.
+
+Behavior & config:
+
+1) Config / constants
+
+At the top of the file:
+
+- Default asset list:
+
+    ASSETS = ["BTC", "ETH", "SOL", "XRP", "DOGE", "MATIC"]
+
+- Default polling interval:
+
+    INTERVAL_MINUTES = 15
+
+- Default base URL:
+
+    DERIBIT_BASE_URL = os.getenv("DERIBIT_BASE_URL", "https://www.deribit.com")
+
+- Data root:
+
+    DATA_ROOT = "data/live_deribit"
+
+- Log directory:
+
+    LOG_DIR = "logs"
+
+Make sure to:
+
+- os.makedirs(DATA_ROOT, exist_ok=True)
+- os.makedirs(LOG_DIR, exist_ok=True)
+
+2) Logging
+
+Configure logging with:
+
+- A FileHandler at logs/data_harvester.log
+- A StreamHandler to stdout
+
+Log lines like:
+
+- "Starting Data Harvester..."
+- "Fetching BTC..."
+- "Saved N rows for BTC to <filename>"
+
+3) Fetching data from Deribit
+
+Implement a function:
+
+  def fetch_option_chain(currency: str) -> list[dict]:
+
+which calls:
+
+  GET {DERIBIT_BASE_URL}/api/v2/public/get_book_summary_by_currency
+
+with params:
+
+  currency = <symbol>
+  kind = "option"
+
+Use requests with a reasonable timeout (e.g. 10 seconds). On success,
+return result["result"] (a list of entries). On error, log and return [].
+
+4) Processing and saving data
+
+Implement:
+
+  def process_and_save(currency: str, raw_data: list[dict]) -> None:
+
+Steps:
+
+- If raw_data is empty, return immediately.
+- Convert to a DataFrame:
+
+    df = pd.DataFrame(raw_data)
+
+- Add a UTC timestamp column:
+
+    now = datetime.datetime.now(datetime.timezone.utc)
+    df["harvest_time"] = now
+
+- Flatten greeks if present:
+
+    if "greeks" in df.columns:
+        greeks_df = df["greeks"].apply(pd.Series)
+        greeks_df = greeks_df.rename(columns=lambda c: f"greek_{c}")
+        df = pd.concat([df.drop(columns=["greeks"]), greeks_df], axis=1)
+
+- Ensure we keep the essential columns for backtesting:
+
+  * harvesting metadata:
+    - harvest_time
+
+  * instrument identifiers:
+    - instrument_name
+    - expiration_timestamp (if present)
+    - strike (if present)
+    - option_type (if present)
+
+  * pricing:
+    - mark_price
+    - underlying_price (or underlying_index, whichever name Deribit uses in this endpoint)
+    - best_bid_price
+    - best_ask_price
+
+  * volume / OI:
+    - open_interest
+    - volume
+
+  * volatility:
+    - bid_iv
+    - ask_iv
+    - mark_iv
+
+  * greeks (if created above):
+    - greek_delta
+    - greek_gamma
+    - greek_theta
+    - greek_vega
+
+- Filter the DataFrame to only these columns that actually exist.
+
+Directory structure and filename:
+
+- For each snapshot, save under:
+
+    data/live_deribit/<CURRENCY>/<YYYY>/<MM>/<DD>/<CURRENCY>_<YYYY-MM-DD_HHMM>.parquet
+
+  Example:
+
+    data/live_deribit/BTC/2025/12/07/BTC_2025-12-07_1400.parquet
+
+- Create subdirectories with os.makedirs(..., exist_ok=True) before saving.
+
+- Save Parquet via:
+
+    df.to_parquet(filename, engine="pyarrow", index=False)
+
+- Log how many rows were saved.
+
+5) Main loop
+
+Implement:
+
+  def run_harvester() -> None:
+
+- Log startup (assets, interval).
+- While True:
+    - Record loop start time.
+    - For each asset in ASSETS:
+        - Log "Fetching <ASSET>..."
+        - Call fetch_option_chain(asset)
+        - Call process_and_save(asset, data)
+        - Sleep a short time between assets (e.g. 0.5–1.0s) to be gentle to the API.
+    - Compute elapsed time and sleep until INTERVAL_MINUTES have passed:
+
+        elapsed = time.time() - loop_start
+        sleep_sec = INTERVAL_MINUTES * 60 - elapsed
+        if sleep_sec > 0:
+            log "Sleeping for X.X minutes..."
+            time.sleep(sleep_sec)
+        else:
+            log warning that harvesting exceeded the interval and immediately continue.
+
+Add:
+
+  if __name__ == "__main__":
+      run_harvester()
+
+6) Error handling
+
+- Do not crash on transient network errors. Log and continue.
+- If a single asset fetch fails, skip it for this round and move on to the next asset.
+- The loop should be robust and keep running indefinitely.
+
+Part 3 – Usage docs
+====================
+
+Add a short section to README.md (or a separate markdown file) describing:
+
+- What the data harvester does.
+- How to run it:
+
+  - Install deps:
+        pip install -r requirements.txt
+  - Run the harvester in a separate process / terminal:
+        python -m scripts.data_harvester
+
+- Example of resulting files, e.g.:
+
+    data/live_deribit/BTC/2025/12/07/BTC_2025-12-07_1400.parquet
+
+Note that this process should be run independently from the trading bot /
+FastAPI server so that if the bot crashes, the data harvester keeps running.
+
+Do NOT change any existing trading logic or backtesting code in this task.
+Just implement the data harvester and its documentation.

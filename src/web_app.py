@@ -1775,9 +1775,9 @@ def index() -> str:
       <h2>Chat with Agent</h2>
       <p style="color: #888; margin-bottom: 15px;">Ask questions about the bot's current state, positions, decisions, trading rules, or architecture.</p>
       
-      <div id="chat-messages" style="height: 400px; overflow-y: auto; border: 1px solid #333; border-radius: 8px; padding: 15px; margin-bottom: 15px; background: #1a1a1a;">
+      <div id="chat-messages" style="height: 400px; overflow-y: auto; border: 1px solid #ddd; border-radius: 8px; padding: 15px; margin-bottom: 15px; background: #ffffff;">
         <div id="chat-log" style="display: flex; flex-direction: column; gap: 12px;">
-          <div style="text-align: center; color: #666; padding: 20px;">Start a conversation by asking a question below...</div>
+          <div style="text-align: center; color: #888; padding: 20px;">Start a conversation by asking a question below...</div>
         </div>
       </div>
       
@@ -2105,20 +2105,21 @@ def index() -> str:
     function renderChatMessages(messages) {{
       const chatLog = document.getElementById('chat-log');
       if (!messages || messages.length === 0) {{
-        chatLog.innerHTML = '<div style="text-align: center; color: #666; padding: 20px;">Start a conversation by asking a question below...</div>';
+        chatLog.innerHTML = '<div style="text-align: center; color: #888; padding: 20px;">Start a conversation by asking a question below...</div>';
         return;
       }}
       
       chatLog.innerHTML = messages.map(msg => {{
         const isUser = msg.role === 'user';
-        const bgColor = isUser ? '#2a4a7a' : '#333';
+        const bgColor = isUser ? '#e3f2fd' : '#f5f5f5';
+        const textColor = '#333';
         const align = isUser ? 'flex-end' : 'flex-start';
         const label = isUser ? 'You' : 'Agent';
-        const labelColor = isUser ? '#7aa3d4' : '#4CAF50';
+        const labelColor = isUser ? '#1565c0' : '#2e7d32';
         return `
           <div style="display: flex; justify-content: ${{align}};">
-            <div style="max-width: 85%; background: ${{bgColor}}; padding: 10px 14px; border-radius: 12px;">
-              <div style="font-size: 11px; color: ${{labelColor}}; margin-bottom: 4px;">${{label}}</div>
+            <div style="max-width: 85%; background: ${{bgColor}}; padding: 10px 14px; border-radius: 12px; color: ${{textColor}};">
+              <div style="font-size: 11px; color: ${{labelColor}}; margin-bottom: 4px; font-weight: 600;">${{label}}</div>
               <div style="white-space: pre-wrap; line-height: 1.5;">${{msg.content.replace(/</g, '&lt;').replace(/>/g, '&gt;')}}</div>
             </div>
           </div>

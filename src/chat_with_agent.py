@@ -98,14 +98,21 @@ def _summarize_decisions(limit: int = 10) -> str:
     
     action_counts: Dict[str, int] = {}
     symbols_traded: List[str] = []
+    reasonings: List[str] = []
     
     for d in decisions:
-        action = d.get("action", "UNKNOWN")
+        final = d.get("final_action", {})
+        proposed = d.get("proposed_action", {})
+        action = final.get("action") or proposed.get("action") or d.get("action", "UNKNOWN")
         action_counts[action] = action_counts.get(action, 0) + 1
         
-        params = d.get("params", {})
+        params = final.get("params", {}) or proposed.get("params", {}) or d.get("params", {})
         if params and "symbol" in params:
             symbols_traded.append(params["symbol"])
+        
+        reasoning = final.get("reasoning") or proposed.get("reasoning", "")
+        if reasoning and len(reasonings) < 3:
+            reasonings.append(reasoning[:100])
     
     parts = [f"{count}x {action}" for action, count in action_counts.items()]
     summary = f"Last {len(decisions)} decisions: " + ", ".join(parts)
@@ -113,6 +120,9 @@ def _summarize_decisions(limit: int = 10) -> str:
     if symbols_traded:
         unique_symbols = list(dict.fromkeys(symbols_traded[:5]))
         summary += f". Symbols: {', '.join(unique_symbols)}"
+    
+    if reasonings:
+        summary += "\n\nRecent reasoning:\n" + "\n".join(f"- {r}..." for r in reasonings)
     
     return summary
 
@@ -158,6 +168,53 @@ def _load_docs_summary() -> str:
     return "\n\n".join(docs_parts)
 
 
+def _enrich_positions_with_live_data(
+    raw_positions: List[Dict[str, Any]],
+    live_positions: List[Dict[str, Any]],
+    spot_prices: Dict[str, float],
+) -> tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    """
+    Enrich position tracker data with live mark prices and PnL from Deribit.
+    Mirrors the logic in /api/positions/open endpoint.
+    """
+    live_by_symbol: Dict[str, Dict[str, Any]] = {}
+    for p in live_positions:
+        symbol = p.get("symbol")
+        if symbol:
+            live_by_symbol[symbol] = p
+    
+    enriched_positions: List[Dict[str, Any]] = []
+    for pos in raw_positions:
+        enriched = dict(pos)
+        symbol = enriched.get("symbol")
+        underlying = enriched.get("underlying", "BTC")
+        spot = float(spot_prices.get(underlying, 0.0))
+        live_data = live_by_symbol.get(symbol, {})
+        
+        if live_data:
+            live_mark = float(live_data.get("mark_price") or 0.0)
+            live_pnl = float(live_data.get("unrealized_pnl") or 0.0)
+            entry_price_btc = float(enriched.get("entry_price") or 0.0)
+            qty = abs(float(enriched.get("quantity") or 1.0))
+            
+            if live_mark > 0:
+                enriched["mark_price"] = live_mark
+                enriched["unrealized_pnl"] = live_pnl
+                if entry_price_btc > 0 and qty > 0 and spot > 0:
+                    notional_usd = entry_price_btc * qty * spot
+                    enriched["unrealized_pnl_pct"] = (live_pnl / notional_usd) * 100.0 if notional_usd > 0 else 0.0
+        
+        enriched_positions.append(enriched)
+    
+    total_pnl = sum(float(p.get("unrealized_pnl", 0.0)) for p in enriched_positions)
+    totals = {
+        "positions_count": len(enriched_positions),
+        "unrealized_pnl": total_pnl,
+    }
+    
+    return enriched_positions, totals
+
+
 def build_chat_context() -> Dict[str, Any]:
     """
     Collect the current trading context for the LLM:
@@ -171,13 +228,15 @@ def build_chat_context() -> Dict[str, Any]:
     
     current_status = copy.deepcopy(status_store.get())
     
-    positions_data = copy.deepcopy(position_tracker.get_open_positions_payload())
-    positions = positions_data.get("positions", [])
-    totals = positions_data.get("totals", {})
-    
     state = current_status.get("state", {})
     portfolio = state.get("portfolio", {})
     spot = state.get("spot", {})
+    live_positions = portfolio.get("positions", [])
+    
+    raw_positions_data = copy.deepcopy(position_tracker.get_open_positions_payload())
+    raw_positions = raw_positions_data.get("positions", [])
+    
+    positions, totals = _enrich_positions_with_live_data(raw_positions, live_positions, spot)
     
     context = {
         "environment": {
@@ -256,9 +315,9 @@ Current Runtime State:
 - Dry Run: {'YES' if env.get('dry_run') else 'NO'}
 
 Portfolio:
-- Equity: ${ctx['portfolio'].get('equity_usd', 0):,.2f}
-- Margin Used: {ctx['portfolio'].get('margin_used_pct', 0):.2f}%
-- Net Delta: {ctx['portfolio'].get('net_delta', 0):.4f}
+- Equity: ${ctx['portfolio'].get('equity_usd') or 0:,.2f}
+- Margin Used: {ctx['portfolio'].get('margin_used_pct') or 0:.2f}%
+- Net Delta: {ctx['portfolio'].get('net_delta') or 0:.4f}
 
 Spot Prices: {ctx['spot_prices']}
 
