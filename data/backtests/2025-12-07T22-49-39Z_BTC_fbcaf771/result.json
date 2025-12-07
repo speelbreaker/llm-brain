@@ -1,7 +1,7 @@
 {
   "run_id": "2025-12-07T22-49-39Z_BTC_fbcaf771",
-  "created_at": "2025-12-07T22:49:39.149734+00:00",
-  "status": "running",
+  "created_at": "2025-12-07T22:49:39.150237",
+  "status": "finished",
   "config": {
     "underlying": "BTC",
     "start_date": "2024-09-01T00:00:00+00:00",
@@ -18,11 +18,3104 @@
     "margin_type": "inverse",
     "settlement_ccy": "ANY"
   },
-  "metrics": {},
-  "recent_steps": {},
-  "recent_chains": {},
-  "equity_curves": {},
+  "metrics": {
+    "hold_to_expiry": {
+      "initial_equity": 58466.0,
+      "final_equity": 99112.12,
+      "net_profit_usd": 40646.12,
+      "net_profit_pct": 69.52,
+      "hodl_profit_usd": 35061.0,
+      "hodl_profit_pct": 59.97,
+      "max_drawdown_pct": 48.14,
+      "max_drawdown_usd": 49595.07,
+      "num_trades": 123,
+      "win_rate": 75.6,
+      "avg_trade_usd": 2484.78,
+      "profit_factor": 5.71,
+      "gross_profit": 370532.94,
+      "gross_loss": 64904.68,
+      "avg_winner": 3984.23,
+      "avg_loser": 2163.49,
+      "sharpe_ratio": 0.15,
+      "sortino_ratio": 0.12,
+      "final_pnl": 305628.2608,
+      "final_pnl_vs_hodl": 5585.1153,
+      "avg_pnl": 2484.7826
+    },
+    "tp_and_roll": {
+      "initial_equity": 58466.0,
+      "final_equity": 123111.12,
+      "net_profit_usd": 64645.12,
+      "net_profit_pct": 110.57,
+      "hodl_profit_usd": 35061.0,
+      "hodl_profit_pct": 59.97,
+      "max_drawdown_pct": 57.11,
+      "max_drawdown_usd": 63130.51,
+      "num_trades": 122,
+      "win_rate": 72.1,
+      "avg_trade_usd": 242.49,
+      "profit_factor": 1.36,
+      "gross_profit": 111472.83,
+      "gross_loss": 81888.7,
+      "avg_winner": 1266.74,
+      "avg_loser": 2408.49,
+      "sharpe_ratio": 0.21,
+      "sortino_ratio": 0.15,
+      "final_pnl": 29584.1234,
+      "final_pnl_vs_hodl": 29584.1234,
+      "avg_pnl": 242.4928
+    }
+  },
+  "recent_steps": {
+    "tp_and_roll": [
+      {
+        "time": "2024-11-13T00:00:00+00:00",
+        "candidates": 6,
+        "best_score": 5.05,
+        "traded": true
+      },
+      {
+        "time": "2024-11-14T00:00:00+00:00",
+        "candidates": 6,
+        "best_score": 4.67,
+        "traded": true
+      },
+      {
+        "time": "2024-11-15T00:00:00+00:00",
+        "candidates": 6,
+        "best_score": 4.53,
+        "traded": true
+      },
+      {
+        "time": "2024-11-16T00:00:00+00:00",
+        "candidates": 6,
+        "best_score": 4.32,
+        "traded": true
+      },
+      {
+        "time": "2024-11-17T00:00:00+00:00",
+        "candidates": 6,
+        "best_score": 4.27,
+        "traded": true
+      },
+      {
+        "time": "2024-11-18T00:00:00+00:00",
+        "candidates": 6,
+        "best_score": 4.09,
+        "traded": true
+      },
+      {
+        "time": "2024-11-19T00:00:00+00:00",
+        "candidates": 6,
+        "best_score": 4.11,
+        "traded": true
+      },
+      {
+        "time": "2024-11-20T00:00:00+00:00",
+        "candidates": 7,
+        "best_score": 4.22,
+        "traded": true
+      },
+      {
+        "time": "2024-11-21T00:00:00+00:00",
+        "candidates": 6,
+        "best_score": 4.31,
+        "traded": true
+      },
+      {
+        "time": "2024-11-22T00:00:00+00:00",
+        "candidates": 7,
+        "best_score": 4.23,
+        "traded": true
+      },
+      {
+        "time": "2024-11-23T00:00:00+00:00",
+        "candidates": 7,
+        "best_score": 4.29,
+        "traded": true
+      },
+      {
+        "time": "2024-11-24T00:00:00+00:00",
+        "candidates": 7,
+        "best_score": 4.13,
+        "traded": true
+      },
+      {
+        "time": "2024-11-25T00:00:00+00:00",
+        "candidates": 7,
+        "best_score": 4.16,
+        "traded": true
+      },
+      {
+        "time": "2024-11-26T00:00:00+00:00",
+        "candidates": 7,
+        "best_score": 3.62,
+        "traded": true
+      },
+      {
+        "time": "2024-11-27T00:00:00+00:00",
+        "candidates": 7,
+        "best_score": 3.56,
+        "traded": true
+      },
+      {
+        "time": "2024-11-28T00:00:00+00:00",
+        "candidates": 6,
+        "best_score": 3.74,
+        "traded": true
+      },
+      {
+        "time": "2024-11-29T00:00:00+00:00",
+        "candidates": 7,
+        "best_score": 3.72,
+        "traded": true
+      },
+      {
+        "time": "2024-11-30T00:00:00+00:00",
+        "candidates": 6,
+        "best_score": 3.88,
+        "traded": true
+      },
+      {
+        "time": "2024-12-01T00:00:00+00:00",
+        "candidates": 7,
+        "best_score": 4.14,
+        "traded": true
+      },
+      {
+        "time": "2024-12-02T00:00:00+00:00",
+        "candidates": 6,
+        "best_score": 4.85,
+        "traded": true
+      },
+      {
+        "time": "2024-12-03T00:00:00+00:00",
+        "candidates": 7,
+        "best_score": 4.23,
+        "traded": true
+      },
+      {
+        "time": "2024-12-04T00:00:00+00:00",
+        "candidates": 7,
+        "best_score": 4.38,
+        "traded": true
+      },
+      {
+        "time": "2024-12-05T00:00:00+00:00",
+        "candidates": 7,
+        "best_score": 4.11,
+        "traded": true
+      },
+      {
+        "time": "2024-12-06T00:00:00+00:00",
+        "candidates": 7,
+        "best_score": 4.45,
+        "traded": true
+      },
+      {
+        "time": "2024-12-07T00:00:00+00:00",
+        "candidates": 7,
+        "best_score": 4.61,
+        "traded": true
+      },
+      {
+        "time": "2024-12-08T00:00:00+00:00",
+        "candidates": 6,
+        "best_score": 4.7,
+        "traded": true
+      },
+      {
+        "time": "2024-12-09T00:00:00+00:00",
+        "candidates": 7,
+        "best_score": 4.63,
+        "traded": true
+      },
+      {
+        "time": "2024-12-10T00:00:00+00:00",
+        "candidates": 7,
+        "best_score": 4.91,
+        "traded": true
+      },
+      {
+        "time": "2024-12-11T00:00:00+00:00",
+        "candidates": 7,
+        "best_score": 4.88,
+        "traded": true
+      },
+      {
+        "time": "2024-12-12T00:00:00+00:00",
+        "candidates": 7,
+        "best_score": 6.4,
+        "traded": true
+      },
+      {
+        "time": "2024-12-13T00:00:00+00:00",
+        "candidates": 7,
+        "best_score": 6.26,
+        "traded": true
+      },
+      {
+        "time": "2024-12-14T00:00:00+00:00",
+        "candidates": 7,
+        "best_score": 6.36,
+        "traded": true
+      },
+      {
+        "time": "2024-12-15T00:00:00+00:00",
+        "candidates": 7,
+        "best_score": 6.41,
+        "traded": true
+      },
+      {
+        "time": "2024-12-16T00:00:00+00:00",
+        "candidates": 7,
+        "best_score": 6.28,
+        "traded": true
+      },
+      {
+        "time": "2024-12-17T00:00:00+00:00",
+        "candidates": 7,
+        "best_score": 5.81,
+        "traded": true
+      },
+      {
+        "time": "2024-12-18T00:00:00+00:00",
+        "candidates": 7,
+        "best_score": 6.39,
+        "traded": true
+      },
+      {
+        "time": "2024-12-19T00:00:00+00:00",
+        "candidates": 7,
+        "best_score": 6.5,
+        "traded": true
+      },
+      {
+        "time": "2024-12-20T00:00:00+00:00",
+        "candidates": 7,
+        "best_score": 6.35,
+        "traded": true
+      },
+      {
+        "time": "2024-12-21T00:00:00+00:00",
+        "candidates": 6,
+        "best_score": 6.4,
+        "traded": true
+      },
+      {
+        "time": "2024-12-22T00:00:00+00:00",
+        "candidates": 6,
+        "best_score": 6.46,
+        "traded": true
+      },
+      {
+        "time": "2024-12-23T00:00:00+00:00",
+        "candidates": 6,
+        "best_score": 6.34,
+        "traded": true
+      },
+      {
+        "time": "2024-12-24T00:00:00+00:00",
+        "candidates": 6,
+        "best_score": 6.45,
+        "traded": true
+      },
+      {
+        "time": "2024-12-25T00:00:00+00:00",
+        "candidates": 6,
+        "best_score": 6.4,
+        "traded": true
+      },
+      {
+        "time": "2024-12-26T00:00:00+00:00",
+        "candidates": 7,
+        "best_score": 6.36,
+        "traded": true
+      },
+      {
+        "time": "2024-12-27T00:00:00+00:00",
+        "candidates": 6,
+        "best_score": 6.49,
+        "traded": true
+      },
+      {
+        "time": "2024-12-28T00:00:00+00:00",
+        "candidates": 6,
+        "best_score": 6.49,
+        "traded": true
+      },
+      {
+        "time": "2024-12-29T00:00:00+00:00",
+        "candidates": 6,
+        "best_score": 6.46,
+        "traded": true
+      },
+      {
+        "time": "2024-12-30T00:00:00+00:00",
+        "candidates": 6,
+        "best_score": 6.25,
+        "traded": true
+      },
+      {
+        "time": "2024-12-31T00:00:00+00:00",
+        "candidates": 7,
+        "best_score": 6.19,
+        "traded": true
+      },
+      {
+        "time": "2025-01-01T00:00:00+00:00",
+        "candidates": 6,
+        "best_score": 5.79,
+        "traded": false
+      }
+    ]
+  },
+  "recent_chains": {
+    "tp_and_roll": [
+      {
+        "decision_time": "2024-11-12T00:00:00+00:00",
+        "underlying": "BTC",
+        "num_legs": 1,
+        "num_rolls": 0,
+        "total_pnl": 1077.493116173653,
+        "max_drawdown_pct": 2.556499629420264,
+        "exit_style": "tp_and_roll",
+        "legs": [
+          {
+            "index": 0,
+            "open_time": "2024-11-12T00:00:00+00:00",
+            "close_time": "2024-11-18T08:00:00+00:00",
+            "strike": 96000.0,
+            "dte_open": 7.0,
+            "pnl": 1077.493116173653,
+            "trigger": "none"
+          }
+        ]
+      },
+      {
+        "decision_time": "2024-11-13T00:00:00+00:00",
+        "underlying": "BTC",
+        "num_legs": 1,
+        "num_rolls": 0,
+        "total_pnl": 495.3046185548046,
+        "max_drawdown_pct": 2.208426120703985,
+        "exit_style": "tp_and_roll",
+        "legs": [
+          {
+            "index": 0,
+            "open_time": "2024-11-13T00:00:00+00:00",
+            "close_time": "2024-11-19T08:00:00+00:00",
+            "strike": 94000.0,
+            "dte_open": 7.0,
+            "pnl": 495.3046185548046,
+            "trigger": "none"
+          }
+        ]
+      },
+      {
+        "decision_time": "2024-11-14T00:00:00+00:00",
+        "underlying": "BTC",
+        "num_legs": 1,
+        "num_rolls": 0,
+        "total_pnl": 400.60090992628466,
+        "max_drawdown_pct": 0.28365483533975494,
+        "exit_style": "tp_and_roll",
+        "legs": [
+          {
+            "index": 0,
+            "open_time": "2024-11-14T00:00:00+00:00",
+            "close_time": "2024-11-20T08:00:00+00:00",
+            "strike": 98000.0,
+            "dte_open": 7.0,
+            "pnl": 400.60090992628466,
+            "trigger": "none"
+          }
+        ]
+      },
+      {
+        "decision_time": "2024-11-15T00:00:00+00:00",
+        "underlying": "BTC",
+        "num_legs": 4,
+        "num_rolls": 3,
+        "total_pnl": 174.2776360086409,
+        "max_drawdown_pct": 4.510221480198383,
+        "exit_style": "tp_and_roll",
+        "legs": [
+          {
+            "index": 0,
+            "open_time": "2024-11-15T00:00:00+00:00",
+            "close_time": "2024-11-19T08:00:00+00:00",
+            "strike": 94000.0,
+            "dte_open": 7.0,
+            "pnl": -520.5476869006379,
+            "trigger": "defensive_roll"
+          },
+          {
+            "index": 1,
+            "open_time": "2024-11-19T08:00:00+00:00",
+            "close_time": "2024-11-21T08:00:00+00:00",
+            "strike": 100000.0,
+            "dte_open": 7.0,
+            "pnl": -1779.5382563070489,
+            "trigger": "defensive_roll"
+          },
+          {
+            "index": 2,
+            "open_time": "2024-11-21T08:00:00+00:00",
+            "close_time": "2024-11-25T08:00:00+00:00",
+            "strike": 107000.0,
+            "dte_open": 7.0,
+            "pnl": 1259.1020727794476,
+            "trigger": "tp_roll"
+          },
+          {
+            "index": 3,
+            "open_time": "2024-11-25T08:00:00+00:00",
+            "close_time": "2024-12-02T08:00:00+00:00",
+            "strike": 101000.0,
+            "dte_open": 7.0,
+            "pnl": 1215.2615064368802,
+            "trigger": "expiry"
+          }
+        ]
+      },
+      {
+        "decision_time": "2024-11-16T00:00:00+00:00",
+        "underlying": "BTC",
+        "num_legs": 2,
+        "num_rolls": 1,
+        "total_pnl": 692.1283101609952,
+        "max_drawdown_pct": 4.096528580810173,
+        "exit_style": "tp_and_roll",
+        "legs": [
+          {
+            "index": 0,
+            "open_time": "2024-11-16T00:00:00+00:00",
+            "close_time": "2024-11-20T08:00:00+00:00",
+            "strike": 98000.0,
+            "dte_open": 7.0,
+            "pnl": -664.3180897646307,
+            "trigger": "defensive_roll"
+          },
+          {
+            "index": 1,
+            "open_time": "2024-11-20T08:00:00+00:00",
+            "close_time": "2024-11-27T08:00:00+00:00",
+            "strike": 104000.0,
+            "dte_open": 7.0,
+            "pnl": 1356.4463999256259,
+            "trigger": "expiry"
+          }
+        ]
+      },
+      {
+        "decision_time": "2024-11-17T00:00:00+00:00",
+        "underlying": "BTC",
+        "num_legs": 2,
+        "num_rolls": 1,
+        "total_pnl": -86.71792166312298,
+        "max_drawdown_pct": 4.129230433369131,
+        "exit_style": "tp_and_roll",
+        "legs": [
+          {
+            "index": 0,
+            "open_time": "2024-11-17T00:00:00+00:00",
+            "close_time": "2024-11-20T08:00:00+00:00",
+            "strike": 97000.0,
+            "dte_open": 7.0,
+            "pnl": -1443.1643215887489,
+            "trigger": "defensive_roll"
+          },
+          {
+            "index": 1,
+            "open_time": "2024-11-20T08:00:00+00:00",
+            "close_time": "2024-11-27T08:00:00+00:00",
+            "strike": 104000.0,
+            "dte_open": 7.0,
+            "pnl": 1356.4463999256259,
+            "trigger": "expiry"
+          }
+        ]
+      },
+      {
+        "decision_time": "2024-11-18T00:00:00+00:00",
+        "underlying": "BTC",
+        "num_legs": 2,
+        "num_rolls": 1,
+        "total_pnl": 104.39184591343292,
+        "max_drawdown_pct": 4.121157956880847,
+        "exit_style": "tp_and_roll",
+        "legs": [
+          {
+            "index": 0,
+            "open_time": "2024-11-18T00:00:00+00:00",
+            "close_time": "2024-11-20T08:00:00+00:00",
+            "strike": 98000.0,
+            "dte_open": 7.0,
+            "pnl": -1252.054554012193,
+            "trigger": "defensive_roll"
+          },
+          {
+            "index": 1,
+            "open_time": "2024-11-20T08:00:00+00:00",
+            "close_time": "2024-11-27T08:00:00+00:00",
+            "strike": 104000.0,
+            "dte_open": 7.0,
+            "pnl": 1356.4463999256259,
+            "trigger": "expiry"
+          }
+        ]
+      },
+      {
+        "decision_time": "2024-11-19T00:00:00+00:00",
+        "underlying": "BTC",
+        "num_legs": 2,
+        "num_rolls": 1,
+        "total_pnl": -216.07271141927777,
+        "max_drawdown_pct": 4.134712350417986,
+        "exit_style": "tp_and_roll",
+        "legs": [
+          {
+            "index": 0,
+            "open_time": "2024-11-19T00:00:00+00:00",
+            "close_time": "2024-11-20T08:00:00+00:00",
+            "strike": 98000.0,
+            "dte_open": 7.0,
+            "pnl": -1572.5191113449036,
+            "trigger": "defensive_roll"
+          },
+          {
+            "index": 1,
+            "open_time": "2024-11-20T08:00:00+00:00",
+            "close_time": "2024-11-27T08:00:00+00:00",
+            "strike": 104000.0,
+            "dte_open": 7.0,
+            "pnl": 1356.4463999256259,
+            "trigger": "expiry"
+          }
+        ]
+      },
+      {
+        "decision_time": "2024-11-20T00:00:00+00:00",
+        "underlying": "BTC",
+        "num_legs": 3,
+        "num_rolls": 2,
+        "total_pnl": 484.9162848971373,
+        "max_drawdown_pct": 4.495848289231865,
+        "exit_style": "tp_and_roll",
+        "legs": [
+          {
+            "index": 0,
+            "open_time": "2024-11-20T00:00:00+00:00",
+            "close_time": "2024-11-21T08:00:00+00:00",
+            "strike": 100000.0,
+            "dte_open": 7.0,
+            "pnl": -1989.4472943191904,
+            "trigger": "defensive_roll"
+          },
+          {
+            "index": 1,
+            "open_time": "2024-11-21T08:00:00+00:00",
+            "close_time": "2024-11-25T08:00:00+00:00",
+            "strike": 107000.0,
+            "dte_open": 7.0,
+            "pnl": 1259.1020727794476,
+            "trigger": "tp_roll"
+          },
+          {
+            "index": 2,
+            "open_time": "2024-11-25T08:00:00+00:00",
+            "close_time": "2024-12-02T08:00:00+00:00",
+            "strike": 101000.0,
+            "dte_open": 7.0,
+            "pnl": 1215.2615064368802,
+            "trigger": "expiry"
+          }
+        ]
+      },
+      {
+        "decision_time": "2024-11-21T00:00:00+00:00",
+        "underlying": "BTC",
+        "num_legs": 2,
+        "num_rolls": 1,
+        "total_pnl": 2469.0384252223166,
+        "max_drawdown_pct": 3.7994585266997234,
+        "exit_style": "tp_and_roll",
+        "legs": [
+          {
+            "index": 0,
+            "open_time": "2024-11-21T00:00:00+00:00",
+            "close_time": "2024-11-25T08:00:00+00:00",
+            "strike": 104000.0,
+            "dte_open": 7.0,
+            "pnl": 1253.7769187854365,
+            "trigger": "tp_roll"
+          },
+          {
+            "index": 1,
+            "open_time": "2024-11-25T08:00:00+00:00",
+            "close_time": "2024-12-02T08:00:00+00:00",
+            "strike": 101000.0,
+            "dte_open": 7.0,
+            "pnl": 1215.2615064368802,
+            "trigger": "expiry"
+          }
+        ]
+      },
+      {
+        "decision_time": "2024-11-22T00:00:00+00:00",
+        "underlying": "BTC",
+        "num_legs": 2,
+        "num_rolls": 1,
+        "total_pnl": 2435.6307777867355,
+        "max_drawdown_pct": 3.9946821509956862,
+        "exit_style": "tp_and_roll",
+        "legs": [
+          {
+            "index": 0,
+            "open_time": "2024-11-22T00:00:00+00:00",
+            "close_time": "2024-11-25T08:00:00+00:00",
+            "strike": 107000.0,
+            "dte_open": 7.0,
+            "pnl": 1220.3692713498554,
+            "trigger": "tp_roll"
+          },
+          {
+            "index": 1,
+            "open_time": "2024-11-25T08:00:00+00:00",
+            "close_time": "2024-12-02T08:00:00+00:00",
+            "strike": 101000.0,
+            "dte_open": 7.0,
+            "pnl": 1215.2615064368802,
+            "trigger": "expiry"
+          }
+        ]
+      },
+      {
+        "decision_time": "2024-11-23T00:00:00+00:00",
+        "underlying": "BTC",
+        "num_legs": 2,
+        "num_rolls": 1,
+        "total_pnl": 2340.0524021972087,
+        "max_drawdown_pct": 3.7404663312900897,
+        "exit_style": "tp_and_roll",
+        "legs": [
+          {
+            "index": 0,
+            "open_time": "2024-11-23T00:00:00+00:00",
+            "close_time": "2024-11-25T08:00:00+00:00",
+            "strike": 106000.0,
+            "dte_open": 7.0,
+            "pnl": 1124.7908957603286,
+            "trigger": "tp_roll"
+          },
+          {
+            "index": 1,
+            "open_time": "2024-11-25T08:00:00+00:00",
+            "close_time": "2024-12-02T08:00:00+00:00",
+            "strike": 101000.0,
+            "dte_open": 7.0,
+            "pnl": 1215.2615064368802,
+            "trigger": "expiry"
+          }
+        ]
+      },
+      {
+        "decision_time": "2024-11-24T00:00:00+00:00",
+        "underlying": "BTC",
+        "num_legs": 2,
+        "num_rolls": 1,
+        "total_pnl": 2476.898579201965,
+        "max_drawdown_pct": 3.6876095457179505,
+        "exit_style": "tp_and_roll",
+        "legs": [
+          {
+            "index": 0,
+            "open_time": "2024-11-24T00:00:00+00:00",
+            "close_time": "2024-11-26T08:00:00+00:00",
+            "strike": 106000.0,
+            "dte_open": 7.0,
+            "pnl": 1090.4016262179011,
+            "trigger": "tp_roll"
+          },
+          {
+            "index": 1,
+            "open_time": "2024-11-26T08:00:00+00:00",
+            "close_time": "2024-12-03T08:00:00+00:00",
+            "strike": 100000.0,
+            "dte_open": 7.0,
+            "pnl": 1386.4969529840637,
+            "trigger": "expiry"
+          }
+        ]
+      },
+      {
+        "decision_time": "2024-11-25T00:00:00+00:00",
+        "underlying": "BTC",
+        "num_legs": 2,
+        "num_rolls": 1,
+        "total_pnl": 2491.3259781798733,
+        "max_drawdown_pct": 2.7436623349325053,
+        "exit_style": "tp_and_roll",
+        "legs": [
+          {
+            "index": 0,
+            "open_time": "2024-11-25T00:00:00+00:00",
+            "close_time": "2024-11-29T08:00:00+00:00",
+            "strike": 105000.0,
+            "dte_open": 7.0,
+            "pnl": 1179.8108585019254,
+            "trigger": "tp_roll"
+          },
+          {
+            "index": 1,
+            "open_time": "2024-11-29T08:00:00+00:00",
+            "close_time": "2024-12-06T08:00:00+00:00",
+            "strike": 104000.0,
+            "dte_open": 7.0,
+            "pnl": 1311.515119677948,
+            "trigger": "expiry"
+          }
+        ]
+      },
+      {
+        "decision_time": "2024-11-26T00:00:00+00:00",
+        "underlying": "BTC",
+        "num_legs": 1,
+        "num_rolls": 0,
+        "total_pnl": 1176.9566600168814,
+        "max_drawdown_pct": 0.20657503782949616,
+        "exit_style": "tp_and_roll",
+        "legs": [
+          {
+            "index": 0,
+            "open_time": "2024-11-26T00:00:00+00:00",
+            "close_time": "2024-12-02T08:00:00+00:00",
+            "strike": 101000.0,
+            "dte_open": 7.0,
+            "pnl": 1176.9566600168814,
+            "trigger": "none"
+          }
+        ]
+      },
+      {
+        "decision_time": "2024-11-27T00:00:00+00:00",
+        "underlying": "BTC",
+        "num_legs": 1,
+        "num_rolls": 0,
+        "total_pnl": 1187.6552254018661,
+        "max_drawdown_pct": 0.015823866434092403,
+        "exit_style": "tp_and_roll",
+        "legs": [
+          {
+            "index": 0,
+            "open_time": "2024-11-27T00:00:00+00:00",
+            "close_time": "2024-12-03T08:00:00+00:00",
+            "strike": 100000.0,
+            "dte_open": 7.0,
+            "pnl": 1187.6552254018661,
+            "trigger": "none"
+          }
+        ]
+      },
+      {
+        "decision_time": "2024-11-28T00:00:00+00:00",
+        "underlying": "BTC",
+        "num_legs": 1,
+        "num_rolls": 0,
+        "total_pnl": -55.58539053102504,
+        "max_drawdown_pct": 0.2260953639495886,
+        "exit_style": "tp_and_roll",
+        "legs": [
+          {
+            "index": 0,
+            "open_time": "2024-11-28T00:00:00+00:00",
+            "close_time": "2024-12-04T08:00:00+00:00",
+            "strike": 102000.0,
+            "dte_open": 7.0,
+            "pnl": -55.58539053102504,
+            "trigger": "none"
+          }
+        ]
+      },
+      {
+        "decision_time": "2024-11-29T00:00:00+00:00",
+        "underlying": "BTC",
+        "num_legs": 1,
+        "num_rolls": 0,
+        "total_pnl": 1172.7666896640012,
+        "max_drawdown_pct": 2.539537003731163,
+        "exit_style": "tp_and_roll",
+        "legs": [
+          {
+            "index": 0,
+            "open_time": "2024-11-29T00:00:00+00:00",
+            "close_time": "2024-12-05T08:00:00+00:00",
+            "strike": 103000.0,
+            "dte_open": 7.0,
+            "pnl": 1172.7666896640012,
+            "trigger": "none"
+          }
+        ]
+      },
+      {
+        "decision_time": "2024-11-30T00:00:00+00:00",
+        "underlying": "BTC",
+        "num_legs": 3,
+        "num_rolls": 2,
+        "total_pnl": 2117.6754615569353,
+        "max_drawdown_pct": 3.2251968070639006,
+        "exit_style": "tp_and_roll",
+        "legs": [
+          {
+            "index": 0,
+            "open_time": "2024-11-30T00:00:00+00:00",
+            "close_time": "2024-12-04T08:00:00+00:00",
+            "strike": 104000.0,
+            "dte_open": 7.0,
+            "pnl": -441.2537424247639,
+            "trigger": "defensive_roll"
+          },
+          {
+            "index": 1,
+            "open_time": "2024-12-04T08:00:00+00:00",
+            "close_time": "2024-12-08T08:00:00+00:00",
+            "strike": 110000.0,
+            "dte_open": 7.0,
+            "pnl": 1208.9712866572354,
+            "trigger": "tp_roll"
+          },
+          {
+            "index": 2,
+            "open_time": "2024-12-08T08:00:00+00:00",
+            "close_time": "2024-12-15T08:00:00+00:00",
+            "strike": 107000.0,
+            "dte_open": 7.0,
+            "pnl": 1349.9579173244638,
+            "trigger": "expiry"
+          }
+        ]
+      },
+      {
+        "decision_time": "2024-12-01T00:00:00+00:00",
+        "underlying": "BTC",
+        "num_legs": 3,
+        "num_rolls": 2,
+        "total_pnl": 1624.973221975417,
+        "max_drawdown_pct": 3.2408549716180004,
+        "exit_style": "tp_and_roll",
+        "legs": [
+          {
+            "index": 0,
+            "open_time": "2024-12-01T00:00:00+00:00",
+            "close_time": "2024-12-04T08:00:00+00:00",
+            "strike": 104000.0,
+            "dte_open": 7.0,
+            "pnl": -933.9559820062823,
+            "trigger": "defensive_roll"
+          },
+          {
+            "index": 1,
+            "open_time": "2024-12-04T08:00:00+00:00",
+            "close_time": "2024-12-08T08:00:00+00:00",
+            "strike": 110000.0,
+            "dte_open": 7.0,
+            "pnl": 1208.9712866572354,
+            "trigger": "tp_roll"
+          },
+          {
+            "index": 2,
+            "open_time": "2024-12-08T08:00:00+00:00",
+            "close_time": "2024-12-15T08:00:00+00:00",
+            "strike": 107000.0,
+            "dte_open": 7.0,
+            "pnl": 1349.9579173244638,
+            "trigger": "expiry"
+          }
+        ]
+      },
+      {
+        "decision_time": "2024-12-02T00:00:00+00:00",
+        "underlying": "BTC",
+        "num_legs": 3,
+        "num_rolls": 2,
+        "total_pnl": 935.1410144839083,
+        "max_drawdown_pct": 3.2630351643986915,
+        "exit_style": "tp_and_roll",
+        "legs": [
+          {
+            "index": 0,
+            "open_time": "2024-12-02T00:00:00+00:00",
+            "close_time": "2024-12-04T08:00:00+00:00",
+            "strike": 103000.0,
+            "dte_open": 7.0,
+            "pnl": -1623.7881894977909,
+            "trigger": "defensive_roll"
+          },
+          {
+            "index": 1,
+            "open_time": "2024-12-04T08:00:00+00:00",
+            "close_time": "2024-12-08T08:00:00+00:00",
+            "strike": 110000.0,
+            "dte_open": 7.0,
+            "pnl": 1208.9712866572354,
+            "trigger": "tp_roll"
+          },
+          {
+            "index": 2,
+            "open_time": "2024-12-08T08:00:00+00:00",
+            "close_time": "2024-12-15T08:00:00+00:00",
+            "strike": 107000.0,
+            "dte_open": 7.0,
+            "pnl": 1349.9579173244638,
+            "trigger": "expiry"
+          }
+        ]
+      },
+      {
+        "decision_time": "2024-12-03T00:00:00+00:00",
+        "underlying": "BTC",
+        "num_legs": 3,
+        "num_rolls": 2,
+        "total_pnl": 489.72342989531717,
+        "max_drawdown_pct": 3.277518706635491,
+        "exit_style": "tp_and_roll",
+        "legs": [
+          {
+            "index": 0,
+            "open_time": "2024-12-03T00:00:00+00:00",
+            "close_time": "2024-12-04T08:00:00+00:00",
+            "strike": 103000.0,
+            "dte_open": 7.0,
+            "pnl": -2069.205774086382,
+            "trigger": "defensive_roll"
+          },
+          {
+            "index": 1,
+            "open_time": "2024-12-04T08:00:00+00:00",
+            "close_time": "2024-12-08T08:00:00+00:00",
+            "strike": 110000.0,
+            "dte_open": 7.0,
+            "pnl": 1208.9712866572354,
+            "trigger": "tp_roll"
+          },
+          {
+            "index": 2,
+            "open_time": "2024-12-08T08:00:00+00:00",
+            "close_time": "2024-12-15T08:00:00+00:00",
+            "strike": 107000.0,
+            "dte_open": 7.0,
+            "pnl": 1349.9579173244638,
+            "trigger": "expiry"
+          }
+        ]
+      },
+      {
+        "decision_time": "2024-12-04T00:00:00+00:00",
+        "underlying": "BTC",
+        "num_legs": 3,
+        "num_rolls": 2,
+        "total_pnl": 687.3671540805899,
+        "max_drawdown_pct": 3.271076133480376,
+        "exit_style": "tp_and_roll",
+        "legs": [
+          {
+            "index": 0,
+            "open_time": "2024-12-04T00:00:00+00:00",
+            "close_time": "2024-12-04T08:00:00+00:00",
+            "strike": 104000.0,
+            "dte_open": 7.0,
+            "pnl": -1871.5620499011093,
+            "trigger": "defensive_roll"
+          },
+          {
+            "index": 1,
+            "open_time": "2024-12-04T08:00:00+00:00",
+            "close_time": "2024-12-08T08:00:00+00:00",
+            "strike": 110000.0,
+            "dte_open": 7.0,
+            "pnl": 1208.9712866572354,
+            "trigger": "tp_roll"
+          },
+          {
+            "index": 2,
+            "open_time": "2024-12-08T08:00:00+00:00",
+            "close_time": "2024-12-15T08:00:00+00:00",
+            "strike": 107000.0,
+            "dte_open": 7.0,
+            "pnl": 1349.9579173244638,
+            "trigger": "expiry"
+          }
+        ]
+      },
+      {
+        "decision_time": "2024-12-05T00:00:00+00:00",
+        "underlying": "BTC",
+        "num_legs": 2,
+        "num_rolls": 1,
+        "total_pnl": 2465.220834723734,
+        "max_drawdown_pct": 1.7221558276100577,
+        "exit_style": "tp_and_roll",
+        "legs": [
+          {
+            "index": 0,
+            "open_time": "2024-12-05T00:00:00+00:00",
+            "close_time": "2024-12-08T08:00:00+00:00",
+            "strike": 110000.0,
+            "dte_open": 7.0,
+            "pnl": 1115.26291739927,
+            "trigger": "tp_roll"
+          },
+          {
+            "index": 1,
+            "open_time": "2024-12-08T08:00:00+00:00",
+            "close_time": "2024-12-15T08:00:00+00:00",
+            "strike": 107000.0,
+            "dte_open": 7.0,
+            "pnl": 1349.9579173244638,
+            "trigger": "expiry"
+          }
+        ]
+      },
+      {
+        "decision_time": "2024-12-06T00:00:00+00:00",
+        "underlying": "BTC",
+        "num_legs": 1,
+        "num_rolls": 0,
+        "total_pnl": 1365.8542563908459,
+        "max_drawdown_pct": 1.6711948067542641,
+        "exit_style": "tp_and_roll",
+        "legs": [
+          {
+            "index": 0,
+            "open_time": "2024-12-06T00:00:00+00:00",
+            "close_time": "2024-12-12T08:00:00+00:00",
+            "strike": 105000.0,
+            "dte_open": 7.0,
+            "pnl": 1365.8542563908459,
+            "trigger": "none"
+          }
+        ]
+      },
+      {
+        "decision_time": "2024-12-07T00:00:00+00:00",
+        "underlying": "BTC",
+        "num_legs": 1,
+        "num_rolls": 0,
+        "total_pnl": 1277.7035188756563,
+        "max_drawdown_pct": 1.806469881566352,
+        "exit_style": "tp_and_roll",
+        "legs": [
+          {
+            "index": 0,
+            "open_time": "2024-12-07T00:00:00+00:00",
+            "close_time": "2024-12-13T08:00:00+00:00",
+            "strike": 107000.0,
+            "dte_open": 7.0,
+            "pnl": 1277.7035188756563,
+            "trigger": "none"
+          }
+        ]
+      },
+      {
+        "decision_time": "2024-12-08T00:00:00+00:00",
+        "underlying": "BTC",
+        "num_legs": 1,
+        "num_rolls": 0,
+        "total_pnl": 1309.8534039572505,
+        "max_drawdown_pct": 1.7554811841752944,
+        "exit_style": "tp_and_roll",
+        "legs": [
+          {
+            "index": 0,
+            "open_time": "2024-12-08T00:00:00+00:00",
+            "close_time": "2024-12-14T08:00:00+00:00",
+            "strike": 107000.0,
+            "dte_open": 7.0,
+            "pnl": 1309.8534039572505,
+            "trigger": "none"
+          }
+        ]
+      },
+      {
+        "decision_time": "2024-12-09T00:00:00+00:00",
+        "underlying": "BTC",
+        "num_legs": 1,
+        "num_rolls": 0,
+        "total_pnl": 842.4210168395439,
+        "max_drawdown_pct": 0.0769250358865074,
+        "exit_style": "tp_and_roll",
+        "legs": [
+          {
+            "index": 0,
+            "open_time": "2024-12-09T00:00:00+00:00",
+            "close_time": "2024-12-15T08:00:00+00:00",
+            "strike": 107000.0,
+            "dte_open": 7.0,
+            "pnl": 842.4210168395439,
+            "trigger": "none"
+          }
+        ]
+      },
+      {
+        "decision_time": "2024-12-10T00:00:00+00:00",
+        "underlying": "BTC",
+        "num_legs": 1,
+        "num_rolls": 0,
+        "total_pnl": -1799.3289064585188,
+        "max_drawdown_pct": 0.0,
+        "exit_style": "tp_and_roll",
+        "legs": [
+          {
+            "index": 0,
+            "open_time": "2024-12-10T00:00:00+00:00",
+            "close_time": "2024-12-16T08:00:00+00:00",
+            "strike": 104000.0,
+            "dte_open": 7.0,
+            "pnl": -1799.3289064585188,
+            "trigger": "none"
+          }
+        ]
+      },
+      {
+        "decision_time": "2024-12-11T00:00:00+00:00",
+        "underlying": "BTC",
+        "num_legs": 4,
+        "num_rolls": 3,
+        "total_pnl": 2144.8369174695144,
+        "max_drawdown_pct": 8.94040694414617,
+        "exit_style": "tp_and_roll",
+        "legs": [
+          {
+            "index": 0,
+            "open_time": "2024-12-11T00:00:00+00:00",
+            "close_time": "2024-12-15T08:00:00+00:00",
+            "strike": 104000.0,
+            "dte_open": 7.0,
+            "pnl": -1571.251844069142,
+            "trigger": "defensive_roll"
+          },
+          {
+            "index": 1,
+            "open_time": "2024-12-15T08:00:00+00:00",
+            "close_time": "2024-12-18T08:00:00+00:00",
+            "strike": 113000.0,
+            "dte_open": 7.0,
+            "pnl": 1106.4009947685136,
+            "trigger": "tp_roll"
+          },
+          {
+            "index": 2,
+            "open_time": "2024-12-18T08:00:00+00:00",
+            "close_time": "2024-12-21T08:00:00+00:00",
+            "strike": 109000.0,
+            "dte_open": 7.0,
+            "pnl": 1272.0681701831036,
+            "trigger": "tp_roll"
+          },
+          {
+            "index": 3,
+            "open_time": "2024-12-21T08:00:00+00:00",
+            "close_time": "2024-12-28T08:00:00+00:00",
+            "strike": 103000.0,
+            "dte_open": 7.0,
+            "pnl": 1337.6195965870393,
+            "trigger": "expiry"
+          }
+        ]
+      },
+      {
+        "decision_time": "2024-12-12T00:00:00+00:00",
+        "underlying": "BTC",
+        "num_legs": 4,
+        "num_rolls": 3,
+        "total_pnl": 3052.325607542869,
+        "max_drawdown_pct": 9.0429879553994,
+        "exit_style": "tp_and_roll",
+        "legs": [
+          {
+            "index": 0,
+            "open_time": "2024-12-12T00:00:00+00:00",
+            "close_time": "2024-12-16T08:00:00+00:00",
+            "strike": 108000.0,
+            "dte_open": 7.0,
+            "pnl": -704.2332164791005,
+            "trigger": "defensive_roll"
+          },
+          {
+            "index": 1,
+            "open_time": "2024-12-16T08:00:00+00:00",
+            "close_time": "2024-12-18T08:00:00+00:00",
+            "strike": 115000.0,
+            "dte_open": 7.0,
+            "pnl": 1146.8710572518266,
+            "trigger": "tp_roll"
+          },
+          {
+            "index": 2,
+            "open_time": "2024-12-18T08:00:00+00:00",
+            "close_time": "2024-12-21T08:00:00+00:00",
+            "strike": 109000.0,
+            "dte_open": 7.0,
+            "pnl": 1272.0681701831036,
+            "trigger": "tp_roll"
+          },
+          {
+            "index": 3,
+            "open_time": "2024-12-21T08:00:00+00:00",
+            "close_time": "2024-12-28T08:00:00+00:00",
+            "strike": 103000.0,
+            "dte_open": 7.0,
+            "pnl": 1337.6195965870393,
+            "trigger": "expiry"
+          }
+        ]
+      },
+      {
+        "decision_time": "2024-12-13T00:00:00+00:00",
+        "underlying": "BTC",
+        "num_legs": 4,
+        "num_rolls": 3,
+        "total_pnl": 2742.943654570805,
+        "max_drawdown_pct": 8.889807871476082,
+        "exit_style": "tp_and_roll",
+        "legs": [
+          {
+            "index": 0,
+            "open_time": "2024-12-13T00:00:00+00:00",
+            "close_time": "2024-12-15T08:00:00+00:00",
+            "strike": 107000.0,
+            "dte_open": 7.0,
+            "pnl": -973.1451069678515,
+            "trigger": "defensive_roll"
+          },
+          {
+            "index": 1,
+            "open_time": "2024-12-15T08:00:00+00:00",
+            "close_time": "2024-12-18T08:00:00+00:00",
+            "strike": 113000.0,
+            "dte_open": 7.0,
+            "pnl": 1106.4009947685136,
+            "trigger": "tp_roll"
+          },
+          {
+            "index": 2,
+            "open_time": "2024-12-18T08:00:00+00:00",
+            "close_time": "2024-12-21T08:00:00+00:00",
+            "strike": 109000.0,
+            "dte_open": 7.0,
+            "pnl": 1272.0681701831036,
+            "trigger": "tp_roll"
+          },
+          {
+            "index": 3,
+            "open_time": "2024-12-21T08:00:00+00:00",
+            "close_time": "2024-12-28T08:00:00+00:00",
+            "strike": 103000.0,
+            "dte_open": 7.0,
+            "pnl": 1337.6195965870393,
+            "trigger": "expiry"
+          }
+        ]
+      },
+      {
+        "decision_time": "2024-12-14T00:00:00+00:00",
+        "underlying": "BTC",
+        "num_legs": 4,
+        "num_rolls": 3,
+        "total_pnl": 2750.9381070722266,
+        "max_drawdown_pct": 9.06872472455742,
+        "exit_style": "tp_and_roll",
+        "legs": [
+          {
+            "index": 0,
+            "open_time": "2024-12-14T00:00:00+00:00",
+            "close_time": "2024-12-16T08:00:00+00:00",
+            "strike": 109000.0,
+            "dte_open": 7.0,
+            "pnl": -1005.6207169497429,
+            "trigger": "defensive_roll"
+          },
+          {
+            "index": 1,
+            "open_time": "2024-12-16T08:00:00+00:00",
+            "close_time": "2024-12-18T08:00:00+00:00",
+            "strike": 115000.0,
+            "dte_open": 7.0,
+            "pnl": 1146.8710572518266,
+            "trigger": "tp_roll"
+          },
+          {
+            "index": 2,
+            "open_time": "2024-12-18T08:00:00+00:00",
+            "close_time": "2024-12-21T08:00:00+00:00",
+            "strike": 109000.0,
+            "dte_open": 7.0,
+            "pnl": 1272.0681701831036,
+            "trigger": "tp_roll"
+          },
+          {
+            "index": 3,
+            "open_time": "2024-12-21T08:00:00+00:00",
+            "close_time": "2024-12-28T08:00:00+00:00",
+            "strike": 103000.0,
+            "dte_open": 7.0,
+            "pnl": 1337.6195965870393,
+            "trigger": "expiry"
+          }
+        ]
+      },
+      {
+        "decision_time": "2024-12-15T00:00:00+00:00",
+        "underlying": "BTC",
+        "num_legs": 4,
+        "num_rolls": 3,
+        "total_pnl": 2395.3299605298344,
+        "max_drawdown_pct": 9.099280661169477,
+        "exit_style": "tp_and_roll",
+        "legs": [
+          {
+            "index": 0,
+            "open_time": "2024-12-15T00:00:00+00:00",
+            "close_time": "2024-12-16T08:00:00+00:00",
+            "strike": 109000.0,
+            "dte_open": 7.0,
+            "pnl": -1361.2288634921351,
+            "trigger": "defensive_roll"
+          },
+          {
+            "index": 1,
+            "open_time": "2024-12-16T08:00:00+00:00",
+            "close_time": "2024-12-18T08:00:00+00:00",
+            "strike": 115000.0,
+            "dte_open": 7.0,
+            "pnl": 1146.8710572518266,
+            "trigger": "tp_roll"
+          },
+          {
+            "index": 2,
+            "open_time": "2024-12-18T08:00:00+00:00",
+            "close_time": "2024-12-21T08:00:00+00:00",
+            "strike": 109000.0,
+            "dte_open": 7.0,
+            "pnl": 1272.0681701831036,
+            "trigger": "tp_roll"
+          },
+          {
+            "index": 3,
+            "open_time": "2024-12-21T08:00:00+00:00",
+            "close_time": "2024-12-28T08:00:00+00:00",
+            "strike": 103000.0,
+            "dte_open": 7.0,
+            "pnl": 1337.6195965870393,
+            "trigger": "expiry"
+          }
+        ]
+      },
+      {
+        "decision_time": "2024-12-16T00:00:00+00:00",
+        "underlying": "BTC",
+        "num_legs": 3,
+        "num_rolls": 2,
+        "total_pnl": 3782.240939901023,
+        "max_drawdown_pct": 9.357660845238627,
+        "exit_style": "tp_and_roll",
+        "legs": [
+          {
+            "index": 0,
+            "open_time": "2024-12-16T00:00:00+00:00",
+            "close_time": "2024-12-19T08:00:00+00:00",
+            "strike": 113000.0,
+            "dte_open": 7.0,
+            "pnl": 1314.720209060806,
+            "trigger": "tp_roll"
+          },
+          {
+            "index": 1,
+            "open_time": "2024-12-19T08:00:00+00:00",
+            "close_time": "2024-12-23T08:00:00+00:00",
+            "strike": 105000.0,
+            "dte_open": 7.0,
+            "pnl": 1187.532702926801,
+            "trigger": "tp_roll"
+          },
+          {
+            "index": 2,
+            "open_time": "2024-12-23T08:00:00+00:00",
+            "close_time": "2024-12-30T08:00:00+00:00",
+            "strike": 101000.0,
+            "dte_open": 7.0,
+            "pnl": 1279.9880279134159,
+            "trigger": "expiry"
+          }
+        ]
+      },
+      {
+        "decision_time": "2024-12-17T00:00:00+00:00",
+        "underlying": "BTC",
+        "num_legs": 3,
+        "num_rolls": 2,
+        "total_pnl": 3808.654277759597,
+        "max_drawdown_pct": 7.918464549809577,
+        "exit_style": "tp_and_roll",
+        "legs": [
+          {
+            "index": 0,
+            "open_time": "2024-12-17T00:00:00+00:00",
+            "close_time": "2024-12-19T08:00:00+00:00",
+            "strike": 115000.0,
+            "dte_open": 7.0,
+            "pnl": 1341.1335469193798,
+            "trigger": "tp_roll"
+          },
+          {
+            "index": 1,
+            "open_time": "2024-12-19T08:00:00+00:00",
+            "close_time": "2024-12-23T08:00:00+00:00",
+            "strike": 105000.0,
+            "dte_open": 7.0,
+            "pnl": 1187.532702926801,
+            "trigger": "tp_roll"
+          },
+          {
+            "index": 2,
+            "open_time": "2024-12-23T08:00:00+00:00",
+            "close_time": "2024-12-30T08:00:00+00:00",
+            "strike": 101000.0,
+            "dte_open": 7.0,
+            "pnl": 1279.9880279134159,
+            "trigger": "expiry"
+          }
+        ]
+      },
+      {
+        "decision_time": "2024-12-18T00:00:00+00:00",
+        "underlying": "BTC",
+        "num_legs": 3,
+        "num_rolls": 2,
+        "total_pnl": 3635.167043666401,
+        "max_drawdown_pct": 5.732515029303557,
+        "exit_style": "tp_and_roll",
+        "legs": [
+          {
+            "index": 0,
+            "open_time": "2024-12-18T00:00:00+00:00",
+            "close_time": "2024-12-19T08:00:00+00:00",
+            "strike": 112000.0,
+            "dte_open": 7.0,
+            "pnl": 1167.646312826184,
+            "trigger": "tp_roll"
+          },
+          {
+            "index": 1,
+            "open_time": "2024-12-19T08:00:00+00:00",
+            "close_time": "2024-12-23T08:00:00+00:00",
+            "strike": 105000.0,
+            "dte_open": 7.0,
+            "pnl": 1187.532702926801,
+            "trigger": "tp_roll"
+          },
+          {
+            "index": 2,
+            "open_time": "2024-12-23T08:00:00+00:00",
+            "close_time": "2024-12-30T08:00:00+00:00",
+            "strike": 101000.0,
+            "dte_open": 7.0,
+            "pnl": 1279.9880279134159,
+            "trigger": "expiry"
+          }
+        ]
+      },
+      {
+        "decision_time": "2024-12-19T00:00:00+00:00",
+        "underlying": "BTC",
+        "num_legs": 2,
+        "num_rolls": 1,
+        "total_pnl": 2548.793308023859,
+        "max_drawdown_pct": 3.6797348886685253,
+        "exit_style": "tp_and_roll",
+        "legs": [
+          {
+            "index": 0,
+            "open_time": "2024-12-19T00:00:00+00:00",
+            "close_time": "2024-12-21T08:00:00+00:00",
+            "strike": 109000.0,
+            "dte_open": 7.0,
+            "pnl": 1211.1737114368198,
+            "trigger": "tp_roll"
+          },
+          {
+            "index": 1,
+            "open_time": "2024-12-21T08:00:00+00:00",
+            "close_time": "2024-12-28T08:00:00+00:00",
+            "strike": 103000.0,
+            "dte_open": 7.0,
+            "pnl": 1337.6195965870393,
+            "trigger": "expiry"
+          }
+        ]
+      },
+      {
+        "decision_time": "2024-12-20T00:00:00+00:00",
+        "underlying": "BTC",
+        "num_legs": 2,
+        "num_rolls": 1,
+        "total_pnl": 2398.589653824335,
+        "max_drawdown_pct": 3.6257065821969436,
+        "exit_style": "tp_and_roll",
+        "legs": [
+          {
+            "index": 0,
+            "open_time": "2024-12-20T00:00:00+00:00",
+            "close_time": "2024-12-23T08:00:00+00:00",
+            "strike": 105000.0,
+            "dte_open": 7.0,
+            "pnl": 1118.6016259109192,
+            "trigger": "tp_roll"
+          },
+          {
+            "index": 1,
+            "open_time": "2024-12-23T08:00:00+00:00",
+            "close_time": "2024-12-30T08:00:00+00:00",
+            "strike": 101000.0,
+            "dte_open": 7.0,
+            "pnl": 1279.9880279134159,
+            "trigger": "expiry"
+          }
+        ]
+      },
+      {
+        "decision_time": "2024-12-21T00:00:00+00:00",
+        "underlying": "BTC",
+        "num_legs": 2,
+        "num_rolls": 1,
+        "total_pnl": 2451.201212208206,
+        "max_drawdown_pct": 3.156105816251335,
+        "exit_style": "tp_and_roll",
+        "legs": [
+          {
+            "index": 0,
+            "open_time": "2024-12-21T00:00:00+00:00",
+            "close_time": "2024-12-23T08:00:00+00:00",
+            "strike": 106000.0,
+            "dte_open": 7.0,
+            "pnl": 1171.2131842947902,
+            "trigger": "tp_roll"
+          },
+          {
+            "index": 1,
+            "open_time": "2024-12-23T08:00:00+00:00",
+            "close_time": "2024-12-30T08:00:00+00:00",
+            "strike": 101000.0,
+            "dte_open": 7.0,
+            "pnl": 1279.9880279134159,
+            "trigger": "expiry"
+          }
+        ]
+      },
+      {
+        "decision_time": "2024-12-22T00:00:00+00:00",
+        "underlying": "BTC",
+        "num_legs": 3,
+        "num_rolls": 2,
+        "total_pnl": 2220.8437834487795,
+        "max_drawdown_pct": 3.224935521878311,
+        "exit_style": "tp_and_roll",
+        "legs": [
+          {
+            "index": 0,
+            "open_time": "2024-12-22T00:00:00+00:00",
+            "close_time": "2024-12-26T08:00:00+00:00",
+            "strike": 103000.0,
+            "dte_open": 7.0,
+            "pnl": 1088.9205351529854,
+            "trigger": "tp_roll"
+          },
+          {
+            "index": 1,
+            "open_time": "2024-12-26T08:00:00+00:00",
+            "close_time": "2024-12-30T08:00:00+00:00",
+            "strike": 102000.0,
+            "dte_open": 7.0,
+            "pnl": 1126.306943991729,
+            "trigger": "tp_roll"
+          },
+          {
+            "index": 2,
+            "open_time": "2024-12-30T08:00:00+00:00",
+            "close_time": "2024-12-31T08:00:00+00:00",
+            "strike": 99000.0,
+            "dte_open": 7.0,
+            "pnl": 5.616304304065125,
+            "trigger": "none"
+          }
+        ]
+      },
+      {
+        "decision_time": "2024-12-23T00:00:00+00:00",
+        "underlying": "BTC",
+        "num_legs": 2,
+        "num_rolls": 1,
+        "total_pnl": 2083.7450027165232,
+        "max_drawdown_pct": 2.947390745086072,
+        "exit_style": "tp_and_roll",
+        "legs": [
+          {
+            "index": 0,
+            "open_time": "2024-12-23T00:00:00+00:00",
+            "close_time": "2024-12-27T08:00:00+00:00",
+            "strike": 102000.0,
+            "dte_open": 7.0,
+            "pnl": 1120.3348820682659,
+            "trigger": "tp_roll"
+          },
+          {
+            "index": 1,
+            "open_time": "2024-12-27T08:00:00+00:00",
+            "close_time": "2024-12-31T08:00:00+00:00",
+            "strike": 101000.0,
+            "dte_open": 7.0,
+            "pnl": 963.4101206482574,
+            "trigger": "none"
+          }
+        ]
+      },
+      {
+        "decision_time": "2024-12-24T00:00:00+00:00",
+        "underlying": "BTC",
+        "num_legs": 1,
+        "num_rolls": 0,
+        "total_pnl": 1278.1623455216304,
+        "max_drawdown_pct": 3.00248787688164,
+        "exit_style": "tp_and_roll",
+        "legs": [
+          {
+            "index": 0,
+            "open_time": "2024-12-24T00:00:00+00:00",
+            "close_time": "2024-12-30T08:00:00+00:00",
+            "strike": 101000.0,
+            "dte_open": 7.0,
+            "pnl": 1278.1623455216304,
+            "trigger": "none"
+          }
+        ]
+      },
+      {
+        "decision_time": "2024-12-25T00:00:00+00:00",
+        "underlying": "BTC",
+        "num_legs": 2,
+        "num_rolls": 1,
+        "total_pnl": 2043.2516470335668,
+        "max_drawdown_pct": 3.209720933242804,
+        "exit_style": "tp_and_roll",
+        "legs": [
+          {
+            "index": 0,
+            "open_time": "2024-12-25T00:00:00+00:00",
+            "close_time": "2024-12-28T08:00:00+00:00",
+            "strike": 105000.0,
+            "dte_open": 7.0,
+            "pnl": 1133.4543876817697,
+            "trigger": "tp_roll"
+          },
+          {
+            "index": 1,
+            "open_time": "2024-12-28T08:00:00+00:00",
+            "close_time": "2024-12-31T08:00:00+00:00",
+            "strike": 102000.0,
+            "dte_open": 7.0,
+            "pnl": 909.797259351797,
+            "trigger": "none"
+          }
+        ]
+      },
+      {
+        "decision_time": "2024-12-26T00:00:00+00:00",
+        "underlying": "BTC",
+        "num_legs": 2,
+        "num_rolls": 1,
+        "total_pnl": 1602.3865961790916,
+        "max_drawdown_pct": 1.826848996301846,
+        "exit_style": "tp_and_roll",
+        "legs": [
+          {
+            "index": 0,
+            "open_time": "2024-12-26T00:00:00+00:00",
+            "close_time": "2024-12-29T08:00:00+00:00",
+            "strike": 105000.0,
+            "dte_open": 7.0,
+            "pnl": 1152.0823089783562,
+            "trigger": "tp_roll"
+          },
+          {
+            "index": 1,
+            "open_time": "2024-12-29T08:00:00+00:00",
+            "close_time": "2024-12-31T08:00:00+00:00",
+            "strike": 100000.0,
+            "dte_open": 7.0,
+            "pnl": 450.3042872007354,
+            "trigger": "none"
+          }
+        ]
+      },
+      {
+        "decision_time": "2024-12-27T00:00:00+00:00",
+        "underlying": "BTC",
+        "num_legs": 2,
+        "num_rolls": 1,
+        "total_pnl": 1114.6076525029857,
+        "max_drawdown_pct": 1.7375418291553681,
+        "exit_style": "tp_and_roll",
+        "legs": [
+          {
+            "index": 0,
+            "open_time": "2024-12-27T00:00:00+00:00",
+            "close_time": "2024-12-31T08:00:00+00:00",
+            "strike": 102000.0,
+            "dte_open": 7.0,
+            "pnl": 1114.6076525029857,
+            "trigger": "tp_roll"
+          },
+          {
+            "index": 1,
+            "open_time": "2024-12-31T08:00:00+00:00",
+            "close_time": "2024-12-31T08:00:00+00:00",
+            "strike": 100000.0,
+            "dte_open": 7.0,
+            "pnl": 0.0,
+            "trigger": "none"
+          }
+        ]
+      },
+      {
+        "decision_time": "2024-12-28T00:00:00+00:00",
+        "underlying": "BTC",
+        "num_legs": 1,
+        "num_rolls": 0,
+        "total_pnl": 829.6375730773798,
+        "max_drawdown_pct": 1.5604439468043194,
+        "exit_style": "tp_and_roll",
+        "legs": [
+          {
+            "index": 0,
+            "open_time": "2024-12-28T00:00:00+00:00",
+            "close_time": "2024-12-31T08:00:00+00:00",
+            "strike": 101000.0,
+            "dte_open": 7.0,
+            "pnl": 829.6375730773798,
+            "trigger": "none"
+          }
+        ]
+      },
+      {
+        "decision_time": "2024-12-29T00:00:00+00:00",
+        "underlying": "BTC",
+        "num_legs": 1,
+        "num_rolls": 0,
+        "total_pnl": 790.2011610306181,
+        "max_drawdown_pct": 0.564420420458053,
+        "exit_style": "tp_and_roll",
+        "legs": [
+          {
+            "index": 0,
+            "open_time": "2024-12-29T00:00:00+00:00",
+            "close_time": "2024-12-31T08:00:00+00:00",
+            "strike": 102000.0,
+            "dte_open": 7.0,
+            "pnl": 790.2011610306181,
+            "trigger": "none"
+          }
+        ]
+      },
+      {
+        "decision_time": "2024-12-30T00:00:00+00:00",
+        "underlying": "BTC",
+        "num_legs": 1,
+        "num_rolls": 0,
+        "total_pnl": 301.2052380083296,
+        "max_drawdown_pct": 0.0,
+        "exit_style": "tp_and_roll",
+        "legs": [
+          {
+            "index": 0,
+            "open_time": "2024-12-30T00:00:00+00:00",
+            "close_time": "2024-12-31T08:00:00+00:00",
+            "strike": 100000.0,
+            "dte_open": 7.0,
+            "pnl": 301.2052380083296,
+            "trigger": "none"
+          }
+        ]
+      },
+      {
+        "decision_time": "2024-12-31T00:00:00+00:00",
+        "underlying": "BTC",
+        "num_legs": 1,
+        "num_rolls": 0,
+        "total_pnl": -148.26718570696903,
+        "max_drawdown_pct": 0.0,
+        "exit_style": "tp_and_roll",
+        "legs": [
+          {
+            "index": 0,
+            "open_time": "2024-12-31T00:00:00+00:00",
+            "close_time": "2024-12-31T08:00:00+00:00",
+            "strike": 99000.0,
+            "dte_open": 7.0,
+            "pnl": -148.26718570696903,
+            "trigger": "none"
+          }
+        ]
+      }
+    ]
+  },
+  "equity_curves": {
+    "hold_to_expiry": [
+      [
+        "2024-09-01T00:00:00+00:00",
+        58466.0,
+        58466.0
+      ],
+      [
+        "2024-09-08T00:00:00+00:00",
+        55169.258340406035,
+        54425.0
+      ],
+      [
+        "2024-09-09T00:00:00+00:00",
+        56438.87694352198,
+        54963.0
+      ],
+      [
+        "2024-09-10T00:00:00+00:00",
+        59619.56484467627,
+        57236.0
+      ],
+      [
+        "2024-09-11T00:00:00+00:00",
+        59822.146267753924,
+        56696.5
+      ],
+      [
+        "2024-09-12T00:00:00+00:00",
+        62086.87425557297,
+        58144.0
+      ],
+      [
+        "2024-09-13T00:00:00+00:00",
+        62642.17443032956,
+        58099.5
+      ],
+      [
+        "2024-09-14T00:00:00+00:00",
+        63252.49199879145,
+        60195.0
+      ],
+      [
+        "2024-09-15T00:00:00+00:00",
+        61804.5040342859,
+        60205.5
+      ],
+      [
+        "2024-09-16T00:00:00+00:00",
+        60586.10097833662,
+        58889.0
+      ],
+      [
+        "2024-09-17T00:00:00+00:00",
+        61189.75611720049,
+        58697.5
+      ],
+      [
+        "2024-09-18T00:00:00+00:00",
+        63202.616672411554,
+        60453.0
+      ],
+      [
+        "2024-09-19T00:00:00+00:00",
+        64950.13769953716,
+        62114.5
+      ],
+      [
+        "2024-09-20T00:00:00+00:00",
+        65489.47094382058,
+        63531.5
+      ],
+      [
+        "2024-09-21T00:00:00+00:00",
+        65645.08560887579,
+        63113.0
+      ],
+      [
+        "2024-09-22T00:00:00+00:00",
+        66072.41792763786,
+        62936.5
+      ],
+      [
+        "2024-09-23T00:00:00+00:00",
+        66473.72048539927,
+        63552.5
+      ],
+      [
+        "2024-09-24T00:00:00+00:00",
+        66216.76619519191,
+        63569.0
+      ],
+      [
+        "2024-09-25T00:00:00+00:00",
+        66977.26975731306,
+        63860.0
+      ],
+      [
+        "2024-09-26T00:00:00+00:00",
+        67707.03521396196,
+        63858.0
+      ],
+      [
+        "2024-09-27T00:00:00+00:00",
+        70142.59933394377,
+        65484.5
+      ],
+      [
+        "2024-09-28T00:00:00+00:00",
+        71189.79582332855,
+        65875.0
+      ],
+      [
+        "2024-09-29T00:00:00+00:00",
+        71469.91593527596,
+        65490.5
+      ],
+      [
+        "2024-09-30T00:00:00+00:00",
+        71438.19184431204,
+        64579.5
+      ],
+      [
+        "2024-10-01T00:00:00+00:00",
+        71791.01644720513,
+        64031.0
+      ],
+      [
+        "2024-10-02T00:00:00+00:00",
+        70256.39806132493,
+        61721.5
+      ],
+      [
+        "2024-10-03T00:00:00+00:00",
+        70219.36546347222,
+        60910.0
+      ],
+      [
+        "2024-10-04T00:00:00+00:00",
+        71689.39840039492,
+        61423.5
+      ],
+      [
+        "2024-10-05T00:00:00+00:00",
+        73201.58306780104,
+        62100.5
+      ],
+      [
+        "2024-10-06T00:00:00+00:00",
+        74023.6771482873,
+        61964.5
+      ],
+      [
+        "2024-10-07T00:00:00+00:00",
+        76563.74283212589,
+        63555.5
+      ],
+      [
+        "2024-10-08T00:00:00+00:00",
+        76122.47242091167,
+        62300.0
+      ],
+      [
+        "2024-10-09T00:00:00+00:00",
+        76959.29501165962,
+        62259.0
+      ],
+      [
+        "2024-10-10T00:00:00+00:00",
+        76451.22559491792,
+        60844.5
+      ],
+      [
+        "2024-10-11T00:00:00+00:00",
+        77045.23845894204,
+        60618.5
+      ],
+      [
+        "2024-10-12T00:00:00+00:00",
+        79960.60794663019,
+        62770.5
+      ],
+      [
+        "2024-10-13T00:00:00+00:00",
+        80953.92800420997,
+        62843.5
+      ],
+      [
+        "2024-10-14T00:00:00+00:00",
+        83594.82814396138,
+        64605.5
+      ],
+      [
+        "2024-10-15T00:00:00+00:00",
+        85164.26865506048,
+        65646.5
+      ],
+      [
+        "2024-10-16T00:00:00+00:00",
+        86515.2012750544,
+        66972.5
+      ],
+      [
+        "2024-10-17T00:00:00+00:00",
+        85319.14861072325,
+        67285.5
+      ],
+      [
+        "2024-10-18T00:00:00+00:00",
+        83814.98739281044,
+        67978.5
+      ],
+      [
+        "2024-10-19T00:00:00+00:00",
+        83470.33662971578,
+        68349.0
+      ],
+      [
+        "2024-10-20T00:00:00+00:00",
+        82783.95202783728,
+        68386.5
+      ],
+      [
+        "2024-10-21T00:00:00+00:00",
+        83265.5631124175,
+        68508.5
+      ],
+      [
+        "2024-10-22T00:00:00+00:00",
+        83036.21986568268,
+        67378.0
+      ],
+      [
+        "2024-10-23T00:00:00+00:00",
+        83370.35845313525,
+        66829.0
+      ],
+      [
+        "2024-10-24T00:00:00+00:00",
+        84578.81455674864,
+        67078.0
+      ],
+      [
+        "2024-10-25T00:00:00+00:00",
+        85896.76703121742,
+        67480.5
+      ],
+      [
+        "2024-10-26T00:00:00+00:00",
+        86351.92584368726,
+        66924.0
+      ],
+      [
+        "2024-10-27T00:00:00+00:00",
+        87579.55454283967,
+        67130.5
+      ],
+      [
+        "2024-10-28T00:00:00+00:00",
+        89865.94162438193,
+        68372.0
+      ],
+      [
+        "2024-10-29T00:00:00+00:00",
+        93027.65749699541,
+        70983.5
+      ],
+      [
+        "2024-10-30T00:00:00+00:00",
+        94144.24041779735,
+        72224.5
+      ],
+      [
+        "2024-10-31T00:00:00+00:00",
+        94163.52833010437,
+        72416.5
+      ],
+      [
+        "2024-11-01T00:00:00+00:00",
+        91846.70459642887,
+        69171.0
+      ],
+      [
+        "2024-11-02T00:00:00+00:00",
+        93165.29782452842,
+        69774.5
+      ],
+      [
+        "2024-11-03T00:00:00+00:00",
+        92623.63514374323,
+        68341.0
+      ],
+      [
+        "2024-11-04T00:00:00+00:00",
+        93854.09231516549,
+        68566.5
+      ],
+      [
+        "2024-11-05T00:00:00+00:00",
+        95173.36058010909,
+        68877.0
+      ],
+      [
+        "2024-11-06T00:00:00+00:00",
+        100777.89169506125,
+        73432.5
+      ],
+      [
+        "2024-11-07T00:00:00+00:00",
+        103026.37073127223,
+        74839.5
+      ],
+      [
+        "2024-11-08T00:00:00+00:00",
+        103018.23294128924,
+        76395.0
+      ],
+      [
+        "2024-11-09T00:00:00+00:00",
+        102229.97947441782,
+        76602.0
+      ],
+      [
+        "2024-11-10T00:00:00+00:00",
+        99635.28688177366,
+        78898.0
+      ],
+      [
+        "2024-11-11T00:00:00+00:00",
+        95585.81345430965,
+        81225.0
+      ],
+      [
+        "2024-11-12T00:00:00+00:00",
+        89283.6285006212,
+        89192.0
+      ],
+      [
+        "2024-11-13T00:00:00+00:00",
+        80052.74245115514,
+        87475.5
+      ],
+      [
+        "2024-11-14T00:00:00+00:00",
+        73670.43921202619,
+        90900.0
+      ],
+      [
+        "2024-11-15T00:00:00+00:00",
+        65800.13079760318,
+        87724.5
+      ],
+      [
+        "2024-11-16T00:00:00+00:00",
+        61167.948868194595,
+        91183.5
+      ],
+      [
+        "2024-11-17T00:00:00+00:00",
+        55976.89381755279,
+        90612.0
+      ],
+      [
+        "2024-11-18T00:00:00+00:00",
+        53472.92903405227,
+        91795.5
+      ],
+      [
+        "2024-11-19T00:00:00+00:00",
+        54516.42215022593,
+        91761.5
+      ],
+      [
+        "2024-11-20T00:00:00+00:00",
+        56212.72676878073,
+        92962.5
+      ],
+      [
+        "2024-11-21T00:00:00+00:00",
+        60690.32767870702,
+        97039.5
+      ],
+      [
+        "2024-11-22T00:00:00+00:00",
+        58847.95058311963,
+        99466.0
+      ],
+      [
+        "2024-11-23T00:00:00+00:00",
+        57745.43302720167,
+        98715.0
+      ],
+      [
+        "2024-11-24T00:00:00+00:00",
+        56761.38808804957,
+        98520.5
+      ],
+      [
+        "2024-11-25T00:00:00+00:00",
+        56536.2642031609,
+        98197.5
+      ],
+      [
+        "2024-11-26T00:00:00+00:00",
+        53431.30095386095,
+        93824.5
+      ],
+      [
+        "2024-11-27T00:00:00+00:00",
+        54437.48811562729,
+        93625.5
+      ],
+      [
+        "2024-11-28T00:00:00+00:00",
+        57552.764448185626,
+        95386.0
+      ],
+      [
+        "2024-11-29T00:00:00+00:00",
+        59179.873425459926,
+        95709.5
+      ],
+      [
+        "2024-11-30T00:00:00+00:00",
+        61663.73871962729,
+        96859.5
+      ],
+      [
+        "2024-12-01T00:00:00+00:00",
+        62621.18153551554,
+        96530.0
+      ],
+      [
+        "2024-12-02T00:00:00+00:00",
+        63594.57402022896,
+        96077.5
+      ],
+      [
+        "2024-12-03T00:00:00+00:00",
+        64296.030680245836,
+        95602.0
+      ],
+      [
+        "2024-12-04T00:00:00+00:00",
+        66622.1859056477,
+        96740.5
+      ],
+      [
+        "2024-12-05T00:00:00+00:00",
+        72244.60051511668,
+        102418.5
+      ],
+      [
+        "2024-12-06T00:00:00+00:00",
+        69238.86720478068,
+        98240.0
+      ],
+      [
+        "2024-12-07T00:00:00+00:00",
+        71830.12656903501,
+        99622.5
+      ],
+      [
+        "2024-12-08T00:00:00+00:00",
+        73066.13113283992,
+        99738.5
+      ],
+      [
+        "2024-12-09T00:00:00+00:00",
+        74113.10316182542,
+        99656.0
+      ],
+      [
+        "2024-12-10T00:00:00+00:00",
+        72888.68538706582,
+        97242.5
+      ],
+      [
+        "2024-12-11T00:00:00+00:00",
+        74322.88567353447,
+        97409.5
+      ],
+      [
+        "2024-12-12T00:00:00+00:00",
+        78823.25079937982,
+        100531.0
+      ],
+      [
+        "2024-12-13T00:00:00+00:00",
+        79770.60505577066,
+        100112.5
+      ],
+      [
+        "2024-12-14T00:00:00+00:00",
+        82773.80857464632,
+        101838.0
+      ],
+      [
+        "2024-12-15T00:00:00+00:00",
+        84014.16197860357,
+        101768.5
+      ],
+      [
+        "2024-12-16T00:00:00+00:00",
+        88084.08299544311,
+        104996.0
+      ],
+      [
+        "2024-12-17T00:00:00+00:00",
+        88191.2540889846,
+        106902.5
+      ],
+      [
+        "2024-12-18T00:00:00+00:00",
+        85614.9664423922,
+        104240.5
+      ],
+      [
+        "2024-12-19T00:00:00+00:00",
+        84326.33714808567,
+        101627.5
+      ],
+      [
+        "2024-12-20T00:00:00+00:00",
+        81835.84935185152,
+        97672.0
+      ],
+      [
+        "2024-12-21T00:00:00+00:00",
+        84592.41374121499,
+        98973.5
+      ],
+      [
+        "2024-12-22T00:00:00+00:00",
+        83140.21083049239,
+        96083.5
+      ],
+      [
+        "2024-12-23T00:00:00+00:00",
+        83745.59638785619,
+        95323.5
+      ],
+      [
+        "2024-12-24T00:00:00+00:00",
+        83914.19609350676,
+        94091.0
+      ],
+      [
+        "2024-12-25T00:00:00+00:00",
+        89265.47548415845,
+        98047.0
+      ],
+      [
+        "2024-12-26T00:00:00+00:00",
+        90307.09298940659,
+        97686.5
+      ],
+      [
+        "2024-12-27T00:00:00+00:00",
+        88993.79356026348,
+        95078.5
+      ],
+      [
+        "2024-12-28T00:00:00+00:00",
+        89492.02078489805,
+        94177.0
+      ],
+      [
+        "2024-12-29T00:00:00+00:00",
+        91800.9375436959,
+        95152.0
+      ],
+      [
+        "2024-12-30T00:00:00+00:00",
+        91595.43107514629,
+        93579.5
+      ],
+      [
+        "2024-12-31T00:00:00+00:00",
+        92024.09342066792,
+        92730.0
+      ],
+      [
+        "2025-01-01T00:00:00+00:00",
+        94209.44343610494,
+        93527.0
+      ],
+      [
+        "2025-01-02T00:00:00+00:00",
+        95507.1692481483,
+        93527.0
+      ],
+      [
+        "2025-01-03T00:00:00+00:00",
+        96783.1112020785,
+        93527.0
+      ],
+      [
+        "2025-01-04T00:00:00+00:00",
+        97794.95378688595,
+        93527.0
+      ],
+      [
+        "2025-01-05T00:00:00+00:00",
+        98969.20537616462,
+        93527.0
+      ],
+      [
+        "2025-01-06T00:00:00+00:00",
+        99444.57971157318,
+        93527.0
+      ],
+      [
+        "2025-01-07T00:00:00+00:00",
+        97835.65239851808,
+        93527.0
+      ],
+      [
+        "2025-01-08T00:00:00+00:00",
+        99112.11525465354,
+        93527.0
+      ]
+    ],
+    "tp_and_roll": [
+      [
+        "2024-09-01T00:00:00+00:00",
+        58466.0,
+        58466.0
+      ],
+      [
+        "2024-09-12T08:00:00+00:00",
+        59588.18129241263,
+        58144.0
+      ],
+      [
+        "2024-09-12T08:00:00+00:00",
+        60929.23776585095,
+        58144.0
+      ],
+      [
+        "2024-09-12T08:00:00+00:00",
+        62439.58381728274,
+        58144.0
+      ],
+      [
+        "2024-09-12T08:00:00+00:00",
+        63039.38399203934,
+        58144.0
+      ],
+      [
+        "2024-09-18T08:00:00+00:00",
+        65414.14300617617,
+        60453.0
+      ],
+      [
+        "2024-09-18T08:00:00+00:00",
+        65500.16403330178,
+        60453.0
+      ],
+      [
+        "2024-09-19T08:00:00+00:00",
+        66283.99727758521,
+        62114.5
+      ],
+      [
+        "2024-09-20T08:00:00+00:00",
+        68229.06092618327,
+        63531.5
+      ],
+      [
+        "2024-09-20T08:00:00+00:00",
+        68698.99458556931,
+        63531.5
+      ],
+      [
+        "2024-09-20T08:00:00+00:00",
+        68490.04444855094,
+        63531.5
+      ],
+      [
+        "2024-09-20T08:00:00+00:00",
+        68134.22807511676,
+        63531.5
+      ],
+      [
+        "2024-09-20T08:00:00+00:00",
+        68428.18621938102,
+        63531.5
+      ],
+      [
+        "2024-09-20T08:00:00+00:00",
+        68370.4841304032,
+        63531.5
+      ],
+      [
+        "2024-09-20T08:00:00+00:00",
+        68944.59879545841,
+        63531.5
+      ],
+      [
+        "2024-09-21T08:00:00+00:00",
+        69129.93111422047,
+        63113.0
+      ],
+      [
+        "2024-09-24T08:00:00+00:00",
+        70055.43467634163,
+        63569.0
+      ],
+      [
+        "2024-09-25T08:00:00+00:00",
+        70408.1822877423,
+        63860.0
+      ],
+      [
+        "2024-09-25T08:00:00+00:00",
+        70223.13768673223,
+        63860.0
+      ],
+      [
+        "2024-09-25T08:00:00+00:00",
+        70954.90314338113,
+        63860.0
+      ],
+      [
+        "2024-09-26T08:00:00+00:00",
+        71761.96726336294,
+        63858.0
+      ],
+      [
+        "2024-09-27T08:00:00+00:00",
+        74045.1637527477,
+        65484.5
+      ],
+      [
+        "2024-09-28T08:00:00+00:00",
+        75100.28386469511,
+        65875.0
+      ],
+      [
+        "2024-09-29T08:00:00+00:00",
+        75595.0597737312,
+        65490.5
+      ],
+      [
+        "2024-09-30T08:00:00+00:00",
+        75585.38437662428,
+        64579.5
+      ],
+      [
+        "2024-10-01T08:00:00+00:00",
+        75811.76599074408,
+        64031.0
+      ],
+      [
+        "2024-10-02T08:00:00+00:00",
+        74276.73339289139,
+        61721.5
+      ],
+      [
+        "2024-10-08T08:00:00+00:00",
+        76682.98452913878,
+        62300.0
+      ],
+      [
+        "2024-10-08T08:00:00+00:00",
+        78374.73817644591,
+        62300.0
+      ],
+      [
+        "2024-10-08T08:00:00+00:00",
+        80105.55700709627,
+        62300.0
+      ],
+      [
+        "2024-10-08T08:00:00+00:00",
+        80983.37959784424,
+        62300.0
+      ],
+      [
+        "2024-10-09T08:00:00+00:00",
+        82682.4257237123,
+        62259.0
+      ],
+      [
+        "2024-10-09T08:00:00+00:00",
+        83588.85630697061,
+        62259.0
+      ],
+      [
+        "2024-10-10T08:00:00+00:00",
+        83648.27671856659,
+        60844.5
+      ],
+      [
+        "2024-10-10T08:00:00+00:00",
+        84468.28958259069,
+        60844.5
+      ],
+      [
+        "2024-10-14T08:00:00+00:00",
+        88757.7300936898,
+        64605.5
+      ],
+      [
+        "2024-10-15T08:00:00+00:00",
+        89823.6627136837,
+        65646.5
+      ],
+      [
+        "2024-10-21T08:00:00+00:00",
+        93586.81946694889,
+        68508.5
+      ],
+      [
+        "2024-10-22T08:00:00+00:00",
+        92422.8451652477,
+        67378.0
+      ],
+      [
+        "2024-10-22T08:00:00+00:00",
+        92168.84724050661,
+        67378.0
+      ],
+      [
+        "2024-10-22T08:00:00+00:00",
+        93051.98582795919,
+        67378.0
+      ],
+      [
+        "2024-10-23T08:00:00+00:00",
+        93462.44193157257,
+        66829.0
+      ],
+      [
+        "2024-10-24T08:00:00+00:00",
+        94451.07408857993,
+        67078.0
+      ],
+      [
+        "2024-10-24T08:00:00+00:00",
+        95022.02306191182,
+        67078.0
+      ],
+      [
+        "2024-10-24T08:00:00+00:00",
+        95582.4932928587,
+        67078.0
+      ],
+      [
+        "2024-10-24T08:00:00+00:00",
+        95462.91897853413,
+        67078.0
+      ],
+      [
+        "2024-10-24T08:00:00+00:00",
+        95053.72489577107,
+        67078.0
+      ],
+      [
+        "2024-10-24T08:00:00+00:00",
+        95480.72743437866,
+        67078.0
+      ],
+      [
+        "2024-10-28T08:00:00+00:00",
+        97324.94330699214,
+        68372.0
+      ],
+      [
+        "2024-10-29T08:00:00+00:00",
+        101354.0649086467,
+        70983.5
+      ],
+      [
+        "2024-10-29T08:00:00+00:00",
+        101229.64782944864,
+        70983.5
+      ],
+      [
+        "2024-10-30T08:00:00+00:00",
+        103831.38416365608,
+        72224.5
+      ],
+      [
+        "2024-11-08T08:00:00+00:00",
+        108653.2953690121,
+        76395.0
+      ],
+      [
+        "2024-11-08T08:00:00+00:00",
+        108971.557919754,
+        76395.0
+      ],
+      [
+        "2024-11-08T08:00:00+00:00",
+        108782.85268170928,
+        76395.0
+      ],
+      [
+        "2024-11-08T08:00:00+00:00",
+        108410.42229669291,
+        76395.0
+      ],
+      [
+        "2024-11-08T08:00:00+00:00",
+        107645.14926891445,
+        76395.0
+      ],
+      [
+        "2024-11-08T08:00:00+00:00",
+        106703.91074270984,
+        76395.0
+      ],
+      [
+        "2024-11-12T08:00:00+00:00",
+        110545.66982429112,
+        89192.0
+      ],
+      [
+        "2024-11-16T08:00:00+00:00",
+        106537.49770300236,
+        91183.5
+      ],
+      [
+        "2024-11-16T08:00:00+00:00",
+        100604.3709267713,
+        91183.5
+      ],
+      [
+        "2024-11-16T08:00:00+00:00",
+        94476.11342908273,
+        91183.5
+      ],
+      [
+        "2024-11-18T08:00:00+00:00",
+        90354.85161930839,
+        91795.5
+      ],
+      [
+        "2024-11-18T08:00:00+00:00",
+        85600.34541845894,
+        91795.5
+      ],
+      [
+        "2024-11-18T08:00:00+00:00",
+        79837.08053421712,
+        91795.5
+      ],
+      [
+        "2024-11-18T08:00:00+00:00",
+        74155.84524119028,
+        91795.5
+      ],
+      [
+        "2024-11-18T08:00:00+00:00",
+        68332.17897792773,
+        91795.5
+      ],
+      [
+        "2024-11-18T08:00:00+00:00",
+        63881.44984974204,
+        91795.5
+      ],
+      [
+        "2024-11-18T08:00:00+00:00",
+        59725.808417641674,
+        91795.5
+      ],
+      [
+        "2024-11-18T08:00:00+00:00",
+        56494.03331411378,
+        91795.5
+      ],
+      [
+        "2024-11-18T08:00:00+00:00",
+        53053.66035212355,
+        91795.5
+      ],
+      [
+        "2024-11-18T08:00:00+00:00",
+        49644.14032689683,
+        91795.5
+      ],
+      [
+        "2024-11-18T08:00:00+00:00",
+        47415.16308144995,
+        91795.5
+      ],
+      [
+        "2024-11-18T08:00:00+00:00",
+        48492.65619762361,
+        91795.5
+      ],
+      [
+        "2024-11-19T08:00:00+00:00",
+        48953.96081617841,
+        91761.5
+      ],
+      [
+        "2024-11-20T08:00:00+00:00",
+        50555.5617261047,
+        92962.5
+      ],
+      [
+        "2024-11-27T08:00:00+00:00",
+        51910.6900362657,
+        93625.5
+      ],
+      [
+        "2024-11-27T08:00:00+00:00",
+        51823.972114602584,
+        93625.5
+      ],
+      [
+        "2024-11-27T08:00:00+00:00",
+        51928.36396051601,
+        93625.5
+      ],
+      [
+        "2024-11-27T08:00:00+00:00",
+        51712.29124909673,
+        93625.5
+      ],
+      [
+        "2024-12-02T08:00:00+00:00",
+        54338.56888510536,
+        96077.5
+      ],
+      [
+        "2024-12-02T08:00:00+00:00",
+        54823.48517000249,
+        96077.5
+      ],
+      [
+        "2024-12-02T08:00:00+00:00",
+        57292.52359522482,
+        96077.5
+      ],
+      [
+        "2024-12-02T08:00:00+00:00",
+        59728.154373011566,
+        96077.5
+      ],
+      [
+        "2024-12-02T08:00:00+00:00",
+        62068.206775208775,
+        96077.5
+      ],
+      [
+        "2024-12-02T08:00:00+00:00",
+        63245.16343522565,
+        96077.5
+      ],
+      [
+        "2024-12-03T08:00:00+00:00",
+        65246.56201442762,
+        95602.0
+      ],
+      [
+        "2024-12-03T08:00:00+00:00",
+        66434.21723982948,
+        95602.0
+      ],
+      [
+        "2024-12-04T08:00:00+00:00",
+        67517.13184929846,
+        96740.5
+      ],
+      [
+        "2024-12-05T08:00:00+00:00",
+        74367.89853896246,
+        102418.5
+      ],
+      [
+        "2024-12-06T08:00:00+00:00",
+        72680.72451714233,
+        98240.0
+      ],
+      [
+        "2024-12-12T08:00:00+00:00",
+        76337.57877353317,
+        100531.0
+      ],
+      [
+        "2024-12-13T08:00:00+00:00",
+        77196.78229240883,
+        100112.5
+      ],
+      [
+        "2024-12-14T08:00:00+00:00",
+        80232.13569636608,
+        101838.0
+      ],
+      [
+        "2024-12-15T08:00:00+00:00",
+        82280.31115792302,
+        101768.5
+      ],
+      [
+        "2024-12-15T08:00:00+00:00",
+        83905.28437989842,
+        101768.5
+      ],
+      [
+        "2024-12-15T08:00:00+00:00",
+        84840.42539438233,
+        101768.5
+      ],
+      [
+        "2024-12-15T08:00:00+00:00",
+        85330.14882427765,
+        101768.5
+      ],
+      [
+        "2024-12-15T08:00:00+00:00",
+        86017.51597835825,
+        101768.5
+      ],
+      [
+        "2024-12-15T08:00:00+00:00",
+        88482.73681308198,
+        101768.5
+      ],
+      [
+        "2024-12-15T08:00:00+00:00",
+        89325.15782992152,
+        101768.5
+      ],
+      [
+        "2024-12-16T08:00:00+00:00",
+        90753.328923463,
+        104996.0
+      ],
+      [
+        "2024-12-28T08:00:00+00:00",
+        82079.16584093253,
+        94177.0
+      ],
+      [
+        "2024-12-28T08:00:00+00:00",
+        85131.4914484754,
+        94177.0
+      ],
+      [
+        "2024-12-28T08:00:00+00:00",
+        87874.4351030462,
+        94177.0
+      ],
+      [
+        "2024-12-28T08:00:00+00:00",
+        90625.37321011843,
+        94177.0
+      ],
+      [
+        "2024-12-28T08:00:00+00:00",
+        93020.70317064827,
+        94177.0
+      ],
+      [
+        "2024-12-28T08:00:00+00:00",
+        95569.49647867212,
+        94177.0
+      ],
+      [
+        "2024-12-30T08:00:00+00:00",
+        98754.23741857316,
+        93579.5
+      ],
+      [
+        "2024-12-30T08:00:00+00:00",
+        102562.89169633276,
+        93579.5
+      ],
+      [
+        "2024-12-30T08:00:00+00:00",
+        106198.05873999918,
+        93579.5
+      ],
+      [
+        "2024-12-30T08:00:00+00:00",
+        108596.64839382352,
+        93579.5
+      ],
+      [
+        "2024-12-30T08:00:00+00:00",
+        111047.84960603171,
+        93579.5
+      ],
+      [
+        "2024-12-30T08:00:00+00:00",
+        112326.01195155334,
+        93579.5
+      ],
+      [
+        "2024-12-31T08:00:00+00:00",
+        113697.35573500211,
+        92730.0
+      ],
+      [
+        "2024-12-31T08:00:00+00:00",
+        115781.10073771865,
+        92730.0
+      ],
+      [
+        "2024-12-31T08:00:00+00:00",
+        117824.3523847522,
+        92730.0
+      ],
+      [
+        "2024-12-31T08:00:00+00:00",
+        119426.73898093129,
+        92730.0
+      ],
+      [
+        "2024-12-31T08:00:00+00:00",
+        120541.34663343427,
+        92730.0
+      ],
+      [
+        "2024-12-31T08:00:00+00:00",
+        121370.98420651164,
+        92730.0
+      ],
+      [
+        "2024-12-31T08:00:00+00:00",
+        122161.18536754226,
+        92730.0
+      ],
+      [
+        "2024-12-31T08:00:00+00:00",
+        122462.3906055506,
+        92730.0
+      ],
+      [
+        "2024-12-31T08:00:00+00:00",
+        122314.12341984363,
+        92730.0
+      ],
+      [
+        "2025-01-01T00:00:00+00:00",
+        123111.12341984363,
+        93527.0
+      ]
+    ]
+  },
   "error": null,
-  "finished_at": null,
-  "duration_seconds": null
+  "finished_at": "2025-12-07T22:56:15.557179",
+  "duration_seconds": 396.406942
 }
