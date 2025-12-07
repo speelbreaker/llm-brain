@@ -1,0 +1,226 @@
+You are working inside my LLMAgentBrain options-bot repository.
+
+Goal
+====
+
+Create a "strategy health check" script that automatically runs a standard
+battery of synthetic vs live_deribit comparisons and prints a compact report.
+
+We already have:
+- scripts/compare_synthetic_vs_live.py   (runs a pair of backtests synthetic vs live)
+- scripts/diff_backtest_runs.py          (prints detailed diff between two runs)
+- BacktestRuns / BacktestMetrics / BacktestChains stored in Postgres
+- LIVE_DERIBIT_CAPTURED data source wired via build_live_deribit_exam_dataset
+
+Task: scripts/strategy_health_check.py
+======================================
+
+Create a new script:
+
+  scripts/strategy_health_check.py
+
+CLI interface:
+
+  python scripts/strategy_health_check.py \
+    --days 7 \
+    [--underlyings BTC ETH] \
+    [--exit-style tp_and_roll]
+
+Requirements
+============
+
+1) CLI arguments:
+
+   - --days (int, default 7)
+     Number of days for the lookback window.
+
+   - --underlyings (one or more strings, default ["BTC", "ETH"])
+     Underlyings to test.
+
+   - --exit-style (string, default "tp_and_roll")
+     Exit style to use for all tests.
+
+2) Date range:
+
+   - Compute "today" in UTC and then:
+       end_date   = today - 1 day  (last full day)
+       start_date = end_date - (days - 1) days
+
+   - Use these for all tests:
+       start_ts = start_date 00:00:00 UTC
+       end_ts   = end_date   23:59:59 UTC
+
+3) Standard test battery:
+
+   For now, define the following tests:
+
+   - BTC, decisions every 1440 minutes (daily)
+   - BTC, decisions every 240 minutes (4h)
+   - ETH, decisions every 1440 minutes (daily)
+
+   Only tests whose underlying is included in --underlyings should run.
+
+4) Running the pair of backtests:
+
+   For each test (underlying + decision_interval_minutes):
+
+   - Call the same core logic as scripts/compare_synthetic_vs_live.py to run
+     both backtests (synthetic and live_deribit) and get the two run_ids.
+
+     If needed, refactor compare_synthetic_vs_live.py so the main "run both
+     backtests" logic lives in a reusable helper function, e.g.:
+
+       from src.backtest.compare import run_synthetic_vs_live_pair
+
+       run_id_synth, run_id_live = run_synthetic_vs_live_pair(
+           underlying=...,
+           start_ts=...,
+           end_ts=...,
+           decision_interval_minutes=...,
+           exit_style=exit_style,
+       )
+
+     The function should:
+       - Create BacktestRun rows,
+       - Execute the backtests synchronously,
+       - Return the two run_id strings.
+
+   - If the live_deribit run fails due to lack of data (e.g. loader raises an
+     error, or no trades / no market data), catch the exception and mark the
+     test as "SKIPPED (no live_deribit data)", then continue to the next test.
+
+5) Computing the diff:
+
+   - Instead of calling diff_backtest_runs.py via subprocess, expose its core
+     logic as an importable function.
+
+   - Refactor scripts/diff_backtest_runs.py so the diff logic lives in a helper
+     function, e.g.:
+
+       from src.backtest.diff import compute_diff_for_runs
+
+       diff = compute_diff_for_runs(run_id_a, run_id_b, exit_style)
+
+     Where diff is a dict like:
+
+       {
+         "run_a": {...metadata...},
+         "run_b": {...metadata...},
+         "metrics": {
+           "net_profit_pct": {"a": ..., "b": ..., "diff": ...},
+           "net_profit_usd": {...},
+           "final_pnl_vs_hodl": {...},
+           "max_drawdown_pct": {...},
+           "max_drawdown_usd": {...},
+           "num_trades": {...},
+           "win_rate": {...},
+           "profit_factor": {...},
+           "avg_trade_usd": {...},
+           "sharpe_ratio": {...},
+           "sortino_ratio": {...},
+         }
+       }
+
+     Reuse as much code as possible from diff_backtest_runs.py; just extract it
+     into a proper function.
+
+6) "Optimism factor" and health summary:
+
+   For each test's diff:
+
+   - Extract:
+       net_profit_pct_synth = metrics["net_profit_pct"]["a"] or ["synthetic"]
+       net_profit_pct_live  = metrics["net_profit_pct"]["b"] or ["live_deribit"]
+
+   - Compute:
+
+       optimism_factor = None
+       if net_profit_pct_live is not None and abs(net_profit_pct_live) > 1e-9:
+           optimism_factor = net_profit_pct_synth / net_profit_pct_live
+
+   - Gather the following for printing:
+
+       - underlying
+       - decision_interval_minutes
+       - exit_style
+       - period (start_date → end_date)
+       - net_profit_pct_synth, net_profit_pct_live, diff
+       - optimism_factor
+       - num_trades_synth, num_trades_live
+       - win_rate_synth, win_rate_live
+       - max_drawdown_pct_synth, max_drawdown_pct_live
+       - profit_factor_synth, profit_factor_live
+       - sharpe_ratio_synth, sharpe_ratio_live
+
+7) Output format:
+
+   For each test, print a block like:
+
+   ================================================================================
+   STRATEGY HEALTH CHECK – <underlying>, decisions=<N> min
+   Exit style: <exit_style>
+   Period: <start_date> → <end_date>
+   Data source A: synthetic
+   Data source B: live_deribit
+   -------------------------------------------------------------------------------
+   net_profit_pct:
+     synthetic:    +35.2 %
+     live_deribit: +28.1 %
+     diff:         -7.1 pp
+     optimism:     1.25x
+   num_trades:
+     synthetic:    24
+     live_deribit: 22
+   win_rate:
+     synthetic:    79.2 %
+     live_deribit: 75.0 %
+   max_drawdown_pct:
+     synthetic:    18.4 %
+     live_deribit: 21.7 %
+   profit_factor:
+     synthetic:    3.10
+     live_deribit: 2.40
+   sharpe_ratio:
+     synthetic:    0.32
+     live_deribit: 0.27
+   -------------------------------------------------------------------------------
+
+   If a test was skipped due to missing live data, print:
+
+   ================================================================================
+   STRATEGY HEALTH CHECK – BTC, decisions=1440 min
+   SKIPPED: not enough live_deribit data for 2025-12-01 → 2025-12-07
+   -------------------------------------------------------------------------------
+
+8) Final summary:
+
+   At the end, print a small summary like:
+
+   Summary:
+     BTC 7d daily decisions:   optimism 1.25x
+     BTC 7d 4h decisions:      optimism 1.80x
+     ETH 7d daily decisions:   optimism 1.10x
+     (SKIPPED: ETH 7d 4h decisions – not configured)
+
+   Note: no need to enforce thresholds in this script; just print the numbers.
+
+9) Optional: JSON output (nice-to-have, not required):
+
+   - If convenient, write a JSON summary to:
+       data/health_checks/healthcheck_<YYYY-MM-DD>.json
+
+   containing the same info: tests run, metrics, optimism factors, skipped flags.
+
+10) Error handling:
+
+   - Do not crash the whole script if one test fails; mark it as SKIPPED and
+     continue.
+   - Exit code 0 if at least one test ran successfully or was skipped.
+   - Exit code 1 only for "global" issues (e.g., DB connection failure).
+
+After this task, I should be able to run:
+
+  python scripts/strategy_health_check.py --days 7 --exit-style tp_and_roll
+
+and see a multi-block report summarizing synthetic vs live_deribit performance
+for BTC and ETH over the last 7 full days.
