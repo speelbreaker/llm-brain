@@ -1,6 +1,12 @@
 """
-Chat with the options trading agent using recent decision logs.
+Chat with the options trading agent using real-time state and decision logs.
 Uses OpenAI via Replit AI Integrations to answer questions about the agent's behavior.
+
+Features:
+- Multi-turn conversation history
+- Real-time trading state context (positions, PnL, mode)
+- Recent decision summaries
+- Architecture documentation context
 """
 from __future__ import annotations
 
@@ -9,11 +15,15 @@ import json
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from openai import OpenAI
 
 from src.config import settings
+from src.chat_store import chat_store
+from src.status_store import status_store
+from src.decisions_store import decisions_store
+from src.position_tracker import position_tracker
 
 
 def _get_openai_client() -> OpenAI:
@@ -34,23 +44,29 @@ def _get_openai_client() -> OpenAI:
 LOG_DIR = Path("logs")
 LOG_PATTERN = "agent_decisions_*.jsonl"
 
+DOCS_FILES = [
+    "ARCHITECTURE_OVERVIEW.md",
+    "HEALTHCHECK.md",
+    "ROADMAP.md",
+    "replit.md",
+]
+
+MAX_DOC_CHARS = 3000
+
 
 @dataclass
 class LogEntry:
     raw: Dict[str, Any]
 
 
-def find_latest_log_file() -> Path:
+def find_latest_log_file() -> Optional[Path]:
     """Find the most recent agent_decisions_YYYYMMDD.jsonl file in logs/."""
     paths = sorted(
         LOG_DIR.glob(LOG_PATTERN),
         key=lambda p: p.name,
     )
     if not paths:
-        raise FileNotFoundError(
-            f"No log files matching {LOG_PATTERN} found in {LOG_DIR}. "
-            "Run the agent first so it creates logs."
-        )
+        return None
     return paths[-1]
 
 
@@ -74,112 +90,204 @@ def load_recent_entries(log_file: Path, limit: int = 20) -> List[LogEntry]:
     return entries
 
 
-def compress_entry(entry: LogEntry) -> Dict[str, Any]:
-    """Build a compact, LLM-friendly summary of a single log entry."""
-    d = entry.raw
-    state = d.get("state", {}) or {}
-    proposed = d.get("proposed_action", {}) or {}
-    final_action = d.get("final_action", {}) or {}
-    risk = d.get("risk_check", {}) or {}
-    exec_info = d.get("execution", {}) or {}
-    cfg = d.get("config_snapshot", {}) or {}
+def _summarize_decisions(limit: int = 10) -> str:
+    """Summarize recent decisions from the decisions_store."""
+    decisions = decisions_store.get_all()[:limit]
+    if not decisions:
+        return "No recent decisions recorded."
+    
+    action_counts: Dict[str, int] = {}
+    symbols_traded: List[str] = []
+    
+    for d in decisions:
+        action = d.get("action", "UNKNOWN")
+        action_counts[action] = action_counts.get(action, 0) + 1
+        
+        params = d.get("params", {})
+        if params and "symbol" in params:
+            symbols_traded.append(params["symbol"])
+    
+    parts = [f"{count}x {action}" for action, count in action_counts.items()]
+    summary = f"Last {len(decisions)} decisions: " + ", ".join(parts)
+    
+    if symbols_traded:
+        unique_symbols = list(dict.fromkeys(symbols_traded[:5]))
+        summary += f". Symbols: {', '.join(unique_symbols)}"
+    
+    return summary
 
-    return {
-        "timestamp": d.get("log_timestamp"),
-        "spot": state.get("spot", {}),
+
+def _format_positions_summary(positions: List[Dict[str, Any]], limit: int = 5) -> str:
+    """Format open positions as a compact summary."""
+    if not positions:
+        return "No open positions."
+    
+    lines = []
+    for p in positions[:limit]:
+        symbol = p.get("symbol", "?")
+        qty = p.get("qty", 0)
+        pnl = p.get("unrealized_pnl", 0)
+        pnl_pct = p.get("unrealized_pnl_pct", 0)
+        dte = p.get("dte", "?")
+        lines.append(f"  - {symbol}: qty={qty}, PnL=${pnl:.2f} ({pnl_pct:+.2f}%), DTE={dte}")
+    
+    if len(positions) > limit:
+        lines.append(f"  ... and {len(positions) - limit} more positions")
+    
+    return "\n".join(lines)
+
+
+def _load_docs_summary() -> str:
+    """Load and truncate architecture documentation files."""
+    docs_parts = []
+    
+    for filename in DOCS_FILES:
+        path = Path(filename)
+        if path.exists():
+            try:
+                content = path.read_text(encoding="utf-8")[:MAX_DOC_CHARS]
+                if len(content) >= MAX_DOC_CHARS:
+                    content = content + "\n... [truncated]"
+                docs_parts.append(f"### {filename}\n{content}")
+            except Exception:
+                pass
+    
+    if not docs_parts:
+        return "No documentation files available."
+    
+    return "\n\n".join(docs_parts)
+
+
+def build_chat_context() -> Dict[str, Any]:
+    """
+    Collect the current trading context for the LLM:
+    - /status snapshot (mode, training, llm_enabled, positions, PnL, etc.)
+    - recent decisions (last N from decisions_store)
+    - optional summarized docs for architecture/safety questions
+    """
+    current_status = status_store.get()
+    
+    positions_data = position_tracker.get_open_positions_payload()
+    positions = positions_data.get("positions", [])
+    totals = positions_data.get("totals", {})
+    
+    state = current_status.get("state", {})
+    portfolio = state.get("portfolio", {})
+    spot = state.get("spot", {})
+    
+    context = {
+        "environment": {
+            "deribit_env": getattr(settings, "deribit_env", "testnet"),
+            "mode": "research" if settings.is_research else "production",
+            "training_mode": settings.is_training_enabled,
+            "llm_enabled": settings.llm_enabled,
+            "explore_prob": settings.explore_prob,
+            "dry_run": settings.dry_run,
+        },
         "portfolio": {
-            "equity_usd": state.get("portfolio", {}).get("equity_usd"),
-            "margin_used_pct": state.get("portfolio", {}).get("margin_used_pct"),
-            "net_delta": state.get("portfolio", {}).get("net_delta"),
+            "equity_usd": portfolio.get("equity_usd"),
+            "margin_used_pct": portfolio.get("margin_used_pct"),
+            "net_delta": portfolio.get("net_delta"),
         },
-        "candidates_count": state.get("candidates_count"),
-        "top_candidates": state.get("top_candidates", []),
-        "proposed_action": {
-            "action": proposed.get("action"),
-            "params": proposed.get("params"),
-            "reasoning": proposed.get("reasoning"),
-        },
-        "risk_check": {
-            "allowed": risk.get("allowed"),
-            "reasons": risk.get("reasons"),
-        },
-        "final_action": {
-            "action": final_action.get("action"),
-            "params": final_action.get("params"),
-        },
-        "execution": {
-            "status": exec_info.get("status"),
-            "dry_run": exec_info.get("dry_run"),
-            "orders": exec_info.get("orders"),
-            "message": exec_info.get("message"),
-        },
-        "config_snapshot": {
-            "dry_run": cfg.get("dry_run"),
-            "max_margin_used_pct": cfg.get("max_margin_used_pct"),
-            "max_net_delta_abs": cfg.get("max_net_delta_abs"),
-            "max_expiry_exposure": cfg.get("max_expiry_exposure"),
-        },
+        "spot_prices": spot,
+        "positions": positions,
+        "positions_count": len(positions),
+        "total_unrealized_pnl_usd": totals.get("unrealized_pnl", 0.0),
+        "recent_decisions_summary": _summarize_decisions(10),
+        "positions_summary": _format_positions_summary(positions, 5),
+        "docs_summary": _load_docs_summary(),
     }
+    
+    return context
 
 
-def build_logs_context(entries: List[LogEntry]) -> Dict[str, Any]:
-    """Build a compact context object summarizing recent decisions."""
-    compressed = [compress_entry(e) for e in entries]
-    return {
-        "entries": compressed,
-        "entry_count": len(compressed),
-    }
+def _build_rules_text() -> str:
+    """Build a short rules summary for the system prompt."""
+    return """Trading Rules:
+- Prefers selling OTM calls with delta in [0.10, 0.40] and DTE in [1, 21] days.
+- In training mode: allows multiple positions per underlying (up to 6), builds delta ladders.
+- In live mode: one covered call per underlying, stricter risk checks.
+- Rolls a short call if:
+  * Close to expiry (< 3 days) and near-the-money, or
+  * ITM and at risk of assignment, or
+  * Better premium available at higher strike.
+- Otherwise holds to expiry and lets options expire worthless (OTM).
+- Risk controls: margin cap (80%), net delta cap (5.0), per-expiry exposure limits.
+- Position reconciliation runs each loop to detect local/exchange divergence."""
 
 
 def chat_with_agent(question: str, log_limit: int = 20) -> str:
     """
     Use the OpenAI API to answer a question about the agent's behavior
-    based on recent log entries.
+    based on real-time state, positions, and recent decisions.
+    
+    Maintains multi-turn conversation history via chat_store.
     """
-    latest_log = find_latest_log_file()
-    entries = load_recent_entries(latest_log, limit=log_limit)
-    if not entries:
-        return (
-            "I couldn't find any recent log entries. "
-            "Make sure the agent has been running and generating logs."
-        )
+    ctx = build_chat_context()
+    
+    history = chat_store.get_history()
+    
+    env = ctx["environment"]
+    system_prompt = f"""You are an assistant embedded inside an options trading bot dashboard.
 
-    context = build_logs_context(entries)
+The user is the bot owner. Your job is to:
+- Explain what the bot is currently doing and why.
+- Explain trading rules (when it opens, rolls, or closes positions).
+- Interpret positions, PnL, training mode, and risk limits.
+- Give high-level advice on architecture, safety, and coding WHEN ASKED, based only on the docs provided below.
+- Answer questions about recent decisions based on the decision log.
 
+Important:
+- This is a research/experimentation system on TESTNET only.
+- Do NOT give financial advice.
+- Do NOT claim to trade real money; it's testnet.
+- Be concise but thorough. Use the context provided.
+
+Current Runtime State:
+- Deribit Environment: {env.get('deribit_env', 'testnet').upper()}
+- Mode: {env.get('mode', 'research')}
+- Training Mode: {'ENABLED' if env.get('training_mode') else 'DISABLED'}
+- LLM Decisions: {'ENABLED' if env.get('llm_enabled') else 'DISABLED (rule-based)'}
+- Exploration Probability: {env.get('explore_prob', 0):.0%}
+- Dry Run: {'YES' if env.get('dry_run') else 'NO'}
+
+Portfolio:
+- Equity: ${ctx['portfolio'].get('equity_usd', 0):,.2f}
+- Margin Used: {ctx['portfolio'].get('margin_used_pct', 0):.2f}%
+- Net Delta: {ctx['portfolio'].get('net_delta', 0):.4f}
+
+Spot Prices: {ctx['spot_prices']}
+
+Open Positions ({ctx['positions_count']}):
+{ctx['positions_summary']}
+
+Total Unrealized PnL: ${ctx['total_unrealized_pnl_usd']:,.2f}
+
+Recent Decisions:
+{ctx['recent_decisions_summary']}
+
+{_build_rules_text()}
+
+Project Documentation (truncated):
+{ctx['docs_summary']}
+"""
+    
+    messages: List[Dict[str, Any]] = [{"role": "system", "content": system_prompt}]
+    
+    for msg in history:
+        messages.append({"role": msg["role"], "content": msg["content"]})
+    
+    messages.append({"role": "user", "content": question})
+    
     client = _get_openai_client()
-
-    system_prompt = (
-        "You are the user's automated BTC/ETH options trading agent running on Deribit testnet.\n"
-        "You make decisions about covered calls (open, roll, close, or do nothing).\n"
-        "You are given a compact summary of your recent decisions and their context from the logs.\n"
-        "Your job is to answer the user's questions about:\n"
-        "- why you took certain actions,\n"
-        "- what your internal rules and constraints are,\n"
-        "- how you've behaved recently,\n"
-        "- what you might do in similar situations.\n\n"
-        "Important rules:\n"
-        "- This is a research/experimentation system on TESTNET only.\n"
-        "- Do NOT give financial advice.\n"
-        "- Do NOT claim you traded real money; it's testnet.\n"
-        "- Base your answers on the provided logs and general behavior, "
-        "and admit uncertainty if something isn't clear.\n"
-    )
-
-    user_content = {
-        "question": question,
-        "recent_decisions": context,
-    }
-
+    
     model_name = getattr(settings, "llm_chat_model_name", None) or getattr(
         settings, "llm_model_name", "gpt-4.1-mini"
     )
 
     response = client.chat.completions.create(
         model=model_name,
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": json.dumps(user_content, default=str)},
-        ],
+        messages=messages,
         max_tokens=1024,
     )
 
@@ -187,8 +295,21 @@ def chat_with_agent(question: str, log_limit: int = 20) -> str:
         answer = response.choices[0].message.content or ""
     except Exception:
         answer = "I had trouble reading the model's response."
+    
+    chat_store.append("user", question)
+    chat_store.append("assistant", answer)
 
     return answer
+
+
+def get_chat_messages() -> List[Dict[str, str]]:
+    """Get all chat messages for API response."""
+    return chat_store.get_history()
+
+
+def clear_chat_history() -> None:
+    """Clear all chat history."""
+    chat_store.clear()
 
 
 def main() -> None:

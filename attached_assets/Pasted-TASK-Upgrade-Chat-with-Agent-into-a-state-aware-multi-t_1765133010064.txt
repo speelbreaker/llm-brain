@@ -1,0 +1,261 @@
+TASK: Upgrade `Chat with Agent` into a state-aware, multi-turn assistant
+
+Goal:
+Turn the existing Chat tab into a real “assistant” that:
+- Knows the current trading state (positions, unrealized PnL, training vs live, etc.)
+- Maintains multi-turn conversation history
+- Can answer both:
+  - “Explain what the bot is doing right now” questions, and
+  - Higher-level architecture / safety / coding questions based on docs in the repo.
+
+Please implement this in small, clear pieces.
+
+--------------------------------------------------
+1) Add a lightweight chat history store
+--------------------------------------------------
+
+Create a new module:
+
+  src/chat_store.py
+
+Implement a simple in-memory (and optional file-backed) history:
+
+  from collections import deque
+  from typing import Deque, Dict, List
+
+  MAX_HISTORY = 20  # last 20 messages is enough
+
+  _history: Deque[Dict[str, str]] = deque(maxlen=MAX_HISTORY)
+
+  def append(role: str, content: str) -> None:
+      """Append a chat message."""
+      _history.append({"role": role, "content": content})
+
+  def get_history() -> List[Dict[str, str]]:
+      """Return chat history as a list of {role, content} dicts."""
+      return list(_history)
+
+  def clear() -> None:
+      """Clear chat history."""
+      _history.clear()
+
+We do NOT need persistence across process restarts yet; in-memory per-process is fine.
+
+--------------------------------------------------
+2) Extend the status snapshot with positions + PnL
+--------------------------------------------------
+
+We want the LLM to know exactly what the UI knows.
+
+Update whatever module builds the `/status` payload (likely src/status_store.py or equivalent) so that the JSON includes:
+
+- `positions`: list of open positions, each with:
+  - underlying
+  - symbol
+  - qty
+  - entry_price
+  - mark_price
+  - unrealized_pnl_usd
+  - dte (days to expiry)
+  - mode (LIVE / TRAINING)
+- `total_unrealized_pnl_usd`: sum over all positions
+- `mode`: "research" or "production"
+- `training_mode`: true/false
+- `llm_enabled`: true/false
+- `explore_prob`: current exploration probability (e.g. 0.25)
+- Any other key flags you think are useful for explanation.
+
+Make sure this is the SAME data that populates the “Bot Positions” table, so Total Unrealized on the dashboard and in status are consistent.
+
+--------------------------------------------------
+3) Enhance chat_with_agent.py to build rich context
+--------------------------------------------------
+
+Open src/chat_with_agent.py and refactor it to:
+
+- Import:
+
+  - `chat_store`
+  - the status getter (whatever `web_app` uses for `/status`)
+  - the decisions/flight recorder store to get recent decisions.
+
+Add a helper:
+
+  def build_chat_context():
+      """
+      Collect the current trading context for the LLM:
+      - /status snapshot (mode, training, llm_enabled, positions, PnL, etc.)
+      - recent decisions (last N from decisions_store)
+      - optional summarized docs for architecture/safety questions
+      """
+      ...
+
+Inside this helper:
+
+1) Load the current status snapshot:
+
+   `status = status_store.get_status()` (or equivalent)
+
+2) Extract key fields:
+
+   - environment: status["mode"], status["training_mode"], status["llm_enabled"], status["explore_prob"]
+   - current positions: status["positions"], status["total_unrealized_pnl_usd"]
+   - risk config summary from status["config"] if available (max_margin_used_pct, max_net_delta_abs, etc.)
+
+3) Load recent decisions (e.g. last 10) from decisions_store / flight recorder.
+   Summarize them into a short text like:
+
+   - “Last 5 decisions: 3x DO_NOTHING (TRAINING ladder full), 2x OPEN_COVERED_CALL on BTC-xxxx.”
+
+4) OPTIONAL: Load and truncate architecture docs:
+
+   - Read files if they exist:
+     - ARCHITECTURE_OVERVIEW.md
+     - HEALTHCHECK.md
+     - ROADMAP.md
+   - For each, truncate to first ~3000 characters to avoid token blowup.
+   - Concatenate into a `docs_summary` string with clear section headers.
+
+Return a dictionary:
+
+  {
+    "status": status,
+    "recent_decisions_summary": "...",
+    "docs_summary": "..."  # optional, may be empty
+  }
+
+--------------------------------------------------
+4) Build a richer LLM prompt with history + context
+--------------------------------------------------
+
+In the main `chat_with_agent(question: str)` function:
+
+1) Get chat history:
+
+   `history = chat_store.get_history()`
+
+2) Get context:
+
+   `ctx = build_chat_context()`
+
+3) Build a **system message** that explains the assistant’s role and includes the state summary:
+
+   - Example:
+
+     """
+     You are an assistant embedded inside an options trading bot dashboard.
+
+     The user is the bot owner. Your job is to:
+     - Explain what the bot is currently doing and why.
+     - Explain trading rules (when it opens, rolls, or closes positions).
+     - Interpret positions, PnL, training mode, and risk limits.
+     - Give high-level advice on architecture, safety, and coding WHEN ASKED,
+       based only on the docs provided below.
+
+     Current runtime state:
+     - mode: {status["mode"]}
+     - training_mode: {status["training_mode"]}
+     - llm_enabled: {status["llm_enabled"]}
+     - explore_prob: {status["explore_prob"]}
+     - total_unrealized_pnl_usd: {status["total_unrealized_pnl_usd"]}
+     - num_open_positions: {len(status["positions"])}
+
+     Recent decisions:
+     {recent_decisions_summary}
+
+     Open positions (summary):
+     {a compact table-like summary of positions, maybe first 5}
+
+     Project docs summary:
+     {docs_summary or 'No docs loaded'}
+     """
+
+   Use Python string formatting to inject the real values.
+
+4) Build the messages list:
+
+   `messages = []`
+
+   - Append system message (role="system").
+   - Append history from `chat_store` (role "user"/"assistant" as stored).
+   - Append the new user question: `{"role": "user", "content": question}`.
+
+5) Call the OpenAI client with `messages` (chat/completions or Responses API as you already use).
+
+6) When you get the assistant reply:
+
+   - Append the new user message to `chat_store`.
+   - Append the assistant reply to `chat_store`.
+
+Return the assistant reply text to the API layer.
+
+--------------------------------------------------
+5) Update the Chat API & UI to display full history
+--------------------------------------------------
+
+In src/web_app.py:
+
+- Update the chat endpoint (e.g. `/api/chat/ask` or similar) to return:
+
+  {
+    "messages": [
+      {"role": "user", "content": "..."},
+      {"role": "assistant", "content": "..."},
+      ...
+    ]
+  }
+
+Instead of just a single “answer” string.
+
+Then update the Chat tab UI so that:
+
+- It renders the list of messages as a scrolling chat log.
+- New questions are appended to the log; previous answers remain visible.
+- Optionally add a “Clear chat” button that calls a new endpoint to clear history via `chat_store.clear()`.
+
+Styling can be simple (user on the right, assistant on the left).
+
+--------------------------------------------------
+6) Make sure LLM can explain roll vs expiry rules
+--------------------------------------------------
+
+To help the LLM answer “will you roll or let it expire?”:
+
+- Include a short, explicit **rules summary** in the system message, derived from your existing rule-based logic and training profiles.
+
+Example snippet to embed in the system message:
+
+  - “Rule-based policy:
+     - Prefers selling OTM calls with delta in [0.15, 0.35] and DTE in [3, 21] days.
+     - Tries to roll a short call if:
+       - it is close to expiry and near-the-money, or
+       - it is ITM and close to expiry, or
+       - training mode logic requests a roll.
+     - Otherwise the default is to hold to expiry.”
+
+You can pull this from an existing `rules_summary` helper if you already have one; otherwise just hardcode a short text.
+
+--------------------------------------------------
+7) Validation
+--------------------------------------------------
+
+After implementing:
+
+1) Run the existing smoke tests:
+
+   bash scripts/smoke_live_agent.sh
+   bash scripts/smoke_backtest.sh
+   bash scripts/smoke_training_export.sh
+   bash scripts/smoke_web_api.sh
+
+2) Manually test via the dashboard:
+
+   - Open the Chat tab.
+   - Ask:
+     - “What strategy are you running right now?”
+     - “Why is the unrealized PnL negative? Break it down by position.”
+     - “Will you roll my 94k calls if BTC hits 94k, or hold to expiry?”
+     - “Summarize the main safety features of this bot.”
+   - Confirm:
+     - The answers reference the current positions and PnL.
+     - The chat history stays on screen and context is maintained.

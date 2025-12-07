@@ -16,7 +16,7 @@ from typing import cast
 from agent_loop import run_agent_loop_forever
 from src.status_store import status_store
 from src.decisions_store import decisions_store
-from src.chat_with_agent import chat_with_agent
+from src.chat_with_agent import chat_with_agent, get_chat_messages, clear_chat_history
 from src.config import settings
 from src.position_tracker import position_tracker
 from src.calibration import run_calibration
@@ -70,7 +70,7 @@ def health_check() -> JSONResponse:
 def chat_endpoint(
     payload: Dict[str, Any] = Body(..., example={"question": "Why did you pick the 97k call?"}),
 ) -> JSONResponse:
-    """Ask the agent a question about its recent behavior."""
+    """Ask the agent a question about its recent behavior. Returns full conversation history."""
     question = payload.get("question", "").strip()
     if not question:
         return JSONResponse(
@@ -80,12 +80,26 @@ def chat_endpoint(
 
     try:
         answer = chat_with_agent(question, log_limit=20)
-        return JSONResponse(content={"question": question, "answer": answer})
+        messages = get_chat_messages()
+        return JSONResponse(content={"question": question, "answer": answer, "messages": messages})
     except Exception as e:
         return JSONResponse(
             status_code=500,
             content={"error": f"Failed to generate answer: {str(e)}"},
         )
+
+
+@app.get("/chat/messages")
+def get_chat_history_endpoint() -> JSONResponse:
+    """Get the full chat conversation history."""
+    return JSONResponse(content={"messages": get_chat_messages()})
+
+
+@app.post("/chat/clear")
+def clear_chat_endpoint() -> JSONResponse:
+    """Clear the chat conversation history."""
+    clear_chat_history()
+    return JSONResponse(content={"status": "cleared", "messages": []})
 
 
 @app.get("/api/agent/decisions")
@@ -1760,14 +1774,23 @@ def index() -> str:
   <div id="tab-chat" class="tab-content">
     <div class="section">
       <h2>Chat with Agent</h2>
-      <div class="form-group">
-        <label for="question">Ask a question about the agent's behavior:</label>
-        <textarea id="question" placeholder="e.g., Why did you pick the 97k call? What would you do next?"></textarea>
-      </div>
-      <button id="ask-btn" onclick="sendQuestion()">Ask Agent</button>
+      <p style="color: #888; margin-bottom: 15px;">Ask questions about the bot's current state, positions, decisions, trading rules, or architecture.</p>
       
-      <h3>Answer</h3>
-      <pre id="answer-box" class="answer-box">Ask a question to get started...</pre>
+      <div id="chat-messages" style="height: 400px; overflow-y: auto; border: 1px solid #333; border-radius: 8px; padding: 15px; margin-bottom: 15px; background: #1a1a1a;">
+        <div id="chat-log" style="display: flex; flex-direction: column; gap: 12px;">
+          <div style="text-align: center; color: #666; padding: 20px;">Start a conversation by asking a question below...</div>
+        </div>
+      </div>
+      
+      <div style="display: flex; gap: 10px; align-items: flex-end;">
+        <div style="flex: 1;">
+          <textarea id="question" placeholder="e.g., What strategy are you running? Why is my PnL negative? Will you roll my 94k calls?" style="resize: none; height: 60px;"></textarea>
+        </div>
+        <div style="display: flex; flex-direction: column; gap: 5px;">
+          <button id="ask-btn" onclick="sendQuestion()" style="height: 40px;">Ask Agent</button>
+          <button onclick="clearChat()" style="height: 20px; font-size: 11px; background: #444; padding: 2px 8px;">Clear Chat</button>
+        </div>
+      </div>
     </div>
   </div>
 
@@ -1779,6 +1802,10 @@ def index() -> str:
       document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
       document.querySelector(`[onclick="showTab('${{name}}')"]`).classList.add('active');
       document.getElementById(`tab-${{name}}`).classList.add('active');
+      
+      if (name === 'chat') {{
+        loadChatHistory();
+      }}
     }}
     
     function formatNumber(num) {{
@@ -2076,6 +2103,43 @@ def index() -> str:
       }}
     }}
 
+    function renderChatMessages(messages) {{
+      const chatLog = document.getElementById('chat-log');
+      if (!messages || messages.length === 0) {{
+        chatLog.innerHTML = '<div style="text-align: center; color: #666; padding: 20px;">Start a conversation by asking a question below...</div>';
+        return;
+      }}
+      
+      chatLog.innerHTML = messages.map(msg => {{
+        const isUser = msg.role === 'user';
+        const bgColor = isUser ? '#2a4a7a' : '#333';
+        const align = isUser ? 'flex-end' : 'flex-start';
+        const label = isUser ? 'You' : 'Agent';
+        const labelColor = isUser ? '#7aa3d4' : '#4CAF50';
+        return `
+          <div style="display: flex; justify-content: ${{align}};">
+            <div style="max-width: 85%; background: ${{bgColor}}; padding: 10px 14px; border-radius: 12px;">
+              <div style="font-size: 11px; color: ${{labelColor}}; margin-bottom: 4px;">${{label}}</div>
+              <div style="white-space: pre-wrap; line-height: 1.5;">${{msg.content.replace(/</g, '&lt;').replace(/>/g, '&gt;')}}</div>
+            </div>
+          </div>
+        `;
+      }}).join('');
+      
+      const chatContainer = document.getElementById('chat-messages');
+      chatContainer.scrollTop = chatContainer.scrollHeight;
+    }}
+    
+    async function loadChatHistory() {{
+      try {{
+        const res = await fetch('/chat/messages');
+        const data = await res.json();
+        renderChatMessages(data.messages || []);
+      }} catch (err) {{
+        console.error('Failed to load chat history:', err);
+      }}
+    }}
+    
     async function sendQuestion() {{
       const q = document.getElementById('question').value;
       if (!q.trim()) {{
@@ -2086,7 +2150,14 @@ def index() -> str:
       const btn = document.getElementById('ask-btn');
       btn.disabled = true;
       btn.innerText = 'Thinking...';
-      document.getElementById('answer-box').innerText = 'Analyzing logs and generating response...';
+      
+      const chatLog = document.getElementById('chat-log');
+      const thinkingDiv = document.createElement('div');
+      thinkingDiv.style.cssText = 'text-align: center; color: #888; padding: 10px;';
+      thinkingDiv.innerHTML = '<span style="animation: pulse 1.5s infinite;">Analyzing state and generating response...</span>';
+      thinkingDiv.id = 'thinking-indicator';
+      chatLog.appendChild(thinkingDiv);
+      document.getElementById('chat-messages').scrollTop = document.getElementById('chat-messages').scrollHeight;
 
       try {{
         const res = await fetch('/chat', {{
@@ -2095,12 +2166,29 @@ def index() -> str:
           body: JSON.stringify({{ question: q }})
         }});
         const data = await res.json();
-        document.getElementById('answer-box').innerText = data.error || data.answer;
+        
+        if (data.error) {{
+          alert('Error: ' + data.error);
+        }} else {{
+          renderChatMessages(data.messages || []);
+          document.getElementById('question').value = '';
+        }}
       }} catch (err) {{
-        document.getElementById('answer-box').innerText = 'Error: ' + err;
+        alert('Error: ' + err);
       }} finally {{
+        const indicator = document.getElementById('thinking-indicator');
+        if (indicator) indicator.remove();
         btn.disabled = false;
         btn.innerText = 'Ask Agent';
+      }}
+    }}
+    
+    async function clearChat() {{
+      try {{
+        await fetch('/chat/clear', {{ method: 'POST' }});
+        renderChatMessages([]);
+      }} catch (err) {{
+        console.error('Failed to clear chat:', err);
       }}
     }}
     

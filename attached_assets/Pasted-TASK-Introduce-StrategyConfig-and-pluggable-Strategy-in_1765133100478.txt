@@ -1,0 +1,218 @@
+TASK: Introduce StrategyConfig and pluggable Strategy interface (first strategy = existing covered call logic)
+
+Goal:
+Create a small strategy layer so that:
+- Our current covered call bot becomes a `CoveredCallStrategy`.
+- Later we can add more strategies (Wheel, CrashHedge, etc.) without rewriting the agent loop.
+- Behaviour for the current single bot stays identical.
+
+We are NOT adding new strategies in this task, only extracting the existing one.
+
+--------------------------------------------------
+1) Define core types for strategies
+--------------------------------------------------
+
+Create a new package:
+
+  src/strategies/
+
+Add:
+
+  src/strategies/types.py
+
+With:
+
+  from dataclasses import dataclass
+  from typing import Literal, List, Optional
+  from src.models import AgentState, ProposedAction  # or equivalent types
+
+  ModeType = Literal["rule_based", "llm", "training"]
+
+  @dataclass
+  class StrategyConfig:
+      name: str
+      underlyings: List[str]           # e.g. ["BTC"], ["BTC", "ETH"]
+      mode: ModeType                   # "rule_based", "llm", or "training"
+      enabled: bool                    # can be toggled off
+      training_enabled: bool           # per-strategy training flag (for future)
+      explore_prob: float              # used only in research mode
+      delta_min: float
+      delta_max: float
+      dte_min: int
+      dte_max: int
+      ivrv_min: float
+      size_fraction: float             # fraction of underlying to use per trade (for sizing)
+      profile_name: Optional[str] = None  # e.g. "ladder", "conservative", etc.
+
+  class Strategy:
+      """
+      Base interface for any trading strategy.
+      A Strategy sees the full AgentState and proposes zero or more actions.
+      The risk engine still has final veto.
+      """
+      def __init__(self, config: StrategyConfig):
+          self.config = config
+
+      @property
+      def name(self) -> str:
+          return self.config.name
+
+      def propose_actions(self, state: AgentState) -> List[ProposedAction]:
+          raise NotImplementedError
+
+--------------------------------------------------
+2) Create a StrategyRegistry
+--------------------------------------------------
+
+Add:
+
+  src/strategies/registry.py
+
+Implement:
+
+  from typing import Dict, List
+  from .types import Strategy, StrategyConfig
+  from .covered_call import CoveredCallStrategy  # to be created in step 3
+  from src.config import Settings
+
+  class StrategyRegistry:
+      def __init__(self, strategies: List[Strategy]):
+          self._strategies = strategies
+
+      def get_active_strategies(self) -> List[Strategy]:
+          return [s for s in self._strategies if s.config.enabled]
+
+  def build_default_registry(settings: Settings) -> StrategyRegistry:
+      """
+      Build the default set of strategies based on global Settings.
+
+      For now, we only create one CoveredCallStrategy that mirrors the
+      existing behaviour for BTC and ETH.
+      """
+      # Construct StrategyConfig from settings (delta ranges, DTE, ivrv, etc.)
+      cfg = StrategyConfig(
+          name="CoveredCallLadder",
+          underlyings=settings.underlyings,  # ["BTC", "ETH"]
+          mode=(
+              "training"
+              if settings.is_training_enabled
+              else ("llm" if settings.llm_enabled else "rule_based")
+          ),
+          enabled=True,
+          training_enabled=settings.is_training_enabled,
+          explore_prob=settings.research_explore_prob,
+          delta_min=settings.effective_delta_min,
+          delta_max=settings.effective_delta_max,
+          dte_min=settings.effective_dte_min,
+          dte_max=settings.effective_dte_max,
+          ivrv_min=settings.effective_ivrv_min,
+          size_fraction=settings.position_size_fraction,
+          profile_name=settings.training_profile_mode,  # e.g. "ladder"
+      )
+
+      strategy = CoveredCallStrategy(cfg)
+      return StrategyRegistry([strategy])
+
+--------------------------------------------------
+3) Extract current covered call logic into CoveredCallStrategy
+--------------------------------------------------
+
+Add:
+
+  src/strategies/covered_call.py
+
+Implement `CoveredCallStrategy` as a thin wrapper around existing logic:
+
+  from typing import List
+  from .types import Strategy, StrategyConfig
+  from src.models import AgentState, ProposedAction
+  from src import policy_rule_based
+  from src import agent_brain_llm
+  from src import training_policy
+
+  class CoveredCallStrategy(Strategy):
+      """
+      Wraps the current single-bot behaviour (rule-based / LLM / training)
+      into a Strategy interface.
+      """
+
+      def propose_actions(self, state: AgentState) -> List[ProposedAction]:
+          # Decide which underlying(s) to act on based on self.config.underlyings.
+          # Then delegate to the appropriate existing module:
+          # - if self.config.mode == "training": use training_policy.build_training_actions(...)
+          # - elif self.config.mode == "llm": use agent_brain_llm.propose_action(...)
+          # - else: use policy_rule_based.propose_action(...)
+          #
+          # For now we preserve existing behaviour:
+          # - Only one main action per loop from the "old" logic.
+          # - If training mode, build multiple training actions as before.
+          #
+          # Return a list of ProposedAction objects (may be 0, 1, or many).
+          ...
+
+The key point: CoveredCallStrategy should reuse the existing functions so that behaviour is unchanged. The only difference is that the agent loop will call `strategy.propose_actions(state)` instead of calling those modules directly.
+
+--------------------------------------------------
+4) Update agent_loop to use StrategyRegistry
+--------------------------------------------------
+
+In agent_loop.py (or equivalent main loop):
+
+- Import `build_default_registry` and create a registry once at startup:
+
+  settings = Settings()
+  strategy_registry = build_default_registry(settings)
+
+- In each loop:
+
+  - Build `AgentState` as before.
+  - Instead of directly calling rule-based / LLM / training code, do:
+
+      all_proposed_actions: List[ProposedAction] = []
+      for strategy in strategy_registry.get_active_strategies():
+          actions = strategy.propose_actions(state)
+          all_proposed_actions.extend(actions)
+
+  - For now, behaviour should match the previous single-bot model:
+      - CoveredCallStrategy returns:
+          - either one main action (rule-based / LLM), or
+          - multiple training actions (when training enabled).
+      - So `all_proposed_actions` should look exactly like what we had before.
+
+  - Pass `all_proposed_actions` through the risk engine and execution layer
+    exactly as before (no behaviour change).
+
+We’re only changing *where* the actions come from, not what they are.
+
+--------------------------------------------------
+5) Keep current behaviour identical
+--------------------------------------------------
+
+Very important:
+
+- Unit tests and smoke tests must all pass with identical results (PnL, number of trades, etc.) after this refactor.
+
+Run:
+
+  bash scripts/run_tests.sh
+  bash scripts/smoke_live_agent.sh
+  bash scripts/smoke_backtest.sh
+  bash scripts/smoke_training_export.sh
+  bash scripts/smoke_web_api.sh
+
+If any behaviour changes, adjust CoveredCallStrategy glue code until it matches the old outputs.
+
+--------------------------------------------------
+6) Document the new strategy layer
+--------------------------------------------------
+
+Update ARCHITECTURE_OVERVIEW.md and HEALTHCHECK.md:
+
+- Add a short section “Strategy Layer” explaining:
+
+  - `StrategyConfig`
+  - `Strategy` interface
+  - `StrategyRegistry`
+  - `CoveredCallStrategy` as the only registered strategy for now.
+
+Also add a short note in ROADMAP.md that future bots (Wheel, CrashHedge, etc.) will be implemented as new `Strategy` subclasses registered alongside CoveredCallStrategy.
