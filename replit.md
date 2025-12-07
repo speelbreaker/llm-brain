@@ -71,7 +71,7 @@ The agent is built with a clear separation of concerns, featuring modules for co
 
 ### Technical Implementations
 - **Configuration**: Pydantic settings are used for managing application configuration and switching between research/production modes.
-- **API Wrapper**: `deribit_client.py` provides an `httpx`-based wrapper for the Deribit testnet API.
+- **API Wrapper**: `deribit_client.py` provides an `httpx`-based wrapper for the Deribit testnet API. Extends `DeribitBaseClient` from `src/deribit/base_client.py` which contains shared HTTP/JSON-RPC logic used by both trading and backtest clients.
 - **State Management**: `state_builder.py` aggregates market data and `status_store.py` manages thread-safe status updates.
 - **Unified State Core**: `state_core.py` provides shared state-building logic for both live and backtest agents. Contains `RawMarketSnapshot`, `RawOption`, `RawPortfolio` dataclasses and `build_agent_state_from_raw()` function. Only data sources differ between live (Deribit API) and backtest (historical/synthetic); construction rules are unified.
 - **Order Execution**: `execution.py` handles order translation, supporting dry-run simulations.

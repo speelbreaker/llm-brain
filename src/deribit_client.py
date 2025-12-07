@@ -1,32 +1,26 @@
 """
-Deribit API client for testnet.
-Provides typed methods for public and private API endpoints.
+Deribit API client for live trading.
+Extends DeribitBaseClient with authentication for private endpoints.
 """
 from __future__ import annotations
 
-import hashlib
-import hmac
 import time
 from datetime import datetime
 from typing import Any, Optional
 
-import httpx
-
 from src.config import settings
+from src.deribit.base_client import DeribitBaseClient, DeribitAPIError
+
+__all__ = ["DeribitClient", "DeribitAPIError"]
 
 
-class DeribitAPIError(Exception):
-    """Custom exception for Deribit API errors."""
-    def __init__(self, code: int, message: str):
-        self.code = code
-        self.message = message
-        super().__init__(f"Deribit API Error {code}: {message}")
-
-
-class DeribitClient:
+class DeribitClient(DeribitBaseClient):
     """
-    Minimal wrapper for Deribit testnet API.
-    Supports both public and private endpoints.
+    Deribit API client with authentication for live trading.
+    
+    Extends DeribitBaseClient with:
+    - OAuth2 authentication (client credentials flow)
+    - Private endpoint support (positions, orders, account)
     """
     
     def __init__(
@@ -35,15 +29,16 @@ class DeribitClient:
         client_id: Optional[str] = None,
         client_secret: Optional[str] = None,
     ):
-        self.base_url = base_url or settings.deribit_base_url
+        super().__init__(
+            base_url=base_url or settings.deribit_base_url,
+            timeout=30.0,
+        )
         self.client_id = client_id or settings.deribit_client_id
         self.client_secret = client_secret or settings.deribit_client_secret
         
         self._access_token: Optional[str] = None
         self._refresh_token: Optional[str] = None
         self._token_expiry: float = 0
-        
-        self._client = httpx.Client(timeout=30.0)
     
     def _make_request(
         self,
@@ -51,52 +46,13 @@ class DeribitClient:
         params: Optional[dict[str, Any]] = None,
         private: bool = False,
     ) -> Any:
-        """Make an API request to Deribit using JSON-RPC 2.0."""
+        """Make an API request to Deribit."""
         if private:
             self._ensure_authenticated()
-        
-        url = f"{self.base_url}/api/v2/{method}"
-        
-        headers = {"Content-Type": "application/json"}
-        if private and self._access_token:
-            headers["Authorization"] = f"Bearer {self._access_token}"
-        
-        try:
-            if private:
-                json_rpc = {
-                    "jsonrpc": "2.0",
-                    "id": int(time.time() * 1000),
-                    "method": method,
-                    "params": params or {},
-                }
-                response = self._client.post(
-                    f"{self.base_url}/api/v2/",
-                    json=json_rpc,
-                    headers=headers,
-                )
-            else:
-                response = self._client.get(url, params=params, headers=headers)
-            
-            response.raise_for_status()
-            data = response.json()
-            
-            if "error" in data:
-                error = data["error"]
-                raise DeribitAPIError(error.get("code", -1), error.get("message", "Unknown error"))
-            
-            return data.get("result")
-        except httpx.HTTPStatusError as e:
-            # Try to get more error details from the response body
-            try:
-                error_body = e.response.json() if e.response else None
-                if error_body and "error" in error_body:
-                    err = error_body["error"]
-                    raise DeribitAPIError(err.get("code", -1), err.get("message", str(e)))
-            except Exception:
-                pass
-            raise DeribitAPIError(-1, f"HTTP error: {e}")
-        except httpx.RequestError as e:
-            raise DeribitAPIError(-1, f"Request error: {e}")
+            headers = {"Authorization": f"Bearer {self._access_token}"}
+            return self._make_jsonrpc_request(method, params, headers)
+        else:
+            return self._make_public_request(method, params)
     
     def _ensure_authenticated(self) -> None:
         """Ensure we have a valid access token."""
@@ -116,7 +72,7 @@ class DeribitClient:
             "client_secret": self.client_secret,
         }
         
-        result = self._make_request("public/auth", params)
+        result = self._make_public_request("public/auth", params)
         
         self._access_token = result["access_token"]
         self._refresh_token = result.get("refresh_token")
@@ -206,7 +162,6 @@ class DeribitClient:
             "type": order_type,
         }
         
-        # Only add optional parameters if they have non-default values
         if post_only:
             params["post_only"] = True
         if reduce_only:
@@ -260,13 +215,3 @@ class DeribitClient:
             "resolution": resolution,
         }
         return self._make_request("public/get_tradingview_chart_data", params)
-
-    def close(self) -> None:
-        """Close the HTTP client."""
-        self._client.close()
-    
-    def __enter__(self) -> "DeribitClient":
-        return self
-    
-    def __exit__(self, *args: Any) -> None:
-        self.close()

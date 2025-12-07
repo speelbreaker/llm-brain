@@ -27,7 +27,8 @@ This is an automated options trading system that sells "covered calls" on Bitcoi
 | `src/training_profiles.py` | Defines the three training strategy profiles and how to score option candidates for each. |
 | `src/strategies/` | Strategy layer providing a pluggable interface for trading strategies (see "Strategy Layer" section below). |
 | `src/market_context.py` | Calculates "big picture" market metrics like whether we're in a bull/bear market, recent volatility, and distance from moving averages. |
-| `src/deribit_client.py` | Talks to the Deribit exchange API. Handles authentication, fetching prices, getting account info, and placing orders. |
+| `src/deribit_client.py` | Talks to the Deribit exchange API. Handles authentication, fetching prices, getting account info, and placing orders. Extends `DeribitBaseClient`. |
+| `src/deribit/base_client.py` | Shared base class for Deribit API clients. Contains HTTP/JSON-RPC logic, error handling, and response parsing. Used by both trading (`DeribitClient`) and backtest (`DeribitPublicClient`) clients. |
 | `src/position_tracker.py` | Remembers which positions the bot has opened. Saves to disk so it survives restarts. |
 | `src/calibration.py` | Compares our synthetic (calculated) option prices against real Deribit prices to check accuracy. |
 | `src/synthetic_skew.py` | Fetches real volatility "smile" data from Deribit to make our synthetic prices more realistic. |
@@ -340,7 +341,7 @@ See `HEALTHCHECK.md` for the full prioritized list with risk assessments. Below 
 | Item | Risk if Unfixed | Risk of Refactoring | Status |
 |------|-----------------|---------------------|--------|
 | **Duplicate state builders** (live vs backtest) | Makes it harder to add new features—changes must be made in two places, increasing the chance one gets forgotten. | Moderate risk; the live and backtest builders have different data sources, so a hasty merge could break either mode. | **FIXED** – Uses `src/state_core.py` |
-| **Duplicate Deribit clients** (trading vs public data) | Maintenance burden; any bug fix or API change must be applied twice. | Low-to-moderate risk; the clients serve different purposes (auth vs no-auth), so they can share base code without full merge. |
+| **Duplicate Deribit clients** (trading vs public data) | Maintenance burden; any bug fix or API change must be applied twice. | Low-to-moderate risk; the clients serve different purposes (auth vs no-auth), so they can share base code without full merge. | **FIXED** – Uses `src/deribit/base_client.py` |
 | **Duplicate expiry parsing** | Minor—mostly code clarity. Same logic in two places means potential for subtle date parsing bugs. | Very low risk; simple utility functions that can be extracted without touching core logic. |
 | **No unit tests** | Regressions go undetected until they cause visible problems in production or backtests. | Time investment rather than code risk; tests should be added incrementally without modifying existing code. |
 
