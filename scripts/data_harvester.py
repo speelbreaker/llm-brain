@@ -3,8 +3,12 @@
 Deribit Data Harvester
 
 A standalone script that continuously collects real Deribit options data
-for assets with active options markets (BTC, ETH) and saves them as
-Parquet files for backtesting and analysis.
+for all assets with active options markets and saves them as Parquet files
+for backtesting and analysis.
+
+Supports:
+- Inverse options: BTC, ETH (settled in the underlying asset)
+- Linear USDC options: SOL, XRP, AVAX, TRX, PAXG, etc. (settled in USDC)
 
 This script runs independently from the trading bot / FastAPI server.
 
@@ -22,7 +26,9 @@ from typing import Any
 import pandas as pd
 import requests
 
-ASSETS = ["BTC", "ETH"]
+INVERSE_ASSETS = ["BTC", "ETH"]
+
+LINEAR_CURRENCY = "USDC"
 
 INTERVAL_MINUTES = int(os.getenv("HARVESTER_INTERVAL_MINUTES", "15"))
 
@@ -159,6 +165,31 @@ def process_and_save(currency: str, raw_data: list[dict[str, Any]]) -> None:
     logger.info(f"Saved {len(df)} rows for {currency} to {filepath}")
 
 
+def process_linear_options(raw_data: list[dict[str, Any]]) -> None:
+    """
+    Process USDC linear options and save grouped by underlying asset.
+    
+    Args:
+        raw_data: List of option data dictionaries from USDC query
+    """
+    if not raw_data:
+        logger.info("No linear USDC options data to save")
+        return
+    
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for option in raw_data:
+        instrument_name = option.get("instrument_name", "")
+        if "-" in instrument_name:
+            underlying = instrument_name.split("-")[0]
+            if underlying not in grouped:
+                grouped[underlying] = []
+            grouped[underlying].append(option)
+    
+    for underlying, options in grouped.items():
+        logger.info(f"Processing {len(options)} options for {underlying}")
+        process_and_save(underlying, options)
+
+
 def run_harvester() -> None:
     """
     Main harvester loop. Runs indefinitely, fetching and saving option data
@@ -166,7 +197,8 @@ def run_harvester() -> None:
     """
     logger.info("=" * 60)
     logger.info("Starting Deribit Data Harvester")
-    logger.info(f"Assets: {', '.join(ASSETS)}")
+    logger.info(f"Inverse assets: {', '.join(INVERSE_ASSETS)}")
+    logger.info(f"Linear currency: {LINEAR_CURRENCY}")
     logger.info(f"Polling interval: {INTERVAL_MINUTES} minutes")
     logger.info(f"Data directory: {DATA_ROOT}")
     logger.info(f"Deribit URL: {DERIBIT_BASE_URL}")
@@ -180,15 +212,22 @@ def run_harvester() -> None:
         
         logger.info(f"--- Harvest iteration {iteration} ---")
         
-        for asset in ASSETS:
+        for asset in INVERSE_ASSETS:
             try:
-                logger.info(f"Fetching {asset}...")
+                logger.info(f"Fetching inverse {asset}...")
                 data = fetch_option_chain(asset)
                 process_and_save(asset, data)
             except Exception as e:
                 logger.exception(f"Unexpected error processing {asset}: {e}")
             
             time.sleep(0.5)
+        
+        try:
+            logger.info(f"Fetching linear {LINEAR_CURRENCY} options...")
+            linear_data = fetch_option_chain(LINEAR_CURRENCY)
+            process_linear_options(linear_data)
+        except Exception as e:
+            logger.exception(f"Unexpected error processing linear options: {e}")
         
         elapsed = time.time() - loop_start
         sleep_sec = INTERVAL_MINUTES * 60 - elapsed
