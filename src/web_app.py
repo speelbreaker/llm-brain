@@ -16,7 +16,7 @@ from typing import cast
 from agent_loop import run_agent_loop_forever
 from src.status_store import status_store
 from src.decisions_store import decisions_store
-from src.chat_with_agent import chat_with_agent, get_chat_messages, clear_chat_history
+from src.chat_with_agent import chat_with_agent_full, get_chat_messages, clear_chat_history
 from src.config import settings
 from src.position_tracker import position_tracker
 from src.calibration import run_calibration
@@ -79,9 +79,8 @@ def chat_endpoint(
         )
 
     try:
-        answer = chat_with_agent(question, log_limit=20)
-        messages = get_chat_messages()
-        return JSONResponse(content={"question": question, "answer": answer, "messages": messages})
+        result = chat_with_agent_full(question, log_limit=20)
+        return JSONResponse(content={"question": question, "answer": result["answer"], "messages": result["messages"]})
     except Exception as e:
         return JSONResponse(
             status_code=500,

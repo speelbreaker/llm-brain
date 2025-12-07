@@ -164,10 +164,14 @@ def build_chat_context() -> Dict[str, Any]:
     - /status snapshot (mode, training, llm_enabled, positions, PnL, etc.)
     - recent decisions (last N from decisions_store)
     - optional summarized docs for architecture/safety questions
-    """
-    current_status = status_store.get()
     
-    positions_data = position_tracker.get_open_positions_payload()
+    Note: All stores return copies to avoid race conditions with background agent.
+    """
+    import copy
+    
+    current_status = copy.deepcopy(status_store.get())
+    
+    positions_data = copy.deepcopy(position_tracker.get_open_positions_payload())
     positions = positions_data.get("positions", [])
     totals = positions_data.get("totals", {})
     
@@ -300,6 +304,16 @@ Project Documentation (truncated):
     chat_store.append("assistant", answer)
 
     return answer
+
+
+def chat_with_agent_full(question: str, log_limit: int = 20) -> Dict[str, Any]:
+    """
+    Same as chat_with_agent but returns full response with messages.
+    Used by API to avoid race conditions.
+    """
+    answer = chat_with_agent(question, log_limit)
+    messages = chat_store.get_history()
+    return {"answer": answer, "messages": messages}
 
 
 def get_chat_messages() -> List[Dict[str, str]]:

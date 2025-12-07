@@ -44,6 +44,17 @@ The agent is built with a clear separation of concerns, featuring modules for co
   - **Per-decision ranking** (`*_per_decision_ranking.jsonl`): One record per decision_time with task to pick best candidate index or NO_TRADE
   Usage: `python scripts/build_llm_training_from_candidates.py --input <csv> --exit-style <style> --underlying <asset>`
 - **Web Dashboard**: A FastAPI application offers a "Live Agent" view with real-time status and recent decisions, a "Backtesting Lab" with TradingView-style summary panel, equity curve charts, a "Calibration" tab for comparing synthetic BS prices vs live Deribit marks, and a "Chat" interface for natural language interaction with the agent.
+- **State-Aware Chat Assistant**: The Chat tab is a multi-turn, state-aware assistant that:
+  - Knows current trading state (positions, unrealized PnL, training vs live mode, spot prices)
+  - Maintains conversation history across messages (up to 20 turns)
+  - Can explain what the bot is doing right now based on live data
+  - Answers questions about trading rules (when it opens, rolls, or closes positions)
+  - Provides architecture and safety information from project docs (ARCHITECTURE_OVERVIEW.md, HEALTHCHECK.md, ROADMAP.md)
+  - Uses thread-safe context assembly to avoid race conditions with the background agent
+- **Position Reconciliation**: At each agent loop iteration, the system compares local position tracker against Deribit exchange positions. Configurable via `POSITION_RECONCILE_ACTION`:
+  - `halt`: Stops trading when positions diverge (safe mode)
+  - `auto_heal`: Automatically rebuilds local tracker from exchange data
+  - Manual recovery script: `scripts/reconcile_positions_once.py --heal`
 - **Calibration vs Deribit**: Compares synthetic Black-Scholes option prices against live Deribit mark prices. Uses RV-based IV model matching the synthetic backtester (sigma = RV(7d) * iv_multiplier * skew_factor), fetches real-time option chains from Deribit public API, and reports Mean Absolute Error (MAE) and bias. Displays computed realized volatility and allows tuning via iv_multiplier slider. Handles both inverse (BTC/ETH-settled) and linear (USDC-settled) contracts correctly.
 - **Synthetic Skew Engine**: Derives IV skew factors from live Deribit smile data. Computes skew anchors at deltas [0.15, 0.25, 0.35, 0.50] by comparing IV to ATM IV, then interpolates linearly for any delta. Skew anchors are cached per (underlying, option_type) to minimize API calls. Skew is applied to both calibration and synthetic backtester pricing.
 - **Structured Logging**: Uses JSONL for structured logging of all decisions and actions, facilitating future analysis and ML/RL training.
