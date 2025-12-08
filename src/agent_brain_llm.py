@@ -11,8 +11,9 @@ from typing import Any
 
 from openai import OpenAI
 
-from src.config import settings
-from src.models import AgentState, CandidateOption, MarketContext
+from src.config import Settings, settings
+from src.logging_utils import log_error
+from src.models import ActionType, AgentState, CandidateOption, MarketContext
 
 _client: OpenAI | None = None
 
@@ -130,6 +131,82 @@ def _compress_candidates_for_llm(
         }
         for c in candidates
     ]
+
+
+def validate_llm_decision(
+    decision: dict[str, Any],
+    agent_state: AgentState,
+    candidates: list[CandidateOption],
+    cfg: Settings,
+) -> dict[str, Any]:
+    """
+    Validate and sanitize an LLM decision.
+    
+    Returns a possibly adjusted decision dict.
+    Raises ValueError if the decision is unusable and should be discarded.
+    
+    Validation rules:
+    1. Action must be a valid ActionType value
+    2. Params must be a dict
+    3. Symbol references must match candidates or open positions
+    4. Size must be within limits (clamped if needed)
+    """
+    valid_actions = {a.value for a in ActionType}
+    action = decision.get("action")
+    
+    if action not in valid_actions:
+        raise ValueError(f"invalid_action: '{action}' not in {valid_actions}")
+    
+    params = decision.get("params")
+    if params is None:
+        decision["params"] = {}
+        params = decision["params"]
+    elif not isinstance(params, dict):
+        raise ValueError("invalid_params: params must be a dict")
+    
+    if action == ActionType.DO_NOTHING.value:
+        return decision
+    
+    candidate_symbols = {c.symbol for c in candidates}
+    open_position_symbols = {p.symbol for p in agent_state.portfolio.option_positions}
+    
+    if action == ActionType.OPEN_COVERED_CALL.value:
+        symbol = params.get("symbol")
+        if not symbol:
+            raise ValueError("invalid_symbol_reference: symbol required for OPEN_COVERED_CALL")
+        if symbol not in candidate_symbols:
+            raise ValueError(f"invalid_symbol_reference: '{symbol}' not in candidates")
+    
+    elif action == ActionType.ROLL_COVERED_CALL.value:
+        from_symbol = params.get("from_symbol")
+        to_symbol = params.get("to_symbol")
+        if not from_symbol or not to_symbol:
+            raise ValueError("invalid_symbol_reference: from_symbol and to_symbol required for ROLL")
+        if from_symbol not in open_position_symbols:
+            raise ValueError(f"invalid_symbol_reference: '{from_symbol}' not in open positions")
+        if to_symbol not in candidate_symbols:
+            raise ValueError(f"invalid_symbol_reference: '{to_symbol}' not in candidates")
+    
+    elif action == ActionType.CLOSE_COVERED_CALL.value:
+        symbol = params.get("symbol")
+        if not symbol:
+            raise ValueError("invalid_symbol_reference: symbol required for CLOSE_COVERED_CALL")
+        if symbol not in open_position_symbols:
+            raise ValueError(f"invalid_symbol_reference: '{symbol}' not in open positions")
+    
+    size = params.get("size")
+    if size is not None:
+        try:
+            size = float(size)
+            if size <= 0 or size > cfg.default_order_size:
+                size = cfg.default_order_size
+            params["size"] = size
+        except (ValueError, TypeError):
+            params["size"] = cfg.default_order_size
+    else:
+        params["size"] = cfg.default_order_size
+    
+    return decision
 
 
 def _get_training_mode_instructions() -> str:
@@ -323,10 +400,26 @@ Return ONLY valid JSON matching the requested schema."""
     if "reasoning" not in decision:
         decision["reasoning"] = "no reasoning provided"
     
-    valid_actions = {"DO_NOTHING", "OPEN_COVERED_CALL", "ROLL_COVERED_CALL", "CLOSE_COVERED_CALL"}
-    if decision["action"] not in valid_actions:
-        decision["action"] = "DO_NOTHING"
-        decision["reasoning"] = f"Invalid action '{decision.get('action')}'; defaulting to DO_NOTHING."
+    try:
+        decision = validate_llm_decision(decision, state, candidates, settings)
+        decision["validated"] = True
+    except ValueError as e:
+        log_error("llm_decision_validation_failed", str(e), {"raw_decision": decision})
+        if settings.llm_validation_strict:
+            return {
+                "action": ActionType.DO_NOTHING.value,
+                "params": {},
+                "reasoning": f"LLM decision rejected by validation: {e}",
+                "decision_source": "llm_rejected",
+                "validated": False,
+                "mode": settings.mode,
+                "policy_version": "llm_v1",
+            }
+        else:
+            decision["action"] = ActionType.DO_NOTHING.value
+            decision["params"] = {}
+            decision["reasoning"] = f"Validation warning (downgraded to DO_NOTHING): {e}"
+            decision["validated"] = False
 
     decision["mode"] = settings.mode
     decision["policy_version"] = "llm_v1"

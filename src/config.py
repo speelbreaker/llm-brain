@@ -192,6 +192,29 @@ class Settings(BaseSettings):
         default=False,
         description="Enable LLM-based decision making",
     )
+    decision_mode: Literal["rule_only", "llm_only", "hybrid_shadow"] = Field(
+        default="rule_only",
+        description=(
+            "Decision mode for non-training runs: "
+            "'rule_only' = only rule-based executes (LLM optional shadow); "
+            "'llm_only' = LLM executes with fallback to rules on error/invalid; "
+            "'hybrid_shadow' = rules execute, LLM runs in shadow for logging/comparison."
+        ),
+    )
+    llm_shadow_enabled: bool = Field(
+        default=True,
+        description=(
+            "If True and llm_enabled, compute an LLM proposal even when it won't be executed, "
+            "so we can log and compare against the rule-based action."
+        ),
+    )
+    llm_validation_strict: bool = Field(
+        default=True,
+        description=(
+            "If True, apply strict validation to LLM decisions; on any validation failure, "
+            "fall back to DO_NOTHING or rule-based action."
+        ),
+    )
     llm_model_name: str = Field(
         default="gpt-4.1-mini",
         description="OpenAI model name for LLM decisions",

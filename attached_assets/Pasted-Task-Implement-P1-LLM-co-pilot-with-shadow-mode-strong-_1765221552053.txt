@@ -1,0 +1,427 @@
+Task: Implement P1 “LLM co-pilot with shadow mode + strong validation” on top of the current llm-brain repo
+
+You are working in the existing llm-brain project (Deribit BTC/ETH options agent) in Replit. The current code already has:
+
+An agent loop in agent_loop.py.
+
+Config in src/config.py (Settings + settings).
+
+Rule-based policy in src/policy_rule_based.py.
+
+LLM policy in src/agent_brain_llm.py.
+
+Risk checks in src/risk_engine.py.
+
+Training mode logic and decision logging in agent_loop.py (via decisions_store and logging_utils). 
+GitHub
++2
+GitHub
++2
+
+Phase 2 item A1/A2 (strategy abstraction + shared state builder) and the new state_core are already implemented and must not be broken. There are ~45 tests passing; keep all tests green and add new ones where stated.
+
+High-level goal
+
+Implement the P1 LLM layer improvements:
+
+F1 – Strong LLM output validation + safe fallback to rules.
+
+F2 – Hybrid decision mode with shadow testing:
+
+Always compute both rule and LLM actions (when LLM is enabled).
+
+Configurable decision mode: rule-only, llm-only, hybrid shadow.
+
+Log both actions and clearly tag what was actually executed. 
+
+Untitled document_3
+
+This is safety + evaluation plumbing, not new trading logic.
+
+1. Config: add decision modes / toggles
+
+Edit src/config.py (the Settings class). 
+GitHub
+
+Add these fields to Settings:
+
+from typing import Literal
+
+class Settings(BaseSettings):
+    # ... existing fields ...
+
+    decision_mode: Literal["rule_only", "llm_only", "hybrid_shadow"] = Field(
+        default="rule_only",
+        description=(
+            "Decision mode for non-training runs: "
+            "'rule_only' = only rule-based executes (LLM optional shadow); "
+            "'llm_only' = LLM executes with fallback to rules on error/invalid; "
+            "'hybrid_shadow' = rules execute, LLM runs in shadow for logging/comparison."
+        ),
+    )
+
+    llm_shadow_enabled: bool = Field(
+        default=True,
+        description=(
+            "If True and llm_enabled, compute an LLM proposal even when it won't be executed, "
+            "so we can log and compare against the rule-based action."
+        ),
+    )
+
+    llm_validation_strict: bool = Field(
+        default=True,
+        description=(
+            "If True, apply strict validation to LLM decisions; on any validation failure, "
+            "fall back to DO_NOTHING or rule-based action."
+        ),
+    )
+
+
+Make sure these fields plug into the existing Settings/settings pattern and don’t break any property methods.
+
+2. agent_loop: compute both rule + LLM actions and support decision modes
+
+Edit agent_loop.py. Focus on the main loop in run_agent_loop_forever where we:
+
+Build agent_state.
+
+Decide proposed_action.
+
+Run check_action_allowed.
+
+Execute.
+
+Log and add to decisions_store. 
+GitHub
+
+2.1. Keep training mode behavior unchanged
+
+If settings.is_training_enabled is True, keep the current training logic:
+
+Build training_actions via build_training_actions(...).
+
+Execute via execute_actions(...).
+
+Record them with decision_source="training_mode".
+
+Do not introduce LLM hybrid behavior into training mode for now.
+
+2.2. For non-training mode, compute both rule and LLM actions
+
+Refactor the “Making decision…” block as follows:
+
+Always compute a rule-based action:
+
+rule_action = rule_decide_action(agent_state, settings)
+
+
+Initialize llm_action = None.
+
+If settings.llm_enabled is True and (we’re in a decision mode that cares about LLM):
+
+For decision_mode in {"llm_only", "hybrid_shadow"} → compute an LLM action:
+
+llm_action = choose_action_with_llm(
+    agent_state,
+    agent_state.candidate_options,
+)
+
+
+Wrap in try/except:
+
+On any exception (API error, parse error, etc.), log via log_error("llm_decision_error", ...), set llm_action = None and continue.
+
+Based on settings.decision_mode, pick the proposed_action:
+
+"rule_only"
+
+proposed_action = rule_action
+
+decision_source = "rule_based"
+
+"llm_only"
+
+If llm_action is not None, use it after validation (see section 3).
+
+If llm_action is None or fails validation, fall back to:
+
+proposed_action = rule_action
+
+decision_source = "llm_fallback_to_rule"
+
+"hybrid_shadow"
+
+proposed_action = rule_action
+
+decision_source = "rule_based_shadow_llm"
+
+LLM is advisory only: never executed, only logged.
+
+If settings.llm_enabled is False, behave exactly like today:
+
+Only compute rule_action.
+
+proposed_action = rule_action
+
+decision_source = "rule_based"
+
+Ensure decision source is stored with the proposed action, e.g.:
+
+proposed_action["decision_source"] = decision_source
+
+2.3. Pass both actions into logging and decisions_store
+
+Currently _build_status_snapshot and the decision_entry only know about a single proposed_action. Extend them to optionally include both actions when available:
+
+In _build_status_snapshot, add:
+
+"rule_action": rule_action,
+"llm_action": llm_action,
+"decision_mode": settings.decision_mode,
+
+
+In the decision_entry for non-training mode, add:
+
+"decision_mode": settings.decision_mode,
+"rule_action": rule_action,
+"llm_action": llm_action,
+
+
+Be careful to handle llm_action None safely.
+
+Keep the existing risk engine call exactly once on the chosen proposed_action:
+
+allowed, reasons = check_action_allowed(agent_state, proposed_action, settings)
+
+
+Do not apply check_action_allowed to both actions for now; we just want the actual, executed one to pass through the risk firewall. (A later P1/2 can add richer “what-if” checks.)
+
+3. agent_brain_llm: strong validation of LLM decisions (F1)
+
+Edit src/agent_brain_llm.py.
+
+Today this module:
+
+Builds a compact state + candidates summary.
+
+Calls the OpenAI client.
+
+Parses a JSON response into a dict like {"action": "...", "params": {...}, "reasoning": "..."}.
+
+We need to harden this with strict validation to avoid garbage / hallucinated trades.
+
+3.1. Add a validation helper
+
+Inside src/agent_brain_llm.py, add a pure function:
+
+from src.models import ActionType, CandidateOption, OptionPosition, AgentState
+
+def validate_llm_decision(
+    decision: dict,
+    agent_state: AgentState,
+    candidates: list[CandidateOption],
+    settings: Settings,  # from src.config import Settings
+) -> dict:
+    """
+    Validate and sanitize an LLM decision.
+
+    Returns a possibly adjusted decision dict.
+    Raises ValueError if the decision is unusable and should be discarded.
+    """
+
+
+Validation rules (v1, keep it simple but strict):
+
+Action must be allowed:
+
+decision["action"] must be a valid ActionType value (e.g. "DO_NOTHING", "OPEN_COVERED_CALL", "ROLL_COVERED_CALL", "CLOSE_COVERED_CALL").
+
+If not, raise ValueError("invalid_action").
+
+Params must be a dict:
+
+If missing or not a dict, raise ValueError("invalid_params").
+
+Symbol sanity:
+
+For OPEN_COVERED_CALL:
+
+Require params["symbol"] to be present.
+
+It must match one of the supplied c.symbol in candidates.
+
+For ROLL_COVERED_CALL:
+
+Require params["from_symbol"] and params["to_symbol"].
+
+from_symbol must match an open option position in agent_state.portfolio.option_positions.
+
+to_symbol must match a candidate’s .symbol.
+
+For CLOSE_COVERED_CALL:
+
+Require params["symbol"] to match an open option position.
+
+If any of these fail → raise ValueError("invalid_symbol_reference").
+
+Size sanity:
+
+Read size from params (if present); default to settings.default_order_size if missing.
+
+Enforce 0 < size <= settings.default_order_size (v1 simple rule).
+
+If out of range, clamp to settings.default_order_size.
+
+Write the sanitized size back into decision["params"]["size"].
+
+Ensure DO_NOTHING is always allowed:
+
+If action is DO_NOTHING, accept as-is (no symbol/size checks required).
+
+If all checks pass, return the sanitized decision dict. If settings.llm_validation_strict is True and any check fails, raise ValueError. If llm_validation_strict is False, you may downgrade to DO_NOTHING instead of raising.
+
+3.2. Integrate validation into choose_action_with_llm
+
+In choose_action_with_llm(...):
+
+After parsing the raw JSON into decision, call:
+
+try:
+    decision = validate_llm_decision(decision, agent_state, candidates, settings)
+    decision["validated"] = True
+except ValueError as e:
+    # Log and return a safe DO_NOTHING
+    log_error("llm_decision_validation_failed", str(e), {"raw_decision": decision})
+    return {
+        "action": ActionType.DO_NOTHING.value,
+        "params": {},
+        "reasoning": f"LLM decision rejected by validation: {e}",
+        "decision_source": "llm_rejected",
+        "validated": False,
+    }
+
+
+Ensure the final dict always contains:
+
+"action"
+
+"params"
+
+"reasoning"
+
+"decision_source": "llm"
+
+"validated": True/False
+
+This will be passed into the agent loop as llm_action.
+
+4. Logging & decisions_store: richer metadata
+
+In the non-training branch of agent_loop.py, where we build decision_entry for decisions_store, extend it to include:
+
+decision_mode (from settings.decision_mode).
+
+rule_action and llm_action (possibly None).
+
+decision_source as determined in the decision block ("rule_based", "llm_only", "llm_fallback_to_rule", "rule_based_shadow_llm", etc).
+
+Example structure:
+
+decision_entry = {
+    "timestamp": datetime.utcnow().isoformat(),
+    "decision_source": proposed_action.get("decision_source", "unknown"),
+    "decision_mode": settings.decision_mode,
+    "rule_action": rule_action,
+    "llm_action": llm_action,
+    "proposed_action": proposed_action,
+    "final_action": final_action,
+    "risk_check": {"allowed": allowed, "reasons": reasons},
+    "execution": execution_result,
+    "config_snapshot": {
+        "mode": settings.mode,
+        "training_mode": False,
+        "llm_enabled": settings.llm_enabled,
+        "dry_run": settings.dry_run,
+    },
+}
+
+
+Also consider including decision_mode and both actions in the JSONL logger via log_decision if that function already supports extra metadata.
+
+5. Tests
+
+If there is no tests/ folder yet, create one. Add at least two small test modules:
+
+tests/test_llm_validation.py
+
+Unit test for validate_llm_decision:
+
+A valid OPEN_COVERED_CALL where symbol is in candidates → passes and returns sanitized decision.
+
+Invalid action string → raises ValueError.
+
+symbol not in candidates → raises ValueError.
+
+tests/test_agent_loop_hybrid_decision.py (or similar)
+
+Use small fakes/mocks for:
+
+agent_state (minimal object with attributes used by agent_loop).
+
+rule_decide_action.
+
+choose_action_with_llm.
+
+Verify that for decision_mode="rule_only":
+
+llm_enabled=True but llm_shadow_enabled=True:
+
+rule_action is used as proposed_action.
+
+llm_action is still computed and appears in decision_entry.
+
+For decision_mode="llm_only":
+
+When mock LLM returns a valid decision → proposed_action uses LLM.
+
+When mock LLM raises or returns invalid → falls back to rule action and decision_source indicates fallback.
+
+You can structure tests however is simplest, but make sure:
+
+They run with pytest.
+
+They don’t rely on real network calls or OpenAI / Deribit.
+
+6. Documentation
+
+Update replit.md:
+
+Add a short subsection to the agent loop description documenting:
+
+decision_mode values.
+
+How rule vs LLM vs hybrid shadow behave.
+
+That in hybrid_shadow the rules execute but LLM decisions are logged for analysis.
+
+Also add a note that the LLM layer uses strict validation and can never place trades on symbols not in candidates or positions.
+
+7. Final checklist
+
+When done:
+
+Run python -m pytest and ensure all tests pass.
+
+Run python agent_loop.py in research + testnet + dry_run mode with:
+
+decision_mode="hybrid_shadow"
+
+llm_enabled=True
+
+Confirm in logs / console:
+
+Rule-based actions are still executed.
+
+LLM actions are being logged alongside rule actions with clear decision_source and decision_mode.
+
+Do not weaken any existing risk checks or training mode behavior.
