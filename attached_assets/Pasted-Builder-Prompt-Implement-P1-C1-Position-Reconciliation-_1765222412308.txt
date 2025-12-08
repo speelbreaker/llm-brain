@@ -1,0 +1,309 @@
+Builder Prompt: Implement P1 [C1] Position Reconciliation vs Deribit
+TASK
+====
+
+Implement P1 item **[C1] Position reconciliation vs Deribit (startup + per loop)** from ROADMAP_BACKLOG.md.
+
+Goal:
+
+- On startup (and optionally on each loop), compare the bot’s **internal position state** vs **live Deribit positions** for the managed account / subaccount.
+- If there’s any material mismatch (missing/extra positions, or big size mismatch), the bot must:
+  - loudly log the problem, and
+  - **stop opening new positions** until the mismatch is resolved.
+- This is a safety rail before we ever think about mainnet.
+
+
+Context (repo)
+==============
+
+You are working inside the **llm-brain** repo (LLMAgentBrain).
+
+Key pieces you should be aware of:
+
+- The **agent loop** runs in `agent_loop.py`.
+- Deribit client(s) live under `src/` (e.g. `src/deribit_client.py` or similarly named module).
+- Position / portfolio models live in `src/models.py` (e.g. `PortfolioState`, `VolState`, `Position` or similar).
+- There is already a **position tracking** concept used by the agent loop and/or UI (look for modules like `position_tracker`, use whatever actually exists).
+- ROADMAP + healthcheck docs are in the repo (e.g. `ROADMAP_BACKLOG.md`, `HEALTHCHECK.md`, `replit.md`).
+
+Important:
+
+- If this prompt mentions a module or class name that doesn’t exactly exist, **adapt to the actual names in the repo**. The intent is more important than the exact string.
+- Do not rename existing core models (`PortfolioState`, `VolState`, etc.). Work with what’s there.
+
+
+High-Level Design
+=================
+
+We want a **small, focused reconciliation module** plus hooks in the agent loop.
+
+Pieces:
+
+1. A pure “diff” function that compares:
+   - “what Deribit says is open” vs
+   - “what our internal tracker thinks is open”.
+2. A reconciliation status data structure that can be:
+   - logged,
+   - exposed in the dashboard (later),
+   - used to decide “trade / don’t trade”.
+3. Agent-loop integration that:
+   - runs reconciliation on startup,
+   - optionally runs it on each loop,
+   - blocks **new openings** when things are out of sync,
+   - but does **not** silently fix anything behind the scenes.
+
+
+Step 1 – Add config flags
+=========================
+
+In the central settings/config module (e.g. `src/config.py`), extend the Settings (or equivalent) with:
+
+- `POSITION_RECONCILE_ON_STARTUP: bool = True`
+- `POSITION_RECONCILE_ON_EACH_LOOP: bool = False`
+- `POSITION_RECONCILE_TOLERANCE_USD: float = 10.0`
+
+Notes:
+
+- `POSITION_RECONCILE_TOLERANCE_USD` is a small cushion so we don’t panic over tiny rounding differences in mark values etc.
+- If the config model already uses nested sections (e.g. `SafetySettings`), feel free to put these fields into a logical group, but keep the semantics.
+
+
+Step 2 – Implement reconciliation core
+======================================
+
+Create a small module, for example:
+
+- `src/reconciliation.py`
+
+In it, define:
+
+1. **Lightweight types**
+
+   Use existing position / instrument models from `src/models.py`. If there is already a position model, reuse it instead of inventing a new one.
+
+   Add a small *diff* dataclass, e.g.:
+
+   - `PositionReconciliationDiff` with fields like:
+     - `untracked_on_exchange: list[PositionLike]`
+       - positions that exist on Deribit but NOT in our internal tracker
+     - `missing_on_exchange: list[PositionLike]`
+       - positions that tracker thinks are open, but Deribit says are closed
+     - `size_mismatches: list[PositionSizeMismatch]`
+       - same instrument, but size/side different
+     - `is_clean: bool` property / method:
+       - true only when no lists above are non-empty and value differences are within tolerance
+
+   Implement `PositionSizeMismatch` as another dataclass with fields such as:
+   - `instrument_name: str`
+   - `side: str` (e.g. “long” / “short” or “buy” / “sell”, whatever the models use)
+   - `size_tracker: float`
+   - `size_exchange: float`
+
+   Use **whatever naming and types match the existing models**; adapt as needed.
+
+2. **Snapshot builders**
+
+   Implement two helper functions:
+
+   - `def get_exchange_positions(deribit_client, underlying_filter: str | None = None) -> list[PositionLike]:`
+     - Use the existing Deribit private client methods to fetch *open positions*.
+     - If there is already helper code for this somewhere, call it instead of re-implementing.
+     - Apply `underlying_filter` if it’s easy/consistent (e.g. only BTC/ETH).
+
+   - `def get_tracked_positions(position_tracker, underlying_filter: str | None = None) -> list[PositionLike]:`
+     - Use the existing position tracking structure (whatever the repo has) to produce a list of “open positions we think we have”.
+     - Again, adapt to actual code; do not create a second tracker.
+
+3. **Diff function**
+
+   Implement:
+
+   - `def diff_positions(tracked: list[PositionLike], exchange: list[PositionLike], tolerance_usd: float) -> PositionReconciliationDiff:`
+
+   Behaviour:
+
+   - Define a **key** for matching positions, e.g.:
+
+     `(instrument_name, direction_or_side)`
+
+     Use the actual attributes available in the models to distinguish long vs short.
+
+   - For each key:
+
+     - If present on exchange but not in tracked → add to `untracked_on_exchange`.
+     - If present in tracked but exchange has no such open position → add to `missing_on_exchange`.
+     - If present in both but **size / notional differ** beyond `tolerance_usd` → add a `PositionSizeMismatch`.
+
+   - `is_clean` must be `True` only when:
+     - `untracked_on_exchange` is empty,
+     - `missing_on_exchange` is empty,
+     - `size_mismatches` is empty.
+
+   All of the above should be **pure functions**, easy to test with fake positions.
+
+
+Step 3 – Agent loop integration
+===============================
+
+In `agent_loop.py` (or whichever module runs the main loop and holds the Deribit client + config):
+
+1. Add a helper like:
+
+   ```python
+   def run_position_reconciliation_once(
+       deribit_client,
+       position_tracker,
+       settings,
+       logger,
+   ) -> PositionReconciliationDiff:
+       ...
+
+
+Call get_exchange_positions(...) and get_tracked_positions(...).
+
+Call diff_positions(...) with tolerance_usd=settings.POSITION_RECONCILE_TOLERANCE_USD.
+
+Log a structured summary of the diff:
+
+how many untracked/bad positions, instrument names, sizes, etc.
+
+Return the diff object.
+
+On startup:
+
+Before the agent enters its main loop (before any decisions/trades), if settings.POSITION_RECONCILE_ON_STARTUP is True:
+
+Call run_position_reconciliation_once(...).
+
+If diff.is_clean is False:
+
+Log a big WARNING / ERROR message.
+
+Do NOT start trading.
+
+The simplest safe behaviour: exit the process with a non-zero code, OR set a flag so that the main loop skips all “OPEN/ROLL” actions and only logs the issue.
+
+Prefer something explicit & noisy over silent failure.
+
+On each loop:
+
+If settings.POSITION_RECONCILE_ON_EACH_LOOP is True, call reconciliation at the top of each loop iteration.
+
+If the diff is not clean:
+
+Continue to update state and logs, but do not send any new opening or rolling trades.
+
+Closing existing positions is allowed (safer), but do not open new exposure while we’re out of sync.
+
+To implement this, you can add a simple boolean like trading_blocked_due_to_reconciliation to the loop context or config and check it before sending orders.
+
+Step 4 – Surface reconciliation status in logs
+
+Wherever you already log the per-loop decision state (e.g. the JSONL “flight recorder” logs for decisions), extend the structure to include a small field:
+
+reconciliation_status:
+
+“clean” if last diff was clean.
+
+“out_of_sync” if any mismatches were found (even if we’re just logging and not trading).
+
+This is primarily for debugging and future dashboard use. Do not over-complicate; a single string or small enum is fine.
+
+Step 5 – CLI helper script
+
+Add a small CLI script to run reconciliation manually, e.g.:
+
+scripts/reconcile_positions_once.py
+
+Behaviour:
+
+Uses the existing config / environment to build:
+
+Deribit client,
+
+position tracker / state.
+
+Calls run_position_reconciliation_once(...).
+
+Prints a human-readable summary to stdout:
+
+Counts:
+
+“N positions only on exchange”
+
+“M positions only in tracker”
+
+“K positions with size mismatch”
+
+For each problem, print:
+
+underlying, instrument_name, side, sizes.
+
+This script is for ops/debug, not automated trading.
+
+Step 6 – Tests
+
+Add a new test module, e.g.:
+
+tests/test_reconciliation.py
+
+Tests should:
+
+Construct fake PositionLike objects (you can use the existing models from src/models.py directly, or simple namedtuples if easier).
+
+Test diff_positions():
+
+identical tracked vs exchange → is_clean is True, all lists empty.
+
+one extra exchange position → shows up in untracked_on_exchange.
+
+one extra tracker position → shows up in missing_on_exchange.
+
+same instrument but different sizes beyond tolerance → shows up in size_mismatches.
+
+These tests should be pure / no network.
+
+Optionally, test that run_position_reconciliation_once(...) respects POSITION_RECONCILE_TOLERANCE_USD when you stub/mocks the client + tracker.
+
+Re-run the existing test suite after adding the new tests:
+
+pytest
+
+Any smoke scripts used in this repo (e.g. scripts/smoke_live_agent.sh, etc.), if they are already present.
+
+Step 7 – Docs / backlog updates
+
+In ROADMAP_BACKLOG.md:
+
+Mark [C1] position reconciliation vs Deribit as implemented or in progress.
+
+In HEALTHCHECK.md and/or replit.md:
+
+Briefly document:
+
+The new config flags:
+
+POSITION_RECONCILE_ON_STARTUP
+
+POSITION_RECONCILE_ON_EACH_LOOP
+
+POSITION_RECONCILE_TOLERANCE_USD
+
+The new script:
+
+scripts/reconcile_positions_once.py
+
+The behaviour: bot refuses to open new positions when reconciliation is out of sync.
+
+Constraints
+
+Do not change any behaviour unrelated to reconciliation.
+
+Do not silently auto-fix positions at this stage; only detect and block openings/log errors.
+
+Keep functions small, testable, and well-documented with short docstrings.
+
+Existing agent loop behaviour (when positions are in sync) must remain the same.
+
+
+---

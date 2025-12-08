@@ -20,7 +20,12 @@ from src.execution import execute_action, execute_actions
 from src.logging_utils import log_decision, log_error, print_decision_summary
 from src.models import ActionType
 from src.decisions_store import decisions_store
-from src.reconciliation import reconcile_positions, format_reconciliation_summary
+from src.reconciliation import (
+    reconcile_positions,
+    format_reconciliation_summary,
+    run_reconciliation_once,
+    get_reconciliation_status,
+)
 from src.position_tracker import position_tracker
 from src.strategies import build_default_registry, StrategyRegistry
 from src.policy_rule_based import decide_action as rule_decide_action
@@ -184,6 +189,47 @@ def run_agent_loop_forever(
     active_strategies = strategy_registry.get_active_strategies()
     print(f"Strategies: {[s.name for s in active_strategies]}")
     
+    startup_reconciliation_failed = False
+    if settings.position_reconcile_on_startup:
+        print("\n[Startup] Running position reconciliation...")
+        try:
+            startup_diff = run_reconciliation_once(
+                deribit_client=client,
+                position_tracker=position_tracker,
+                settings=settings,
+            )
+            if startup_diff.is_clean:
+                print(f"[Startup] Positions IN SYNC (exchange={startup_diff.exchange_count}, local={startup_diff.local_count})")
+            else:
+                print("\n" + "!" * 60)
+                print("STARTUP RECONCILIATION FAILED - POSITION MISMATCH DETECTED")
+                print("!" * 60)
+                diff_dict = startup_diff.to_dict()
+                if diff_dict["untracked_on_exchange"]:
+                    print(f"  Untracked on exchange: {', '.join(diff_dict['untracked_on_exchange'])}")
+                if diff_dict["missing_on_exchange"]:
+                    print(f"  Missing on exchange: {', '.join(diff_dict['missing_on_exchange'])}")
+                if diff_dict["size_mismatches"]:
+                    print(f"  Size mismatches:")
+                    for m in diff_dict["size_mismatches"]:
+                        print(f"    {m['symbol']}: local={m['local']:.4f}, exchange={m['exchange']:.4f}")
+                print("!" * 60)
+                
+                if settings.position_reconcile_action == "halt":
+                    startup_reconciliation_failed = True
+                    print("Agent will NOT trade until positions are reconciled.")
+                    print("Use 'scripts/reconcile_positions_once.py' to diagnose.")
+                else:
+                    rebuilt = position_tracker.rebuild_from_exchange(
+                        client.get_positions(currency="BTC", kind="option")
+                        + client.get_positions(currency="ETH", kind="option")
+                    )
+                    print(f"Auto-healed: rebuilt {rebuilt} positions from exchange.")
+        except Exception as e:
+            print(f"[Startup] Reconciliation error: {e}")
+            traceback.print_exc()
+            log_error("startup_reconciliation_error", str(e))
+    
     print("\nStarting agent loop...\n")
     
     iteration = 0
@@ -239,48 +285,58 @@ def run_agent_loop_forever(
                 time.sleep(settings.loop_interval_sec)
                 continue
 
-            reconciliation_stats: Dict[str, Any] = {"divergent": False}
-            reconciliation_halted = False
-            try:
-                exchange_positions = [
-                    {
-                        "symbol": p.symbol,
-                        "size": p.size,
-                        "direction": "sell" if p.side.value == "sell" else "buy",
-                        "average_price": p.avg_price,
-                        "mark_price": p.mark_price,
-                        "unrealized_pnl": p.unrealized_pnl,
-                        "delta": p.delta,
-                        "underlying": p.underlying,
-                        "option_type": "call",
-                    }
-                    for p in agent_state.portfolio.option_positions
-                ]
-                
-                local_payload = position_tracker.get_open_positions_payload()
-                local_positions = local_payload.get("positions", [])
-                
-                _, reconciliation_stats = reconcile_positions(
-                    exchange_positions=exchange_positions,
-                    local_positions=local_positions,
-                    action=settings.position_reconcile_action,
-                )
-                
-                if reconciliation_stats["divergent"]:
-                    print(f"\n{format_reconciliation_summary(reconciliation_stats)}")
+            reconciliation_stats: Dict[str, Any] = {"divergent": False, "is_clean": True}
+            reconciliation_halted = startup_reconciliation_failed
+            reconciliation_status = "clean"
+            
+            if settings.position_reconcile_on_each_loop and not startup_reconciliation_failed:
+                try:
+                    exchange_positions = [
+                        {
+                            "symbol": p.symbol,
+                            "size": p.size,
+                            "direction": "sell" if p.side.value == "sell" else "buy",
+                            "average_price": p.avg_price,
+                            "mark_price": p.mark_price,
+                            "unrealized_pnl": p.unrealized_pnl,
+                            "delta": p.delta,
+                            "underlying": p.underlying,
+                            "option_type": "call",
+                        }
+                        for p in agent_state.portfolio.option_positions
+                    ]
                     
-                    if settings.position_reconcile_action == "halt":
-                        reconciliation_halted = True
-                        print("Trading HALTED due to position divergence.")
+                    local_payload = position_tracker.get_open_positions_payload()
+                    local_positions = local_payload.get("positions", [])
+                    
+                    _, reconciliation_stats = reconcile_positions(
+                        exchange_positions=exchange_positions,
+                        local_positions=local_positions,
+                        action=settings.position_reconcile_action,
+                        tolerance_usd=settings.position_reconcile_tolerance_usd,
+                        spot_prices=agent_state.spot,
+                    )
+                    
+                    reconciliation_status = "clean" if reconciliation_stats.get("is_clean", not reconciliation_stats["divergent"]) else "out_of_sync"
+                    
+                    if reconciliation_stats["divergent"]:
+                        print(f"\n{format_reconciliation_summary(reconciliation_stats)}")
+                        
+                        if settings.position_reconcile_action == "halt":
+                            reconciliation_halted = True
+                            print("Trading HALTED due to position divergence.")
+                        else:
+                            rebuilt_count = position_tracker.rebuild_from_exchange(exchange_positions)
+                            print(f"Auto-healed: rebuilt {rebuilt_count} positions from exchange.")
                     else:
-                        rebuilt_count = position_tracker.rebuild_from_exchange(exchange_positions)
-                        print(f"Auto-healed: rebuilt {rebuilt_count} positions from exchange.")
-                else:
-                    print(f"\nPositions: IN SYNC (exchange={reconciliation_stats['exchange_count']}, local={reconciliation_stats['local_count']})")
-                    
-            except Exception as e:
-                print(f"Reconciliation error (continuing): {e}")
-                log_error("reconciliation_error", str(e))
+                        print(f"\nPositions: IN SYNC (exchange={reconciliation_stats['exchange_count']}, local={reconciliation_stats['local_count']})")
+                        
+                except Exception as e:
+                    print(f"Reconciliation error (continuing): {e}")
+                    log_error("reconciliation_error", str(e))
+            elif startup_reconciliation_failed:
+                reconciliation_status = "startup_failed"
+                print("\n[Reconciliation] Skipped - startup check failed, trading blocked.")
             
             training_actions: list = []
             is_training = settings.is_training_enabled
@@ -305,6 +361,7 @@ def run_agent_loop_forever(
                     execution_result=execution_result,
                 )
                 snapshot["reconciliation"] = reconciliation_stats
+                snapshot["reconciliation_status"] = reconciliation_status
                 
                 try:
                     log_decision(
@@ -326,6 +383,7 @@ def run_agent_loop_forever(
                     "risk_check": {"allowed": allowed, "reasons": reasons},
                     "execution": execution_result,
                     "reconciliation": reconciliation_stats,
+                    "reconciliation_status": reconciliation_status,
                 }
                 decisions_store.add(decision_entry)
                 

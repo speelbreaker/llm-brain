@@ -205,16 +205,17 @@ Missing pieces:
 
 ### [C1] Position reconciliation vs exchange  
 **Priority:** P0 (pre-mainnet), P1 (Phase 2 on testnet)  
-**Status:** Not implemented  
+**Status:** IMPLEMENTED (2025-12-08)  
 
-- Currently, `position_tracker` relies on local tracking.
-- No hard reconciliation step on startup or each loop.
-
-**Goal:**
-- On startup and regularly:
-  - Fetch positions from Deribit (truth).
-  - Compare with local tracker.
-  - On mismatch: halt or auto-repair, and flag via alert/UI.
+**Implementation:**
+- `src/reconciliation.py` with `PositionReconciliationDiff`, `PositionSizeMismatch` dataclasses
+- `diff_positions()` pure function compares local tracker vs exchange positions
+- `run_reconciliation_once()` helper for CLI and agent loop
+- Agent loop runs reconciliation on startup (`position_reconcile_on_startup`) and per-loop (`position_reconcile_on_each_loop`)
+- Configurable tolerance (`position_reconcile_tolerance_usd`) to avoid panicking over tiny rounding differences
+- On mismatch: `halt` (block new openings) or `auto_heal` (rebuild local state from exchange)
+- CLI script: `scripts/reconcile_positions_once.py` for manual diagnosis
+- 17 unit tests in `tests/test_reconciliation.py`
 
 ---
 

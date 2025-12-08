@@ -250,6 +250,18 @@ class Settings(BaseSettings):
         default="halt",
         description="Action on position divergence: 'halt' stops trading, 'auto_heal' rebuilds local state from exchange",
     )
+    position_reconcile_on_startup: bool = Field(
+        default=True,
+        description="Run position reconciliation on agent startup before entering main loop",
+    )
+    position_reconcile_on_each_loop: bool = Field(
+        default=True,
+        description="Run position reconciliation at the start of each loop iteration",
+    )
+    position_reconcile_tolerance_usd: float = Field(
+        default=10.0,
+        description="Tolerance in USD for size mismatches (to avoid panicking over tiny rounding differences)",
+    )
 
     @property
     def is_research(self) -> bool:

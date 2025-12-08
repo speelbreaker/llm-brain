@@ -44,6 +44,8 @@ def main() -> int:
     print("Position Reconciliation Tool")
     print("=" * 60)
     print(f"Deribit Environment: {settings.deribit_env.upper()}")
+    print(f"Underlyings: {', '.join(settings.underlyings)}")
+    print(f"Tolerance USD: ${settings.position_reconcile_tolerance_usd:.2f}")
     print(f"Action: {'AUTO-HEAL' if args.heal else 'DRY-RUN (report only)'}")
     print("=" * 60)
 
@@ -86,6 +88,7 @@ def main() -> int:
         exchange_positions=exchange_positions,
         local_positions=local_positions,
         action=action,
+        tolerance_usd=settings.position_reconcile_tolerance_usd,
     )
 
     print()
