@@ -54,6 +54,20 @@ class Settings(BaseSettings):
         default=0.3,
         description="Maximum exposure per expiry (in BTC/ETH notionals) for production",
     )
+    daily_drawdown_limit_pct: float = Field(
+        default=0.0,
+        description=(
+            "Maximum allowed daily peak-to-trough equity loss (percent). "
+            "0.0 disables the daily drawdown guard."
+        ),
+    )
+    kill_switch_enabled: bool = Field(
+        default=False,
+        description=(
+            "Global kill switch for trading. When True, all non-DO_NOTHING "
+            "actions are blocked at the risk layer."
+        ),
+    )
 
     ivrv_min: float = Field(
         default=1.2,

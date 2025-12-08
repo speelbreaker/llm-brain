@@ -124,6 +124,8 @@ def _build_status_snapshot(
             "effective_dte_range": [settings.effective_dte_min, settings.effective_dte_max],
             "max_margin_used_pct": settings.max_margin_used_pct,
             "max_net_delta_abs": settings.max_net_delta_abs,
+            "daily_drawdown_limit_pct": settings.daily_drawdown_limit_pct,
+            "kill_switch_enabled": settings.kill_switch_enabled,
         },
         "decision_source": final_action.get("decision_source", "unknown"),
         "strategy_id": final_action.get("strategy_id", proposed_action.get("strategy_id", "covered_call_v1")),
@@ -180,6 +182,8 @@ def run_agent_loop_forever(
     print(f"DTE Range: {settings.effective_dte_min} - {settings.effective_dte_max}")
     print(f"Max Margin: {settings.max_margin_used_pct}%")
     print(f"Max Delta: {settings.max_net_delta_abs}")
+    print(f"Daily DD Limit: {settings.daily_drawdown_limit_pct:.1f}%")
+    print(f"Kill Switch: {'ENABLED' if settings.kill_switch_enabled else 'Disabled'}")
     print(f"Position Reconcile: {settings.position_reconcile_action.upper()}")
     print("=" * 60)
     

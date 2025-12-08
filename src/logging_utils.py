@@ -109,6 +109,8 @@ def log_decision(
             "llm_enabled": settings.llm_enabled,
             "max_margin_used_pct": settings.max_margin_used_pct,
             "max_net_delta_abs": settings.max_net_delta_abs,
+            "daily_drawdown_limit_pct": settings.daily_drawdown_limit_pct,
+            "kill_switch_enabled": settings.kill_switch_enabled,
         },
     }
     

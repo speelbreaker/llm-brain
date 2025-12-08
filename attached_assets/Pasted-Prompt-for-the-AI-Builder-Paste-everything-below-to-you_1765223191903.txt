@@ -1,0 +1,430 @@
+Prompt for the AI Builder
+
+Paste everything below to your builder:
+
+You are working in the repository `llm-brain` (Deribit options trading agent) on Replit.
+
+Goal for this task
+==================
+
+Implement *two hard safety rails* in the existing risk engine:
+
+1. A **global kill switch** that can block ALL non-DO_NOTHING actions regardless of environment or mode.
+2. A **simple daily drawdown guard** that prevents opening NEW risk after a configurable daily peak-to-trough loss.
+
+This sits on top of the already-implemented risk checks (margin, net delta, per-expiry exposure, covered call check) and must work cleanly with the existing config + agent loop.
+
+Important: follow the existing style – type hints, Pydantic config, clear logging, and minimal cleverness.
+
+
+High-level behavior
+===================
+
+1. **Global Kill Switch**
+   - Controlled by a new boolean config flag.
+   - When the flag is ON, *any* proposed action that is **not** `DO_NOTHING` must be blocked at the risk layer.
+   - This must apply **even in training mode on testnet** (i.e., it overrides the “training_on_testnet bypass risk” rule).
+   - DO_NOTHING is always allowed so the agent can safely idle even with the kill switch engaged.
+
+2. **Daily Drawdown Guard (peak-to-trough, per UTC day, in process memory)**
+   - Controlled by a new config field `daily_drawdown_limit_pct` (percent, 0 = disabled).
+   - For each **UTC day**, track the **maximum portfolio equity** seen so far in that process.
+   - When considering **risk-increasing actions** (`OPEN_COVERED_CALL`, `ROLL_COVERED_CALL`):
+     - Calculate daily peak-to-trough drawdown as:
+       `dd_pct = (max_equity_today - current_equity) / max_equity_today * 100`
+     - If `dd_pct` is **greater than or equal to** the configured limit, block the action.
+   - DO_NOTHING and **risk-reducing actions** (`CLOSE_COVERED_CALL`) must *not* be blocked by the drawdown guard.
+   - This first version can keep the state **in memory only** (simple module-level dict in `risk_engine.py`) and reset when:
+     - The UTC date changes, or
+     - The process restarts.
+   - We accept that this is process-local (not persisted to disk) for now – it’s a minimal guard, not a full PnL accounting system.
+
+3. **Mode interaction**
+   - If `is_training_on_testnet` is true:
+     - The **global kill switch** must still work.
+     - The daily drawdown guard can be skipped entirely (i.e., only enforce drawdown in non-training / real-ish modes).
+   - For non-training modes (especially when deribit_env="mainnet"), both kill switch and daily drawdown should be active (if configured).
+
+
+Concrete implementation steps
+=============================
+
+1) Extend Settings with new fields
+----------------------------------
+
+File: `src/config.py`
+
+Add two new fields to the `Settings` class (alongside the other top-level risk limits like `max_margin_used_pct`, `max_net_delta_abs`, etc.):
+
+- `daily_drawdown_limit_pct: float`
+- `kill_switch_enabled: bool`
+
+Use the same style as existing fields, with clear descriptions and sensible defaults.
+
+Suggested definitions:
+
+```python
+    daily_drawdown_limit_pct: float = Field(
+        default=0.0,
+        description=(
+            "Maximum allowed daily peak-to-trough equity loss (percent). "
+            "0.0 disables the daily drawdown guard."
+        ),
+    )
+
+    kill_switch_enabled: bool = Field(
+        default=False,
+        description=(
+            "Global kill switch for trading. When True, all non-DO_NOTHING "
+            "actions are blocked at the risk layer."
+        ),
+    )
+
+
+Notes:
+
+Keep naming consistent with existing pattern: snake_case in Settings, env vars will be uppercased automatically (DAILY_DRAWDOWN_LIMIT_PCT, KILL_SWITCH_ENABLED).
+
+Wire these into the .env example
+
+File: .env.example
+
+Under the “Risk Limits” section, add the new environment variables, with conservative defaults:
+
+# Hard Risk Limits
+MAX_MARGIN_USED_PCT=80
+MAX_NET_DELTA_ABS=5.0
+DAILY_DRAWDOWN_LIMIT_PCT=0        # 0 = disabled, e.g. 10 = block new risk after 10% daily drawdown
+KILL_SWITCH_ENABLED=false         # true = block ALL non-DO_NOTHING actions
+
+
+Keep comments short and in the same style as existing ones.
+
+Implement kill switch + daily drawdown in risk_engine
+
+File: src/risk_engine.py
+
+You already have:
+
+check_action_allowed(agent_state, proposed_action, config=None) which returns (allowed: bool, reasons: list[str])
+
+Early bypass of risk checks when cfg.is_training_on_testnet is true
+
+Margin, net delta, per-expiry exposure, and “covered” checks
+
+We need to:
+
+3.1 Imports and module-level state
+
+At the top of risk_engine.py, extend imports:
+
+from datetime import datetime, timezone
+from typing import Any
+
+
+Then define a simple module-level dict to track daily drawdown:
+
+_daily_drawdown_state: dict[str, Any] = {
+    "date": None,            # UTC date object
+    "max_equity_usd": 0.0,   # peak equity seen today (in process)
+}
+
+3.2 Helper for daily drawdown guard
+
+Still in risk_engine.py, add a helper function above check_action_allowed:
+
+def _check_daily_drawdown_limit(
+    portfolio: Any,
+    cfg: Settings,
+    reasons: list[str],
+) -> bool:
+    """
+    Update and enforce a simple daily peak-to-trough drawdown limit.
+
+    - Tracks max equity per UTC day in-process.
+    - Returns True if trading is allowed.
+    - Returns False and appends a reason if the limit is breached.
+    """
+    if cfg.daily_drawdown_limit_pct <= 0:
+        # Guard disabled
+        return True
+
+    equity = float(getattr(portfolio, "equity_usd", 0.0))
+    if equity <= 0:
+        # If equity is already invalid, other checks will block anyway
+        return True
+
+    today = datetime.now(timezone.utc).date()
+    state_date = _daily_drawdown_state.get("date")
+    max_equity = float(_daily_drawdown_state.get("max_equity_usd", 0.0) or 0.0)
+
+    # Reset tracking at the start of a new UTC day or first run
+    if state_date != today or max_equity <= 0.0:
+        _daily_drawdown_state["date"] = today
+        _daily_drawdown_state["max_equity_usd"] = equity
+        return True
+
+    # Update peak equity
+    if equity > max_equity:
+        max_equity = equity
+        _daily_drawdown_state["max_equity_usd"] = max_equity
+
+    if max_equity <= 0.0:
+        return True
+
+    dd_pct = (max_equity - equity) / max_equity * 100.0
+
+    if dd_pct >= cfg.daily_drawdown_limit_pct:
+        reasons.append(
+            (
+                "Daily drawdown limit reached: "
+                f"{dd_pct:.2f}% >= {cfg.daily_drawdown_limit_pct:.2f}% "
+                f"(max_equity_today=${max_equity:,.2f}, current_equity=${equity:,.2f})"
+            )
+        )
+        return False
+
+    return True
+
+
+This is intentionally simple and process-local. We’re not persisting to disk in this task.
+
+3.3 Update check_action_allowed logic
+
+Still in risk_engine.py, modify check_action_allowed to:
+
+Parse the action type.
+
+Apply global kill switch before the training-on-testnet bypass.
+
+Keep DO_NOTHING fast-path.
+
+Apply daily drawdown guard only for risk-increasing actions, and only when not in is_training_on_testnet.
+
+Concretely, change the top of check_action_allowed from:
+
+    cfg = config or settings
+    reasons: list[str] = []
+
+    if cfg.is_training_on_testnet:
+        return True, ["training_mode on testnet: risk checks skipped"]
+
+    action_str = proposed_action.get("action", "DO_NOTHING")
+    ...
+    if action_type == ActionType.DO_NOTHING:
+        return True, []
+
+
+to something like:
+
+    cfg = config or settings
+    reasons: list[str] = []
+
+    action_str = proposed_action.get("action", "DO_NOTHING")
+    if isinstance(action_str, ActionType):
+        action_type = action_str
+    else:
+        try:
+            action_type = ActionType(action_str)
+        except ValueError:
+            reasons.append(f"Invalid action type: {action_str}")
+            return False, reasons
+
+    # 0) Global kill switch: applies in ALL modes, including training_on_testnet
+    if cfg.kill_switch_enabled and action_type != ActionType.DO_NOTHING:
+        reasons.append("Global kill-switch enabled: blocking all trading actions.")
+        return False, reasons
+
+    # 1) Training-on-testnet bypass (only if kill switch is NOT engaged)
+    if cfg.is_training_on_testnet:
+        return True, ["training_mode on testnet: risk checks skipped"]
+
+    # 2) DO_NOTHING fast path (allowed even after drawdown / kill switch)
+    if action_type == ActionType.DO_NOTHING:
+        return True, []
+
+    portfolio = agent_state.portfolio
+    params = proposed_action.get("params", {})
+
+
+Then, after you check that equity is valid but before margin & net-delta checks, call the daily drawdown helper for risk-increasing actions only:
+
+Find the existing equity check:
+
+    equity = getattr(portfolio, "equity_usd", None)
+    if equity is None or equity <= 0:
+        ...
+        return False, reasons
+
+    margin_used_pct = portfolio.margin_used_pct
+    ...
+
+
+Modify it to:
+
+    equity = getattr(portfolio, "equity_usd", None)
+    if equity is None or equity <= 0:
+        reasons.append(
+            "Portfolio equity is zero or unavailable. This usually means "
+            "private API credentials are missing, invalid, or the account is unfunded. "
+            "Blocking all actions until portfolio state is valid."
+        )
+        return False, reasons
+
+    # Daily drawdown guard – only for risk-increasing actions, only outside training_on_testnet
+    if action_type in (ActionType.OPEN_COVERED_CALL, ActionType.ROLL_COVERED_CALL):
+        if not _check_daily_drawdown_limit(portfolio, cfg, reasons):
+            return False, reasons
+
+    margin_used_pct = portfolio.margin_used_pct
+    ...
+
+
+Do not apply the drawdown guard to CLOSE_COVERED_CALL or DO_NOTHING – we always want to allow risk reduction and idling even after a drawdown limit has been hit.
+
+Leave the rest of the function (margin, net delta, per-expiry exposure, covered-call checks) intact.
+
+Surface the new fields in the agent startup banner and snapshots
+
+4.1 Agent startup banner
+
+File: agent_loop.py
+
+In run_agent_loop_forever, there is a startup banner that prints:
+
+Operating mode
+
+Deribit environment
+
+Decision mode
+
+Training mode
+
+Risk checks status
+
+Dry run, explore_prob, loop interval, max margin, max delta, etc.
+
+Extend this banner to also print:
+
+The daily drawdown limit
+
+Kill switch status
+
+Right after the existing prints for max margin / max delta, add something like:
+
+    print(f"Max Margin: {settings.max_margin_used_pct}%")
+    print(f"Max Delta: {settings.max_net_delta_abs}")
+    print(f"Daily DD Limit: {settings.daily_drawdown_limit_pct:.1f}%")
+    print(f"Kill Switch: {'ENABLED' if settings.kill_switch_enabled else 'Disabled'}")
+    print("=" * 60)
+
+
+Adjust formatting as needed to keep the banner clean.
+
+4.2 Status snapshot (for dashboard/API)
+
+Still in agent_loop.py, the _build_status_snapshot function creates a config_snapshot section.
+
+Currently it includes things like:
+
+        "config_snapshot": {
+            "mode": settings.mode,
+            "deribit_env": settings.deribit_env,
+            "policy_version": settings.policy_version,
+            "dry_run": settings.dry_run,
+            "llm_enabled": settings.llm_enabled,
+            "training_mode": settings.is_training_enabled,
+            "training_on_testnet": settings.is_training_on_testnet,
+            "training_strategies": settings.training_strategies if settings.is_training_enabled else [],
+            "explore_prob": settings.explore_prob,
+            "explore_top_k": settings.explore_top_k,
+            "effective_delta_range": [settings.effective_delta_min, settings.effective_delta_max],
+            "effective_dte_range": [settings.effective_dte_min, settings.effective_dte_max],
+            "max_margin_used_pct": settings.max_margin_used_pct,
+            "max_net_delta_abs": settings.max_net_delta_abs,
+        },
+
+
+Extend this dictionary to include:
+
+            "daily_drawdown_limit_pct": settings.daily_drawdown_limit_pct,
+            "kill_switch_enabled": settings.kill_switch_enabled,
+
+
+so the web UI / status API can display these settings.
+
+Include in JSON decision logs
+
+File: src/logging_utils.py
+
+The log_decision function also has a config_snapshot field with a smaller subset of config. Extend it similarly to reflect the new safety rails.
+
+Currently:
+
+    "config_snapshot": {
+        "dry_run": settings.dry_run,
+        "llm_enabled": settings.llm_enabled,
+        "max_margin_used_pct": settings.max_margin_used_pct,
+        "max_net_delta_abs": settings.max_net_delta_abs,
+    },
+
+
+Change to:
+
+    "config_snapshot": {
+        "dry_run": settings.dry_run,
+        "llm_enabled": settings.llm_enabled,
+        "max_margin_used_pct": settings.max_margin_used_pct,
+        "max_net_delta_abs": settings.max_net_delta_abs,
+        "daily_drawdown_limit_pct": settings.daily_drawdown_limit_pct,
+        "kill_switch_enabled": settings.kill_switch_enabled,
+    },
+
+
+This keeps logs self-describing when we later analyze decisions vs. risk settings.
+
+Documentation touch-up
+
+File: replit.md (and optionally README.md if it documents config)
+
+In the section describing risk management / configuration, add a short bullet for:
+
+DAILY_DRAWDOWN_LIMIT_PCT – brief description of its meaning (daily peak-to-trough equity limit, 0 = disabled).
+
+KILL_SWITCH_ENABLED – global hard stop, blocks all non-DO_NOTHING actions when true.
+
+Keep the tone and formatting consistent with the existing docs.
+
+Tests and sanity checks
+
+Run the full test suite (whatever is used in this repo, e.g. uv run pytest or pytest) and ensure all tests pass.
+
+Add targeted unit tests for the new behavior, following the style of existing tests (look for tests that exercise check_action_allowed or risk logic):
+
+At minimum cover:
+
+Kill switch ON:
+
+For an OPEN_COVERED_CALL action with otherwise safe parameters, check_action_allowed returns (False, reasons) and reasons mentions the kill switch.
+
+For a DO_NOTHING action, check_action_allowed returns (True, ...) even when kill switch is enabled.
+
+Daily drawdown guard:
+
+With daily_drawdown_limit_pct=0, the guard never blocks.
+
+With daily_drawdown_limit_pct set to a small value, simulate:
+
+First call with equity = 10,000 USD → allowed, baseline set.
+
+Next call with equity still 10,000 USD → allowed.
+
+Next call with equity dropped enough to exceed the configured limit and action = OPEN_COVERED_CALL → blocked with a reason mentioning daily drawdown.
+
+A CLOSE_COVERED_CALL action under the same equity conditions remains allowed (drawdown guard does not block closes).
+
+Briefly sanity-check the startup banner output in a dry run:
+
+Confirm it prints the Daily DD Limit and Kill Switch state as expected.
+
+When done, summarize the changes (files touched and key behaviors) in a short note.

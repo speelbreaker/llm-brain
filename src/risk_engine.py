@@ -4,10 +4,66 @@ Validates proposed actions against risk limits before execution.
 """
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any
 
 from src.config import Settings, settings
 from src.models import ActionType, AgentState, OptionType, Side
+
+_daily_drawdown_state: dict[str, Any] = {
+    "date": None,
+    "max_equity_usd": 0.0,
+}
+
+
+def _check_daily_drawdown_limit(
+    portfolio: Any,
+    cfg: Settings,
+    reasons: list[str],
+) -> bool:
+    """
+    Update and enforce a simple daily peak-to-trough drawdown limit.
+
+    - Tracks max equity per UTC day in-process.
+    - Returns True if trading is allowed.
+    - Returns False and appends a reason if the limit is breached.
+    """
+    if cfg.daily_drawdown_limit_pct <= 0:
+        return True
+
+    equity = float(getattr(portfolio, "equity_usd", 0.0))
+    if equity <= 0:
+        return True
+
+    today = datetime.now(timezone.utc).date()
+    state_date = _daily_drawdown_state.get("date")
+    max_equity = float(_daily_drawdown_state.get("max_equity_usd", 0.0) or 0.0)
+
+    if state_date != today or max_equity <= 0.0:
+        _daily_drawdown_state["date"] = today
+        _daily_drawdown_state["max_equity_usd"] = equity
+        return True
+
+    if equity > max_equity:
+        max_equity = equity
+        _daily_drawdown_state["max_equity_usd"] = max_equity
+
+    if max_equity <= 0.0:
+        return True
+
+    dd_pct = (max_equity - equity) / max_equity * 100.0
+
+    if dd_pct >= cfg.daily_drawdown_limit_pct:
+        reasons.append(
+            (
+                "Daily drawdown limit reached: "
+                f"{dd_pct:.2f}% >= {cfg.daily_drawdown_limit_pct:.2f}% "
+                f"(max_equity_today=${max_equity:,.2f}, current_equity=${equity:,.2f})"
+            )
+        )
+        return False
+
+    return True
 
 
 def check_action_allowed(
@@ -30,11 +86,7 @@ def check_action_allowed(
     cfg = config or settings
     reasons: list[str] = []
     
-    if cfg.is_training_on_testnet:
-        return True, ["training_mode on testnet: risk checks skipped"]
-    
     action_str = proposed_action.get("action", "DO_NOTHING")
-    
     if isinstance(action_str, ActionType):
         action_type = action_str
     else:
@@ -43,6 +95,13 @@ def check_action_allowed(
         except ValueError:
             reasons.append(f"Invalid action type: {action_str}")
             return False, reasons
+    
+    if cfg.kill_switch_enabled and action_type != ActionType.DO_NOTHING:
+        reasons.append("Global kill-switch enabled: blocking all trading actions.")
+        return False, reasons
+    
+    if cfg.is_training_on_testnet:
+        return True, ["training_mode on testnet: risk checks skipped"]
     
     if action_type == ActionType.DO_NOTHING:
         return True, []
@@ -62,6 +121,10 @@ def check_action_allowed(
             "Blocking all actions until portfolio state is valid."
         )
         return False, reasons
+
+    if action_type in (ActionType.OPEN_COVERED_CALL, ActionType.ROLL_COVERED_CALL):
+        if not _check_daily_drawdown_limit(portfolio, cfg, reasons):
+            return False, reasons
 
     margin_used_pct = portfolio.margin_used_pct
     if margin_used_pct >= cfg.max_margin_used_pct:
