@@ -2076,7 +2076,7 @@ def index() -> str:
         
         const safeguardsCompact = s.safeguards.slice(0, 4).map(sg => {{
           const bgColor = sg.status === 'ON' ? '#4caf50' : '#f44336';
-          return `<span style="display:inline-flex;align-items:center;gap:3px;background:#333;padding:2px 6px;border-radius:4px;font-size:0.75em;">
+          return `<span style="display:inline-flex;align-items:center;gap:3px;background:#333;padding:2px 6px;border-radius:4px;font-size:0.75em;color:#fff;">
             <span style="width:6px;height:6px;border-radius:50%;background:${{bgColor}};"></span>
             ${{sg.name}}
           </span>`;
