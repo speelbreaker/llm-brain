@@ -23,6 +23,8 @@ from src.decisions_store import decisions_store
 from src.reconciliation import reconcile_positions, format_reconciliation_summary
 from src.position_tracker import position_tracker
 from src.strategies import build_default_registry, StrategyRegistry
+from src.policy_rule_based import decide_action as rule_decide_action
+from src.agent_brain_llm import choose_action_with_llm
 
 StatusCallback = Callable[[Dict[str, Any]], None]
 
@@ -43,6 +45,8 @@ def _build_status_snapshot(
     risk_allowed: bool,
     risk_reasons: list,
     execution_result: Dict[str, Any],
+    rule_action: Optional[Dict[str, Any]] = None,
+    llm_action: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Build a compact status snapshot for the status store and logging."""
     return {
@@ -105,6 +109,7 @@ def _build_status_snapshot(
             "policy_version": settings.policy_version,
             "dry_run": settings.dry_run,
             "llm_enabled": settings.llm_enabled,
+            "decision_mode": settings.decision_mode,
             "training_mode": settings.is_training_enabled,
             "training_on_testnet": settings.is_training_on_testnet,
             "training_strategies": settings.training_strategies if settings.is_training_enabled else [],
@@ -117,6 +122,9 @@ def _build_status_snapshot(
         },
         "decision_source": final_action.get("decision_source", "unknown"),
         "strategy_id": final_action.get("strategy_id", proposed_action.get("strategy_id", "covered_call_v1")),
+        "decision_mode": settings.decision_mode,
+        "rule_action": rule_action,
+        "llm_action": llm_action,
     }
 
 
@@ -148,7 +156,8 @@ def run_agent_loop_forever(
     print("=" * 60)
     print(f"Operating Mode: {settings.mode.upper()}")
     print(f"Deribit Environment: {settings.deribit_env.upper()}")
-    print(f"Decision Mode: {'LLM-based' if settings.llm_enabled else 'Rule-based'}")
+    print(f"Decision Mode: {settings.decision_mode.upper()}")
+    print(f"LLM Enabled: {settings.llm_enabled}")
     print(f"Training Mode: {'ENABLED' if settings.is_training_enabled else 'Disabled'}")
     if settings.is_training_enabled:
         print(f"  Profile Mode: {settings.training_profile_mode.upper()}")
@@ -329,38 +338,93 @@ def run_agent_loop_forever(
                 time.sleep(sleep_time)
                 continue
 
+            rule_action: Optional[Dict[str, Any]] = None
+            llm_action: Optional[Dict[str, Any]] = None
+            decision_source = "unknown"
+            
             try:
                 print("\nMaking decision...")
                 
-                all_proposed_actions: list[dict[str, Any]] = []
-                for strategy in strategy_registry.get_active_strategies():
-                    actions = strategy.propose_actions(agent_state)
-                    all_proposed_actions.extend(actions)
-                
-                if is_training and len(all_proposed_actions) > 1:
-                    training_actions = all_proposed_actions
-                    print(f"Training mode: {len(training_actions)} actions across profiles")
-                    for ta in training_actions:
-                        strat = ta.get("strategy", "?")
-                        sym = ta.get("params", {}).get("symbol", "?")
-                        diag = ta.get("diagnostics", {})
-                        delta = diag.get("delta", 0)
-                        dte = diag.get("dte", 0)
-                        premium = diag.get("premium_usd", 0)
-                        print(f"  [{strat}] {sym} Δ={delta:.3f} DTE={dte} ${premium:.2f}")
-                    proposed_action = training_actions[0]
-                elif all_proposed_actions:
-                    proposed_action = all_proposed_actions[0]
-                    training_actions = []
-                    action_type = proposed_action.get('action', 'DO_NOTHING')
-                    mode_label = "LLM" if settings.llm_enabled else "Rule-based"
-                    print(f"{mode_label} proposed: {action_type}")
+                if is_training:
+                    all_proposed_actions: list[dict[str, Any]] = []
+                    for strategy in strategy_registry.get_active_strategies():
+                        actions = strategy.propose_actions(agent_state)
+                        all_proposed_actions.extend(actions)
+                    
+                    if len(all_proposed_actions) > 1:
+                        training_actions = all_proposed_actions
+                        print(f"Training mode: {len(training_actions)} actions across profiles")
+                        for ta in training_actions:
+                            strat = ta.get("strategy", "?")
+                            sym = ta.get("params", {}).get("symbol", "?")
+                            diag = ta.get("diagnostics", {})
+                            delta = diag.get("delta", 0)
+                            dte = diag.get("dte", 0)
+                            premium = diag.get("premium_usd", 0)
+                            print(f"  [{strat}] {sym} Δ={delta:.3f} DTE={dte} ${premium:.2f}")
+                        proposed_action = training_actions[0]
+                        decision_source = "training_mode"
+                    elif all_proposed_actions:
+                        proposed_action = all_proposed_actions[0]
+                        training_actions = []
+                        decision_source = "training_mode"
+                    else:
+                        proposed_action = {
+                            "action": ActionType.DO_NOTHING.value,
+                            "params": {},
+                            "reasoning": "No actions proposed by strategies",
+                        }
+                        training_actions = []
+                        decision_source = "training_mode"
                 else:
-                    proposed_action = {
-                        "action": ActionType.DO_NOTHING.value,
-                        "params": {},
-                        "reasoning": "No actions proposed by strategies",
-                    }
+                    rule_action = rule_decide_action(agent_state, settings)
+                    rule_action["strategy_id"] = "covered_call_v1"
+                    print(f"Rule-based proposed: {rule_action.get('action', 'DO_NOTHING')}")
+                    
+                    should_compute_llm = (
+                        settings.llm_enabled and 
+                        settings.decision_mode in ("llm_only", "hybrid_shadow")
+                    )
+                    should_compute_shadow = (
+                        settings.llm_enabled and 
+                        settings.llm_shadow_enabled and
+                        settings.decision_mode == "rule_only"
+                    )
+                    
+                    if should_compute_llm or should_compute_shadow:
+                        try:
+                            llm_action = choose_action_with_llm(
+                                agent_state,
+                                agent_state.candidate_options,
+                            )
+                            llm_action["strategy_id"] = "covered_call_v1"
+                            print(f"LLM proposed: {llm_action.get('action', 'DO_NOTHING')} (validated={llm_action.get('validated', 'N/A')})")
+                        except Exception as e:
+                            log_error("llm_decision_error", str(e), {"traceback": traceback.format_exc()})
+                            print(f"LLM error (using rule fallback): {e}")
+                            llm_action = None
+                    
+                    if settings.decision_mode == "rule_only":
+                        proposed_action = rule_action.copy()
+                        decision_source = "rule_based"
+                        
+                    elif settings.decision_mode == "llm_only":
+                        if llm_action is not None and llm_action.get("validated", False):
+                            proposed_action = llm_action.copy()
+                            decision_source = "llm"
+                        else:
+                            proposed_action = rule_action.copy()
+                            decision_source = "llm_fallback_to_rule"
+                            print("LLM invalid/failed, falling back to rule-based")
+                            
+                    elif settings.decision_mode == "hybrid_shadow":
+                        proposed_action = rule_action.copy()
+                        decision_source = "rule_based_shadow_llm"
+                    else:
+                        proposed_action = rule_action.copy()
+                        decision_source = "rule_based"
+                    
+                    proposed_action["decision_source"] = decision_source
                     training_actions = []
                 
             except Exception as e:
@@ -374,6 +438,7 @@ def run_agent_loop_forever(
                     "reasoning": f"Error during decision: {e}",
                 }
                 training_actions = []
+                decision_source = "error_fallback"
             
             try:
                 allowed, reasons = check_action_allowed(agent_state, proposed_action, settings)
@@ -439,11 +504,12 @@ def run_agent_loop_forever(
                 risk_allowed=allowed,
                 risk_reasons=reasons,
                 execution_result=execution_result,
+                rule_action=rule_action,
+                llm_action=llm_action,
             )
             snapshot["reconciliation"] = reconciliation_stats
             
             if is_training and training_actions:
-                decision_source = "training_mode"
                 for ta in training_actions:
                     ta_result = None
                     for r in execution_result.get("results", []):
@@ -452,12 +518,15 @@ def run_agent_loop_forever(
                             break
                     decision_entry = {
                         "timestamp": datetime.utcnow().isoformat(),
-                        "decision_source": decision_source,
+                        "decision_source": "training_mode",
+                        "decision_mode": settings.decision_mode,
                         "strategy_id": ta.get("strategy_id", "covered_call_v1"),
                         "strategy": ta.get("strategy"),
                         "underlying": ta.get("underlying"),
                         "proposed_action": ta,
                         "final_action": ta,
+                        "rule_action": None,
+                        "llm_action": None,
                         "risk_check": {"allowed": True, "reasons": []},
                         "execution": ta_result or {"status": "unknown"},
                         "config_snapshot": {
@@ -465,6 +534,7 @@ def run_agent_loop_forever(
                             "training_mode": True,
                             "training_strategies": settings.training_strategies,
                             "llm_enabled": settings.llm_enabled,
+                            "decision_mode": settings.decision_mode,
                             "dry_run": settings.dry_run,
                         },
                     }
@@ -472,16 +542,20 @@ def run_agent_loop_forever(
             else:
                 decision_entry = {
                     "timestamp": datetime.utcnow().isoformat(),
-                    "decision_source": proposed_action.get("decision_source", "llm" if settings.llm_enabled else "rule_based"),
+                    "decision_source": decision_source,
+                    "decision_mode": settings.decision_mode,
                     "strategy_id": proposed_action.get("strategy_id", "covered_call_v1"),
                     "proposed_action": proposed_action,
                     "final_action": final_action,
+                    "rule_action": rule_action,
+                    "llm_action": llm_action,
                     "risk_check": {"allowed": allowed, "reasons": reasons},
                     "execution": execution_result,
                     "config_snapshot": {
                         "mode": settings.mode,
                         "training_mode": False,
                         "llm_enabled": settings.llm_enabled,
+                        "decision_mode": settings.decision_mode,
                         "dry_run": settings.dry_run,
                     },
                 }
