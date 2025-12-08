@@ -95,6 +95,7 @@ def log_decision(
     """
     log_entry = {
         "log_timestamp": datetime.utcnow().isoformat(),
+        "strategy_id": proposed_action.get("strategy_id", final_action.get("strategy_id", "covered_call_v1")),
         "state": _compress_agent_state(agent_state),
         "proposed_action": proposed_action,
         "risk_check": {

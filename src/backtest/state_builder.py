@@ -6,6 +6,11 @@ This module:
 1. Fetches historical/synthetic data from DeribitDataSource
 2. Uses shared filtering logic from state_core
 3. Returns Dict format for backward compatibility with backtest simulator
+4. Also provides build_historical_agent_state() for typed AgentState output
+
+The key principle: both live and backtest builders use the same state_core
+logic for constructing AgentState, ensuring no drift between simulation
+and live trading.
 """
 from __future__ import annotations
 
@@ -19,7 +24,12 @@ from .market_context_backtest import compute_market_context_from_ds, market_cont
 from .types import OptionSnapshot, CallSimulationConfig
 from .pricing import bs_call_delta, get_synthetic_iv
 from src.utils.expiry import parse_deribit_expiry
+from src.models import AgentState, MarketContext
 from src.state_core import (
+    RawOption,
+    RawPortfolio,
+    RawMarketSnapshot,
+    build_agent_state_from_raw,
     _calculate_dte,
     _calculate_dte_float,
     _calculate_moneyness,
@@ -269,5 +279,175 @@ def create_state_builder(
     """
     def state_builder(t: datetime) -> Dict[str, Any]:
         return build_historical_state(ds, cfg, t)
+    
+    return state_builder
+
+
+def _option_snapshot_to_raw_option(
+    opt: OptionSnapshot,
+    spot: float,
+    underlying: str,
+    rv: float,
+    reference_time: datetime,
+) -> RawOption:
+    """
+    Convert OptionSnapshot to RawOption for state_core.
+    
+    Args:
+        opt: OptionSnapshot from data source
+        spot: Current spot price
+        underlying: Underlying asset symbol
+        rv: Realized volatility
+        reference_time: The decision timestamp (NOT datetime.now()) for DTE calculation
+    """
+    from .pricing import bs_call_price
+    
+    expiry = opt.expiry
+    dte = _calculate_dte_float(expiry, reference_time) if expiry else 0
+    
+    iv = opt.iv if opt.iv else 0.6
+    mark_price = opt.mark_price
+    if mark_price is None and spot > 0 and expiry:
+        t_years = dte / 365.0 if dte > 0 else 0.001
+        mark_price = bs_call_price(spot, opt.strike, t_years, iv, 0.05)
+    
+    return RawOption(
+        instrument_name=opt.instrument_name,
+        expiry=expiry or reference_time,
+        strike=opt.strike,
+        option_type="call" if opt.kind == "call" else "put",
+        mark_price=mark_price or 0.0,
+        mark_iv=iv * 100,
+        delta=opt.delta or 0.0,
+        underlying_price=spot,
+        underlying=underlying,
+        bid=mark_price * 0.95 if mark_price else None,
+        ask=mark_price * 1.05 if mark_price else None,
+        rv=rv * 100,
+    )
+
+
+def build_historical_agent_state(
+    ds: DeribitDataSource,
+    cfg: CallSimulationConfig,
+    t: datetime,
+) -> AgentState:
+    """
+    Build a historical AgentState at time t using the shared state_core.
+    
+    This function uses the SAME build_agent_state_from_raw() logic as the
+    live agent, ensuring no drift between backtest and live state construction.
+    
+    Args:
+        ds: DeribitDataSource instance
+        cfg: CallSimulationConfig with target parameters
+        t: Decision time for state construction
+        
+    Returns:
+        AgentState suitable for strategy.propose_actions()
+    """
+    underlying = cfg.underlying
+    
+    lookback_hours = 24
+    spot_lookback = t - timedelta(hours=lookback_hours)
+    spot_df = ds.get_spot_ohlc(
+        underlying=underlying,
+        start=spot_lookback,
+        end=t,
+        timeframe=cfg.timeframe,
+    )
+    spot = float(spot_df["close"].iloc[-1]) if not spot_df.empty else 0.0
+    
+    mc_obj = compute_market_context_from_ds(ds, underlying=underlying, as_of=t)
+    
+    rv_lookback = t - timedelta(days=cfg.synthetic_rv_window_days + 7)
+    rv_df = ds.get_spot_ohlc(
+        underlying=underlying,
+        start=rv_lookback,
+        end=t,
+        timeframe="1d",
+    )
+    spot_history = []
+    if not rv_df.empty:
+        for idx, row in rv_df.iterrows():
+            spot_history.append((idx, float(row["close"])))
+    
+    sigma = get_synthetic_iv(cfg, spot_history, t)
+    rv = sigma * 0.8
+    
+    options: List[OptionSnapshot] = []
+    if cfg.pricing_mode == "synthetic_bs":
+        if spot > 0:
+            options = _generate_synthetic_candidates(spot, t, cfg, sigma)
+    else:
+        all_options = ds.list_option_chain(
+            underlying=underlying,
+            as_of=t,
+            settlement_ccy=cfg.option_settlement_ccy,
+            margin_type=cfg.option_margin_type,
+        )
+        options = _filter_option_chain(
+            all_options=all_options,
+            t=t,
+            min_dte=cfg.min_dte,
+            max_dte=cfg.max_dte,
+            delta_min=cfg.delta_min,
+            delta_max=cfg.delta_max,
+        )
+    
+    raw_options = [
+        _option_snapshot_to_raw_option(opt, spot, underlying, rv, t)
+        for opt in options
+    ]
+    
+    raw_portfolio = RawPortfolio(
+        equity_usd=100000.0,
+        margin_used_pct=0.0,
+        balances={underlying: cfg.initial_spot_position},
+        positions=[],
+        margin_used_usd=0.0,
+        margin_available_usd=100000.0,
+        net_delta=0.0,
+    )
+    
+    raw_snapshot = RawMarketSnapshot(
+        timestamp=t,
+        underlyings=[underlying],
+        spot={underlying: spot},
+        portfolio=raw_portfolio,
+        options=raw_options,
+        realized_vol={underlying: rv * 100},
+        market_context=mc_obj,
+    )
+    
+    return build_agent_state_from_raw(
+        raw_snapshot,
+        delta_min=cfg.delta_min,
+        delta_max=cfg.delta_max,
+        dte_min=cfg.min_dte,
+        dte_max=cfg.max_dte,
+        premium_min_usd=0.0,
+        max_candidates=50,
+        source="backtest",
+    )
+
+
+def create_agent_state_builder(
+    ds: DeribitDataSource,
+    cfg: CallSimulationConfig,
+):
+    """
+    Factory function to create a typed AgentState builder for strategies.
+    
+    This returns the SAME AgentState type as the live agent uses,
+    enabling direct use of Strategy.propose_actions().
+    
+    Usage:
+        state_builder = create_agent_state_builder(ds, cfg)
+        agent_state = state_builder(t)
+        actions = strategy.propose_actions(agent_state)
+    """
+    def state_builder(t: datetime) -> AgentState:
+        return build_historical_agent_state(ds, cfg, t)
     
     return state_builder

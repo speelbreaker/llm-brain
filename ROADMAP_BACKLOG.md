@@ -64,6 +64,17 @@ These are **implemented** and here only as reference so we don't re-plan them:
 - Web app:
   - Live Agent, Backtesting Lab, Chat, Calibration tabs.
   - Chat agent can answer "why did the bot do X?" by reading decision logs.
+- **Strategy abstraction (Phase 2 #1)**:
+  - `Strategy` base class with `strategy_id` property and `propose_actions()` method
+  - `CandidateAction` and `StrategyDecision` typed action types
+  - `CoveredCallStrategy` implementing the interface
+  - `StrategyRegistry` for managing active strategies
+  - `strategy_id` propagates through agent_loop, decisions_store, and JSONL logs
+- **Shared StateBuilder core (Phase 2 #1)**:
+  - `src/state_core.py` with `RawMarketSnapshot` → `AgentState` pure functions
+  - Both live and backtest builders use same `build_agent_state_from_raw()` logic
+  - `build_historical_agent_state()` for typed backtest state construction
+  - Tests ensuring deterministic output and live/backtest parity
 
 Everything below is **TODO / backlog**.
 
@@ -73,28 +84,32 @@ Everything below is **TODO / backlog**.
 
 ### [A1] Strategy abstraction & multi-strategy readiness  
 **Priority:** P1 (Phase 2)  
-**Status:** Not implemented  
+**Status:** IMPLEMENTED (2025-12-08)  
 
-- Currently, the agent loop is wired directly to the **covered-call** rule/LLM logic.
-- There is no generic `Strategy` interface (e.g. `Strategy.step(state) -> actions`).
-- No `strategy_id` field in actions/logs for multi-bot/multi-strategy.
-
-**Goal:**
-- Define a core `Strategy` abstraction (and `StrategyConfig`) so multiple strategies (Covered Calls, Wheel, etc.) can coexist.
-- Make the agent loop call `strategy.step(state)` instead of hard-coding covered-call policy.
+**Implemented:**
+- `Strategy` base class in `src/strategies/types.py` with `strategy_id` property
+- `StrategyConfig` for strategy configuration
+- `CandidateAction` and `StrategyDecision` typed action representations
+- `CoveredCallStrategy` implementation in `src/strategies/covered_call.py`
+- `StrategyRegistry` in `src/strategies/registry.py` for managing strategies
+- Agent loop now uses `strategy.propose_actions(state)` via registry
+- `strategy_id` included in all decision logs, JSONL flight recorder, and status snapshots
 
 ---
 
 ### [A2] Shared StateBuilder core (live + backtest)  
 **Priority:** P1 (Phase 2)  
-**Status:** Not implemented  
+**Status:** IMPLEMENTED (2025-12-08)  
 
-- Live and backtest have separate state builders (`src/state_builder.py` and `src/backtest/state_builder.py`) that perform similar work.
-- Risk: **drift** between live and backtest logic.
-
-**Goal:**
-- Extract a `state_core.py` that converts a generic `RawMarketSnapshot` → `AgentState` and candidate list.
-- Make both live and backtest builders use this shared core, with only their data sources differing.
+**Implemented:**
+- `src/state_core.py` with:
+  - `RawMarketSnapshot`, `RawOption`, `RawPosition`, `RawPortfolio` types
+  - `build_agent_state_from_raw()` pure function
+- Live `src/state_builder.py` uses state_core for AgentState construction
+- Backtest `src/backtest/state_builder.py` has:
+  - `build_historical_agent_state()` using same state_core logic
+  - `create_agent_state_builder()` factory for strategy integration
+- Tests in `tests/test_state_core.py` verify deterministic output and live/backtest consistency
 
 ---
 

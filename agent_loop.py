@@ -116,6 +116,7 @@ def _build_status_snapshot(
             "max_net_delta_abs": settings.max_net_delta_abs,
         },
         "decision_source": final_action.get("decision_source", "unknown"),
+        "strategy_id": final_action.get("strategy_id", proposed_action.get("strategy_id", "covered_call_v1")),
     }
 
 
@@ -452,6 +453,7 @@ def run_agent_loop_forever(
                     decision_entry = {
                         "timestamp": datetime.utcnow().isoformat(),
                         "decision_source": decision_source,
+                        "strategy_id": ta.get("strategy_id", "covered_call_v1"),
                         "strategy": ta.get("strategy"),
                         "underlying": ta.get("underlying"),
                         "proposed_action": ta,
@@ -471,6 +473,7 @@ def run_agent_loop_forever(
                 decision_entry = {
                     "timestamp": datetime.utcnow().isoformat(),
                     "decision_source": proposed_action.get("decision_source", "llm" if settings.llm_enabled else "rule_based"),
+                    "strategy_id": proposed_action.get("strategy_id", "covered_call_v1"),
                     "proposed_action": proposed_action,
                     "final_action": final_action,
                     "risk_check": {"allowed": allowed, "reasons": reasons},

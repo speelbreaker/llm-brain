@@ -30,7 +30,23 @@ The agent features a clear separation of concerns, with modules for configuratio
 - **Position Persistence**: Bot-managed positions are saved to `data/positions.json` and restored on restart.
 
 ### Strategy Layer
-A pluggable architecture (`src/strategies/`) allows multiple trading strategies to run concurrently, sharing market data and risk controls. It defines a `Strategy` interface and a `StrategyRegistry`, currently implementing `CoveredCallStrategy`.
+A pluggable architecture (`src/strategies/`) allows multiple trading strategies to run concurrently, sharing market data and risk controls.
+
+**Key Types:**
+- `Strategy` – Base class with `strategy_id` property and `propose_actions(state: AgentState)` method
+- `StrategyConfig` – Configuration dataclass for strategy parameters
+- `CandidateAction` – Typed action with scoring metadata (delta, DTE, premium, IVRV score)
+- `StrategyDecision` – Final decision for execution with strategy attribution
+- `StrategyRegistry` – Manages active strategies, built from settings via `build_default_registry()`
+
+**Current Implementation:**
+- `CoveredCallStrategy` – Implements covered call logic (rule-based/LLM/training modes)
+- All decisions include `strategy_id` for multi-strategy logging and attribution
+
+**How to add a new strategy:**
+1. Create `src/strategies/my_strategy.py` extending `Strategy`
+2. Implement `propose_actions(state: AgentState) -> List[dict]`
+3. Register in `build_default_registry()` in `src/strategies/registry.py`
 
 ### Technical Implementations
 - **Configuration**: Pydantic settings manage application configuration.
