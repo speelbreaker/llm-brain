@@ -30,6 +30,7 @@ from src.position_tracker import position_tracker
 from src.strategies import build_default_registry, StrategyRegistry
 from src.policy_rule_based import decide_action as rule_decide_action
 from src.agent_brain_llm import choose_action_with_llm
+from src.healthcheck import run_agent_healthcheck, format_healthcheck_banner
 
 StatusCallback = Callable[[Dict[str, Any]], None]
 
@@ -186,6 +187,26 @@ def run_agent_loop_forever(
     print(f"Kill Switch: {'ENABLED' if settings.kill_switch_enabled else 'Disabled'}")
     print(f"Position Reconcile: {settings.position_reconcile_action.upper()}")
     print("=" * 60)
+    
+    print("\n[Startup] Running healthcheck...")
+    try:
+        healthcheck_result = run_agent_healthcheck(settings)
+        print(format_healthcheck_banner(healthcheck_result))
+        
+        if healthcheck_result["overall_status"] == "FAIL":
+            if not settings.is_testnet:
+                print("\n" + "!" * 60)
+                print("HEALTHCHECK FAILED ON MAINNET - ABORTING AGENT START")
+                print("!" * 60)
+                print("Fix the issues above before running on mainnet.")
+                sys.exit(1)
+            else:
+                print("\n[WARNING] Healthcheck failed but continuing on testnet...")
+    except Exception as e:
+        print(f"[Startup] Healthcheck error: {e}")
+        if not settings.is_testnet:
+            print("Aborting agent start on mainnet due to healthcheck failure.")
+            sys.exit(1)
     
     client = DeribitClient()
     

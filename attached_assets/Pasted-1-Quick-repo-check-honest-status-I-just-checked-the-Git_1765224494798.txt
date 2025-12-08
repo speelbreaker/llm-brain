@@ -1,0 +1,321 @@
+1. Quick repo check (honest status)
+
+I just checked the GitHub repo snapshot again, and I don’t see the daily drawdown / kill-switch changes yet:
+
+src/config.py still has the original Settings class without anything like daily_drawdown_limit_pct, daily_drawdown_warning_pct, or kill_switch_enabled. 
+GitHub
+
+src/risk_engine.py has no logic relating to daily equity PnL or a kill switch; it only enforces margin, delta, and per-expiry exposure / covered-call checks. 
+GitHub
+
+src/logging_utils.py’s config_snapshot only logs dry_run, llm_enabled, max_margin_used_pct, and max_net_delta_abs. 
+GitHub
+
+.env.example hasn’t gained any new risk-management env vars (still only max margin, net delta, IVRV, deltas, DTE, etc.). 
+GitHub
+
+So either:
+
+The builder did the work only in Replit and those commits haven’t been pushed yet, or
+
+The builder didn’t actually implement that prompt.
+
+I can’t truly “check correctness” until that code is in the Git repo, but I’ll assume you want to keep moving and I’ll give you the next builder prompt now. Once you push the daily-DD / kill-switch stuff, I can re-verify it on top of whatever we do next.
+
+2. Next P1: Single automated “Agent Healthcheck” script
+
+You’d asked for “a single health check that I don’t need to run manually, it could run automatically.” Let’s turn that into a concrete, self-contained feature:
+
+A Python healthcheck module that exercises the critical pipeline (config → Deribit → state builder).
+
+A CLI script you can run directly or wire into cron / Replit scheduler / Cloud Run startup.
+
+Optional startup banner integration so the agent prints a clear health summary at launch.
+
+Here’s a prompt you can paste to the builder:
+
+Prompt for the builder
+
+TASK: Add a small, self-contained Agent Healthcheck module + CLI for LLMAgentBrain, so I can:
+
+Run one command to check if the system is healthy (config, Deribit connectivity, state builder),
+
+See a clear PASS/WARN/FAIL summary in the console,
+
+Optionally have the agent run this healthcheck on startup and print the same summary.
+
+1) New module: src/healthcheck.py
+
+Create a new module src/healthcheck.py with:
+
+a) Types
+
+Use simple, typed structures:
+
+from __future__ import annotations
+from dataclasses import dataclass
+from enum import Enum
+from typing import Any
+
+from src.config import Settings, settings
+from src.deribit_client import DeribitClient, DeribitAPIError
+from src.state_builder import build_agent_state
+
+class CheckStatus(str, Enum):
+    OK = "ok"
+    WARN = "warn"
+    FAIL = "fail"
+    SKIPPED = "skipped"
+
+@dataclass
+class HealthCheckResult:
+    name: str               # e.g. "config", "deribit_public", "deribit_private", "state_builder"
+    status: CheckStatus
+    detail: str             # short human-readable message
+
+b) Individual checks
+
+Implement four core checks as pure functions that return HealthCheckResult:
+
+check_config(cfg: Settings) -> HealthCheckResult
+
+Validate basic config sanity:
+
+cfg.deribit_env is "testnet" or "mainnet".
+
+cfg.loop_interval_sec > 0.
+
+cfg.max_margin_used_pct in (0, 100].
+
+cfg.max_net_delta_abs >= 0.
+
+If anything looks obviously broken, return status=FAIL with a clear detail.
+
+Otherwise return OK with a short summary, e.g.
+
+"mode=research, env=testnet, loop_interval=300s".
+
+check_deribit_public(client: DeribitClient) -> HealthCheckResult
+
+Try fetching at least one public datum:
+
+get_index_price("BTC")
+
+Optionally also get_index_price("ETH").
+
+On success: status=OK, detail like:
+
+"public API OK, BTC index=${price:,.0f}".
+
+If a DeribitAPIError or any network error is raised:
+
+status=FAIL, detail with the error message.
+
+check_deribit_private(client: DeribitClient, cfg: Settings) -> HealthCheckResult
+
+Important: Do not fail just because there are no credentials in dev mode.
+
+Logic:
+
+If cfg.deribit_client_id or cfg.deribit_client_secret is empty:
+
+Return status=SKIPPED, detail="No private API credentials configured".
+
+Otherwise, try a lightweight private call, for example:
+
+client.get_account_summary(cfg.option_settlement_ccy or "USDC")
+
+On success: status=OK, detail like "private API OK, equity_usd=..."
+
+On error: status=FAIL, detail with the error message.
+
+check_state_builder(cfg: Settings) -> HealthCheckResult
+
+This should exercise the same pipeline the agent uses, but only once:
+
+Create a temporary DeribitClient().
+
+Call build_agent_state(client, cfg).
+
+On success:
+
+status=OK
+
+detail summarizing core state, e.g.:
+
+"built AgentState: equity=${...:,.2f}, positions={len(...)} candidates={len(...)}".
+
+If public API fails: status=FAIL with clear error.
+
+If private endpoints fail because of missing credentials but everything else works:
+
+You can return WARN instead of FAIL, with detail like
+
+"state built with partial portfolio (no private credentials)".
+
+Make sure all these functions never raise; they should always return a HealthCheckResult with a sensible status.
+
+c) Aggregator function
+
+Add:
+
+def run_agent_healthcheck(cfg: Settings | None = None) -> dict[str, Any]:
+    ...
+
+
+Behavior:
+
+Use cfg = cfg or settings.
+
+In a with DeribitClient() as client: block, run the four checks above.
+
+Collect results into a list.
+
+Compute an overall_status:
+
+If any check is FAIL → overall_status = "FAIL".
+
+Else if any check is WARN → overall_status = "WARN".
+
+Else → overall_status = "OK".
+
+Return a dict:
+
+{
+    "overall_status": "OK" | "WARN" | "FAIL",
+    "results": [
+        {"name": ..., "status": ..., "detail": ...},
+        ...
+    ],
+}
+
+
+Keep it pure/simple so we can reuse it from:
+
+A CLI script,
+
+The agent startup banner,
+
+Tests.
+
+2) New CLI script: scripts/agent_healthcheck.py
+
+Create scripts/agent_healthcheck.py with:
+
+#!/usr/bin/env python3
+from __future__ import annotations
+import sys
+
+from src.config import settings
+from src.healthcheck import run_agent_healthcheck, CheckStatus
+
+def main() -> None:
+    print("=" * 60)
+    print("LLMAgentBrain – Agent Healthcheck")
+    print("=" * 60)
+
+    result = run_agent_healthcheck(settings)
+
+    overall = result["overall_status"]
+    print(f"\nOverall status: {overall}")
+    print("-" * 60)
+
+    for r in result["results"]:
+        name = r["name"]
+        status = r["status"]
+        detail = r["detail"]
+        print(f"[{status.upper():7}] {name:18} - {detail}")
+
+    print("-" * 60)
+
+    # Exit code: 0 if OK/WARN, 1 if any FAIL
+    if overall == "FAIL":
+        sys.exit(1)
+    sys.exit(0)
+
+if __name__ == "__main__":
+    main()
+
+
+Usage examples (document these in replit.md):
+
+Manual:
+
+uv run python scripts/agent_healthcheck.py
+
+For cron / scheduler:
+
+Run the same command on schedule and alert if exit code is non-zero.
+
+3) Optional: integrate into agent_loop startup banner
+
+In agent_loop.py you already print a nice startup banner. Please:
+
+Import run_agent_healthcheck and CheckStatus from src.healthcheck.
+
+Right after the banner prints (before starting the infinite loop), run the healthcheck once:
+
+Print a short inline summary, e.g.:
+
+Healthcheck: OK
+  - config: OK – mode=research, env=testnet, loop=300s
+  - deribit_public: OK – BTC index=$...
+  - deribit_private: SKIPPED – no credentials
+  - state_builder: OK – equity=$..., positions=..., candidates=...
+
+
+Behavior on failures:
+
+In research/testnet mode:
+
+If overall_status == "FAIL", print a big warning but still continue running.
+
+In production/mainnet mode:
+
+If overall_status == "FAIL", it is acceptable to:
+
+print the same details
+
+and exit the process with non-zero code instead of starting the loop.
+
+Use whatever is simplest and safest, but don’t over-complicate the control flow.
+
+4) Tests (no real network calls)
+
+Add a small test file, e.g. tests/test_healthcheck_basic.py:
+
+Do not hit the real Deribit API in tests.
+
+Instead:
+
+Create a tiny FakeDeribitClient class with the minimal methods you need, like get_index_price, get_account_summary, get_positions.
+
+Use monkeypatch or simple dependency injection to test the check functions in isolation:
+
+check_config
+
+check_deribit_public
+
+check_deribit_private
+
+check_state_builder (you can fake build_agent_state too if needed).
+
+Assert that:
+
+Happy-path returns status=OK.
+
+Missing credentials lead to status=SKIPPED for the private check.
+
+Simulated errors (raising DeribitAPIError) produce status=FAIL.
+
+Keep tests small and fast; they’re just sanity checks, not full integration tests.
+
+5) Don’t break anything else
+
+Do not change the existing risk engine, strategy layer, or backtesting logic.
+
+Don’t change any external behavior besides:
+
+Adding the new module + script,
+
+Optionally printing the healthcheck summary at agent startup.

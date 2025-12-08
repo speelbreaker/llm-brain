@@ -24,6 +24,7 @@ The agent features a clear separation of concerns, with modules for configuratio
 - **Web Dashboard**: A FastAPI application offering "Live Agent" status, "Backtesting Lab" with interactive charts, "Backtest Runs" management, "Calibration" for price comparison, and a "Chat" interface for natural language interaction.
 - **Persistent Backtest Runs**: Stores backtest results in PostgreSQL using SQLAlchemy ORM for status tracking, viewing, and downloading. Supports `synthetic`, `live_deribit`, and `real_scraper` data sources.
 - **Comparison & Health Check Scripts**: Tools for comparing synthetic vs. live backtests, generating diff reports, and performing strategy health checks.
+- **Agent Healthcheck Module**: Self-contained healthcheck system (`src/healthcheck.py`) that exercises the critical pipeline (config → Deribit → state builder). Includes CLI script (`scripts/agent_healthcheck.py`) and automatic startup integration with PASS/WARN/FAIL status display.
 - **State-Aware Chat Assistant**: A multi-turn assistant that understands current trading state, answers questions, and provides project information.
 - **Position Reconciliation**: Compares local position tracker against exchange positions, with configurable actions (`halt`, `auto_heal`) and a manual recovery script.
 - **Calibration vs Deribit**: Compares synthetic Black-Scholes prices against live Deribit marks, using an RV-based IV model and deriving skew from live data.
