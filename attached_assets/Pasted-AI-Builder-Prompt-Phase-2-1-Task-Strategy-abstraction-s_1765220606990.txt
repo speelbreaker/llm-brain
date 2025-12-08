@@ -1,0 +1,244 @@
+AI Builder Prompt – Phase 2 #1
+
+Task: Strategy abstraction + shared state builder for the options bot
+
+You are a senior Python engineer and systematic options trader.
+You have access to my repo for an AI-powered options trading bot that trades BTC/ETH options on Deribit (testnet + backtests). The bot already:
+
+Has a live agent loop that:
+
+Builds a “state” (spot, options chain, portfolio, risk metrics, candidate options).
+
+Chooses an action among a discrete set (e.g. DO_NOTHING, OPEN_COVERED_CALL, ROLL_COVERED_CALL, CLOSE_COVERED_CALL).
+
+Uses either a rule-based policy or an LLM-based policy, switchable.
+
+Logs decisions into a “flight recorder” JSONL log.
+
+Has a backtesting lab for covered calls that:
+
+Simulates many decisions over time using historical/synthetic data.
+
+Has its own way of building state and picking actions.
+
+Produces metrics for runs (P&L, drawdown, winrate, etc.).
+
+Has multiple data sources:
+
+Synthetic universe (spot + RV + synthetic IV + skew).
+
+Live / harvested Deribit data and “exam dataset” builder.
+
+Right now, there is duplication and drift between how the live agent and the backtester build “state” and decide what to do.
+
+Goal of this task
+
+Create a clean strategy abstraction and a shared state builder so that:
+
+Live agent and backtester use the exact same strategy logic and state schema.
+
+It becomes easy to plug in more strategies later (cash-secured puts, combined call+put, etc.) without copy-pasting logic.
+
+The LLM brain sees the same strategy_state structure that the simulator uses, so training / evaluation are consistent.
+
+Do not try to solve the whole roadmap. This task is only about the core abstraction + shared state.
+
+High-level design I want
+
+You should read the repo and then implement something along these lines (adapt filenames to match the codebase):
+
+Shared state builder module
+
+Create a module (e.g. src/strategy/state_builder.py) that exposes a single canonical function, something like:
+
+def build_strategy_state(
+    *,
+    now: datetime,
+    underlying: str,
+    market_data: MarketDataSnapshot,
+    portfolio: PortfolioSnapshot,
+    config: StrategyConfig,
+) -> StrategyState:
+    ...
+
+
+StrategyState should be a Pydantic model or dataclass that is:
+
+JSON-serializable,
+
+used both by:
+
+the live agent loop,
+
+and the backtester / simulators,
+
+and is suitable as input to the LLM (no raw OHLC arrays; only compact, derived features).
+
+The state should include (use/rename existing types where possible, don’t invent new ones if not needed):
+
+Meta:
+
+underlying, now, environment flags (training vs live, DRY_RUN vs REAL, risk mode like ultra_safe/balanced/aggressive).
+
+Spot / returns / volatility:
+
+Current spot, 7d/30d returns, 7d/30d realized volatility, IV/RV ratios, maybe simple trend / MA info if already implemented.
+
+Options universe:
+
+A compact representation of the current option chain used by the strategy:
+
+for relevant expiries + strikes,
+
+calls and (optionally) puts,
+
+fields like DTE, strike, delta, mid price, bid/ask, IV, maybe an IVRV score.
+
+Portfolio:
+
+Available balance,
+
+current positions: especially existing short calls/puts on that underlying (size, strike, expiry, entry price, current PnL),
+
+margin/collateral usage if available.
+
+Risk / config:
+
+Caps like max short notional, max loss, per-position risk %, etc.,
+
+any mode flags (e.g. “training mode on/off”, “safe guardrails enabled”).
+
+The idea: any strategy (covered calls today, CSP later) can look only at StrategyState to decide what to do.
+
+Strategy abstraction
+
+Create a Strategy interface / base class (e.g. src/strategy/base.py):
+
+from abc import ABC, abstractmethod
+
+class Strategy(ABC):
+    name: str
+
+    @abstractmethod
+    def propose_actions(self, state: StrategyState) -> list[CandidateAction]:
+        """Return a small set of discrete candidate actions with metadata."""
+
+    @abstractmethod
+    def choose_action(
+        self,
+        state: StrategyState,
+        candidates: list[CandidateAction],
+        policy: StrategyPolicy,
+    ) -> FinalAction:
+        """Pick the final action to execute (or DO_NOTHING)."""
+
+
+Define small, explicit types for actions, for example:
+
+CandidateAction holding:
+
+action type enum (e.g. OPEN_COVERED_CALL, ROLL_COVERED_CALL, CLOSE_COVERED_CALL, DO_NOTHING),
+
+parameter details (expiry, strike, size, price assumptions),
+
+scoring metadata (e.g. reward/risk score, IVRV score, distance from target DTE/delta).
+
+FinalAction, which is what the executor/live agent actually executes.
+
+Implement at least one concrete strategy:
+
+CoveredCallStrategy(Strategy) that:
+
+uses existing covered-call logic,
+
+is the only strategy used by both live agent and backtester after this refactor.
+
+StrategyPolicy should encapsulate “rule-based vs LLM” policies:
+
+rule-based policy: deterministic scoring/ranking of candidates,
+
+LLM policy: wrapper that converts StrategyState + candidates into a prompt and parses the result.
+
+Wire the live agent to use the abstraction
+
+Find the current live agent decision loop. Replace the ad-hoc logic like:
+
+“build some dict for LLM”
+
+“filter options”
+
+“if this then OPEN_COVERED_CALL”
+
+Instead:
+
+Build a StrategyState via the shared builder.
+
+Instantiate CoveredCallStrategy.
+
+Create a StrategyPolicy (rule-based or LLM, based on existing config flags).
+
+Call propose_actions then choose_action.
+
+Pass the FinalAction to the existing execution layer (order placement / DRY_RUN ledger).
+
+Make sure the flight-recorder logs the new StrategyState and FinalAction in a backward-compatible way (e.g. include them under new keys while preserving old top-level keys where feasible).
+
+Wire the backtester to use the abstraction
+
+Refactor the backtest/simulator so that it:
+
+uses the same StrategyState builder,
+
+uses the same CoveredCallStrategy and StrategyPolicy (e.g., rule-based only for now),
+
+iterates through time steps building state → proposing actions → choosing action → applying it to the simulated portfolio.
+
+The goal: if we freeze one timeline (market data + initial portfolio + config), the live decision loop and the backtester should make the same decisions (when the policy is configured the same way).
+
+Tests and acceptance criteria
+
+Add or update tests to verify:
+
+StrategyState is JSON-serializable and stable enough for logging / LLM prompts.
+
+For a unit test with a frozen Deribit snapshot (or synthetic snapshot), the old and new decision logic produce the same final action for the covered-call strategy (or as close as possible, given schema changes).
+
+The backtester can run at least one existing backtest config end-to-end using the new abstraction without errors.
+
+Don’t obsess over 100% strict backward compatibility in logs, but:
+
+don’t break existing CLI entry points or main scripts,
+
+keep metric names and basic run metadata unchanged unless there is a strong reason.
+
+Constraints / non-goals for this task
+
+Do not add new strategies yet (no cash-secured puts, no strangles, etc.). Just make it easy to add them next.
+
+Do not rewrite the UI or API in this task.
+
+Do not change the overall business rules for covered calls (DTE/delta bands, IVRV thresholds, etc.) — just move the logic into the new abstraction without semantic changes, unless you find an obvious bug.
+
+Deliverables
+
+New / updated modules for:
+
+shared state builder,
+
+strategy base class,
+
+covered-call strategy implementation,
+
+strategy policy (rule vs LLM).
+
+Refactored live agent loop and backtester that both use this abstraction.
+
+Tests and minimal docs (docstrings + a short comment in the README or architecture/roadmap file) explaining:
+
+what StrategyState is,
+
+how to plug in a new strategy,
+
+how the LLM uses StrategyState + candidates.
+
+Please implement this step by step, keeping the diffs readable and focusing on correctness and clarity. Once you’re done, summarize what changed and where, so I know how to call the new abstractions and where to look next when we add cash-secured puts and additional strategies.
