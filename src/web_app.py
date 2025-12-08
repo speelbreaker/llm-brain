@@ -774,6 +774,211 @@ def delete_backtest_run(run_id: str) -> JSONResponse:
         return JSONResponse(content={"deleted": True, "run_id": run_id})
 
 
+# =============================================================================
+# SYSTEM CONTROLS & HEALTH API ENDPOINTS
+# =============================================================================
+
+@app.get("/api/llm_status")
+def get_llm_status() -> JSONResponse:
+    """Get LLM and decision mode configuration status."""
+    try:
+        return JSONResponse(content={
+            "ok": True,
+            "mode": settings.mode,
+            "deribit_env": settings.deribit_env,
+            "llm_enabled": settings.llm_enabled,
+            "decision_mode": getattr(settings, "decision_mode", "rule_only"),
+            "llm_shadow_enabled": getattr(settings, "llm_shadow_enabled", False),
+            "llm_validation_strict": getattr(settings, "llm_validation_strict", True),
+        })
+    except Exception as e:
+        return JSONResponse(content={"ok": False, "error": str(e)})
+
+
+@app.post("/api/test_llm_decision")
+def test_llm_decision() -> JSONResponse:
+    """Test LLM decision pipeline (dry run, no trades)."""
+    try:
+        if not settings.llm_enabled:
+            return JSONResponse(content={
+                "ok": True,
+                "action": "SKIPPED",
+                "reasoning": "LLM is disabled in settings (llm_enabled=False). Enable LLM to test the decision pipeline."
+            })
+        
+        from src.deribit_client import DeribitClient
+        from src.state_builder import build_agent_state
+        from src.agent_brain_llm import choose_action_with_llm
+        
+        with DeribitClient() as client:
+            state = build_agent_state(client, settings)
+            
+            candidates = state.candidate_options or []
+            if not candidates:
+                return JSONResponse(content={
+                    "ok": True,
+                    "action": "DO_NOTHING",
+                    "reasoning": "No candidate options available for testing"
+                })
+            
+            decision = choose_action_with_llm(state, candidates)
+            
+            action = decision.get("action", "DO_NOTHING")
+            reasoning = decision.get("reasoning", "")
+            if len(reasoning) > 200:
+                reasoning = reasoning[:200] + "..."
+            
+            return JSONResponse(content={
+                "ok": True,
+                "action": action,
+                "reasoning": reasoning
+            })
+    except Exception as e:
+        return JSONResponse(content={"ok": False, "error": str(e)})
+
+
+@app.post("/api/reconcile_positions")
+def reconcile_positions_endpoint() -> JSONResponse:
+    """Run position reconciliation once and return results."""
+    try:
+        from src.deribit_client import DeribitClient
+        from src.reconciliation import run_reconciliation_once
+        
+        with DeribitClient() as client:
+            spot_prices = {}
+            for underlying in settings.underlyings:
+                try:
+                    spot_prices[underlying] = client.get_index_price(underlying)
+                except Exception:
+                    pass
+            
+            diff = run_reconciliation_once(
+                deribit_client=client,
+                position_tracker=position_tracker,
+                settings=settings,
+                spot_prices=spot_prices,
+            )
+            
+            summary = {
+                "deribit_positions": diff.exchange_count,
+                "tracked_positions": diff.local_count,
+                "missing_on_deribit": [
+                    p.get("symbol", "unknown") for p in diff.missing_on_exchange
+                ],
+                "missing_in_tracker": [
+                    p.get("instrument_name", p.get("symbol", "unknown"))
+                    for p in diff.untracked_on_exchange
+                ],
+                "mismatched_size": [
+                    {
+                        "symbol": m.instrument_name,
+                        "tracker": m.size_tracker,
+                        "exchange": m.size_exchange,
+                    }
+                    for m in diff.size_mismatches
+                ],
+            }
+            
+            details = []
+            if diff.is_clean:
+                details.append("All positions match between Deribit and tracker.")
+            else:
+                if diff.missing_on_exchange:
+                    details.append(f"{len(diff.missing_on_exchange)} position(s) missing on Deribit")
+                if diff.untracked_on_exchange:
+                    details.append(f"{len(diff.untracked_on_exchange)} position(s) untracked locally")
+                if diff.size_mismatches:
+                    details.append(f"{len(diff.size_mismatches)} size mismatch(es)")
+            
+            return JSONResponse(content={
+                "ok": True,
+                "is_clean": diff.is_clean,
+                "summary": summary,
+                "details": details,
+            })
+    except Exception as e:
+        return JSONResponse(content={"ok": False, "error": str(e)})
+
+
+@app.get("/api/risk_limits")
+def get_risk_limits() -> JSONResponse:
+    """Get current risk limit configuration."""
+    try:
+        return JSONResponse(content={
+            "ok": True,
+            "max_margin_used_pct": settings.max_margin_used_pct,
+            "max_net_delta_abs": settings.max_net_delta_abs,
+            "daily_drawdown_limit_pct": getattr(settings, "daily_drawdown_limit_pct", 0.0),
+            "kill_switch_enabled": getattr(settings, "kill_switch_enabled", False),
+        })
+    except Exception as e:
+        return JSONResponse(content={"ok": False, "error": str(e)})
+
+
+@app.post("/api/test_kill_switch")
+def test_kill_switch() -> JSONResponse:
+    """Test risk engine with a synthetic action (dry run)."""
+    try:
+        from src.risk_engine import check_action_allowed
+        from src.models import AgentState, PortfolioState, ActionType
+        
+        mock_portfolio = PortfolioState(
+            equity_usd=100000.0,
+            margin_used_usd=20000.0,
+            margin_available_usd=80000.0,
+            net_delta=0.5,
+            option_positions=[],
+        )
+        
+        mock_state = AgentState(
+            portfolio=mock_portfolio,
+            spot={"BTC": 100000.0, "ETH": 3500.0},
+            candidate_options=[],
+            market_context=None,
+            timestamp="2025-01-01T00:00:00Z",
+        )
+        
+        proposed_action = {
+            "action": ActionType.OPEN_COVERED_CALL,
+            "params": {
+                "symbol": "BTC-TEST-100000-C",
+                "size": 0.1,
+            },
+            "reasoning": "Test action for kill switch validation",
+        }
+        
+        allowed, reasons = check_action_allowed(mock_state, proposed_action, settings)
+        
+        return JSONResponse(content={
+            "ok": True,
+            "allowed": allowed,
+            "reasons": reasons,
+            "config": {
+                "daily_drawdown_limit_pct": getattr(settings, "daily_drawdown_limit_pct", 0.0),
+                "kill_switch_enabled": getattr(settings, "kill_switch_enabled", False),
+            }
+        })
+    except Exception as e:
+        return JSONResponse(content={"ok": False, "error": str(e)})
+
+
+@app.post("/api/agent_healthcheck")
+def run_healthcheck_endpoint() -> JSONResponse:
+    """Run full agent healthcheck and return results."""
+    try:
+        from src.healthcheck import run_agent_healthcheck
+        
+        result = run_agent_healthcheck(settings)
+        
+        return JSONResponse(content={
+            "ok": result.get("overall_status") != "FAIL",
+            "overall_status": result.get("overall_status", "UNKNOWN"),
+            "results": result.get("results", []),
+        })
+    except Exception as e:
+        return JSONResponse(content={"ok": False, "error": str(e)})
+
+
 @app.get("/", response_class=HTMLResponse)
 def index() -> str:
     """Full HTML dashboard with Live Agent view and Backtesting Lab."""
@@ -1339,6 +1544,7 @@ def index() -> str:
     <button class="tab" onclick="showTab('backtest')">Backtesting Lab</button>
     <button class="tab" onclick="showTab('runs')">Backtest Runs</button>
     <button class="tab" onclick="showTab('calibration')">Calibration</button>
+    <button class="tab" onclick="showTab('health')">System Health</button>
     <button class="tab" onclick="showTab('chat')">Chat</button>
   </div>
 
@@ -1964,6 +2170,54 @@ def index() -> str:
     </div>
   </div>
 
+  <!-- SYSTEM HEALTH TAB -->
+  <div id="tab-health" class="tab-content">
+    <div class="section">
+      <h2>System Controls & Health</h2>
+      <p style="color: #666; margin-bottom: 1.5rem;">Run diagnostics and test system components. These are dry-run tests that do not execute trades.</p>
+      
+      <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 1.5rem;">
+        
+        <!-- LLM & Decision Mode -->
+        <div style="background: #f8f9fa; padding: 1.25rem; border-radius: 8px; border-left: 4px solid #1565c0;">
+          <h3 style="margin: 0 0 0.75rem 0; color: #1565c0; font-size: 1rem;">LLM & Decision Mode</h3>
+          <div id="llm-status-line" style="font-size: 0.85rem; color: #666; margin-bottom: 1rem;">Loading...</div>
+          <button onclick="testLlmDecision()" style="width: 100%; margin-bottom: 0.5rem;">Test LLM Decision Pipeline</button>
+          <div id="llm-result" style="font-size: 0.85rem; min-height: 2rem; padding: 0.5rem; background: white; border-radius: 4px;"></div>
+        </div>
+        
+        <!-- Position Reconciliation -->
+        <div style="background: #f8f9fa; padding: 1.25rem; border-radius: 8px; border-left: 4px solid #ff9800;">
+          <h3 style="margin: 0 0 0.75rem 0; color: #ff9800; font-size: 1rem;">Position Reconciliation</h3>
+          <div id="reconcile-status-line" style="font-size: 0.85rem; color: #666; margin-bottom: 1rem;">Last check: not run yet</div>
+          <button onclick="runReconciliation()" style="width: 100%; margin-bottom: 0.5rem;">Run Reconciliation Now</button>
+          <div id="reconcile-result" style="font-size: 0.85rem; min-height: 2rem; padding: 0.5rem; background: white; border-radius: 4px;"></div>
+        </div>
+        
+        <!-- Risk Limits & Kill Switch -->
+        <div style="background: #f8f9fa; padding: 1.25rem; border-radius: 8px; border-left: 4px solid #c62828;">
+          <h3 style="margin: 0 0 0.75rem 0; color: #c62828; font-size: 1rem;">Risk Limits & Kill Switch</h3>
+          <div id="risk-status-line" style="font-size: 0.85rem; color: #666; margin-bottom: 1rem;">Loading...</div>
+          <button onclick="testKillSwitch()" style="width: 100%; margin-bottom: 0.5rem;">Test Risk Checks / Kill Switch</button>
+          <div id="risk-result" style="font-size: 0.85rem; min-height: 2rem; padding: 0.5rem; background: white; border-radius: 4px;"></div>
+        </div>
+        
+        <!-- Agent Healthcheck -->
+        <div style="background: #f8f9fa; padding: 1.25rem; border-radius: 8px; border-left: 4px solid #2e7d32;">
+          <h3 style="margin: 0 0 0.75rem 0; color: #2e7d32; font-size: 1rem;">Agent Healthcheck</h3>
+          <div id="healthcheck-status-line" style="font-size: 0.85rem; color: #666; margin-bottom: 1rem;">Last check: not run yet</div>
+          <button onclick="runHealthcheck()" style="width: 100%; margin-bottom: 0.5rem;">Run Full Agent Healthcheck</button>
+          <div id="healthcheck-result" style="font-size: 0.85rem; min-height: 2rem; padding: 0.5rem; background: white; border-radius: 4px;"></div>
+          <details id="healthcheck-details" style="margin-top: 0.5rem; display: none;">
+            <summary style="cursor: pointer; font-size: 0.8rem; color: #666;">Show details</summary>
+            <pre id="healthcheck-details-content" style="font-size: 0.75rem; background: white; padding: 0.5rem; border-radius: 4px; overflow-x: auto; margin-top: 0.5rem;"></pre>
+          </details>
+        </div>
+        
+      </div>
+    </div>
+  </div>
+
   <!-- CHAT TAB -->
   <div id="tab-chat" class="tab-content">
     <div class="section">
@@ -2002,6 +2256,143 @@ def index() -> str:
       }}
       if (name === 'runs') {{
         fetchBacktestRuns();
+      }}
+      if (name === 'health') {{
+        loadSystemHealthStatus();
+      }}
+    }}
+    
+    // ==============================================
+    // SYSTEM HEALTH TAB FUNCTIONS
+    // ==============================================
+    
+    async function loadSystemHealthStatus() {{
+      // Load LLM status
+      try {{
+        const llmRes = await fetch('/api/llm_status');
+        const llmData = await llmRes.json();
+        if (llmData.ok) {{
+          const llmStatus = `Decision: ${{llmData.decision_mode}} | Env: ${{llmData.deribit_env}} | LLM: ${{llmData.llm_enabled ? 'enabled' : 'disabled'}}`;
+          document.getElementById('llm-status-line').textContent = llmStatus;
+        }} else {{
+          document.getElementById('llm-status-line').textContent = 'Error loading LLM status';
+        }}
+      }} catch (e) {{
+        document.getElementById('llm-status-line').textContent = 'Error: ' + e.message;
+      }}
+      
+      // Load risk limits
+      try {{
+        const riskRes = await fetch('/api/risk_limits');
+        const riskData = await riskRes.json();
+        if (riskData.ok) {{
+          const ks = riskData.kill_switch_enabled ? 'ON' : 'OFF';
+          const dd = riskData.daily_drawdown_limit_pct || 0;
+          const riskStatus = `Max Margin: ${{riskData.max_margin_used_pct}}% | Max Δ: ${{riskData.max_net_delta_abs}} | DD limit: ${{dd}}% | Kill switch: ${{ks}}`;
+          document.getElementById('risk-status-line').textContent = riskStatus;
+        }} else {{
+          document.getElementById('risk-status-line').textContent = 'Error loading risk limits';
+        }}
+      }} catch (e) {{
+        document.getElementById('risk-status-line').textContent = 'Error: ' + e.message;
+      }}
+    }}
+    
+    async function testLlmDecision() {{
+      const el = document.getElementById('llm-result');
+      el.innerHTML = '<span style="color: #666;">Testing LLM pipeline...</span>';
+      try {{
+        const res = await fetch('/api/test_llm_decision', {{ method: 'POST' }});
+        const data = await res.json();
+        if (data.ok) {{
+          el.innerHTML = `<span style="color: #2e7d32;">✅ LLM OK: ${{data.action}}</span><br><span style="color: #666; font-size: 0.8em;">${{data.reasoning || ''}}</span>`;
+        }} else {{
+          el.innerHTML = `<span style="color: #ff9800;">⚠️ ${{data.error}}</span>`;
+        }}
+      }} catch (e) {{
+        el.innerHTML = `<span style="color: #c62828;">❌ Request error: ${{e.message}}</span>`;
+      }}
+    }}
+    
+    async function runReconciliation() {{
+      const el = document.getElementById('reconcile-result');
+      const statusEl = document.getElementById('reconcile-status-line');
+      el.innerHTML = '<span style="color: #666;">Running reconciliation...</span>';
+      try {{
+        const res = await fetch('/api/reconcile_positions', {{ method: 'POST' }});
+        const data = await res.json();
+        if (data.ok) {{
+          const s = data.summary;
+          if (data.is_clean) {{
+            el.innerHTML = `<span style="color: #2e7d32;">✅ Reconciliation OK: ${{s.deribit_positions}} / ${{s.tracked_positions}} positions match.</span>`;
+            statusEl.textContent = `Last check: OK (${{s.deribit_positions}} / ${{s.tracked_positions}} aligned)`;
+          }} else {{
+            const issues = data.details.join(', ');
+            el.innerHTML = `<span style="color: #ff9800;">⚠️ Reconciliation WARN: ${{issues}}</span>`;
+            statusEl.textContent = `Last check: WARN - ${{issues}}`;
+          }}
+        }} else {{
+          el.innerHTML = `<span style="color: #c62828;">❌ Error: ${{data.error}}</span>`;
+        }}
+      }} catch (e) {{
+        el.innerHTML = `<span style="color: #c62828;">❌ Request error: ${{e.message}}</span>`;
+      }}
+    }}
+    
+    async function testKillSwitch() {{
+      const el = document.getElementById('risk-result');
+      el.innerHTML = '<span style="color: #666;">Testing risk engine...</span>';
+      try {{
+        const res = await fetch('/api/test_kill_switch', {{ method: 'POST' }});
+        const data = await res.json();
+        if (data.ok) {{
+          if (data.allowed) {{
+            el.innerHTML = `<span style="color: #2e7d32;">✅ Risk engine ALLOWS OPEN_COVERED_CALL under current config.</span>`;
+          }} else {{
+            const reasons = data.reasons.join('; ');
+            el.innerHTML = `<span style="color: #c62828;">❌ Risk engine BLOCKS OPEN_COVERED_CALL: ${{reasons}}</span>`;
+          }}
+        }} else {{
+          el.innerHTML = `<span style="color: #c62828;">❌ Test failed: ${{data.error}}</span>`;
+        }}
+      }} catch (e) {{
+        el.innerHTML = `<span style="color: #c62828;">❌ Request error: ${{e.message}}</span>`;
+      }}
+    }}
+    
+    async function runHealthcheck() {{
+      const el = document.getElementById('healthcheck-result');
+      const statusEl = document.getElementById('healthcheck-status-line');
+      const detailsEl = document.getElementById('healthcheck-details');
+      const detailsContent = document.getElementById('healthcheck-details-content');
+      el.innerHTML = '<span style="color: #666;">Running healthcheck...</span>';
+      detailsEl.style.display = 'none';
+      try {{
+        const res = await fetch('/api/agent_healthcheck', {{ method: 'POST' }});
+        const data = await res.json();
+        if (data.ok) {{
+          const status = data.overall_status;
+          const checksStr = data.results.map(r => `${{r.name}}=${{r.status}}`).join(', ');
+          if (status === 'OK') {{
+            el.innerHTML = `<span style="color: #2e7d32;">✅ Healthcheck OK – ${{checksStr}}</span>`;
+            statusEl.textContent = 'Last check: OK';
+          }} else if (status === 'WARN') {{
+            el.innerHTML = `<span style="color: #ff9800;">⚠️ Healthcheck WARN – ${{checksStr}}</span>`;
+            statusEl.textContent = 'Last check: WARN';
+          }} else {{
+            el.innerHTML = `<span style="color: #c62828;">❌ Healthcheck FAIL – ${{checksStr}}</span>`;
+            statusEl.textContent = 'Last check: FAIL';
+          }}
+          // Show details
+          detailsContent.textContent = data.results.map(r => `${{r.name}}: ${{r.status}} - ${{r.detail}}`).join('\\n');
+          detailsEl.style.display = 'block';
+        }} else {{
+          el.innerHTML = `<span style="color: #c62828;">❌ Healthcheck failed: ${{data.error || data.overall_status}}</span>`;
+          statusEl.textContent = 'Last check: ERROR';
+        }}
+      }} catch (e) {{
+        el.innerHTML = `<span style="color: #c62828;">❌ Request error: ${{e.message}}</span>`;
+        statusEl.textContent = 'Last check: ERROR';
       }}
     }}
     

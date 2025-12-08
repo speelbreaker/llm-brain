@@ -1,0 +1,176 @@
+ou are working in the `llm-brain` repo (Options Trading Agent / Deribit testnet) on Replit.
+
+Goal of this task
+=================
+
+Perform a **UI coverage audit**:
+
+1. Inspect the **core engine & features** (risk engine, LLM, training, reconciliation, healthcheck, etc.).
+2. Inspect the **existing web UI** (server + any HTML/JS templates).
+3. Produce a single Markdown report called **`UI_FEATURE_GAPS.md`** at the repo root that answers:
+
+   - Which important features/configs exist **only in code**.
+   - Which of them already have some UI representation.
+   - For each “code-only” feature:
+     - Suggest a **concrete UI element** (button / switch / checkbox / dropdown / panel section).
+     - Suggest **where** on the dashboard it should live (e.g. “System Controls & Health card”, “Backtest panel”, etc.).
+     - Suggest a **short, user-facing label** and what happens when the user interacts with it.
+
+**Important:**  
+For this task, **do not actually change any UI or backend behavior**.  
+Your output is just the Markdown report.
+
+Use the existing repo layout
+============================
+
+Use the actual structure of this repo as source of truth, including at least:
+
+- Core engine / features (under `src/`):
+
+  - `src/config.py` (Pydantic `Settings` – env-driven config and toggles)
+  - `src/risk_engine.py` (pre-trade risk checks)
+  - `src/agent_brain_llm.py` (LLM decisions)
+  - `src/state_builder.py` and/or `src/state_core.py` (state building)
+  - `src/logging_utils.py` (decision logs)
+  - Any reconciliation module (e.g. `src/reconciliation.py`) if present
+  - Any healthcheck module (e.g. `src/healthcheck.py`) if present
+  - Any backtest / exam / live-deribit modules that define higher-level “features”
+
+- Entry points:
+
+  - `agent_loop.py` (main agent)
+  - `server.py` (HTTP server / dashboard backend, if used)
+
+- UI / frontend:
+
+  - Any HTML templates or static assets referenced from `server.py`
+    (e.g. Jinja templates, `templates/`, `static/`, or `attached_assets`)
+
+Treat this like a static code analysis problem: you have access to the whole repo contents in this workspace.
+
+What to treat as “features”
+===========================
+
+When you scan the code, consider these as “features” that **might** deserve a UI surface:
+
+1. **Config flags and thresholds** in `Settings` (in `src/config.py`):
+
+   - Booleans (`*_enabled`, `is_*`, `use_*`, `*_mode`, `*_on_testnet`)
+   - Risk limits (percentages, max deltas, margin caps)
+   - Training / decision mode toggles
+   - Any fields added recently such as:
+     - Kill switch
+     - Daily drawdown limits
+     - Position reconciliation flags
+     - Training strategies / modes
+     - LLM decision modes, validation strictness, etc.
+
+2. **Key engine functions** that a non-coder might want to trigger or inspect:
+
+   - Healthcheck-style functions (e.g. `run_agent_healthcheck`, reconciliation runners)
+   - “Run once” diagnostic utilities (position reconciliation, smoke tests)
+   - Backtest runners or backtest config presets.
+
+3. **Important status outputs**:
+
+   - Values included in decision logs (`log_decision` snapshots).
+   - Values printed in the agent startup banner.
+   - Anything that is business-critical to you as a human operator (risk, training, health).
+
+If you find something ambiguous, err on the side of **including it in the report**; we can always ignore it later.
+
+What counts as “existing UI”?
+=============================
+
+When deciding whether a feature is “reflected in the UI”, look at:
+
+- HTTP endpoints defined in `server.py` (or any other web server file):
+  - HTML routes (e.g. `@app.get("/")`)
+  - JSON API routes (e.g. `/api/...`) that the frontend calls
+- HTML templates / JS:
+  - Buttons, links, switches, checkboxes, dropdowns, panels, etc.
+  - Text that clearly shows a config value (e.g. “Kill Switch: Enabled/Disabled”).
+
+For each feature, consider these as separate questions:
+
+- **UI control present?**  
+  Is there a way in the UI to **trigger** it or **toggle** it?
+
+- **UI visibility present?**  
+  Is there a way in the UI to **see its current state/value**?
+
+Even if a feature is “visible” (e.g. printed somewhere as text) you should still flag it if there is **no control** to test or interact with it and you think that would be useful.
+
+Deliverable: `UI_FEATURE_GAPS.md`
+=================================
+
+Create a new file at the repo root named **`UI_FEATURE_GAPS.md`**.
+
+The file should be human-friendly for a non-coder and roughly organized like this:
+
+1. **Title & short intro**
+
+   - One short paragraph explaining what this file is and how to use it.
+
+2. **High-level summary**
+
+   - A short bullet list:
+     - Total features inspected.
+     - ~How many have full UI (control + visibility).
+     - ~How many are “partial” (visibility only).
+     - ~How many are “code only” (no UI at all).
+
+3. **Detailed table**
+
+   A Markdown table with at least these columns:
+
+   | Feature | Category | Code location(s) | UI control? | UI display? | Proposed UI element | Suggested placement | Notes |
+
+   Where:
+
+   - **Feature**: a short name, e.g. `Kill switch`, `Daily drawdown limit`, `LLM decision mode`, `Position reconciliation`, `Agent healthcheck`, `Backtest presets`, etc.
+   - **Category**: e.g. `Risk`, `LLM/Decisions`, `Training`, `Diagnostics`, `Backtest`, `Monitoring`.
+   - **Code location(s)**: key modules or functions, like:
+     - `src/config.Settings.kill_switch_enabled`
+     - `src/risk_engine.check_action_allowed`
+     - `src/healthcheck.run_agent_healthcheck`
+     - `scripts/reconcile_positions_once.py`
+   - **UI control?**: one of `yes`, `partial`, or `no`.
+   - **UI display?**: one of `yes`, `partial`, or `no`.
+   - **Proposed UI element**:
+     - e.g. “Toggle switch: ‘Global Kill Switch’”, “Button: ‘Run reconciliation now’”, “Dropdown: ‘Decision mode’ (Rule / LLM / Hybrid)”.
+   - **Suggested placement**:
+     - e.g. “System Controls & Health card”, “Backtest panel”, “Top status bar”, “Positions dashboard footer”.
+   - **Notes**:
+     - Any extra info: dependencies, potential confusion, or things that should be confirmed before implementing.
+
+4. **Short “Next steps” section**
+
+   - A simple checklist like:
+     - “1. Mike reviews this file and picks which features he wants exposed first.”
+     - “2. Create follow-up prompts instructing the builder to add UI controls for those features.”
+     - “3. Re-run this audit occasionally as new features are added.”
+
+Constraints & expectations
+==========================
+
+- **Do not**:
+  - Change any runtime behavior.
+  - Add or modify UI routes, templates, or JS.
+  - Modify existing config/risk logic or the agent loop.
+
+- **You may**:
+  - Read any file in the repo.
+  - Make reasonable inferences about what counts as a “feature”.
+  - Aggregate related config fields into a single row if that’s clearer, e.g.:
+    - `Daily drawdown guard (daily_drawdown_limit_pct, warning_pct, kill_switch_enabled)`.
+
+- Make the report **concrete and specific**:
+  - Avoid hand-wavy language like “maybe we could add a button”.
+  - Instead say: “Button on System Controls & Health card, label: ‘Run full agent healthcheck’, calls `/api/agent_healthcheck` and shows OK/WARN/FAIL”.
+
+When you’re done:
+=================
+
+- Ensure `UI_FEATURE_GAPS.md` is saved at the repo root.
+- No other files should be changed in this task.
