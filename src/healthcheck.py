@@ -136,8 +136,8 @@ def check_state_builder(client: DeribitClient, cfg: Settings) -> HealthCheckResu
         state = build_agent_state(client, cfg)
 
         equity = state.portfolio.equity_usd
-        positions = len(state.positions)
-        candidates = len(state.candidates)
+        positions = len(state.portfolio.option_positions)
+        candidates = len(state.candidate_options)
 
         return HealthCheckResult(
             name="state_builder",

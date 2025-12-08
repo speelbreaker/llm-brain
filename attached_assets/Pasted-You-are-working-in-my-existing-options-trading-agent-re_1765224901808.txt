@@ -1,0 +1,72 @@
+You are working in my existing options trading agent repo (Deribit testnet, LLMAgentBrain / Options Agent).
+
+Goal of this task:
+Update the roadmap/backlog documentation so that:
+1) It explicitly describes how we plan to avoid OVERFITTING when optimizing strategies.
+2) It clearly states the intended role of the LLM: reasoning, reflection, and proposing structured improvements – NOT acting as a random parameter generator.
+
+Important constraints:
+- This task is **docs-only**. Do NOT change any Python code or database schemas.
+- Keep the style and structure consistent with the existing ROADMAP_BACKLOG.md.
+
+Files to edit:
+- `ROADMAP_BACKLOG.md` (this is already in the repo; you created/updated it recently).
+
+### 1. Add an “Overfitting Mitigation & Robustness” section
+
+In `ROADMAP_BACKLOG.md`, under the existing Data & Backtesting / LLM sections, add a new clearly labeled subsection, for example:
+
+> **[E3] Overfitting Mitigation & Robustness**
+
+Capture the following ideas (you can rephrase for clarity, but keep the meaning):
+
+- **Cross-asset testing**
+  - Strategies should be tested on multiple underlyings (e.g. BTC, ETH, and later possibly SOL/DOGE/etc., where data allows) to check that the edge is not asset-specific.
+- **Time-based splits (train / validation / test)**
+  - Define explicit periods:
+    - Training: used to search/tune parameters.
+    - Validation: used to judge parameter sets and avoid overfitting.
+    - Test/holdout: kept untouched until the end to sanity-check results.
+- **Regime-sliced evaluation**
+  - Backtests must be sliced into different market regimes: bull, bear, sideways, high-vol, low-vol.
+  - A “good strategy” should not just work in one hand-picked period; it should be at least reasonable across very different conditions (e.g. 2021 vs 2022).
+- **Walk-forward / rolling window tests**
+  - Describe that a mature version of the system should support walk-forward testing:
+    - Fit parameters on one window, test on the next window, roll forward, and repeat.
+- **Monte Carlo style perturbations**
+  - Outline that we plan to use Monte Carlo style techniques such as:
+    - Random perturbations of parameters around the “best” configuration to check stability.
+    - Randomized slippage/fee assumptions to stress-test performance (not just a single optimistic fee rate).
+- **Simplicity bias**
+  - Document that, when comparing two parameter sets with similar performance, the system should favour the simpler one:
+    - narrower parameter ranges,
+    - fewer toggles,
+    - more interpretable rules.
+
+Make sure this section explicitly links back to the Phase 2/3 tuning and optimization work so the reader understands this is not just theoretical.
+
+### 2. Clarify the LLM’s intended role in the roadmap
+
+In the LLM-related sections (for example [F1]/[F2]/[F3]):
+
+- Add a short note to explicitly state:
+  - The LLM **must not** be treated as a “random parameter generator.”
+  - Its role is:
+    - to **reason** about backtest results,
+    - to compare different runs and regimes,
+    - to propose **small, structured adjustments** to parameter ranges and risk settings,
+    - to highlight overfitting risks (e.g. “this config only works in one bull market segment”).
+  - Numeric search (grid search / random search / Bayesian optimization) remains the primary engine for exploring parameter space; the LLM is a *researcher/analyst* on top, not a brute-force optimizer.
+
+You can add a short bullet or paragraph under the relevant F-sections, e.g.:
+
+> “The LLM acts as a research assistant: it reads metrics and regimes, proposes small, interpretable changes, and warns about overfitting. Parameter sweeps and optimization across the search space remain primarily numeric (grid/random/Bayesian), with the LLM guiding, not randomly sampling.”
+
+### 3. Acceptance criteria
+
+- `ROADMAP_BACKLOG.md` builds in a clearly labeled “Overfitting Mitigation & Robustness” subsection with the concepts above.
+- LLM-related sections explicitly state the intended role of LLM as:
+  - reasoning/reflecting,
+  - proposing structured, non-random parameter updates,
+  - helping avoid overfitting – not just sampling parameters at random.
+- No Python code or DB schemas are changed in this task.

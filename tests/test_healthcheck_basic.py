@@ -134,8 +134,8 @@ class TestCheckStateBuilder:
     def test_successful_build_returns_ok(self):
         mock_state = MagicMock()
         mock_state.portfolio.equity_usd = 100000.0
-        mock_state.positions = [MagicMock(), MagicMock()]
-        mock_state.candidates = [MagicMock()]
+        mock_state.portfolio.option_positions = [MagicMock(), MagicMock()]
+        mock_state.candidate_options = [MagicMock()]
 
         client = FakeDeribitClient()
         cfg = Settings()
@@ -163,8 +163,8 @@ class TestRunAgentHealthcheck:
     def test_all_ok_returns_overall_ok(self):
         mock_state = MagicMock()
         mock_state.portfolio.equity_usd = 50000.0
-        mock_state.positions = []
-        mock_state.candidates = []
+        mock_state.portfolio.option_positions = []
+        mock_state.candidate_options = []
 
         cfg = Settings(deribit_client_id="", deribit_client_secret="")
 
