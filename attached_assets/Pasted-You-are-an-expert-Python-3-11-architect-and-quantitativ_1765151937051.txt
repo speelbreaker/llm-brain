@@ -1,0 +1,374 @@
+You are an expert Python 3.11 architect and quantitative developer working inside an existing project: an automated BTC/ETH options trading agent for Deribit.
+
+The project already has:
+
+A live agent loop on Deribit testnet that:
+
+builds an agent “state” from market + portfolio data,
+
+uses rule-based and LLM-based policies,
+
+sends covered-call orders via the Deribit client,
+
+logs decisions to JSONL (“flight recorder”).
+
+A backtesting lab with:
+
+synthetic universe (Black–Scholes),
+
+live Deribit exam datasets,
+
+CoveredCallSimulator,
+
+PostgreSQL persistence for backtest runs.
+
+A web app (FastAPI) with tabs:
+
+Live Agent, Backtesting Lab, Chat, Calibration.
+
+We are now entering Phase 2, whose first goal is:
+
+Phase 2 – Item #1: Strategy abstraction & shared state builder
+(Backlog items [A1] + [A2] in ROADMAP_BACKLOG.md)
+
+Your task is to refactor (not rewrite) the codebase to:
+
+Introduce a clean Strategy abstraction so that Covered Calls are just one strategy, and future strategies (Wheel, etc.) can plug in.
+
+Extract a shared StateBuilder core used by both live and backtest, to minimize drift between what we simulate and what we trade.
+
+Please read this carefully and then implement the changes in small, coherent commits / steps.
+
+HIGH-LEVEL OBJECTIVES
+A. Strategy abstraction (Backlog [A1])
+
+Currently, the main agent loop is wired directly to a single covered-call policy implementation (rules + optional LLM).
+
+We want a generic Strategy interface such that:
+
+The agent loop doesn’t know about covered calls specifically.
+
+It only knows “I have a Strategy instance, I give it AgentState, it gives me an action/decision”.
+
+We also want strategy IDs in logs/decisions so that later we can support multiple bots/strategies.
+
+B. Shared StateBuilder core (Backlog [A2])
+
+Today there are two similar state builders:
+
+src/state_builder.py (live),
+
+src/backtest/state_builder.py (backtest).
+
+They both:
+
+build a “snapshot” from raw data,
+
+compute risk metrics / context,
+
+build candidates (e.g. which calls are sellable).
+
+This creates drift risk between live and backtest.
+
+We want:
+
+A single, pure, deterministic “state core” that converts a generic RawMarketSnapshot → AgentState + candidate list.
+
+Both live and backtest builders will:
+
+use their own sources to construct RawMarketSnapshot,
+
+call the shared core to build the actual AgentState.
+
+CONCRETE TASKS
+1. Introduce a Strategy abstraction
+
+Find the main agent loop
+
+Locate the module(s) where the live agent loop currently:
+
+builds state,
+
+selects candidates,
+
+applies covered-call rules and/or LLM policy,
+
+decides actions (OPEN_COVERED_CALL, ROLL_COVERED_CALL, etc.).
+
+This is what we want to wrap behind a Strategy interface.
+
+Create a Strategy base / protocol
+
+Add a new module, for example:
+src/strategies/base.py
+
+Define a Strategy abstraction, reusing existing types as much as possible:
+
+Use the existing AgentState, CandidateOption, PolicyDecision, ActionType, etc., if present.
+
+Do not invent new JSON structures if you can reuse what exists.
+
+A simple starting point (adjust to fit the actual code):
+
+from typing import Protocol
+from src.types import AgentState, StrategyDecision  # adapt imports
+
+class Strategy(Protocol):
+    @property
+    def strategy_id(self) -> str: ...
+
+    def step(self, state: AgentState) -> "StrategyDecision":
+        """Given the current AgentState, return the next high-level decision."""
+
+
+Define or reuse a StrategyDecision / Decision type that contains:
+
+the high-level action (e.g. DO_NOTHING, OPEN_COVERED_CALL, ROLL_COVERED_CALL, CLOSE_COVERED_CALL),
+
+any parameters needed (instrument name, size, price bounds, etc.),
+
+a strategy_id field (string).
+
+Wrap current covered-call logic into CoveredCallStrategy
+
+Add src/strategies/covered_call.py.
+
+Implement CoveredCallStrategy that:
+
+Accepts necessary config objects in its constructor (e.g. StrategyConfig, risk settings, policy mode).
+
+In step(self, state: AgentState), performs exactly what the current agent loop used to do:
+
+compute candidates (possibly via the new shared state core),
+
+apply:
+
+rule-based policy,
+
+LLM policy (if enabled),
+
+risk checks,
+
+output a StrategyDecision.
+
+Ensure all existing behaviour is preserved:
+
+same default order sizes / deltas / DTE rules,
+
+same policy modes.
+
+Wire the agent loop to use Strategy
+
+Update the main agent loop so that:
+
+It creates a Strategy instance, e.g. CoveredCallStrategy, using config.
+
+On each loop iteration, after building AgentState, it calls:
+
+decision = strategy.step(agent_state)
+
+
+The loop then converts the StrategyDecision into actual orders / Deribit API calls.
+
+Add strategy_id into the decision logs:
+
+Wherever we log decisions (JSONL flight recorder, DB, etc.), ensure we now include:
+
+strategy_id
+
+and keep all previous fields intact.
+
+Make the strategy pluggable via configuration:
+
+E.g. settings.strategy_id = "covered_call_v1" (for now only one option).
+
+Future strategies will register under their own IDs.
+
+2. Extract a Shared StateBuilder Core
+
+Identify live and backtest state builders
+
+Confirm locations (likely something like):
+
+src/state_builder.py (used by live agent),
+
+src/backtest/state_builder.py (used by backtester / simulator).
+
+Understand what each does:
+
+how they assemble spot price, options chain, portfolio, risk metrics,
+
+how they build AgentState and candidate options.
+
+Define a RawMarketSnapshot / StateCore interface
+
+Create a new module, for example:
+src/state/state_core.py
+
+Define a “raw snapshot” type that both live and backtest can construct.
+Example (adapt to existing types):
+
+@dataclass
+class RawMarketSnapshot:
+    timestamp: datetime
+    underlying_symbol: str
+    spot_price: float
+    spot_ohlc: SpotOHLC  # or whatever you currently use
+    options_chain: list[OptionContract]
+    portfolio: PortfolioState
+    risk_context: MarketContext  # trend, IV stats, etc.
+
+
+Then define pure functions:
+
+def build_agent_state(
+    snapshot: RawMarketSnapshot,
+    config: AgentConfig,
+) -> AgentState:
+    """Pure function: RawMarketSnapshot -> AgentState."""
+
+def build_candidate_options(
+    state: AgentState,
+    strategy_config: StrategyConfig,
+) -> list[CandidateOption]:
+    """Pure function: AgentState -> candidate options for strategies."""
+
+
+These functions should:
+
+be side-effect free,
+
+not touch network or disk,
+
+use only their inputs and return values.
+
+Refactor live state_builder to use the core
+
+In the live code (e.g. src/state_builder.py):
+
+Leave all I/O and Deribit calls here:
+
+Get spot price & OHLC from Deribit client,
+
+Get options chain from Deribit client / cached data,
+
+Get portfolio positions / margin info.
+
+Assemble a RawMarketSnapshot instance.
+
+Call build_agent_state(...) and build_candidate_options(...) from state_core.
+
+Return AgentState and candidate list to the agent loop.
+
+The core rule:
+
+Live state builder is responsible for “talking to the outside world and building RawMarketSnapshot”;
+state_core is responsible for turning that into an AgentState and candidates.
+
+Refactor backtest state_builder to use the core
+
+In the backtest code (e.g. src/backtest/state_builder.py):
+
+Use backtest data sources to create a RawMarketSnapshot:
+
+Use MarketDataSource or historical data provider,
+
+Use simulated portfolio state from the simulator,
+
+Use whatever you already compute for market_context.
+
+Call the same build_agent_state(...) and build_candidate_options(...).
+
+The goal:
+
+For a given RawMarketSnapshot, live and backtest must produce identical AgentState and candidate lists.
+
+Add tests to ensure no drift
+
+Add tests under tests/ (e.g. tests/test_state_core_vs_builders.py) that:
+
+Construct a synthetic RawMarketSnapshot object.
+
+Call the live and backtest builder functions that should both end up using state_core.
+
+Assert that the resulting AgentState and candidate list are equal (or equal up to minor differences like source tags).
+
+This test ensures future changes don’t silently cause live/backtest drift.
+
+3. Backwards Compatibility & Clean-Up
+
+Keep the public API of the agent loop and backtest CLI as stable as possible.
+
+If you need to rename or move functions:
+
+Add compatibility wrappers or clear deprecation comments.
+
+Ensure that all existing smoke scripts still pass:
+
+scripts/smoke_live_agent.sh
+
+scripts/smoke_backtest.sh
+
+scripts/smoke_training_export.sh
+
+scripts/smoke_web_api.sh
+
+If they currently fail for unrelated reasons, do not silently ignore it; print a clear TODO comment explaining why.
+
+4. Style & Quality Guidelines
+
+Python 3.11, type-annotated code, friendly to mypy / static analysis.
+
+Prefer small, focused modules:
+
+src/strategies/base.py
+
+src/strategies/covered_call.py
+
+src/state/state_core.py
+
+Avoid introducing new global singletons; pass config objects explicitly where feasible.
+
+Keep pure computation in separate functions that are easy to test.
+
+Document the new abstractions:
+
+Add short docstrings to:
+
+Strategy interface,
+
+CoveredCallStrategy,
+
+RawMarketSnapshot,
+
+build_agent_state, build_candidate_options.
+
+Optionally add a short “Strategy abstraction & state core” section to the main README or architecture docs, explaining:
+
+“live/backtest both build RawMarketSnapshot and then call state_core”.
+
+5. Definition of Done
+
+You are done when:
+
+There is a Strategy abstraction with:
+
+a CoveredCallStrategy implementation,
+
+agent loop uses strategy.step(state) instead of hard-wired covered-call code,
+
+decisions and logs include strategy_id.
+
+There is a shared state core (e.g. src/state/state_core.py) that:
+
+defines RawMarketSnapshot,
+
+defines build_agent_state(...) and build_candidate_options(...),
+
+is used by both live and backtest state builders.
+
+There are tests confirming:
+
+For a given snapshot, live and backtest pipelines (through state_core) produce identical AgentState & candidates.
+
+All four smoke scripts still run and the project remains in a working, refactor-friendly state.
