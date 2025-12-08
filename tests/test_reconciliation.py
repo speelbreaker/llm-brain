@@ -295,6 +295,44 @@ class TestHelperFunctions:
         assert "Size mismatches" in summary
 
 
+class TestAutoHealEdgeCases:
+    """Regression tests for auto_heal edge cases."""
+    
+    def test_auto_heal_does_not_overwrite_when_clean(self):
+        """Auto-heal should NOT overwrite local when diff is clean."""
+        local = [{"symbol": "BTC-20DEC24-100000-C", "quantity": 0.1, "side": "SHORT"}]
+        exchange = [{"symbol": "BTC-20DEC24-100000-C", "size": 0.1, "direction": "sell"}]
+        
+        new_local, stats = reconcile_positions(
+            exchange_positions=exchange,
+            local_positions=local,
+            action="auto_heal",
+            tolerance_usd=10.0,
+        )
+        
+        assert stats["is_clean"] is True
+        assert len(new_local) == 1
+        assert new_local[0]["symbol"] == "BTC-20DEC24-100000-C"
+        assert "healed_from_exchange" not in new_local[0]
+    
+    def test_auto_heal_preserves_local_on_clean_diff(self):
+        """When diff is clean, auto_heal returns original local positions, not rebuilt ones."""
+        local = [
+            {"symbol": "BTC-20DEC24-100000-C", "quantity": 0.1, "side": "SHORT", "custom_field": "preserved"}
+        ]
+        exchange = [{"symbol": "BTC-20DEC24-100000-C", "size": 0.1, "direction": "sell"}]
+        
+        new_local, stats = reconcile_positions(
+            exchange_positions=exchange,
+            local_positions=local,
+            action="auto_heal",
+            tolerance_usd=10.0,
+        )
+        
+        assert stats["is_clean"] is True
+        assert new_local[0].get("custom_field") == "preserved"
+
+
 class TestPositionSizeMismatch:
     """Tests for the PositionSizeMismatch dataclass."""
     
