@@ -41,6 +41,8 @@ class StrategyStatus(BaseModel):
     max_margin_used_pct: float
     max_net_delta_abs: float
     per_expiry_exposure_limit: Optional[float] = None
+    daily_drawdown_limit_pct: float = 0.0
+    kill_switch_enabled: bool = False
 
     training_mode: bool
     training_on_testnet: bool
@@ -134,7 +136,28 @@ def build_strategy_status(config_snapshot: Optional[Dict[str, Any]] = None) -> S
         ],
     )
 
+    kill_switch = snapshot.get("kill_switch_enabled", settings.kill_switch_enabled)
+    daily_dd_limit = snapshot.get("daily_drawdown_limit_pct", settings.daily_drawdown_limit_pct)
+
     safeguards = [
+        SafeguardStatus(
+            name="Global Kill Switch",
+            status="ON" if kill_switch else "OFF",
+            details=(
+                "ACTIVE: All trading actions are blocked!"
+                if kill_switch
+                else "Inactive. Trading allowed subject to other checks."
+            ),
+        ),
+        SafeguardStatus(
+            name="Daily Drawdown Guard",
+            status="ON" if daily_dd_limit > 0 else "OFF",
+            details=(
+                f"Active: blocks new risk after {daily_dd_limit:.1f}% daily peak-to-trough loss."
+                if daily_dd_limit > 0
+                else "Disabled (limit = 0)."
+            ),
+        ),
         SafeguardStatus(
             name="Per-expiry exposure limit",
             status="OFF" if settings.is_training_on_testnet else "ON",
@@ -187,6 +210,8 @@ def build_strategy_status(config_snapshot: Optional[Dict[str, Any]] = None) -> S
         max_margin_used_pct=snapshot.get("max_margin_used_pct", settings.max_margin_used_pct),
         max_net_delta_abs=snapshot.get("max_net_delta_abs", settings.max_net_delta_abs),
         per_expiry_exposure_limit=per_expiry_limit,
+        daily_drawdown_limit_pct=daily_dd_limit,
+        kill_switch_enabled=kill_switch,
         training_mode=settings.training_mode,
         training_on_testnet=settings.is_training_on_testnet,
         training_strategies_enabled=training_strategies,

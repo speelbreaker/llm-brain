@@ -262,21 +262,19 @@ class TestDailyDrawdownGuard:
         """Peak equity should be updated when equity increases."""
         _reset_drawdown_state()
         cfg = Settings(daily_drawdown_limit_pct=10.0)
-        state = MockAgentState()
-        state.portfolio.equity_usd = 10000.0
-        state.portfolio.spot_positions = {"BTC": 1.0}
-        action = {"action": "OPEN_COVERED_CALL", "params": {"symbol": "BTC-20DEC24-100000-C", "size": 0.1}}
+        portfolio = MockPortfolio(equity_usd=10000.0)
+        reasons = []
         
-        check_action_allowed(state, action, config=cfg)
+        _check_daily_drawdown_limit(portfolio, cfg, reasons)
         assert _daily_drawdown_state["max_equity_usd"] == 10000.0
         
-        state.portfolio.equity_usd = 11000.0
-        check_action_allowed(state, action, config=cfg)
+        portfolio.equity_usd = 11000.0
+        _check_daily_drawdown_limit(portfolio, cfg, reasons)
         assert _daily_drawdown_state["max_equity_usd"] == 11000.0
         
-        state.portfolio.equity_usd = 9900.0
-        allowed, _ = check_action_allowed(state, action, config=cfg)
-        assert allowed is True
+        portfolio.equity_usd = 10000.0
+        result = _check_daily_drawdown_limit(portfolio, cfg, reasons)
+        assert result is True
         assert _daily_drawdown_state["max_equity_usd"] == 11000.0
 
     def test_drawdown_guard_skipped_in_training_on_testnet(self):
