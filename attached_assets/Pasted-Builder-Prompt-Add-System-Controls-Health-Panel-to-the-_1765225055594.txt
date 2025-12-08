@@ -1,0 +1,457 @@
+Builder Prompt: Add “System Controls & Health” Panel to the Dashboard
+
+GOAL
+
+Give the Options Trading Agent dashboard a visible “System Controls & Health” panel so a non-coder can:
+
+See that the following features are present and wired correctly:
+
+LLM / decision mode & validation
+
+Position reconciliation
+
+Daily drawdown & kill switch
+
+Agent healthcheck
+
+Click simple buttons/switches and get a clear OK/FAIL/WARN text response.
+
+This prompt is only about UI & API wiring on top of features we already implemented, not changing their core behavior.
+
+0) Use the existing dashboard
+
+You already have:
+
+A web dashboard (FastAPI + HTML/Jinja or similar) showing positions / decisions and using decisions_store for recent decisions.
+
+A server process in server.py that exposes Flask endpoints for health checks (used for deployments). 
+GitHub
++1
+
+Requirements:
+
+Keep the existing dashboard and health endpoints working.
+
+Add a new “System Controls & Health” card to the main dashboard page (the page a human opens in a browser to see positions/decisions).
+
+Implement the backend as JSON API endpoints under /api/... that the UI calls via fetch().
+
+If the dashboard is served by a FastAPI app, hook into that app.
+If it’s still using the minimal Flask server.py as the main UI, you may:
+
+Create a simple HTML dashboard page and serve it from /
+
+Keep JSON health checks on /health or /api/health.
+
+Use whichever is actually powering the dashboard in this workspace.
+
+1) New UI card: “System Controls & Health”
+
+On the main dashboard page, add a right-hand sidebar card (or a block near the top) titled:
+
+System Controls & Health
+
+Inside this card, create four sections, each with:
+
+A short status line (read-only text).
+
+One primary button that calls the backend and shows a result text below the button.
+
+Sections:
+
+LLM & Decision Mode
+
+Position Reconciliation
+
+Risk Limits & Kill Switch
+
+Agent Healthcheck
+
+Use a simple layout (plain HTML + a bit of CSS). No need for fancy styling; just make it readable and clearly separated.
+
+2) Section 1 – LLM & Decision Mode
+2.1 API: GET /api/llm_status
+
+Create an endpoint that returns a JSON snapshot of the LLM / decision configuration:
+
+Read from src/config.settings (and any new decision-mode fields we added earlier), e.g.:
+
+mode (research/production)
+
+deribit_env
+
+llm_enabled
+
+Any decision-mode fields we added in previous prompts, such as:
+
+decision_mode (e.g. "rule_only" | "llm_only" | "hybrid_shadow")
+
+llm_shadow_enabled
+
+llm_validation_strict (if present)
+
+Return JSON like:
+
+{
+  "ok": true,
+  "mode": "research",
+  "deribit_env": "testnet",
+  "llm_enabled": false,
+  "decision_mode": "rule_only",
+  "llm_shadow_enabled": false,
+  "llm_validation_strict": true
+}
+
+
+If something goes wrong, return:
+
+{
+  "ok": false,
+  "error": "short human readable message"
+}
+
+2.2 API: POST /api/test_llm_decision
+
+Create a lightweight “LLM pipeline smoke test” endpoint:
+
+If settings.llm_enabled is False, return:
+
+{
+  "ok": false,
+  "error": "LLM is disabled in settings.llm_enabled"
+}
+
+
+Otherwise:
+
+Create a DeribitClient.
+
+Build a single AgentState using the same state builder used by the agent (e.g. build_agent_state(client, settings) or the new state_core function).
+
+Call the LLM decision function (choose_action_with_llm) with that state and its candidates.
+
+Wrap everything in try/except:
+
+On success, return:
+
+{
+  "ok": true,
+  "action": "<ACTION_NAME>",
+  "reasoning": "<truncated reasoning or summary>"
+}
+
+
+On any error, return:
+
+{
+  "ok": false,
+  "error": "Exception message"
+}
+
+
+This endpoint does not execute trades, only tests that the LLM pipeline runs end-to-end.
+
+2.3 UI wiring
+
+In the LLM & Decision Mode section of the card:
+
+Show a status line, e.g.:
+
+Decision: rule_only | Env: testnet | LLM: disabled
+
+by calling GET /api/llm_status on page load.
+
+Add a button:
+
+“Test LLM decision pipeline (dry)”
+
+When clicked:
+
+Call POST /api/test_llm_decision.
+
+Under the button, show one of:
+
+✅ LLM OK: proposed ACTION_NAME – REASONING_SNIPPET
+
+⚠️ LLM disabled: …
+
+❌ LLM error: <error>
+
+3) Section 2 – Position Reconciliation
+
+We previously added a position reconciliation module + CLI (e.g. src/reconciliation.py) that compares:
+
+Deribit positions
+
+Internal tracked positions / logs
+
+3.1 API: POST /api/reconcile_positions
+
+Implement a simple “run once now” endpoint:
+
+Use the reconciliation helper you created previously (e.g. run_position_reconciliation_once(...)) if available.
+
+If the earlier module uses different function names, hook into that instead, but keep this endpoint signature.
+
+Behavior:
+
+Acquire a fresh DeribitClient.
+
+Run a single reconciliation pass.
+
+Return a compact JSON summary, for example:
+
+{
+  "ok": true,
+  "summary": {
+    "deribit_positions": 6,
+    "tracked_positions": 6,
+    "missing_on_deribit": [],
+    "missing_in_tracker": [],
+    "mismatched_size": []
+  },
+  "details": [
+    "All positions match between Deribit and tracker."
+  ]
+}
+
+
+On error:
+
+{
+  "ok": false,
+  "error": "Short human readable error"
+}
+
+
+You can persist “last reconciliation status” in memory if convenient (e.g. just store the last result in a module-level variable), but not required.
+
+3.2 UI wiring
+
+In the Position Reconciliation section:
+
+Status line (optional):
+
+Last reconciliation: not run yet
+or
+Last reconciliation: OK (6 / 6 positions aligned)
+or
+Last reconciliation: WARN – 1 mismatch
+
+Button:
+
+“Run reconciliation now”
+
+On click:
+
+Call POST /api/reconcile_positions.
+
+Show result below:
+
+✅ Reconciliation OK: 6 / 6 positions match.
+
+⚠️ Reconciliation WARN: 1 missing_in_tracker – BTC-27DEC24-90000-C
+
+❌ Reconciliation FAILED: <error>
+
+4) Section 3 – Risk Limits & Kill Switch
+
+You previously added daily drawdown guard + kill switch into the risk/rules layer (e.g. new fields in Settings and extra checks in check_action_allowed).
+
+4.1 API: GET /api/risk_limits
+
+Create an endpoint returning the current risk-related config, e.g.:
+
+max_margin_used_pct
+
+max_net_delta_abs
+
+daily_drawdown_limit_pct
+
+daily_drawdown_warning_pct
+
+kill_switch_enabled
+
+Return JSON like:
+
+{
+  "ok": true,
+  "max_margin_used_pct": 80.0,
+  "max_net_delta_abs": 5.0,
+  "daily_drawdown_limit_pct": 10.0,
+  "daily_drawdown_warning_pct": 5.0,
+  "kill_switch_enabled": true
+}
+
+
+If some of these fields don’t exist yet on Settings, add them with sensible defaults, matching the previous prompt you implemented.
+
+4.2 API: POST /api/test_kill_switch
+
+Create a synthetic risk-check test:
+
+Build a minimal but valid AgentState object (from src.models) with:
+
+Reasonable portfolio equity and margin usage.
+
+Net delta within allowed range.
+
+Empty positions list is fine.
+
+Build a proposed_action for an OPEN_COVERED_CALL with dummy params (symbol, size).
+
+Call check_action_allowed(agent_state, proposed_action, settings).
+
+Return JSON:
+
+{
+  "ok": true,
+  "allowed": false,
+  "reasons": ["Kill switch active due to daily drawdown limit"],
+  "config": {
+    "daily_drawdown_limit_pct": 10.0,
+    "kill_switch_enabled": true
+  }
+}
+
+
+On unexpected errors, set ok=false and include the error.
+
+This is a dry simulation, no actual orders.
+
+4.3 UI wiring
+
+In the Risk Limits & Kill Switch section:
+
+Show config from GET /api/risk_limits, e.g.:
+
+Max Margin: 80% | Max Δ: 5.0 | DD limit: 10% | Kill switch: ON
+
+Button:
+
+“Test risk checks / kill switch”
+
+On click:
+
+Call POST /api/test_kill_switch.
+
+Show:
+
+✅ Risk engine ALLOWS OPEN_COVERED_CALL under current config.
+
+❌ Risk engine BLOCKS OPEN_COVERED_CALL: Kill switch active due to daily drawdown.
+
+❌ Test failed: <error>
+
+5) Section 4 – Agent Healthcheck
+
+You just implemented an src/healthcheck.py module with run_agent_healthcheck(...) and a CLI script.
+
+5.1 API: POST /api/agent_healthcheck
+
+Create a JSON endpoint wrapping run_agent_healthcheck(settings):
+
+Call it once per request.
+
+Return its result directly, with a top-level ok indicator as well, e.g.:
+
+{
+  "ok": true,
+  "overall_status": "OK",
+  "results": [
+    {"name": "config", "status": "ok", "detail": "mode=research, env=testnet, loop_interval=300s"},
+    {"name": "deribit_public", "status": "ok", "detail": "BTC index=100000"},
+    {"name": "deribit_private", "status": "skipped", "detail": "No private API credentials configured"},
+    {"name": "state_builder", "status": "ok", "detail": "built AgentState ..."}
+  ]
+}
+
+
+If run_agent_healthcheck raises unexpectedly, catch it and return ok=false with an error message.
+
+5.2 UI wiring
+
+In the Agent Healthcheck section:
+
+Status line:
+
+Last healthcheck: not run yet
+or
+Last healthcheck: OK / WARN / FAIL
+
+Button:
+
+“Run full agent healthcheck”
+
+On click:
+
+Call POST /api/agent_healthcheck.
+
+Show a short summary, e.g.:
+
+✅ Healthcheck OK – config, public API, state_builder all passed.
+
+⚠️ Healthcheck WARN – private API skipped (no credentials).
+
+❌ Healthcheck FAIL – state_builder: Failed to fetch Deribit data.
+
+Optionally, add a small <details> block with the detailed per-check lines (name + status + detail).
+
+6) Frontend implementation details
+
+Use plain HTML + vanilla JS (no frameworks).
+
+For each button, use fetch() to call the JSON endpoints; update the corresponding <div> or <pre> with human-readable text.
+
+Make sure errors are surfaced cleanly (network error, JSON parse error, etc.).
+
+Example pattern for one section:
+
+<button id="btn-healthcheck">Run full agent healthcheck</button>
+<div id="healthcheck-result" class="result"></div>
+
+<script>
+document.getElementById("btn-healthcheck").addEventListener("click", async () => {
+  const el = document.getElementById("healthcheck-result");
+  el.textContent = "Running healthcheck...";
+  try {
+    const resp = await fetch("/api/agent_healthcheck", { method: "POST" });
+    const data = await resp.json();
+    if (!data.ok) {
+      el.textContent = `❌ Healthcheck failed: ${data.error || data.overall_status}`;
+      return;
+    }
+    el.textContent = `✅ Healthcheck ${data.overall_status}: ` +
+      data.results.map(r => `${r.name}=${r.status}`).join(", ");
+  } catch (e) {
+    el.textContent = `❌ Request error: ${e}`;
+  }
+});
+</script>
+
+
+Apply the same pattern for the other three sections.
+
+7) Docs update
+
+Update replit.md (or the appropriate doc) with a short section:
+
+How to open the dashboard in the browser.
+
+What the “System Controls & Health” panel does.
+
+Mention that:
+
+“Test LLM decision pipeline (dry)” is a quick LLM smoke test.
+
+“Run reconciliation now” checks Deribit vs internal positions.
+
+“Test risk checks / kill switch” simulates a dry risk check.
+
+“Run full agent healthcheck” wraps the full healthcheck module.
+
+8) Non-breaking requirement
+
+Do not change the main agent loop logic or risk logic beyond adding the JSON endpoints and small helper functions.
+
+Do not break existing health endpoints used for autoscaling (e.g. /health).

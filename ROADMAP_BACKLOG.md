@@ -1,6 +1,6 @@
 # Options Trading Agent – Backlog & Roadmap
 
-_Last updated: 2025-12-07_
+_Last updated: 2025-12-08_
 
 This document tracks the **open backlog** for the options trading agent, combining:
 - AI Builder's healthcheck/architecture notes,
@@ -382,7 +382,52 @@ Examples:
 
 ---
 
+### [E3] Overfitting Mitigation & Robustness  
+**Priority:** P1 (Phase 2–3)  
+**Status:** Not implemented  
+
+When optimizing strategies, we must guard against "curve-fitting" parameters that only work on the training period. This section outlines the planned safeguards:
+
+**Cross-asset testing:**
+- Strategies should be tested on multiple underlyings (BTC, ETH, and later SOL/DOGE where data allows).
+- A genuine edge should not be asset-specific; if a config only works on BTC 2021, it's likely overfit.
+
+**Time-based splits (train / validation / test):**
+- Define explicit periods:
+  - **Training:** used to search/tune parameters.
+  - **Validation:** used to judge parameter sets and detect overfitting.
+  - **Test/holdout:** kept untouched until final sanity-check.
+- Example: 2019–2022 training, 2023 validation, 2024 holdout.
+
+**Regime-sliced evaluation:**
+- Backtests must be sliced into different market regimes: bull, bear, sideways, high-vol, low-vol.
+- A "good strategy" should perform reasonably across very different conditions (e.g. 2021 bull vs 2022 bear).
+- Reject configs that only shine in one hand-picked period.
+
+**Walk-forward / rolling window tests:**
+- Mature version should support walk-forward testing:
+  - Fit parameters on window 1, test on window 2, roll forward, repeat.
+  - This simulates real deployment where future data is unknown.
+
+**Monte Carlo style perturbations:**
+- Random perturbations of parameters around the "best" configuration to check stability.
+- If small param changes cause large performance swings, the config is fragile.
+- Randomized slippage/fee assumptions to stress-test robustness (not just optimistic fee rates).
+
+**Simplicity bias:**
+- When comparing two parameter sets with similar performance, favour the simpler one:
+  - Narrower parameter ranges.
+  - Fewer toggles and special cases.
+  - More interpretable rules.
+- Occam's razor: simpler models generalize better.
+
+This section directly supports the Phase 2–3 tuning and optimization work (see [I1] Strategy Factory below).
+
+---
+
 ## F. LLM Layer & Intelligence
+
+> **Important design principle:** The LLM is a **research assistant and analyst**, not a random parameter generator. Its role is to reason about backtest results, compare runs across regimes, propose small structured adjustments, and highlight overfitting risks. Numeric search (grid/random/Bayesian) remains the primary engine for exploring parameter space; the LLM guides and interprets, not brute-force samples.
 
 ### [F1] Stronger LLM output validation  
 **Priority:** P1 (Phase 2)  
@@ -434,6 +479,15 @@ Examples:
 - Define an LLM output schema like:
   - `{"regime": "choppy", "target_delta": [0.20, 0.25], "target_dte": [7, 14], "aggressiveness": "medium"}`.
 - Deterministic code then chooses actual strikes within that window.
+
+**Role clarification:**
+- The LLM **must not** be treated as a random parameter generator.
+- Its intended role is to:
+  - **Reason** about backtest results and market conditions.
+  - **Compare** different runs across regimes (bull vs bear, high-vol vs low-vol).
+  - Propose **small, structured adjustments** to parameter ranges and risk settings.
+  - **Highlight overfitting risks** (e.g. "this config only works in one bull market segment").
+- Numeric search (grid/random/Bayesian) remains the primary engine for exploring parameter space; the LLM is a researcher/analyst on top, not a brute-force optimizer.
 
 ---
 
@@ -542,5 +596,129 @@ Examples:
   - crash,
   - restart.
 - Confirm `position_tracker` + reconciliation logic restore consistent state and do not duplicate or lose positions.
+
+---
+
+## I. Strategy Factory & Experiment Lab
+
+This section describes the long-term vision for a "strategy factory" – an AI-assisted experiment lab that helps create, tune, and evaluate trading strategies systematically.
+
+### [I1] Strategy Definition as First-Class Object  
+**Priority:** P1 (Phase 2–3)  
+**Status:** Not implemented  
+
+**Goal:**
+- Store strategy configurations as first-class objects in PostgreSQL:
+  - `id`, `name`, `description`
+  - `base_strategy_type`: "covered_call" | "wheel" | "other"
+  - `risk_profile`: "conservative" | "balanced" | "aggressive" | "custom"
+  - Parameter ranges: `delta_range`, `dte_range`, `ivrv_min`, `exit_style`, `position_size_rule`
+  - LLM settings: `policy_mode`, `hybrid_llm_prob`, `llm_allowed_to_edit_params`
+  - Lifecycle status: "draft" | "backtesting" | "testnet_live" | "mainnet_live" | "paused"
+- UI wizard: "Create New Strategy" with template selection, profile, parameters, and LLM settings.
+- Attach backtest runs and LLM analyses to strategy definitions for traceability.
+
+---
+
+### [I2] Backtest Runs Tied to Strategies  
+**Priority:** P1 (Phase 2–3)  
+**Status:** Partially present  
+
+**Goal:**
+- Formalize `BacktestRun` as "experiments for a given strategy definition":
+  - `strategy_id` (FK → StrategyDefinition)
+  - `data_source`: "synthetic" | "live_deribit" | "real_scraper"
+  - `time_range`: [start_date, end_date]
+  - `decision_interval`: "1h" | "4h" | "1d"
+  - Metrics: net PnL, PnL %, max drawdown, Sharpe, Sortino, win rate, num_trades
+  - Run metadata: timestamp, code version, config snapshot
+- UI: strategy detail page with table of past runs, sorted by metrics.
+
+---
+
+### [I3] LLM Analysis & Research Notes  
+**Priority:** P2 (Phase 3)  
+**Status:** Not implemented  
+
+**Goal:**
+- Attach AI "research reports" to strategies:
+  - `id`, `strategy_id`
+  - `runs_considered`: list of run IDs
+  - `summary_text`: human-readable explanation
+  - `suggested_changes`: structured JSON (e.g. tighter delta range, higher IVRV min)
+  - `accepted`: whether changes were applied to create a new strategy version
+- The LLM reviews backtest results and proposes **small, interpretable changes**, not random parameter sampling.
+- Example output:
+  ```json
+  {
+    "delta_range": [0.20, 0.30],
+    "dte_range": [7, 14],
+    "ivrv_min": 1.3,
+    "notes": [
+      "2022 bear regime shows too much drawdown; tighten delta",
+      "IVRV often under 1.1 in quiet regimes; skip those"
+    ]
+  }
+  ```
+
+---
+
+### [I4] Optimization Loop: Three Levels  
+**Priority:** P2 (Phase 2–3)  
+**Status:** Not implemented  
+
+The system supports three levels of automation, rolled out incrementally:
+
+**Level 1 – Manual + AI Advisor (short-term, low-risk):**
+- Run 3–10 backtests manually.
+- Click "Ask AI for suggestions" in UI.
+- LLM reviews metrics, proposes small parameter changes with explanation.
+- User decides whether to apply changes.
+- Human remains fully in the loop.
+
+**Level 2 – Semi-auto "Auto-Tune up to N runs":**
+- Define parameter search space (delta bounds, DTE bounds, IVRV range).
+- Use numeric search (random/Bayesian) to pick next parameter set.
+- Run backtest, store metrics.
+- LLM provides commentary after each run: "Are we overfitting? Which region looks promising?"
+- Stop when: N runs reached, no improvement after X iterations, or user clicks "Stop".
+- Mark best config as "recommended" with LLM analysis attached.
+
+**Level 3 – Mostly-auto (bounded sandbox):**
+- System automatically runs initial sweep, LLM refines, stops when metrics plateau.
+- Presents: "Here is the best config found; here is performance across train vs validation; do you want to start this on testnet?"
+- Hard limits:
+  - Max experiments per strategy.
+  - Time-based train/validation split enforced.
+  - No auto-promotion to live without manual approval.
+
+---
+
+### [I5] Supervisor LLM for Multi-Strategy  
+**Priority:** P3  
+**Status:** Concept only  
+
+**Goal:**
+- Future overseer of multiple strategies:
+  - Reads metrics per strategy from DB.
+  - Proposes which strategies to enable/disable.
+  - Suggests capital allocation across strategies.
+  - Schedules tuning runs (e.g. overnight batch optimization).
+  - Outputs human-reviewable config diff; does **not** directly send trades.
+- Autonomy is bounded: all changes require human approval before execution.
+
+---
+
+## Design Principles for Strategy Optimization
+
+1. **LLM as analyst, not optimizer:** The LLM reasons about results, compares regimes, and proposes structured changes. It does not randomly sample parameters.
+
+2. **Numeric search for exploration:** Grid search, random search, or Bayesian optimization handle the heavy lifting of parameter space exploration.
+
+3. **Guard against overfitting:** All optimization work must respect [E3] Overfitting Mitigation guidelines – train/validation splits, regime slicing, simplicity bias.
+
+4. **Incremental autonomy:** Start with manual + AI advisor, graduate to semi-auto with limits, and only later consider mostly-auto in a sandboxed environment.
+
+5. **Audit trail:** Every run, every LLM suggestion, and every parameter change is logged and traceable.
 
 ---
