@@ -14,7 +14,8 @@ This project is a modular Python framework for automated BTC/ETH covered call tr
 The agent features a clear separation of concerns, with modules for configuration, data modeling, API interaction, market context generation, risk management, policy decisions (rule-based and LLM), execution, and logging. It supports "research" and "production" modes. A FastAPI web application provides a real-time dashboard for monitoring, interaction, and backtesting.
 
 ### Key Features
-- **Decision Policies**: Supports rule-based strategies with scoring and epsilon-greedy exploration, and an LLM-powered decision mode validated by a risk engine.
+- **Decision Policies**: Supports rule-based strategies with scoring and epsilon-greedy exploration, and an LLM-powered decision mode validated by a risk engine. Supports three decision modes: `rule_only` (safe baseline), `llm_only` (validated LLM with fallback), and `hybrid_shadow` (rules execute, LLM logs for comparison).
+- **LLM Validation**: The `validate_llm_decision()` function provides comprehensive validation including symbol verification against candidates, action type checking, position verification for closes/rolls, and size clamping to configured limits.
 - **Market Context**: Integrates `MarketContext` for regime detection, returns, and realized volatility.
 - **Risk Management**: A `risk_engine` performs pre-trade validation, checking margin, delta, and exposure limits.
 - **Backtesting Framework**: Includes `CoveredCallSimulator` for historical analysis, supporting various exit styles and training data generation. Features a synthetic pricing mode using Black-Scholes and realized volatility for self-consistent historical backtests. Provides TradingView-style metrics and equity curve visualization.
