@@ -49,7 +49,13 @@ The "Bots" tab provides a comprehensive view of expert trading bots, their marke
 
 **API Endpoints:**
 - `GET /api/bots/market_sensors` - Returns sensor values for all underlyings
+- `GET /api/bots/market_sensors?debug=1` - Returns sensors with debug inputs (formulas, raw inputs, intermediate calculations)
 - `GET /api/bots/strategies` - Returns StrategyEvaluation objects for all bots
+
+**Debug Mode:**
+- "Show debug inputs" checkbox exposes raw computation values for each sensor
+- Displays formula, input values, and intermediate calculations (e.g., VRP = IV - RV with all numeric values shown)
+- Useful for verifying sensor computations and diagnosing unexpected values
 
 **Types (`src/bots/types.py`):**
 - `StrategyCriterion` - Single metric check with value, min/max thresholds, and pass/fail status
