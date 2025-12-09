@@ -1,0 +1,446 @@
+I’m a non-coder operator. I verify everything through the web UI, not by reading code or running CLI commands. Every new feature must show up visibly on the dashboard so I can click something and see that it works.
+
+High-Level Goal
+
+Create a new Bots section that lets me:
+
+See live market sensors for BTC and ETH (per-underlying signal table).
+
+See a list of strategies that currently “pass” the market filters (aggregated view).
+
+See a per-expert breakdown (for now GregBot) showing each strategy, whether it’s enabled/disabled for current conditions, and which sensors pass/fail.
+
+At the same time, finish wiring the Greg Mandolini Phase 1 sensors so that previously null fields (iv_rank_6m, term_structure_spread, skew_25d, adx_14d, rsi_14d, price_vs_ma200) are calculated and returned in the API, not just placeholders.
+
+This should be purely read-only / selection logic: no orders, no real trades.
+
+Existing context (reuse, don’t re-invent)
+
+You already have:
+
+Live state builders and options chain logic under src/ (state builder, vol state, etc.).
+
+A Greg Mandolini Phase 1 selector module & JSON rules (from previous tasks) that exposes:
+
+A “sensors” object for Greg (with fields like vrp_30d, chop_factor_7d, iv_rank_6m, term_structure_spread, skew_25d, adx_14d, rsi_14d, price_vs_ma200, etc.).
+
+A decision object that picks a strategy key for Greg (e.g. straddle/strangle/spread/calendar, etc.).
+
+src/web_app.py serving a single HTML dashboard via index(); currently it has:
+
+Top nav row: Live Agent Backtesting Lab Backtest Runs Calibration System Health Chat
+
+Sections like ## Market Overview, ## Strategy & Safeguards, ## Bot Positions, ## Backtest Configuration, ## System Controls & Health, ## Chat with Agent, etc.
+
+src/config.py with settings.underlyings (BTC, ETH) and other config.
+
+Do not rip out or rename existing endpoints or sections. Build on top of what’s there.
+
+Task 1 – Finish the Greg Phase 1 sensor layer
+
+Use the same Greg selector / sensor types you created earlier. Extend that code so that for each underlying (at least BTC and ETH) the following sensors are computed where reasonably possible from existing data sources:
+
+1A. Sensors to support
+
+For each underlying, Greg’s Phase 1 sensor bundle should expose (at minimum):
+
+vrp_30d – variance risk premium (IV – RV) for a 30-day tenor (this is already working).
+
+chop_factor_7d – RV/IV ratio over 7 days (already working).
+
+iv_rank_6m – 6-month IV rank (0–1 or 0–100 scale).
+
+term_structure_spread – difference in ATM IV between short and longer tenors (e.g. 7d vs 30d).
+
+skew_25d – 25-delta skew (e.g. call IV – put IV or a standard skew metric).
+
+adx_14d – 14-day ADX using spot price series.
+
+rsi_14d – 14-day RSI using spot price series.
+
+price_vs_ma200 – % distance of spot from 200-day moving average (e.g. +10% above MA or −5% below).
+
+Implementation guidance (re-use existing code):
+
+Re-use whatever module you previously used for Greg’s sensors & decision (don’t create a second copy).
+
+For RV and candles:
+
+Re-use the same OHLC/candle data and RV machinery you used to compute vrp_30d and chop_factor_7d (likely via an existing market_context or similar logic).
+
+For term structure & skew:
+
+Use the current options chain you already build for the agent (no extra Deribit round-trips if possible).
+
+Derive approximate ATM and 25-delta options for at least two tenors (e.g. ~7d and ~30d).
+
+Compute:
+
+term_structure_spread ≈ atm_iv_longer - atm_iv_shorter for a consistent tenor pair.
+
+skew_25d ≈ IV(call_25d) - IV(put_25d) or another standard normalized skew metric.
+
+For iv_rank_6m:
+
+Use a simple, robust approximation based on available IV history:
+
+If you already have a rolling history of ATM IVs or RVs, compute rank as:
+
+iv_rank_6m = percentile_rank(current_atm_iv_30d, last_6m_atm_iv_30d_values)
+
+If true 6-month IV history is not yet available, implement a minimal viable version:
+
+Use whatever IV/RV history you do have (e.g. last N days) and compute a rank over that window.
+
+If the historical sample is too short or missing, set iv_rank_6m to None and clearly mark it as missing in the API response ("status": "missing_data" in a debug field).
+
+For adx_14d, rsi_14d, price_vs_ma200:
+
+Use a daily OHLC series for the underlying (reuse your existing OHLC fetch logic).
+
+Implement standard TA formulas:
+
+ADX 14: classic DI+/DI‐ and smoothed DX approach.
+
+RSI 14: standard Wilder’s smoothing.
+
+MA 200: simple moving average over 200 daily closes.
+
+price_vs_ma200 should be a % difference:
+
+price_vs_ma200 = (spot - ma200) / ma200 * 100, or None if MA cannot be computed yet.
+
+Important:
+These sensor computations must be purely analytical. No orders, no side effects other than reading from Deribit/data sources and returning JSON. Cache or reuse data where appropriate, but do not write to disk or the DB.
+
+Task 2 – Define a generic StrategyEvaluation type for Bots
+
+Create a reusable type to represent “what each strategy sees right now”.
+
+Add a new module, for example:
+
+src/bots/types.py
+
+Define:
+
+from pydantic import BaseModel
+from typing import Optional, List, Literal, Dict, Any
+
+class StrategyCriterion(BaseModel):
+    metric: str              # e.g. "iv_30d", "rv_30d", "vrp_30d", "rsi_14d"
+    value: Optional[float]   # current numeric value, if available
+    min: Optional[float] = None
+    max: Optional[float] = None
+    ok: bool                 # True if condition passed, False if failed or missing
+    note: Optional[str] = None   # short explanation: "missing_data", "below_min", etc.
+
+class StrategyEvaluation(BaseModel):
+    bot_name: str            # e.g. "GregBot"
+    expert_id: str           # e.g. "greg_mandolini"
+    underlying: str          # "BTC", "ETH"
+    strategy_key: str        # stable identifier, e.g. "atm_straddle_30d"
+    label: str               # human-friendly name, e.g. "30d ATM Straddle"
+    status: Literal["pass", "blocked", "no_data"]
+    summary: str             # 1–2 sentence explanation: why it passes or doesn’t
+    criteria: List[StrategyCriterion]
+    debug: Dict[str, Any] = {}   # optional: include rule path, sensor snapshot, etc.
+
+
+We’ll reuse this type both for:
+
+The global “Strategies” list (only entries with status == "pass").
+
+The per-expert view (all strategies, with pass/blocked/no_data).
+
+Task 3 – GregBot: adapt Greg Phase 1 to produce StrategyEvaluations
+
+In the module where you already implemented Greg Mandolini Phase 1:
+
+Add a helper that, for a given underlying ("BTC" or "ETH"), returns:
+
+The full Greg sensor snapshot for that underlying.
+
+A list of StrategyEvaluation objects for all strategies Greg knows about.
+
+Pseudocode example:
+
+from src.bots.types import StrategyEvaluation, StrategyCriterion
+
+def get_gregbot_evaluations_for_underlying(underlying: str) -> Dict[str, Any]:
+    """
+    Build current GregBot Phase 1 view for a single underlying.
+    Returns:
+      {
+        "underlying": "BTC",
+        "sensors": {...},              # Greg sensor values (vrp_30d, rsi_14d, etc.)
+        "strategies": [StrategyEvaluation, ...]
+      }
+    """
+    sensors = compute_greg_sensors(underlying=underlying)
+    decisions = run_greg_phase1_tree(sensors)  # reuse your existing decision engine
+
+    # Build StrategyEvaluation for each Greg strategy.
+    # At minimum:
+    #   - mark the selected one as status="pass"
+    #   - others as "blocked" or "no_data"
+    #   - fill criteria based on the rule thresholds used in the tree.
+    ...
+
+
+Criteria mapping:
+
+For each Greg strategy, extract the set of metric thresholds that apply (IV min/max, RV min/max, VRP floor, ADX/RSI bounds, etc.).
+
+For each such metric, create a StrategyCriterion:
+
+metric: name as used in sensors (e.g. "vrp_30d", "adx_14d").
+
+value: sensors.<metric> (may be None).
+
+min / max: thresholds from Greg rules (if present).
+
+ok: True if value exists and meets all bounds, otherwise False.
+
+note: "missing_data" if value is None, "below_min" if it fails min, "above_max" if it fails max.
+
+For status:
+
+"pass": strategy meets all criteria and is allowed under Greg’s strict tree.
+
+"blocked": fails at least one criterion.
+
+"no_data": blocked only because of missing sensor data (no value available).
+
+summary: short explanation such as:
+
+"Pass: VRP 30d=8.9 > 5.0, RSI 14d=45 within [30,70], ADX 14d=18 < 20 (choppy)."
+
+"Blocked: IV rank too low (iv_rank_6m=0.15 < 0.3) and ADX too weak."
+
+This logic should reuse as much of Greg’s existing decision machinery and rule definitions as possible instead of hard-coding numbers in multiple places.
+
+Task 4 – Backend APIs for the new Bots section
+
+Add read-only FastAPI endpoints to src/web_app.py (near the other @app.get("/api/...") endpoints).
+
+4A. Live market sensors for all bots
+from typing import Dict, Any, List
+from fastapi.responses import JSONResponse
+
+@app.get("/api/bots/market_sensors")
+def get_bots_market_sensors() -> JSONResponse:
+    """
+    Return current high-level sensors per underlying for Bots tab.
+    For now this is just GregBot's Phase 1 sensor bundle,
+    but shape it so we can add more bots later.
+    """
+    try:
+        underlyings: List[str] = list(settings.underlyings or ["BTC", "ETH"])
+        data: Dict[str, Any] = {}
+
+        # For now, use GregBot’s sensor computation.
+        from <wherever_greg_module_is> import compute_greg_sensors  # adjust import
+
+        for u in underlyings:
+            sensors = compute_greg_sensors(underlying=u)
+            # sensors should already be a dict-serializable model or BaseModel
+            data[u] = sensors if isinstance(sensors, dict) else sensors.model_dump()
+
+        return JSONResponse(content={"ok": True, "sensors": data})
+    except Exception as e:
+        return JSONResponse(content={"ok": False, "error": str(e)})
+
+
+Replace <wherever_greg_module_is> with the actual module you used for Greg (from the previous task).
+
+4B. Strategy evaluations across bots (for now, only GregBot)
+@app.get("/api/bots/strategies")
+def get_bots_strategies() -> JSONResponse:
+    """
+    Aggregate StrategyEvaluation objects for all expert bots.
+    For now, only GregBot is implemented.
+    """
+    try:
+        from src.bots.types import StrategyEvaluation
+        from <wherever_greg_module_is> import get_gregbot_evaluations_for_underlying
+
+        underlyings: List[str] = list(settings.underlyings or ["BTC", "ETH"])
+        all_evals: List[StrategyEvaluation] = []
+
+        for u in underlyings:
+            payload = get_gregbot_evaluations_for_underlying(underlying=u)
+            strat_evals = payload.get("strategies", [])
+            all_evals.extend(strat_evals)
+
+        # Serialize to JSON
+        return JSONResponse(
+            content={
+                "ok": True,
+                "strategies": [e.model_dump() for e in all_evals],
+            }
+        )
+    except Exception as e:
+        return JSONResponse(content={"ok": False, "error": str(e)})
+
+
+These endpoints must not send orders or mutate any runtime settings. They only read state, compute signals, and return JSON.
+
+Task 5 – New “Bots” section in the dashboard HTML
+
+Update the index() HTML string in src/web_app.py:
+
+If you previously added a “Strategies” section/tab for Greg, rename it to “Bots”.
+
+If there is no such section yet, add a new section near the bottom of the page, before “## Chat with Agent”.
+
+5A. Section structure
+
+Add something like this into the big f-string in index():
+
+## Bots
+
+A live view of expert bots, their market sensors, and which strategies currently pass.
+
+### Live Market Sensors
+
+<div id="bots-live-sensors">
+  Loading live market sensors...
+</div>
+
+### Strategy Matches (All Bots)
+
+<div id="bots-strategy-matches">
+  Loading strategy matches...
+</div>
+
+### Expert Bots
+
+<div id="bots-experts">
+  <div id="bots-expert-tabs">
+    <button class="bots-expert-tab active" data-expert-id="greg_mandolini">GregBot</button>
+    <!-- Future expert tabs go here -->
+  </div>
+
+  <div id="bots-expert-table">
+    Loading expert strategies...
+  </div>
+</div>
+
+
+Use a simple, text-first layout that matches the rest of the dashboard (no need for fancy CSS frameworks).
+
+5B. Inline <script> to wire up the UI
+
+At the very end of the HTML string returned by index() (right before the closing """), add a <script> block in plain JavaScript that:
+
+On page load:
+
+Calls GET /api/bots/market_sensors and renders a table under #bots-live-sensors with:
+
+Columns: Sensor, BTC, ETH (for now).
+
+Rows for: vrp_30d, chop_factor_7d, iv_rank_6m, term_structure_spread, skew_25d, adx_14d, rsi_14d, price_vs_ma200.
+
+Show -- if value is null/missing. You can round numbers to sensible decimals.
+
+Calls GET /api/bots/strategies and:
+
+Fills Strategy Matches table with only entries where status === "pass":
+
+Columns: Bot, Underlying, Strategy, Status.
+
+Status cell text: PASS, styled in greenish text (e.g. using inline style="color: green;").
+
+On hover (title attribute) show a tooltip summarizing criteria, e.g. "vrp_30d 8.9 (>5); rsi_14d 45 in range; iv_rank_6m 0.7 high".
+
+Fills Expert Bots section for the currently selected expert tab:
+
+For GregBot (expert_id "greg_mandolini"), create a table:
+
+Columns: Strategy, Underlying, Status, Details.
+
+One row per StrategyEvaluation for that expert.
+
+Status:
+
+Green text for "pass",
+
+Red text for "blocked",
+
+Grey text for "no_data".
+
+Details:
+
+Show a short string like "vrp_30d OK; rsi_14d below min; iv_rank_6m missing" built from criteria.
+
+Also set the cell’s title attribute to a more detailed multi-metric summary so I can hover to inspect which metrics pass/fail.
+
+Expert tabs behavior:
+
+Clicking on a button in #bots-expert-tabs should:
+
+Change the active tab styling (e.g. add/remove a simple "active" class).
+
+Re-render #bots-expert-table using only those StrategyEvaluation entries whose expert_id matches the clicked tab’s data-expert-id.
+
+For now there will only be GregBot, but write the JS in a way that supports more experts later.
+
+If any API call fails, show a clear inline error in the corresponding container (e.g. “Failed to load market sensors: …”) instead of silently doing nothing.
+
+Task 6 – Tests
+
+Add a small test module, e.g. tests/test_bots_endpoints.py that:
+
+Uses FastAPI TestClient to spin up the app.
+
+Verifies that:
+
+GET /api/bots/market_sensors returns {"ok": True, "sensors": {...}} and includes at least "BTC" in the sensors dict.
+
+GET /api/bots/strategies returns {"ok": True, "strategies": [...]} and that each item has the keys:
+
+bot_name, expert_id, underlying, strategy_key, status, criteria.
+
+It’s OK if, in a test environment, some numeric values are None; just make sure shape and types are correct.
+
+Tests must not hit real external APIs in a brittle way; if needed, you can lightly mock or stub data sources.
+
+All existing tests must continue to pass.
+
+Task 7 – UX & Safety Requirements
+
+No trading side effects:
+
+These new endpoints and UI pieces must be read-only. They compute signals and recommendations only; they do not place or cancel orders.
+
+Operator-friendly:
+
+I should be able to:
+
+Open the dashboard,
+
+Scroll to the Bots section,
+
+See:
+
+A table of live sensors per underlying,
+
+A table of strategies currently passing (if any),
+
+A GregBot table with all of his strategies and clear pass/blocked/no_data status plus metric breakdown.
+
+If some sensors (like iv_rank_6m) are genuinely impossible to compute with current data, handle them gracefully:
+
+Set the numeric value to null,
+
+Mark the relevant StrategyCriterion.ok = False with note = "missing_data",
+
+Ensure that’s reflected in the UI tooltips / text.
+
+When you’re done:
+
+The app should still start normally.
+
+All tests (existing + new) should pass.
+
+I can visually confirm the Bots section working from the web UI without touching the console.

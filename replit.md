@@ -39,22 +39,51 @@ The agent features a clear separation of concerns, with modules for configuratio
 - **Structured Logging**: Uses JSONL for logging decisions and actions.
 - **Position Persistence**: Bot-managed positions are saved to `data/positions.json` and restored on restart.
 
-### Greg Mandolini VRP Harvester (Phase 1)
-The Strategies tab showcases the Greg Mandolini VRP Harvester - a quantitative volatility risk premium (VRP) strategy selector based on market sensors.
+### Bots System
+The "Bots" tab provides a comprehensive view of expert trading bots, their market sensors, and strategy evaluations.
+
+**Features:**
+- **Live Market Sensors**: Per-underlying signal table showing computed sensors for BTC and ETH
+- **Strategy Matches**: Aggregated view of strategies that currently pass market filters
+- **Expert Bots Panel**: Per-bot breakdown showing all strategies with pass/blocked/no_data status
+
+**API Endpoints:**
+- `GET /api/bots/market_sensors` - Returns sensor values for all underlyings
+- `GET /api/bots/strategies` - Returns StrategyEvaluation objects for all bots
+
+**Types (`src/bots/types.py`):**
+- `StrategyCriterion` - Single metric check with value, min/max thresholds, and pass/fail status
+- `StrategyEvaluation` - Complete strategy evaluation with bot_name, status, summary, and criteria list
+
+### Greg Mandolini VRP Harvester (GregBot)
+A quantitative volatility risk premium (VRP) strategy selector based on market sensors.
 
 **Phase 1 (Current - Read-Only):**
-- Computes volatility sensors from current AgentState (VRP, chop factor, skew, price vs MA200)
-- Runs decision tree to select optimal strategy (straddle, strangle, calendar, iron butterfly, spreads, or NO_TRADE)
-- Displays recommendation on dashboard with sensor values
+- Computes 8 volatility sensors for each underlying
+- Runs 9-rule decision tree to select optimal strategy
+- Displays recommendation with pass/blocked/no_data status per strategy
 - No orders placed - purely advisory
 
-**Sensor Mapping:**
-- `vrp_30d`: IV - RV spread
-- `chop_factor_7d`: Realized vol / Implied vol ratio
-- `skew_25d`: Put-call skew from vol state
-- `price_vs_ma200`: Distance from 200-day moving average
+**Sensor Mapping (computed from OHLC + vol_state):**
+- `vrp_30d`: IV - RV spread (requires IV from vol_state)
+- `chop_factor_7d`: RV_7d / IV_30d ratio
+- `iv_rank_6m`: 6-month IV percentile rank (requires historical IV data - not yet available)
+- `term_structure_spread`: IV_7d - IV_30d (requires term structure data - not yet available)
+- `skew_25d`: 25-delta put-call skew (requires skew data from vol_state)
+- `adx_14d`: 14-day Average Directional Index (computed from OHLC)
+- `rsi_14d`: 14-day Relative Strength Index (computed from OHLC)
+- `price_vs_ma200`: % distance from 200-day moving average (computed from OHLC)
 
-**API Endpoint:** `GET /api/strategies/greg/selector`
+**Strategies Evaluated:**
+1. STRATEGY_A_STRADDLE - ATM Straddle (High VRP, Calm)
+2. STRATEGY_B_STRANGLE - OTM Strangle (Moderate VRP, Ranging)
+3. STRATEGY_C_CALENDAR - Calendar Spread (Term Structure)
+4. STRATEGY_D_IRON_BUTTERFLY - Iron Butterfly (Low Vol, Pinned)
+5. STRATEGY_E_PUT_SPREAD - Put Credit Spread (Bullish Bias)
+6. STRATEGY_F_CALL_SPREAD - Call Credit Spread (Bearish Bias)
+7. STRATEGY_G_RATIO_SPREAD - Ratio Spread (Trending + Skewed)
+8. STRATEGY_H_JADE_LIZARD - Jade Lizard (Bullish + High VRP)
+9. NO_TRADE - Default fallback
 
 **Spec Location:** `docs/greg_mandolini/GREG_SELECTOR_RULES_FINAL.json`
 

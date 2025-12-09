@@ -1186,6 +1186,53 @@ def get_greg_selector() -> JSONResponse:
         return JSONResponse(content={"ok": False, "error": str(e)})
 
 
+# =============================================================================
+# BOTS API ENDPOINTS
+# =============================================================================
+
+@app.get("/api/bots/market_sensors")
+def get_bots_market_sensors() -> JSONResponse:
+    """
+    Return current high-level sensors per underlying for Bots tab.
+    Computes Greg Phase 1 sensor bundle for each underlying.
+    """
+    try:
+        from src.bots.gregbot import compute_greg_sensors
+        
+        underlyings = list(settings.underlyings or ["BTC", "ETH"])
+        data = {}
+        
+        for u in underlyings:
+            sensors = compute_greg_sensors(u)
+            data[u] = sensors
+        
+        return JSONResponse(content={"ok": True, "sensors": data})
+    except Exception as e:
+        return JSONResponse(content={"ok": False, "error": str(e)})
+
+
+@app.get("/api/bots/strategies")
+def get_bots_strategies() -> JSONResponse:
+    """
+    Aggregate StrategyEvaluation objects for all expert bots.
+    For now, only GregBot is implemented.
+    """
+    try:
+        from src.bots.gregbot import get_gregbot_evaluations_for_underlying
+        
+        underlyings = list(settings.underlyings or ["BTC", "ETH"])
+        all_evals = []
+        
+        for u in underlyings:
+            payload = get_gregbot_evaluations_for_underlying(u)
+            strat_evals = payload.get("strategies", [])
+            all_evals.extend([e.model_dump() for e in strat_evals])
+        
+        return JSONResponse(content={"ok": True, "strategies": all_evals})
+    except Exception as e:
+        return JSONResponse(content={"ok": False, "error": str(e)})
+
+
 @app.post("/api/test_kill_switch")
 def test_kill_switch() -> JSONResponse:
     """Test risk engine with a synthetic action (dry run)."""
@@ -1896,7 +1943,7 @@ def index() -> str:
     <button class="tab" onclick="showTab('backtest')">Backtesting Lab</button>
     <button class="tab" onclick="showTab('runs')">Backtest Runs</button>
     <button class="tab" onclick="showTab('calibration')">Calibration</button>
-    <button class="tab" onclick="showTab('strategies')">Strategies</button>
+    <button class="tab" onclick="showTab('strategies')">Bots</button>
     <button class="tab" onclick="showTab('health')">System Health</button>
     <button class="tab" onclick="showTab('chat')">Chat</button>
   </div>
@@ -2523,63 +2570,50 @@ def index() -> str:
     </div>
   </div>
 
-  <!-- STRATEGIES TAB -->
+  <!-- BOTS TAB -->
   <div id="tab-strategies" class="tab-content">
     <div class="section">
-      <h2>Strategies</h2>
+      <h2>Bots</h2>
+      <p style="color: #666; margin-bottom: 1.5rem;">A live view of expert bots, their market sensors, and which strategies currently pass.</p>
       
-      <!-- Greg Mandolini VRP Harvester - Phase 1 -->
-      <div id="greg-strategy-panel" style="background: #f8f9fa; padding: 1.5rem; border-radius: 8px; border-left: 4px solid #7c4dff; margin-bottom: 1.5rem;">
+      <!-- Live Market Sensors -->
+      <div style="background: #f8f9fa; padding: 1.5rem; border-radius: 8px; border-left: 4px solid #1565c0; margin-bottom: 1.5rem;">
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
-          <div>
-            <h3 style="margin: 0; color: #7c4dff; font-size: 1.1rem;">Greg Mandolini - VRP Harvester</h3>
-            <span id="greg-meta-label" style="font-size: 0.85rem; color: #666;">Phase 1 - Master Selector</span>
-          </div>
-          <button id="greg-refresh-btn" onclick="refreshGregSelector()" style="padding: 0.5rem 1rem; background: #7c4dff; color: white; border: none; border-radius: 4px; cursor: pointer;">
-            Refresh Greg Selector Now
+          <h3 style="margin: 0; color: #1565c0; font-size: 1.1rem;">Live Market Sensors</h3>
+          <button onclick="refreshBotsSensors()" style="padding: 0.5rem 1rem; background: #1565c0; color: white; border: none; border-radius: 4px; cursor: pointer;">
+            Refresh Sensors
+          </button>
+        </div>
+        <div id="bots-live-sensors" style="overflow-x: auto;">
+          <p style="color: #666; font-style: italic;">Loading live market sensors...</p>
+        </div>
+      </div>
+      
+      <!-- Strategy Matches (All Bots) -->
+      <div style="background: #e8f5e9; padding: 1.5rem; border-radius: 8px; border-left: 4px solid #2e7d32; margin-bottom: 1.5rem;">
+        <h3 style="margin: 0 0 1rem 0; color: #2e7d32; font-size: 1.1rem;">Strategy Matches (All Bots)</h3>
+        <div id="bots-strategy-matches" style="overflow-x: auto;">
+          <p style="color: #666; font-style: italic;">Loading strategy matches...</p>
+        </div>
+      </div>
+      
+      <!-- Expert Bots -->
+      <div style="background: #f3e5f5; padding: 1.5rem; border-radius: 8px; border-left: 4px solid #7c4dff; margin-bottom: 1.5rem;">
+        <h3 style="margin: 0 0 1rem 0; color: #7c4dff; font-size: 1.1rem;">Expert Bots</h3>
+        
+        <div id="bots-expert-tabs" style="margin-bottom: 1rem;">
+          <button class="bots-expert-tab active" data-expert-id="greg_mandolini" onclick="selectExpertTab('greg_mandolini')" style="padding: 0.5rem 1rem; background: #7c4dff; color: white; border: none; border-radius: 4px; cursor: pointer; margin-right: 0.5rem;">
+            GregBot
           </button>
         </div>
         
-        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; margin-bottom: 1rem;">
-          <!-- Decision Panel -->
-          <div style="background: white; padding: 1rem; border-radius: 6px; border: 1px solid #e0e0e0;">
-            <h4 style="margin: 0 0 0.75rem 0; color: #333; font-size: 0.95rem;">Current Decision</h4>
-            <div style="margin-bottom: 0.5rem;">
-              <span style="font-size: 0.85rem; color: #666;">Selected Strategy:</span>
-              <div id="greg-selected-strategy" style="font-size: 1.2rem; font-weight: 600; color: #7c4dff; margin-top: 0.25rem;">--</div>
-            </div>
-            <div>
-              <span style="font-size: 0.85rem; color: #666;">Reasoning:</span>
-              <div id="greg-selected-reason" style="font-size: 0.9rem; color: #444; margin-top: 0.25rem; font-style: italic;">--</div>
-            </div>
-          </div>
-          
-          <!-- Sensors Panel -->
-          <div style="background: white; padding: 1rem; border-radius: 6px; border: 1px solid #e0e0e0;">
-            <h4 style="margin: 0 0 0.75rem 0; color: #333; font-size: 0.95rem;">Sensor Values</h4>
-            <table style="width: 100%; font-size: 0.85rem;">
-              <tbody>
-                <tr><td style="color: #666; padding: 0.25rem 0;">VRP 30d:</td><td id="greg-sensor-vrp-30d" style="text-align: right; font-weight: 500;">--</td></tr>
-                <tr><td style="color: #666; padding: 0.25rem 0;">Chop Factor 7d:</td><td id="greg-sensor-chop-7d" style="text-align: right; font-weight: 500;">--</td></tr>
-                <tr><td style="color: #666; padding: 0.25rem 0;">IV Rank 6m:</td><td id="greg-sensor-ivrank-6m" style="text-align: right; font-weight: 500;">--</td></tr>
-                <tr><td style="color: #666; padding: 0.25rem 0;">Term Spread:</td><td id="greg-sensor-term-spread" style="text-align: right; font-weight: 500;">--</td></tr>
-                <tr><td style="color: #666; padding: 0.25rem 0;">Skew 25d:</td><td id="greg-sensor-skew-25d" style="text-align: right; font-weight: 500;">--</td></tr>
-                <tr><td style="color: #666; padding: 0.25rem 0;">ADX 14d:</td><td id="greg-sensor-adx-14d" style="text-align: right; font-weight: 500;">--</td></tr>
-                <tr><td style="color: #666; padding: 0.25rem 0;">RSI 14d:</td><td id="greg-sensor-rsi-14d" style="text-align: right; font-weight: 500;">--</td></tr>
-                <tr><td style="color: #666; padding: 0.25rem 0;">Price vs MA200:</td><td id="greg-sensor-price-ma200" style="text-align: right; font-weight: 500;">--</td></tr>
-              </tbody>
-            </table>
-          </div>
-        </div>
-        
-        <div id="greg-selector-status" style="font-size: 0.8rem; color: #666; text-align: right;">
-          Not yet loaded
+        <div id="bots-expert-table" style="overflow-x: auto;">
+          <p style="color: #666; font-style: italic;">Loading expert strategies...</p>
         </div>
       </div>
       
       <p style="color: #888; font-size: 0.85rem; margin-top: 1rem;">
         <strong>Phase 1 (Read-Only):</strong> Computes sensors, runs decision tree, displays recommendation. No orders placed.
-        <br>Phase 2 (Execution) and Phase 3 (Global Risk) coming soon.
       </p>
     </div>
   </div>
@@ -2853,57 +2887,188 @@ def index() -> str:
         loadSystemHealthStatus();
       }}
       if (name === 'strategies') {{
-        refreshGregSelector();
+        loadBotsTab();
       }}
     }}
     
     // ==============================================
-    // GREG SELECTOR FUNCTIONS
+    // BOTS TAB FUNCTIONS
     // ==============================================
     
-    async function refreshGregSelector() {{
-      const statusEl = document.getElementById('greg-selector-status');
-      statusEl.textContent = 'Loading...';
-      statusEl.style.color = '#666';
+    let botsStrategiesData = [];
+    let currentExpertId = 'greg_mandolini';
+    
+    function formatSensorValue(val, decimals = 2) {{
+      if (val === null || val === undefined) return '--';
+      return typeof val === 'number' ? val.toFixed(decimals) : String(val);
+    }}
+    
+    async function refreshBotsSensors() {{
+      const container = document.getElementById('bots-live-sensors');
+      container.innerHTML = '<p style="color: #666; font-style: italic;">Loading...</p>';
       
       try {{
-        const res = await fetch('/api/strategies/greg/selector');
+        const res = await fetch('/api/bots/market_sensors');
         const data = await res.json();
         
         if (data.ok) {{
-          // Update meta label
-          const metaLabel = document.getElementById('greg-meta-label');
-          if (metaLabel && data.meta) {{
-            metaLabel.textContent = `${{data.meta.version || 'Phase 1'}} - ${{data.meta.author_style || 'Master Selector'}}`;
+          const sensors = data.sensors || {{}};
+          const underlyings = Object.keys(sensors);
+          
+          let html = `<table style="width: 100%; border-collapse: collapse; font-size: 0.9rem;">
+            <thead>
+              <tr style="border-bottom: 2px solid #ddd;">
+                <th style="text-align: left; padding: 0.5rem;">Sensor</th>
+                ${{underlyings.map(u => `<th style="text-align: right; padding: 0.5rem;">${{u}}</th>`).join('')}}
+              </tr>
+            </thead>
+            <tbody>`;
+          
+          const sensorNames = ['vrp_30d', 'chop_factor_7d', 'iv_rank_6m', 'term_structure_spread', 'skew_25d', 'adx_14d', 'rsi_14d', 'price_vs_ma200'];
+          const sensorLabels = {{'vrp_30d': 'VRP 30d', 'chop_factor_7d': 'Chop Factor 7d', 'iv_rank_6m': 'IV Rank 6m', 'term_structure_spread': 'Term Spread', 'skew_25d': 'Skew 25d', 'adx_14d': 'ADX 14d', 'rsi_14d': 'RSI 14d', 'price_vs_ma200': 'Price vs MA200'}};
+          
+          for (const name of sensorNames) {{
+            html += `<tr style="border-bottom: 1px solid #eee;">
+              <td style="padding: 0.5rem; color: #666;">${{sensorLabels[name] || name}}</td>
+              ${{underlyings.map(u => {{
+                const val = sensors[u] ? sensors[u][name] : null;
+                const display = formatSensorValue(val, name === 'chop_factor_7d' ? 3 : 2);
+                const color = val !== null ? '#333' : '#999';
+                return `<td style="text-align: right; padding: 0.5rem; color: ${{color}}; font-weight: ${{val !== null ? '500' : '400'}};">${{display}}</td>`;
+              }}).join('')}}
+            </tr>`;
           }}
           
-          // Update decision
-          document.getElementById('greg-selected-strategy').textContent = data.selected_strategy || '--';
-          document.getElementById('greg-selected-reason').textContent = data.reasoning || '--';
-          
-          // Update sensors
-          const sensors = data.sensors || {{}};
-          document.getElementById('greg-sensor-vrp-30d').textContent = sensors.vrp_30d !== null ? sensors.vrp_30d.toFixed(2) : '--';
-          document.getElementById('greg-sensor-chop-7d').textContent = sensors.chop_factor_7d !== null ? sensors.chop_factor_7d.toFixed(3) : '--';
-          document.getElementById('greg-sensor-ivrank-6m').textContent = sensors.iv_rank_6m !== null ? (sensors.iv_rank_6m * 100).toFixed(1) + '%' : '--';
-          document.getElementById('greg-sensor-term-spread').textContent = sensors.term_structure_spread !== null ? sensors.term_structure_spread.toFixed(2) : '--';
-          document.getElementById('greg-sensor-skew-25d').textContent = sensors.skew_25d !== null ? sensors.skew_25d.toFixed(2) : '--';
-          document.getElementById('greg-sensor-adx-14d').textContent = sensors.adx_14d !== null ? sensors.adx_14d.toFixed(1) : '--';
-          document.getElementById('greg-sensor-rsi-14d').textContent = sensors.rsi_14d !== null ? sensors.rsi_14d.toFixed(1) : '--';
-          document.getElementById('greg-sensor-price-ma200').textContent = sensors.price_vs_ma200 !== null ? sensors.price_vs_ma200.toFixed(2) : '--';
-          
-          // Update status
-          const time = data.timestamp ? new Date(data.timestamp).toLocaleTimeString() : new Date().toLocaleTimeString();
-          statusEl.textContent = `Updated at ${{time}} UTC (strategy: ${{data.selected_strategy}})`;
-          statusEl.style.color = '#2e7d32';
+          html += '</tbody></table>';
+          container.innerHTML = html;
         }} else {{
-          statusEl.textContent = `Error: ${{data.error}}`;
-          statusEl.style.color = '#c62828';
+          container.innerHTML = `<p style="color: #c62828;">Error: ${{data.error}}</p>`;
         }}
       }} catch (e) {{
-        statusEl.textContent = `Error: ${{e.message}}`;
-        statusEl.style.color = '#c62828';
+        container.innerHTML = `<p style="color: #c62828;">Error: ${{e.message}}</p>`;
       }}
+    }}
+    
+    async function refreshBotsStrategies() {{
+      const matchesContainer = document.getElementById('bots-strategy-matches');
+      const expertContainer = document.getElementById('bots-expert-table');
+      
+      matchesContainer.innerHTML = '<p style="color: #666; font-style: italic;">Loading...</p>';
+      expertContainer.innerHTML = '<p style="color: #666; font-style: italic;">Loading...</p>';
+      
+      try {{
+        const res = await fetch('/api/bots/strategies');
+        const data = await res.json();
+        
+        if (data.ok) {{
+          botsStrategiesData = data.strategies || [];
+          
+          // Render Strategy Matches (only passing strategies)
+          const passing = botsStrategiesData.filter(s => s.status === 'pass');
+          
+          if (passing.length === 0) {{
+            matchesContainer.innerHTML = '<p style="color: #666; font-style: italic;">No strategies currently passing.</p>';
+          }} else {{
+            let html = `<table style="width: 100%; border-collapse: collapse; font-size: 0.9rem;">
+              <thead>
+                <tr style="border-bottom: 2px solid #ddd;">
+                  <th style="text-align: left; padding: 0.5rem;">Bot</th>
+                  <th style="text-align: left; padding: 0.5rem;">Underlying</th>
+                  <th style="text-align: left; padding: 0.5rem;">Strategy</th>
+                  <th style="text-align: center; padding: 0.5rem;">Status</th>
+                </tr>
+              </thead>
+              <tbody>`;
+            
+            for (const s of passing) {{
+              const tooltip = s.criteria.map(c => `${{c.metric}}: ${{formatSensorValue(c.value)}} (${{c.note || 'ok'}})`).join('; ');
+              html += `<tr style="border-bottom: 1px solid #eee;" title="${{tooltip}}">
+                <td style="padding: 0.5rem;">${{s.bot_name}}</td>
+                <td style="padding: 0.5rem;">${{s.underlying}}</td>
+                <td style="padding: 0.5rem;">${{s.label}}</td>
+                <td style="padding: 0.5rem; text-align: center; color: #2e7d32; font-weight: 600;">PASS</td>
+              </tr>`;
+            }}
+            
+            html += '</tbody></table>';
+            matchesContainer.innerHTML = html;
+          }}
+          
+          // Render Expert Table
+          renderExpertTable();
+        }} else {{
+          matchesContainer.innerHTML = `<p style="color: #c62828;">Error: ${{data.error}}</p>`;
+          expertContainer.innerHTML = `<p style="color: #c62828;">Error: ${{data.error}}</p>`;
+        }}
+      }} catch (e) {{
+        matchesContainer.innerHTML = `<p style="color: #c62828;">Error: ${{e.message}}</p>`;
+        expertContainer.innerHTML = `<p style="color: #c62828;">Error: ${{e.message}}</p>`;
+      }}
+    }}
+    
+    function selectExpertTab(expertId) {{
+      currentExpertId = expertId;
+      
+      // Update tab styling
+      document.querySelectorAll('.bots-expert-tab').forEach(btn => {{
+        if (btn.dataset.expertId === expertId) {{
+          btn.style.background = '#7c4dff';
+          btn.style.color = 'white';
+        }} else {{
+          btn.style.background = '#e0e0e0';
+          btn.style.color = '#333';
+        }}
+      }});
+      
+      renderExpertTable();
+    }}
+    
+    function renderExpertTable() {{
+      const container = document.getElementById('bots-expert-table');
+      const filtered = botsStrategiesData.filter(s => s.expert_id === currentExpertId);
+      
+      if (filtered.length === 0) {{
+        container.innerHTML = '<p style="color: #666; font-style: italic;">No strategies for this expert.</p>';
+        return;
+      }}
+      
+      let html = `<table style="width: 100%; border-collapse: collapse; font-size: 0.9rem;">
+        <thead>
+          <tr style="border-bottom: 2px solid #ddd;">
+            <th style="text-align: left; padding: 0.5rem;">Strategy</th>
+            <th style="text-align: left; padding: 0.5rem;">Underlying</th>
+            <th style="text-align: center; padding: 0.5rem;">Status</th>
+            <th style="text-align: left; padding: 0.5rem;">Details</th>
+          </tr>
+        </thead>
+        <tbody>`;
+      
+      for (const s of filtered) {{
+        const statusColors = {{'pass': '#2e7d32', 'blocked': '#c62828', 'no_data': '#666'}};
+        const statusLabels = {{'pass': 'PASS', 'blocked': 'BLOCKED', 'no_data': 'NO DATA'}};
+        
+        const shortDetails = s.criteria.slice(0, 3).map(c => {{
+          const mark = c.ok ? 'OK' : (c.note === 'missing_data' ? '?' : 'X');
+          return `${{c.metric}} ${{mark}}`;
+        }}).join('; ');
+        
+        const tooltip = s.criteria.map(c => `${{c.metric}}: ${{formatSensorValue(c.value)}} (${{c.note || 'ok'}})`).join('\n');
+        
+        html += `<tr style="border-bottom: 1px solid #eee;" title="${{tooltip}}">
+          <td style="padding: 0.5rem;">${{s.label}}</td>
+          <td style="padding: 0.5rem;">${{s.underlying}}</td>
+          <td style="padding: 0.5rem; text-align: center; color: ${{statusColors[s.status]}}; font-weight: 600;">${{statusLabels[s.status]}}</td>
+          <td style="padding: 0.5rem; font-size: 0.8rem; color: #666;">${{shortDetails || s.summary.substring(0, 50)}}</td>
+        </tr>`;
+      }}
+      
+      html += '</tbody></table>';
+      container.innerHTML = html;
+    }}
+    
+    function loadBotsTab() {{
+      refreshBotsSensors();
+      refreshBotsStrategies();
     }}
     
     // ==============================================
