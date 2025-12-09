@@ -2296,6 +2296,79 @@ def index() -> str:
         </div>
         
       </div>
+      
+      <!-- Runtime Controls Section -->
+      <div style="margin-top: 2rem;">
+        <h2 style="margin-bottom: 0.5rem;">Runtime Controls</h2>
+        <p style="color: #666; margin-bottom: 1.5rem;">Adjust safety and operational settings. Changes apply immediately but do not persist across restarts.</p>
+        
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 1.5rem;">
+          
+          <!-- Kill Switch Toggle -->
+          <div style="background: #fff3e0; padding: 1.25rem; border-radius: 8px; border-left: 4px solid #e65100;">
+            <h3 style="margin: 0 0 0.75rem 0; color: #e65100; font-size: 1rem;">Global Kill Switch</h3>
+            <p style="font-size: 0.8rem; color: #666; margin-bottom: 1rem;">When enabled, blocks all trading actions except DO_NOTHING.</p>
+            <div style="display: flex; align-items: center; gap: 1rem;">
+              <label class="switch">
+                <input type="checkbox" id="kill-switch-toggle" onchange="updateKillSwitch(this.checked)">
+                <span class="slider round"></span>
+              </label>
+              <span id="kill-switch-label" style="font-weight: 600; color: #333;">OFF</span>
+            </div>
+            <div id="kill-switch-feedback" style="font-size: 0.8rem; min-height: 1.5rem; margin-top: 0.75rem;"></div>
+          </div>
+          
+          <!-- Daily Drawdown Limit -->
+          <div style="background: #fce4ec; padding: 1.25rem; border-radius: 8px; border-left: 4px solid #c62828;">
+            <h3 style="margin: 0 0 0.75rem 0; color: #c62828; font-size: 1rem;">Daily Drawdown Limit %</h3>
+            <p style="font-size: 0.8rem; color: #666; margin-bottom: 1rem;">Max daily peak-to-trough equity loss. Set 0 to disable.</p>
+            <div style="display: flex; align-items: center; gap: 0.5rem;">
+              <input type="number" id="drawdown-limit-input" min="0" max="100" step="0.1" style="width: 80px; padding: 0.5rem; border: 1px solid #ccc; border-radius: 4px;">
+              <span>%</span>
+              <button onclick="updateDrawdownLimit()" style="padding: 0.5rem 1rem;">Save</button>
+            </div>
+            <div id="drawdown-limit-feedback" style="font-size: 0.8rem; min-height: 1.5rem; margin-top: 0.75rem;"></div>
+          </div>
+          
+          <!-- Decision Mode -->
+          <div style="background: #e3f2fd; padding: 1.25rem; border-radius: 8px; border-left: 4px solid #1565c0;">
+            <h3 style="margin: 0 0 0.75rem 0; color: #1565c0; font-size: 1rem;">Decision Mode</h3>
+            <p style="font-size: 0.8rem; color: #666; margin-bottom: 1rem;">Choose how trading decisions are made.</p>
+            <select id="decision-mode-select" onchange="updateDecisionMode(this.value)" style="width: 100%; padding: 0.5rem; border: 1px solid #ccc; border-radius: 4px;">
+              <option value="rule_only">Rule Only</option>
+              <option value="llm_only">LLM Only</option>
+              <option value="hybrid_shadow">Hybrid (LLM Shadow)</option>
+            </select>
+            <div id="decision-mode-feedback" style="font-size: 0.8rem; min-height: 1.5rem; margin-top: 0.75rem;"></div>
+          </div>
+          
+          <!-- Dry Run Toggle -->
+          <div style="background: #e8f5e9; padding: 1.25rem; border-radius: 8px; border-left: 4px solid #2e7d32;">
+            <h3 style="margin: 0 0 0.75rem 0; color: #2e7d32; font-size: 1rem;">Dry Run Mode</h3>
+            <p style="font-size: 0.8rem; color: #666; margin-bottom: 1rem;">When enabled, simulates trades without placing real orders.</p>
+            <div style="display: flex; align-items: center; gap: 1rem;">
+              <label class="switch">
+                <input type="checkbox" id="dry-run-toggle" onchange="updateDryRun(this.checked)">
+                <span class="slider round"></span>
+              </label>
+              <span id="dry-run-label" style="font-weight: 600; color: #333;">OFF</span>
+            </div>
+            <div id="dry-run-feedback" style="font-size: 0.8rem; min-height: 1.5rem; margin-top: 0.75rem;"></div>
+          </div>
+          
+          <!-- Position Reconcile Action -->
+          <div style="background: #f3e5f5; padding: 1.25rem; border-radius: 8px; border-left: 4px solid #7b1fa2;">
+            <h3 style="margin: 0 0 0.75rem 0; color: #7b1fa2; font-size: 1rem;">On Position Mismatch</h3>
+            <p style="font-size: 0.8rem; color: #666; margin-bottom: 1rem;">Action when local positions differ from exchange.</p>
+            <select id="reconcile-action-select" onchange="updateReconcileAction(this.value)" style="width: 100%; padding: 0.5rem; border: 1px solid #ccc; border-radius: 4px;">
+              <option value="halt">Halt</option>
+              <option value="auto_heal">Auto-Heal</option>
+            </select>
+            <div id="reconcile-action-feedback" style="font-size: 0.8rem; min-height: 1.5rem; margin-top: 0.75rem;"></div>
+          </div>
+          
+        </div>
+      </div>
     </div>
   </div>
 
@@ -2376,6 +2449,178 @@ def index() -> str:
         }}
       }} catch (e) {{
         document.getElementById('risk-status-line').textContent = 'Error: ' + e.message;
+      }}
+      
+      // Load runtime config for controls
+      await loadRuntimeConfig();
+    }}
+    
+    async function loadRuntimeConfig() {{
+      try {{
+        const res = await fetch('/api/system/runtime-config');
+        const data = await res.json();
+        if (data.ok) {{
+          // Kill switch toggle
+          const killSwitchToggle = document.getElementById('kill-switch-toggle');
+          const killSwitchLabel = document.getElementById('kill-switch-label');
+          if (killSwitchToggle && killSwitchLabel) {{
+            killSwitchToggle.checked = data.kill_switch_enabled;
+            killSwitchLabel.textContent = data.kill_switch_enabled ? 'ON' : 'OFF';
+            killSwitchLabel.style.color = data.kill_switch_enabled ? '#c62828' : '#333';
+          }}
+          
+          // Daily drawdown limit
+          const drawdownInput = document.getElementById('drawdown-limit-input');
+          if (drawdownInput) {{
+            drawdownInput.value = data.daily_drawdown_limit_pct || 0;
+          }}
+          
+          // Decision mode
+          const decisionModeSelect = document.getElementById('decision-mode-select');
+          if (decisionModeSelect) {{
+            decisionModeSelect.value = data.decision_mode;
+          }}
+          
+          // Dry run toggle
+          const dryRunToggle = document.getElementById('dry-run-toggle');
+          const dryRunLabel = document.getElementById('dry-run-label');
+          if (dryRunToggle && dryRunLabel) {{
+            dryRunToggle.checked = data.dry_run;
+            dryRunLabel.textContent = data.dry_run ? 'ON' : 'OFF';
+            dryRunLabel.style.color = data.dry_run ? '#e65100' : '#333';
+          }}
+          
+          // Position reconcile action
+          const reconcileActionSelect = document.getElementById('reconcile-action-select');
+          if (reconcileActionSelect) {{
+            reconcileActionSelect.value = data.position_reconcile_action;
+          }}
+        }}
+      }} catch (e) {{
+        console.error('Error loading runtime config:', e);
+      }}
+    }}
+    
+    async function updateKillSwitch(enabled) {{
+      const feedbackEl = document.getElementById('kill-switch-feedback');
+      const labelEl = document.getElementById('kill-switch-label');
+      feedbackEl.innerHTML = '<span style="color: #666;">Updating...</span>';
+      try {{
+        const res = await fetch('/api/system/runtime-config', {{
+          method: 'POST',
+          headers: {{'Content-Type': 'application/json'}},
+          body: JSON.stringify({{kill_switch_enabled: enabled}})
+        }});
+        const data = await res.json();
+        if (data.ok) {{
+          labelEl.textContent = enabled ? 'ON' : 'OFF';
+          labelEl.style.color = enabled ? '#c62828' : '#333';
+          feedbackEl.innerHTML = `<span style="color: #2e7d32;">✓ Kill switch ${{enabled ? 'enabled' : 'disabled'}}</span>`;
+          setTimeout(() => {{ feedbackEl.innerHTML = ''; }}, 3000);
+          loadSystemHealthStatus();
+        }} else {{
+          feedbackEl.innerHTML = `<span style="color: #c62828;">✗ ${{data.errors?.join(', ') || 'Update failed'}}</span>`;
+          document.getElementById('kill-switch-toggle').checked = !enabled;
+        }}
+      }} catch (e) {{
+        feedbackEl.innerHTML = `<span style="color: #c62828;">✗ Error: ${{e.message}}</span>`;
+        document.getElementById('kill-switch-toggle').checked = !enabled;
+      }}
+    }}
+    
+    async function updateDrawdownLimit() {{
+      const inputEl = document.getElementById('drawdown-limit-input');
+      const feedbackEl = document.getElementById('drawdown-limit-feedback');
+      const value = parseFloat(inputEl.value) || 0;
+      feedbackEl.innerHTML = '<span style="color: #666;">Updating...</span>';
+      try {{
+        const res = await fetch('/api/system/runtime-config', {{
+          method: 'POST',
+          headers: {{'Content-Type': 'application/json'}},
+          body: JSON.stringify({{daily_drawdown_limit_pct: value}})
+        }});
+        const data = await res.json();
+        if (data.ok) {{
+          feedbackEl.innerHTML = `<span style="color: #2e7d32;">✓ Drawdown limit updated to ${{value}}%</span>`;
+          setTimeout(() => {{ feedbackEl.innerHTML = ''; }}, 3000);
+          loadSystemHealthStatus();
+        }} else {{
+          feedbackEl.innerHTML = `<span style="color: #c62828;">✗ ${{data.errors?.join(', ') || 'Update failed'}}</span>`;
+        }}
+      }} catch (e) {{
+        feedbackEl.innerHTML = `<span style="color: #c62828;">✗ Error: ${{e.message}}</span>`;
+      }}
+    }}
+    
+    async function updateDecisionMode(mode) {{
+      const feedbackEl = document.getElementById('decision-mode-feedback');
+      feedbackEl.innerHTML = '<span style="color: #666;">Updating...</span>';
+      const modeLabels = {{'rule_only': 'Rule Only', 'llm_only': 'LLM Only', 'hybrid_shadow': 'Hybrid (LLM Shadow)'}};
+      try {{
+        const res = await fetch('/api/system/runtime-config', {{
+          method: 'POST',
+          headers: {{'Content-Type': 'application/json'}},
+          body: JSON.stringify({{decision_mode: mode}})
+        }});
+        const data = await res.json();
+        if (data.ok) {{
+          feedbackEl.innerHTML = `<span style="color: #2e7d32;">✓ Decision mode changed to: ${{modeLabels[mode] || mode}}</span>`;
+          setTimeout(() => {{ feedbackEl.innerHTML = ''; }}, 3000);
+          loadSystemHealthStatus();
+        }} else {{
+          feedbackEl.innerHTML = `<span style="color: #c62828;">✗ ${{data.errors?.join(', ') || 'Update failed'}}</span>`;
+        }}
+      }} catch (e) {{
+        feedbackEl.innerHTML = `<span style="color: #c62828;">✗ Error: ${{e.message}}</span>`;
+      }}
+    }}
+    
+    async function updateDryRun(enabled) {{
+      const feedbackEl = document.getElementById('dry-run-feedback');
+      const labelEl = document.getElementById('dry-run-label');
+      feedbackEl.innerHTML = '<span style="color: #666;">Updating...</span>';
+      try {{
+        const res = await fetch('/api/system/runtime-config', {{
+          method: 'POST',
+          headers: {{'Content-Type': 'application/json'}},
+          body: JSON.stringify({{dry_run: enabled}})
+        }});
+        const data = await res.json();
+        if (data.ok) {{
+          labelEl.textContent = enabled ? 'ON' : 'OFF';
+          labelEl.style.color = enabled ? '#e65100' : '#333';
+          feedbackEl.innerHTML = `<span style="color: #2e7d32;">✓ Dry run mode is now ${{enabled ? 'ON' : 'OFF'}}</span>`;
+          setTimeout(() => {{ feedbackEl.innerHTML = ''; }}, 3000);
+          loadSystemHealthStatus();
+        }} else {{
+          feedbackEl.innerHTML = `<span style="color: #c62828;">✗ ${{data.errors?.join(', ') || 'Update failed'}}</span>`;
+          document.getElementById('dry-run-toggle').checked = !enabled;
+        }}
+      }} catch (e) {{
+        feedbackEl.innerHTML = `<span style="color: #c62828;">✗ Error: ${{e.message}}</span>`;
+        document.getElementById('dry-run-toggle').checked = !enabled;
+      }}
+    }}
+    
+    async function updateReconcileAction(action) {{
+      const feedbackEl = document.getElementById('reconcile-action-feedback');
+      feedbackEl.innerHTML = '<span style="color: #666;">Updating...</span>';
+      const actionLabels = {{'halt': 'Halt', 'auto_heal': 'Auto-Heal'}};
+      try {{
+        const res = await fetch('/api/system/runtime-config', {{
+          method: 'POST',
+          headers: {{'Content-Type': 'application/json'}},
+          body: JSON.stringify({{position_reconcile_action: action}})
+        }});
+        const data = await res.json();
+        if (data.ok) {{
+          feedbackEl.innerHTML = `<span style="color: #2e7d32;">✓ Reconciliation behavior updated to: ${{actionLabels[action] || action}}</span>`;
+          setTimeout(() => {{ feedbackEl.innerHTML = ''; }}, 3000);
+        }} else {{
+          feedbackEl.innerHTML = `<span style="color: #c62828;">✗ ${{data.errors?.join(', ') || 'Update failed'}}</span>`;
+        }}
+      }} catch (e) {{
+        feedbackEl.innerHTML = `<span style="color: #c62828;">✗ Error: ${{e.message}}</span>`;
       }}
     }}
     
