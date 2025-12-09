@@ -790,7 +790,52 @@ def get_llm_status() -> JSONResponse:
             "decision_mode": getattr(settings, "decision_mode", "rule_only"),
             "llm_shadow_enabled": getattr(settings, "llm_shadow_enabled", False),
             "llm_validation_strict": getattr(settings, "llm_validation_strict", True),
+            "explore_prob": settings.explore_prob,
         })
+    except Exception as e:
+        return JSONResponse(content={"ok": False, "error": str(e)})
+
+
+class LLMConfigUpdate(BaseModel):
+    """Request model for updating LLM configuration."""
+    llm_enabled: Optional[bool] = None
+    decision_mode: Optional[str] = None
+    explore_prob: Optional[float] = None
+    llm_shadow_enabled: Optional[bool] = None
+    llm_validation_strict: Optional[bool] = None
+
+
+@app.post("/api/llm_status")
+def update_llm_status(req: LLMConfigUpdate) -> JSONResponse:
+    """Update LLM-related configuration at runtime (in-memory only)."""
+    try:
+        if req.llm_enabled is not None:
+            settings.llm_enabled = req.llm_enabled
+        
+        if req.decision_mode is not None:
+            valid_modes = ["rule_only", "llm_only", "hybrid_shadow"]
+            if req.decision_mode not in valid_modes:
+                return JSONResponse(
+                    status_code=400,
+                    content={"ok": False, "error": f"decision_mode must be one of: {', '.join(valid_modes)}"}
+                )
+            settings.decision_mode = req.decision_mode  # type: ignore
+        
+        if req.explore_prob is not None:
+            if req.explore_prob < 0.0 or req.explore_prob > 1.0:
+                return JSONResponse(
+                    status_code=400,
+                    content={"ok": False, "error": "explore_prob must be between 0.0 and 1.0"}
+                )
+            settings.explore_prob = req.explore_prob
+        
+        if req.llm_shadow_enabled is not None:
+            settings.llm_shadow_enabled = req.llm_shadow_enabled
+        
+        if req.llm_validation_strict is not None:
+            settings.llm_validation_strict = req.llm_validation_strict
+        
+        return get_llm_status()
     except Exception as e:
         return JSONResponse(content={"ok": False, "error": str(e)})
 
@@ -911,6 +956,155 @@ def get_risk_limits() -> JSONResponse:
             "daily_drawdown_limit_pct": getattr(settings, "daily_drawdown_limit_pct", 0.0),
             "kill_switch_enabled": getattr(settings, "kill_switch_enabled", False),
         })
+    except Exception as e:
+        return JSONResponse(content={"ok": False, "error": str(e)})
+
+
+class RiskLimitsUpdate(BaseModel):
+    """Request model for updating risk limits."""
+    max_margin_used_pct: Optional[float] = None
+    max_net_delta_abs: Optional[float] = None
+    daily_drawdown_limit_pct: Optional[float] = None
+    kill_switch_enabled: Optional[bool] = None
+
+
+@app.post("/api/risk_limits")
+def update_risk_limits(req: RiskLimitsUpdate) -> JSONResponse:
+    """Update risk limits at runtime (in-memory only)."""
+    try:
+        if req.max_margin_used_pct is not None:
+            if req.max_margin_used_pct < 0.0 or req.max_margin_used_pct > 100.0:
+                return JSONResponse(
+                    status_code=400,
+                    content={"ok": False, "error": "max_margin_used_pct must be between 0 and 100"}
+                )
+            settings.max_margin_used_pct = req.max_margin_used_pct
+        
+        if req.max_net_delta_abs is not None:
+            if req.max_net_delta_abs < 0.0:
+                return JSONResponse(
+                    status_code=400,
+                    content={"ok": False, "error": "max_net_delta_abs must be >= 0"}
+                )
+            settings.max_net_delta_abs = req.max_net_delta_abs
+        
+        if req.daily_drawdown_limit_pct is not None:
+            if req.daily_drawdown_limit_pct < 0.0 or req.daily_drawdown_limit_pct > 100.0:
+                return JSONResponse(
+                    status_code=400,
+                    content={"ok": False, "error": "daily_drawdown_limit_pct must be between 0 and 100"}
+                )
+            settings.daily_drawdown_limit_pct = req.daily_drawdown_limit_pct
+        
+        if req.kill_switch_enabled is not None:
+            settings.kill_switch_enabled = req.kill_switch_enabled
+        
+        return get_risk_limits()
+    except Exception as e:
+        return JSONResponse(content={"ok": False, "error": str(e)})
+
+
+@app.get("/api/strategy_thresholds")
+def get_strategy_thresholds() -> JSONResponse:
+    """Return current strategy threshold settings for both production + research."""
+    try:
+        return JSONResponse(content={
+            "ok": True,
+            "mode": settings.mode,
+            "is_research": settings.is_research,
+            "training_profile_mode": settings.training_profile_mode,
+            "prod": {
+                "ivrv_min": settings.ivrv_min,
+                "delta_min": settings.delta_min,
+                "delta_max": settings.delta_max,
+                "dte_min": settings.dte_min,
+                "dte_max": settings.dte_max,
+            },
+            "research": {
+                "ivrv_min": settings.research_ivrv_min,
+                "delta_min": settings.research_delta_min,
+                "delta_max": settings.research_delta_max,
+                "dte_min": settings.research_dte_min,
+                "dte_max": settings.research_dte_max,
+            },
+            "effective": {
+                "ivrv_min": settings.effective_ivrv_min,
+                "delta_min": settings.effective_delta_min,
+                "delta_max": settings.effective_delta_max,
+                "dte_min": settings.effective_dte_min,
+                "dte_max": settings.effective_dte_max,
+            },
+        })
+    except Exception as e:
+        return JSONResponse(content={"ok": False, "error": str(e)})
+
+
+class StrategyThresholdsUpdate(BaseModel):
+    """Request model for updating strategy thresholds."""
+    ivrv_min: Optional[float] = None
+    delta_min: Optional[float] = None
+    delta_max: Optional[float] = None
+    dte_min: Optional[int] = None
+    dte_max: Optional[int] = None
+    training_profile_mode: Optional[str] = None
+
+
+@app.post("/api/strategy_thresholds")
+def update_strategy_thresholds(req: StrategyThresholdsUpdate) -> JSONResponse:
+    """Update strategy thresholds at runtime. Writes to research or production fields based on mode."""
+    try:
+        use_research = settings.is_research
+        
+        if req.ivrv_min is not None:
+            if req.ivrv_min < 0:
+                return JSONResponse(status_code=400, content={"ok": False, "error": "ivrv_min must be >= 0"})
+            if use_research:
+                settings.research_ivrv_min = req.ivrv_min
+            else:
+                settings.ivrv_min = req.ivrv_min
+        
+        if req.delta_min is not None:
+            if req.delta_min < 0 or req.delta_min > 1:
+                return JSONResponse(status_code=400, content={"ok": False, "error": "delta_min must be between 0 and 1"})
+            if use_research:
+                settings.research_delta_min = req.delta_min
+            else:
+                settings.delta_min = req.delta_min
+        
+        if req.delta_max is not None:
+            if req.delta_max < 0 or req.delta_max > 1:
+                return JSONResponse(status_code=400, content={"ok": False, "error": "delta_max must be between 0 and 1"})
+            if use_research:
+                settings.research_delta_max = req.delta_max
+            else:
+                settings.delta_max = req.delta_max
+        
+        if req.dte_min is not None:
+            if req.dte_min < 0:
+                return JSONResponse(status_code=400, content={"ok": False, "error": "dte_min must be >= 0"})
+            if use_research:
+                settings.research_dte_min = req.dte_min
+            else:
+                settings.dte_min = req.dte_min
+        
+        if req.dte_max is not None:
+            if req.dte_max < 0:
+                return JSONResponse(status_code=400, content={"ok": False, "error": "dte_max must be >= 0"})
+            if use_research:
+                settings.research_dte_max = req.dte_max
+            else:
+                settings.dte_max = req.dte_max
+        
+        if req.training_profile_mode is not None:
+            valid_modes = ["single", "ladder"]
+            if req.training_profile_mode not in valid_modes:
+                return JSONResponse(
+                    status_code=400,
+                    content={"ok": False, "error": f"training_profile_mode must be one of: {', '.join(valid_modes)}"}
+                )
+            settings.training_profile_mode = req.training_profile_mode  # type: ignore
+        
+        return get_strategy_thresholds()
     except Exception as e:
         return JSONResponse(content={"ok": False, "error": str(e)})
 

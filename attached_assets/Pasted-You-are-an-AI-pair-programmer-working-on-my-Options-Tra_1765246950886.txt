@@ -1,0 +1,551 @@
+You are an AI pair-programmer working on my “Options Trading Agent” repo.
+
+Repo: https://github.com/speelbreaker/llm-brain
+
+Goal for this task (Batch 2 – Medium Priority):
+------------------------------------------------
+Implement an “LLM + Strategy Tuning” configuration layer with **live UI controls** and **FastAPI endpoints** so I can adjust:
+
+- LLM enabled toggle
+- Max margin / delta limits
+- Training profile mode (single vs ladder)
+- Strategy thresholds (IVRV, delta, DTE)
+- Exploration probability
+
+All of this must be:
+- **Visible on the dashboard** (real UI elements I can click),
+- **Backed by API endpoints** that mutate the in-memory `settings` object at runtime,
+- Safe: changes are runtime-only (no writing to env or disk), and DO NOT place real trades.
+
+Important constraints:
+- Do NOT remove or break any existing endpoints or behaviour.
+- Keep everything clearly labeled as research / testnet where appropriate.
+- I’m a non-coder: I should be able to verify this feature **purely from the web UI** by clicking controls and seeing status messages.
+
+Relevant existing pieces
+------------------------
+Key files to work in (do NOT rename them):
+
+- `src/config.py`
+  - `Settings` (Pydantic BaseSettings) already has:
+    - Risk limits: `max_margin_used_pct`, `max_net_delta_abs`, `daily_drawdown_limit_pct`, `max_expiry_exposure`, `research_max_expiry_exposure`
+    - Strategy thresholds:
+      - Production: `ivrv_min`, `delta_min`, `delta_max`, `dte_min`, `dte_max`
+      - Research: `research_ivrv_min`, `research_delta_min`, `research_delta_max`, `research_dte_min`, `research_dte_max`
+      - `premium_min_usd`
+    - LLM config: `llm_enabled`, `decision_mode`, `llm_shadow_enabled`, `llm_validation_strict`, `llm_model_name`, `llm_timeout_seconds`
+    - Strategy exploration: `explore_prob`, `explore_top_k`
+    - Training: `training_mode`, `training_profile_mode`, `training_strategies`,
+      `max_calls_per_underlying_live`, `max_calls_per_underlying_training`,
+      `training_max_calls_per_expiry`, `save_training_data`
+    - Derived helpers:
+      - `is_research`, `is_training_enabled`, `effective_ivrv_min`, `effective_delta_min`, `effective_delta_max`, `effective_dte_min`, `effective_dte_max`, `effective_max_expiry_exposure`
+
+- `src/web_app.py`
+  - FastAPI app and APIs, including:
+    - `/api/llm_status` (GET – current LLM + decision mode snapshot)
+    - `/api/test_llm_decision` (POST – dry run)
+    - `/api/risk_limits` (GET – risk config snapshot)
+    - `/api/test_kill_switch`, `/api/reconcile_positions`, `/api/agent_healthcheck`
+    - `@app.get("/", response_class=HTMLResponse) def index()` returns the main
+      “Options Agent Dashboard” HTML/Markdown string with sections:
+        - `## Strategy & Safeguards`
+        - `## System Controls & Health`
+          - `### LLM & Decision Mode` (currently shows “Loading…” + “Test LLM Decision Pipeline” button)
+          - `### Risk Limits & Kill Switch` (currently shows “Loading…”)
+          - etc.
+
+- `UI_FEATURE_GAPS.md`
+  - Contains an audit of features and their current UI exposure.
+  - We will be implementing items from:
+    - `### Medium Priority (Operational Flexibility)`
+      - LLM enabled toggle
+      - Max margin/delta limits
+      - Training profile mode
+      - Strategy thresholds (IVRV, delta, DTE)
+      - Exploration probability
+
+You can assume the app is served via `src/web_app.py` (FastAPI + HTMLResponse) and that I access it through Replit’s web view.
+
+Task 1 – Backend: config APIs for LLM + Strategy + Risk
+-------------------------------------------------------
+Add **new POST endpoints** (and one GET) in `src/web_app.py` under the “SYSTEM CONTROLS & HEALTH API ENDPOINTS” section.
+
+### 1A. LLM config update
+
+Keep the existing `GET /api/llm_status` as-is for backward compatibility.
+
+Add a **POST `/api/llm_status`** endpoint that updates LLM-related settings at runtime:
+
+- Define a Pydantic model near the other request models in `src/web_app.py`:
+
+  ```python
+  class LLMConfigUpdate(BaseModel):
+      llm_enabled: Optional[bool] = None
+      decision_mode: Optional[Literal["rule_only", "llm_only", "hybrid_shadow"]] = None
+      explore_prob: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+      llm_shadow_enabled: Optional[bool] = None
+      llm_validation_strict: Optional[bool] = None
+Implement:
+
+python
+Copy code
+@app.post("/api/llm_status")
+def update_llm_status(req: LLMConfigUpdate) -> JSONResponse:
+    """
+    Update LLM-related configuration at runtime (in-memory settings only).
+    Does NOT persist to env or disk.
+    """
+    try:
+        if req.llm_enabled is not None:
+            settings.llm_enabled = req.llm_enabled
+
+        if req.decision_mode is not None:
+            settings.decision_mode = req.decision_mode
+
+        if req.explore_prob is not None:
+            settings.explore_prob = req.explore_prob
+
+        if req.llm_shadow_enabled is not None:
+            settings.llm_shadow_enabled = req.llm_shadow_enabled
+
+        if req.llm_validation_strict is not None:
+            settings.llm_validation_strict = req.llm_validation_strict
+
+        # Return the same shape as GET /api/llm_status for convenience
+        return get_llm_status()
+    except Exception as e:
+        return JSONResponse(content={"ok": False, "error": str(e)})
+This will let the UI toggle LLM on/off, change decision mode, and adjust exploration probability.
+
+1B. Strategy thresholds API (IVRV / delta / DTE / explore / training profile)
+Add a GET and POST pair for strategy thresholds:
+
+Pydantic models:
+
+python
+Copy code
+class StrategyThresholdsUpdate(BaseModel):
+    ivrv_min: Optional[float] = None
+    delta_min: Optional[float] = None
+    delta_max: Optional[float] = None
+    dte_min: Optional[int] = None
+    dte_max: Optional[int] = None
+    training_profile_mode: Optional[Literal["single", "ladder"]] = None
+GET endpoint:
+
+python
+Copy code
+@app.get("/api/strategy_thresholds")
+def get_strategy_thresholds() -> JSONResponse:
+    """
+    Return current strategy threshold settings for both production + research,
+    plus the effective values used by the current mode.
+    """
+    try:
+        return JSONResponse(
+            content={
+                "ok": True,
+                "mode": settings.mode,
+                "is_research": settings.is_research,
+                "training_profile_mode": settings.training_profile_mode,
+                # Production thresholds
+                "prod": {
+                    "ivrv_min": settings.ivrv_min,
+                    "delta_min": settings.delta_min,
+                    "delta_max": settings.delta_max,
+                    "dte_min": settings.dte_min,
+                    "dte_max": settings.dte_max,
+                },
+                # Research thresholds
+                "research": {
+                    "ivrv_min": settings.research_ivrv_min,
+                    "delta_min": settings.research_delta_min,
+                    "delta_max": settings.research_delta_max,
+                    "dte_min": settings.research_dte_min,
+                    "dte_max": settings.research_dte_max,
+                },
+                # Effective thresholds for the current mode:
+                "effective": {
+                    "ivrv_min": settings.effective_ivrv_min,
+                    "delta_min": settings.effective_delta_min,
+                    "delta_max": settings.effective_delta_max,
+                    "dte_min": settings.effective_dte_min,
+                    "dte_max": settings.effective_dte_max,
+                },
+            }
+        )
+    except Exception as e:
+        return JSONResponse(content={"ok": False, "error": str(e)})
+POST endpoint:
+
+python
+Copy code
+@app.post("/api/strategy_thresholds")
+def update_strategy_thresholds(req: StrategyThresholdsUpdate) -> JSONResponse:
+    """
+    Update strategy thresholds at runtime.
+    - If in research mode, write to research_* fields.
+    - If in production mode, write to production fields.
+    """
+    try:
+        # Helper: choose correct field set based on mode
+        use_research = settings.is_research
+
+        if req.ivrv_min is not None:
+            if use_research:
+                settings.research_ivrv_min = req.ivrv_min
+            else:
+                settings.ivrv_min = req.ivrv_min
+
+        if req.delta_min is not None:
+            if use_research:
+                settings.research_delta_min = req.delta_min
+            else:
+                settings.delta_min = req.delta_min
+
+        if req.delta_max is not None:
+            if use_research:
+                settings.research_delta_max = req.delta_max
+            else:
+                settings.delta_max = req.delta_max
+
+        if req.dte_min is not None:
+            if use_research:
+                settings.research_dte_min = req.dte_min
+            else:
+                settings.dte_min = req.dte_min
+
+        if req.dte_max is not None:
+            if use_research:
+                settings.research_dte_max = req.dte_max
+            else:
+                settings.dte_max = req.dte_max
+
+        if req.training_profile_mode is not None:
+            settings.training_profile_mode = req.training_profile_mode
+
+        # Return fresh snapshot
+        return get_strategy_thresholds()
+    except Exception as e:
+        return JSONResponse(content={"ok": False, "error": str(e)})
+Also extend the existing /api/training/status response (if present) to include training_profile_mode in the JSON payload so the UI can show it for both the header badge and the tuning panel.
+
+1C. Risk limits update API (max margin / delta / daily DD / kill switch)
+Leave GET /api/risk_limits as-is and add a POST version for updates:
+
+Pydantic model:
+
+python
+Copy code
+class RiskLimitsUpdate(BaseModel):
+    max_margin_used_pct: Optional[float] = Field(default=None, ge=0.0, le=100.0)
+    max_net_delta_abs: Optional[float] = Field(default=None, ge=0.0)
+    daily_drawdown_limit_pct: Optional[float] = Field(default=None, ge=0.0, le=100.0)
+    kill_switch_enabled: Optional[bool] = None
+POST endpoint sharing the same path:
+
+python
+Copy code
+@app.post("/api/risk_limits")
+def update_risk_limits(req: RiskLimitsUpdate) -> JSONResponse:
+    """
+    Update risk limits at runtime.
+    Runtime-only; does not write env or disk.
+    """
+    try:
+        if req.max_margin_used_pct is not None:
+            settings.max_margin_used_pct = req.max_margin_used_pct
+
+        if req.max_net_delta_abs is not None:
+            settings.max_net_delta_abs = req.max_net_delta_abs
+
+        if req.daily_drawdown_limit_pct is not None:
+            settings.daily_drawdown_limit_pct = req.daily_drawdown_limit_pct
+
+        if req.kill_switch_enabled is not None:
+            settings.kill_switch_enabled = req.kill_switch_enabled
+
+        return get_risk_limits()
+    except Exception as e:
+        return JSONResponse(content={"ok": False, "error": str(e)})
+Task 2 – UI: “LLM + Strategy Tuning” panel with real controls
+Update the main HTML returned by index() in src/web_app.py.
+
+The goal is to give me a visible, interactive panel that surfaces and controls:
+
+LLM Enabled
+
+Decision Mode
+
+Explore Probability (%)
+
+Strategy thresholds (IVRV, delta, DTE) – effective values for the current mode
+
+Training profile mode
+
+Max margin used %
+
+Max net delta abs
+
+2A. Add a new panel under “System Controls & Health”
+In the index() HTML string:
+
+Under the existing section:
+
+text
+Copy code
+## System Controls & Health
+
+Run diagnostics and test system components. These are dry-run tests that do not execute trades.
+
+### LLM & Decision Mode
+
+Loading...
+
+Test LLM Decision Pipeline
+Replace the “Loading…” area for this subsection with a simple form-like block. For example (pseudo-Markdown / HTML – adapt to existing style in the string):
+
+html
+Copy code
+### LLM & Strategy Tuning
+
+<div id="llm-strategy-panel">
+  <p><strong>Mode:</strong> <span id="llm-mode-label">Loading...</span></p>
+  <p><strong>Deribit:</strong> <span id="llm-deribit-label">Loading...</span></p>
+
+  <label>
+    <input type="checkbox" id="llm-enabled-toggle">
+    Enable LLM Decisions
+  </label>
+
+  <label>
+    Decision Mode:
+    <select id="decision-mode-select">
+      <option value="rule_only">Rule Only</option>
+      <option value="llm_only">LLM Only</option>
+      <option value="hybrid_shadow">Hybrid Shadow</option>
+    </select>
+  </label>
+
+  <label>
+    Training Profile:
+    <select id="training-profile-select">
+      <option value="single">Single</option>
+      <option value="ladder">Ladder</option>
+    </select>
+  </label>
+
+  <label>
+    Explore Probability:
+    <input type="range" id="explore-prob-slider" min="0" max="100" step="5">
+    <span id="explore-prob-label">0%</span>
+  </label>
+
+  <fieldset>
+    <legend>Strategy Thresholds (effective)</legend>
+    <label>
+      Min IV/RV:
+      <input type="number" step="0.1" id="ivrv-min-input">
+    </label>
+    <label>
+      Delta Range:
+      <input type="number" step="0.01" id="delta-min-input">
+      –
+      <input type="number" step="0.01" id="delta-max-input">
+    </label>
+    <label>
+      DTE Range (days):
+      <input type="number" id="dte-min-input">
+      –
+      <input type="number" id="dte-max-input">
+    </label>
+  </fieldset>
+
+  <fieldset>
+    <legend>Risk Limits</legend>
+    <label>
+      Max Margin Used (%):
+      <input type="number" id="max-margin-input">
+    </label>
+    <label>
+      Max Net Delta (abs):
+      <input type="number" step="0.1" id="max-net-delta-input">
+    </label>
+  </fieldset>
+
+  <button id="apply-llm-strategy-btn">Apply LLM & Strategy Settings</button>
+  <div id="llm-strategy-status" aria-live="polite"></div>
+</div>
+
+<button id="test-llm-btn">Test LLM Decision Pipeline</button>
+Keep the existing “Test LLM Decision Pipeline” button but give it an id="test-llm-btn" so the script can attach behaviour if needed.
+
+Do NOT remove or rename the “System Controls & Health” section; just enrich it.
+
+2B. JavaScript wiring (in-page script)
+At the bottom of the HTML returned by index() (before the closing triple-quote) add a <script> block that:
+
+On page load (DOMContentLoaded), fetches configuration:
+
+GET /api/llm_status
+
+GET /api/strategy_thresholds
+
+GET /api/risk_limits
+
+Populates the UI elements:
+
+llm-mode-label with mode + decision_mode from /api/llm_status
+
+llm-deribit-label with deribit_env
+
+llm-enabled-toggle.checked from llm_enabled
+
+decision-mode-select.value from decision_mode
+
+training-profile-select.value from training_profile_mode (/api/strategy_thresholds effective field)
+
+explore-prob-slider.value from explore_prob * 100; update explore-prob-label accordingly
+
+ivrv-min-input, delta-min-input, delta-max-input, dte-min-input, dte-max-input
+from response["effective"] in /api/strategy_thresholds
+
+max-margin-input and max-net-delta-input from /api/risk_limits
+
+On click of “Apply LLM & Strategy Settings”:
+
+Read current UI values and send:
+
+POST /api/llm_status with:
+
+json
+Copy code
+{
+  "llm_enabled": <from checkbox>,
+  "decision_mode": <from select>,
+  "explore_prob": <slider_value / 100.0>
+}
+POST /api/strategy_thresholds with:
+
+json
+Copy code
+{
+  "ivrv_min": <float>,
+  "delta_min": <float>,
+  "delta_max": <float>,
+  "dte_min": <int>,
+  "dte_max": <int>,
+  "training_profile_mode": <"single" | "ladder">
+}
+POST /api/risk_limits with:
+
+json
+Copy code
+{
+  "max_margin_used_pct": <float>,
+  "max_net_delta_abs": <float>
+}
+If all three calls succeed (ok: true in responses):
+
+Update llm-strategy-status with a green-ish success message like:
+“LLM & strategy settings updated (runtime only – will reset on restart).”
+
+On any error:
+
+Set llm-strategy-status to a red-ish error message with the error string.
+
+On change of explore-prob-slider:
+
+Update explore-prob-label live (e.g., "25%").
+
+The JS can be simple vanilla JS using fetch. No external libraries are necessary.
+
+UX requirements (for me as the operator)
+I should see a clearly labeled “LLM & Strategy Tuning” panel in the System Controls & Health area.
+
+I can:
+
+Toggle “Enable LLM Decisions”.
+
+Change Decision Mode.
+
+Slide “Explore Probability %”.
+
+Edit Min IV/RV, Delta min/max, DTE min/max.
+
+Edit Max Margin % and Max Net Delta.
+
+Change “Training Profile” between Single and Ladder.
+
+When I click “Apply LLM & Strategy Settings” I immediately see:
+
+A success message if everything applied.
+
+Or a clear error message if something failed.
+
+None of this triggers real trades; it only changes the config that will be used on subsequent iterations.
+
+Task 3 – Documentation update
+Update UI_FEATURE_GAPS.md:
+
+In the “Medium Priority (Operational Flexibility)” table, add a short note or mark that the following items now have UI controls implemented:
+
+LLM enabled toggle – now controllable via System Controls & Health → LLM & Strategy Tuning.
+
+Max margin/delta limits – editable inputs in the same panel.
+
+Training profile mode – dropdown in the same panel.
+
+Strategy thresholds (IVRV, delta, DTE) – filter controls in the same panel.
+
+Exploration probability – slider in the same panel.
+
+You don’t have to delete rows; you can add a small “Status: Implemented” note in the Notes column or a short section below summarizing what this batch delivered.
+
+Update replit.md:
+
+Add a short subsection under something like “System Controls & Health” that explains:
+
+Where to find the “LLM & Strategy Tuning” panel.
+
+That controls adjust in-memory settings only (do not persist across restarts).
+
+What each control roughly does (LLM on/off, decision mode, explore %, thresholds, risk limits, training profile).
+
+Task 4 – Tests (lightweight)
+Add a small test module, e.g. tests/test_strategy_tuning_endpoints.py, that:
+
+Spins up the FastAPI app via TestClient.
+
+Verifies that:
+
+GET /api/strategy_thresholds returns ok=True and includes effective keys.
+
+POST /api/strategy_thresholds with some sample values actually changes the returned effective thresholds for the current mode.
+
+POST /api/llm_status updates llm_enabled and explore_prob (you can inspect settings or call GET /api/llm_status afterwards).
+
+POST /api/risk_limits updates max_margin_used_pct and max_net_delta_abs.
+
+Keep tests small and deterministic (no external API calls, no Deribit access).
+
+Success criteria
+The app still starts normally.
+
+All existing tests pass.
+
+New tests for these endpoints pass.
+
+When I open the dashboard in the browser, I see a “LLM & Strategy Tuning” panel under System Controls & Health.
+
+I can:
+
+Toggle LLM, adjust thresholds, adjust risk limits, and see a confirmation message.
+
+Confirm via the JSON responses (using browser dev tools or curl) that these runtime settings actually changed.
+
+No real trades are sent; this is configuration-only.
+
+yaml
+Copy code
