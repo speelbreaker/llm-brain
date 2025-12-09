@@ -2607,6 +2607,22 @@ def index() -> str:
           </button>
         </div>
         
+        <!-- Filters -->
+        <div id="bots-expert-filters" style="margin-bottom: 1rem; display: flex; gap: 1rem; flex-wrap: wrap; font-size: 0.85rem;">
+          <label style="display: flex; align-items: center; gap: 0.3rem; cursor: pointer;">
+            <input type="checkbox" id="filter-show-pass" checked onchange="renderExpertTable()">
+            <span style="color: #2e7d32;">Show PASS</span>
+          </label>
+          <label style="display: flex; align-items: center; gap: 0.3rem; cursor: pointer;">
+            <input type="checkbox" id="filter-show-blocked" checked onchange="renderExpertTable()">
+            <span style="color: #c62828;">Show BLOCKED</span>
+          </label>
+          <label style="display: flex; align-items: center; gap: 0.3rem; cursor: pointer;">
+            <input type="checkbox" id="filter-show-nodata" checked onchange="renderExpertTable()">
+            <span style="color: #666;">Show NO DATA</span>
+          </label>
+        </div>
+        
         <div id="bots-expert-table" style="overflow-x: auto;">
           <p style="color: #666; font-style: italic;">Loading expert strategies...</p>
         </div>
@@ -2963,7 +2979,7 @@ def index() -> str:
         if (data.ok) {{
           botsStrategiesData = data.strategies || [];
           
-          // Render Strategy Matches (only passing strategies)
+          // Render Strategy Matches (passing strategies, with special handling for NO_TRADE)
           const passing = botsStrategiesData.filter(s => s.status === 'pass');
           
           if (passing.length === 0) {{
@@ -2974,19 +2990,30 @@ def index() -> str:
                 <tr style="border-bottom: 2px solid #ddd;">
                   <th style="text-align: left; padding: 0.5rem;">Bot</th>
                   <th style="text-align: left; padding: 0.5rem;">Underlying</th>
-                  <th style="text-align: left; padding: 0.5rem;">Strategy</th>
+                  <th style="text-align: left; padding: 0.5rem;">Recommendation</th>
                   <th style="text-align: center; padding: 0.5rem;">Status</th>
                 </tr>
               </thead>
               <tbody>`;
             
             for (const s of passing) {{
-              const tooltip = s.criteria.map(c => `${{c.metric}}: ${{formatSensorValue(c.value)}} (${{c.note || 'ok'}})`).join('; ');
-              html += `<tr style="border-bottom: 1px solid #eee;" title="${{tooltip}}">
+              const isNoTrade = s.strategy_key === 'NO_TRADE';
+              const tooltip = isNoTrade 
+                ? (s.debug?.description || s.summary || 'No favorable setup detected')
+                : s.criteria.map(c => `${{c.metric}}: ${{formatSensorValue(c.value)}} (${{c.note || 'ok'}})`).join('; ');
+              
+              const statusColor = isNoTrade ? '#ff9800' : '#2e7d32';
+              const statusLabel = isNoTrade ? 'CAUTION' : 'PREFERRED';
+              const statusBg = isNoTrade ? '#fff3e0' : '#e8f5e9';
+              const label = isNoTrade ? 'NO TRADE' : s.label;
+              
+              html += `<tr style="border-bottom: 1px solid #eee; background: ${{statusBg}};" title="${{tooltip}}">
                 <td style="padding: 0.5rem;">${{s.bot_name}}</td>
                 <td style="padding: 0.5rem;">${{s.underlying}}</td>
-                <td style="padding: 0.5rem;">${{s.label}}</td>
-                <td style="padding: 0.5rem; text-align: center; color: #2e7d32; font-weight: 600;">PASS</td>
+                <td style="padding: 0.5rem; font-weight: 600;">${{label}}</td>
+                <td style="padding: 0.5rem; text-align: center;">
+                  <span style="display: inline-block; padding: 0.2rem 0.5rem; border-radius: 4px; background: ${{statusColor}}; color: white; font-size: 0.75rem; font-weight: 600;">${{statusLabel}}</span>
+                </td>
               </tr>`;
             }}
             
@@ -3025,10 +3052,23 @@ def index() -> str:
     
     function renderExpertTable() {{
       const container = document.getElementById('bots-expert-table');
-      const filtered = botsStrategiesData.filter(s => s.expert_id === currentExpertId);
+      
+      // Get filter states
+      const showPass = document.getElementById('filter-show-pass')?.checked ?? true;
+      const showBlocked = document.getElementById('filter-show-blocked')?.checked ?? true;
+      const showNoData = document.getElementById('filter-show-nodata')?.checked ?? true;
+      
+      // Filter by expert and status
+      let filtered = botsStrategiesData.filter(s => s.expert_id === currentExpertId);
+      filtered = filtered.filter(s => {{
+        if (s.status === 'pass' && !showPass) return false;
+        if (s.status === 'blocked' && !showBlocked) return false;
+        if (s.status === 'no_data' && !showNoData) return false;
+        return true;
+      }});
       
       if (filtered.length === 0) {{
-        container.innerHTML = '<p style="color: #666; font-style: italic;">No strategies for this expert.</p>';
+        container.innerHTML = '<p style="color: #666; font-style: italic;">No strategies match current filters.</p>';
         return;
       }}
       
@@ -3044,18 +3084,40 @@ def index() -> str:
         <tbody>`;
       
       for (const s of filtered) {{
+        const isNoTrade = s.strategy_key === 'NO_TRADE';
         const statusColors = {{'pass': '#2e7d32', 'blocked': '#c62828', 'no_data': '#666'}};
         const statusLabels = {{'pass': 'PASS', 'blocked': 'BLOCKED', 'no_data': 'NO DATA'}};
         
+        // Build detailed tooltip
+        let tooltipLines = [];
+        if (s.criteria && s.criteria.length > 0) {{
+          for (const c of s.criteria) {{
+            const valStr = formatSensorValue(c.value);
+            let status = c.ok ? 'OK' : 'FAIL';
+            if (c.note === 'missing_data') status = 'NO DATA';
+            
+            let threshold = '';
+            if (c.min !== null && c.min !== undefined) threshold += `min:${{c.min}} `;
+            if (c.max !== null && c.max !== undefined) threshold += `max:${{c.max}}`;
+            
+            tooltipLines.push(`${{c.metric}}: ${{valStr}} (${{threshold.trim() || 'n/a'}}) - ${{status}}`);
+          }}
+        }} else if (isNoTrade) {{
+          tooltipLines.push(s.summary || 'No favorable conditions detected');
+        }}
+        const tooltip = tooltipLines.join('\\n');
+        
+        // Short inline details
         const shortDetails = s.criteria.slice(0, 3).map(c => {{
           const mark = c.ok ? 'OK' : (c.note === 'missing_data' ? '?' : 'X');
           return `${{c.metric}} ${{mark}}`;
         }}).join('; ');
         
-        const tooltip = s.criteria.map(c => `${{c.metric}}: ${{formatSensorValue(c.value)}} (${{c.note || 'ok'}})`).join('\\n');
+        const displayLabel = isNoTrade ? 'No Trade' : s.label;
+        const rowBg = isNoTrade && s.status === 'pass' ? '#fff3e0' : 'transparent';
         
-        html += `<tr style="border-bottom: 1px solid #eee;" title="${{tooltip}}">
-          <td style="padding: 0.5rem;">${{s.label}}</td>
+        html += `<tr style="border-bottom: 1px solid #eee; background: ${{rowBg}};" title="${{tooltip}}">
+          <td style="padding: 0.5rem;">${{displayLabel}}</td>
           <td style="padding: 0.5rem;">${{s.underlying}}</td>
           <td style="padding: 0.5rem; text-align: center; color: ${{statusColors[s.status]}}; font-weight: 600;">${{statusLabels[s.status]}}</td>
           <td style="padding: 0.5rem; font-size: 0.8rem; color: #666;">${{shortDetails || s.summary.substring(0, 50)}}</td>

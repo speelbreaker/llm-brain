@@ -2,6 +2,7 @@
 GregBot - Greg Mandolini VRP Harvester implementation.
 
 Produces StrategyEvaluation objects for each strategy based on current sensors.
+Based on the JSON spec in docs/greg_mandolini/GREG_SELECTOR_RULES_FINAL.json
 """
 from __future__ import annotations
 
@@ -19,77 +20,74 @@ from src.strategies.greg_selector import (
 GREG_STRATEGIES = [
     {
         "key": "STRATEGY_A_STRADDLE",
-        "label": "ATM Straddle (High VRP, Calm)",
+        "label": "Strategy A: ATM Straddle",
+        "description": "High VRP, Low Movement",
         "criteria_defs": [
-            {"metric": "vrp_30d", "min": 5.0, "description": "VRP > 5"},
-            {"metric": "chop_factor_7d", "max": 0.6, "description": "Chop < 0.6 (calm)"},
-            {"metric": "adx_14d", "max": 20, "description": "ADX < 20 (choppy)"},
+            {"metric": "vrp_30d", "min": 15.0, "description": "VRP > 15"},
+            {"metric": "chop_factor_7d", "max": 0.6, "description": "Chop < 0.6"},
+            {"metric": "adx_14d", "max": 20, "description": "ADX < 20"},
         ],
     },
     {
-        "key": "STRATEGY_B_STRANGLE",
-        "label": "OTM Strangle (Moderate VRP, Ranging)",
+        "key": "STRATEGY_A_STRANGLE",
+        "label": "Strategy A: OTM Strangle",
+        "description": "Good VRP, Market Drifting",
         "criteria_defs": [
-            {"metric": "vrp_30d", "min": 3.0, "description": "VRP > 3"},
-            {"metric": "chop_factor_7d", "min": 0.6, "max": 0.9, "description": "Chop 0.6-0.9"},
-            {"metric": "rsi_14d", "min": 40, "max": 60, "description": "RSI 40-60 (neutral)"},
+            {"metric": "vrp_30d", "min": 10.0, "description": "VRP >= 10"},
+            {"metric": "chop_factor_7d", "max": 0.8, "description": "Chop < 0.8"},
+            {"metric": "adx_14d", "max": 30, "description": "ADX < 30"},
         ],
     },
     {
-        "key": "STRATEGY_C_CALENDAR",
-        "label": "Calendar Spread (Term Structure)",
+        "key": "STRATEGY_B_CALENDAR",
+        "label": "Strategy B: Calendar Spread",
+        "description": "Term Structure Play",
         "criteria_defs": [
-            {"metric": "term_structure_spread", "max": -2.0, "description": "Backwardation < -2"},
-            {"metric": "iv_rank_6m", "min": 0.3, "description": "IV Rank > 30%"},
+            {"metric": "term_structure_spread", "min": 5.0, "description": "Term spread > 5"},
+            {"metric": "iv_rank_6m", "max": 0.80, "description": "IV Rank <= 80%"},
+        ],
+    },
+    {
+        "key": "STRATEGY_C_SHORT_PUT",
+        "label": "Strategy C: Short Put",
+        "description": "Bullish Accumulation",
+        "criteria_defs": [
+            {"metric": "skew_25d", "min": 5.0, "description": "Skew > 5"},
+            {"metric": "price_vs_ma200", "min": 0, "description": "Price > MA200"},
+            {"metric": "iv_rank_6m", "min": 0.50, "description": "IV Rank > 50%"},
         ],
     },
     {
         "key": "STRATEGY_D_IRON_BUTTERFLY",
-        "label": "Iron Butterfly (Low Vol, Pinned)",
+        "label": "Strategy D: Iron Butterfly",
+        "description": "Defined Risk, High Vol",
         "criteria_defs": [
-            {"metric": "vrp_30d", "min": 8.0, "description": "VRP > 8"},
-            {"metric": "adx_14d", "max": 15, "description": "ADX < 15 (very choppy)"},
-            {"metric": "rsi_14d", "min": 45, "max": 55, "description": "RSI 45-55 (pinned)"},
+            {"metric": "iv_rank_6m", "min": 0.80, "description": "IV Rank > 80%"},
+            {"metric": "vrp_30d", "min": 10, "description": "VRP > 10"},
         ],
     },
     {
-        "key": "STRATEGY_E_PUT_SPREAD",
-        "label": "Put Credit Spread (Bullish Bias)",
+        "key": "STRATEGY_F_BULL_PUT_SPREAD",
+        "label": "Strategy F: Bull Put Spread",
+        "description": "Oversold + Fear Skew",
         "criteria_defs": [
-            {"metric": "price_vs_ma200", "min": 0, "description": "Price > MA200"},
-            {"metric": "skew_25d", "min": 2.0, "description": "Skew > 2 (put premium)"},
-            {"metric": "rsi_14d", "max": 70, "description": "RSI < 70 (not overbought)"},
+            {"metric": "skew_25d", "min": 5.0, "description": "Skew > 5 (puts expensive)"},
+            {"metric": "rsi_14d", "max": 30, "description": "RSI < 30 (oversold)"},
         ],
     },
     {
-        "key": "STRATEGY_F_CALL_SPREAD",
-        "label": "Call Credit Spread (Bearish Bias)",
+        "key": "STRATEGY_F_BEAR_CALL_SPREAD",
+        "label": "Strategy F: Bear Call Spread",
+        "description": "Overbought + FOMO Skew",
         "criteria_defs": [
-            {"metric": "price_vs_ma200", "max": 0, "description": "Price < MA200"},
-            {"metric": "skew_25d", "max": -2.0, "description": "Skew < -2 (call premium)"},
-            {"metric": "rsi_14d", "min": 30, "description": "RSI > 30 (not oversold)"},
-        ],
-    },
-    {
-        "key": "STRATEGY_G_RATIO_SPREAD",
-        "label": "Ratio Spread (Trending + Skewed)",
-        "criteria_defs": [
-            {"metric": "adx_14d", "min": 25, "description": "ADX > 25 (trending)"},
-            {"metric": "skew_25d", "min": 3.0, "description": "Skew > 3"},
-        ],
-    },
-    {
-        "key": "STRATEGY_H_JADE_LIZARD",
-        "label": "Jade Lizard (Bullish + High VRP)",
-        "criteria_defs": [
-            {"metric": "vrp_30d", "min": 6.0, "description": "VRP > 6"},
-            {"metric": "price_vs_ma200", "min": 5, "description": "Price > 5% above MA200"},
-            {"metric": "rsi_14d", "min": 50, "max": 70, "description": "RSI 50-70"},
+            {"metric": "skew_25d", "max": -5.0, "description": "Skew < -5 (calls expensive)"},
+            {"metric": "rsi_14d", "min": 70, "description": "RSI > 70 (overbought)"},
         ],
     },
     {
         "key": "NO_TRADE",
-        "label": "No Trade (Conditions Unfavorable)",
+        "label": "No Trade",
+        "description": "Conditions Unfavorable",
         "criteria_defs": [],
     },
 ]
@@ -156,7 +154,9 @@ def _build_strategy_evaluation(
     
     is_selected = strategy_def["key"] == selected_strategy
     
-    if is_selected and all_ok:
+    if strategy_def["key"] == "NO_TRADE":
+        status = "pass" if selected_strategy == "NO_TRADE" else "blocked"
+    elif is_selected and all_ok:
         status = "pass"
     elif has_missing and not all_ok:
         any_non_missing_fail = any(
@@ -167,9 +167,6 @@ def _build_strategy_evaluation(
         status = "blocked"
     else:
         status = "pass" if is_selected else "blocked"
-    
-    if strategy_def["key"] == "NO_TRADE":
-        status = "pass" if selected_strategy == "NO_TRADE" else "blocked"
     
     passing_criteria = [c for c in criteria if c.ok]
     failing_criteria = [c for c in criteria if not c.ok]
@@ -182,7 +179,7 @@ def _build_strategy_evaluation(
             )
             summary = f"Pass: {details}" if details else "Pass: No criteria required."
         else:
-            summary = "Pass: Default fallback."
+            summary = "Pass: Default fallback - no favorable setup detected."
     elif status == "no_data":
         missing = [c.metric for c in criteria if c.note == "missing_data"]
         summary = f"No data: Missing {', '.join(missing)}."
@@ -201,14 +198,14 @@ def _build_strategy_evaluation(
         status=status,
         summary=summary,
         criteria=criteria,
-        debug={"selected_by_tree": is_selected},
+        debug={"selected_by_tree": is_selected, "description": strategy_def.get("description", "")},
     )
 
 
 def compute_greg_sensors(underlying: str) -> Dict[str, Optional[float]]:
     """
     Compute Greg sensors for a given underlying.
-    Fetches OHLC data and computes technical indicators.
+    Fetches OHLC data and options chain data for all indicators.
     """
     from src.config import settings
     from src.status_store import status_store

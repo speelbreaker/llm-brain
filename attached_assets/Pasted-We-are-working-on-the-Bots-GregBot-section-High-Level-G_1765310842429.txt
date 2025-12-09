@@ -1,0 +1,413 @@
+We are working on the Bots → GregBot section.
+
+High-Level Goals for this task
+
+Finish the Greg Phase 1 sensors so that:
+
+iv_rank_6m
+
+term_structure_spread
+
+skew_25d
+are populated from the real data source (API / vol surface) instead of permanently null / "--".
+
+Clean up Greg’s strategy list:
+
+Completely remove Jade Lizard and Ratio Spread from backend + UI.
+
+Rename the two spread strategies to match the JSON spec:
+
+Put Credit Spread (Bullish Bias) → Strategy F: Bull Put Spread
+
+Call Credit Spread (Bearish Bias) → Strategy F: Bear Call Spread
+
+Small UX polish on the Bots tab:
+
+Show “NO TRADE” as a clear recommendation, not as a “PASS” strategy.
+
+Make the Expert Bots table easier to read (filters + clearer labels/tooltips).
+
+Keep everything read-only (no orders).
+
+Use the JSON spec in:
+
+docs/greg_mandolini/GREG_SELECTOR_RULES_FINAL.md
+
+as the source of truth for strategy names and sensors.
+
+Task 1 – Finish IV Rank, Term Structure, and Skew sensors
+
+We already have Greg’s Phase 1 sensors and the Bots tab showing:
+
+VRP 30d
+
+Chop Factor 7d
+
+IV Rank 6m
+
+Term Spread
+
+Skew 25d
+
+ADX 14d
+
+RSI 14d
+
+Price vs MA200
+
+Right now:
+
+VRP 30d & Chop Factor 7d are populated (for BTC).
+
+ADX, RSI, Price vs MA200 are populated from OHLC.
+
+IV Rank 6m, Term Spread, Skew 25d are still "--" due to missing data/API wiring.
+
+1A. Locate Greg sensor pipeline
+
+Find the module where Greg’s sensors and strategy evaluation are computed. In previous tasks you created:
+
+A compute_greg_sensors(underlying: str) function (or equivalent) that returns a sensor bundle for BTC/ETH.
+
+A get_gregbot_evaluations_for_underlying(underlying: str) helper that builds StrategyEvaluation objects and feeds the /api/bots/... endpoints.
+
+Re-use that module; do not duplicate logic.
+
+1B. Wire IV Rank / Term Structure / Skew to real data
+
+Use the existing data sources in this repo rather than inventing new ones. In particular:
+
+VolState / market_context / options chain data built in:
+
+src/state_builder.py
+
+src/market_context.py
+
+src/deribit_client.py
+
+Any existing vol-sensor or external API client you already created for Greg or other sensors.
+
+Implement:
+
+Term structure spread (term_structure_spread)
+
+Use the live options chain for each underlying.
+
+For each of BTC and ETH:
+
+Find a near-7d expiry and a near-30d expiry (closest to those tenors).
+
+Compute ATM IV for each tenor (e.g. midpoint of closest-to-ATM call/put).
+
+Set:
+
+term_structure_spread = iv_7d_atm - iv_30d_atm
+
+
+Store this in whatever structure compute_greg_sensors returns (e.g. Pydantic model or dict) under the key term_structure_spread.
+
+If the vol surface or expiries are missing, set term_structure_spread = None and mark the relevant StrategyCriterion.note = "missing_data".
+
+Skew 25d (skew_25d)
+
+For each underlying:
+
+From the same option chain, locate ~25-delta call and put for a representative tenor (you can use the same 30d expiry used for VRP).
+
+Compute:
+
+skew_25d = iv_25d_put - iv_25d_call
+
+
+Set skew_25d in the sensor bundle.
+
+If IVs are not available, set None and mark the criteria as missing_data.
+
+IV rank (lite) (iv_rank_6m)
+
+Implement a windowed IV rank based on whatever historical IV data is already available (for example aggregated via market_context or a small history cache).
+
+Logic:
+
+Build a simple time series of daily 30d ATM IV for the underlying over the last N days.
+
+Use that to compute:
+
+iv_rank_lite = (current_iv_30d - min_past_iv) / (max_past_iv - min_past_iv)
+
+
+Pick a reasonable N (e.g. 60–180 days) based on the data you actually have.
+
+If there is not enough history (e.g. < 20 points), set iv_rank_6m = None and note "missing_data".
+
+Expose:
+
+iv_rank_6m: float in [0,1] (or [0,100] if you prefer a percent; be consistent).
+
+Optionally iv_rank_window_days in a debug field so we know the actual lookback.
+
+API / external client wiring
+
+If there is already a dedicated client module for these signals (e.g. a “vol metrics” / “crash meter” API):
+
+Replace any placeholder mappings like iv_rank_6m=None, term_structure_spread=None, skew_25d=None with real values from that API.
+
+Make sure key names match the JSON spec and compute_greg_sensors uses the same keys the Bots API expects.
+
+In all cases, the final sensor object returned by compute_greg_sensors must include:
+
+{
+  "vrp_30d": ...,
+  "chop_factor_7d": ...,
+  "iv_rank_6m": ...,
+  "term_structure_spread": ...,
+  "skew_25d": ...,
+  "adx_14d": ...,
+  "rsi_14d": ...,
+  "price_vs_ma200": ...
+}
+
+
+with None only when data is genuinely unavailable.
+
+1C. Keep Live Market Sensors table in sync
+
+The existing endpoint:
+
+GET /api/bots/market_sensors
+
+and the Bots tab Live Market Sensors table must use the updated sensor bundle.
+
+Update nothing in the API shape, but ensure IV Rank 6m, Term Spread, and Skew 25d now show numbers for BTC (and, when data is available, for ETH) instead of "--".
+
+If ETH lacks IV data, keep "--" but with a clear missing_data note in the JSON for debugging.
+
+Task 2 – Strategy clean-up: remove Jade Lizard & Ratio Spread, rename spreads
+
+We want the strategy list to exactly match the JSON spec (GREG_SELECTOR_RULES_FINAL.md) and avoid strategies that don’t exist or aren’t ready.
+
+2A. Delete Jade Lizard and Ratio Spread
+
+Locate the code that defines Greg’s strategy set for Expert Bots and Strategy Matches. You previously created a StrategyEvaluation model and a helper like:
+
+get_gregbot_evaluations_for_underlying(underlying: str) -> {..., "strategies": [StrategyEvaluation, ...]}
+
+Inside that logic:
+
+Completely remove any definitions / mappings / labels that reference:
+
+Jade Lizard (e.g. "Jade Lizard (Bullish + High VRP)")
+
+Ratio Spread (e.g. "Ratio Spread (Trending + Skewed)")
+
+Concretely:
+
+Do not include them in the strategies list returned for GregBot.
+
+They should disappear from:
+
+/api/bots/strategies JSON.
+
+The Expert Bots table on the Bots tab.
+
+Make sure there are no dead references in the decision tree or UI; the decision tree in the JSON spec does not use Jade Lizard or Ratio Spread, so it should still work fine.
+
+2B. Rename spreads to match JSON spec
+
+Per the JSON rules, Strategy F is the directional spreads family:
+
+"STRATEGY_F_BULL_PUT_SPREAD"
+
+"STRATEGY_F_BEAR_CALL_SPREAD"
+
+Currently, the Expert Bots UI shows:
+
+Put Credit Spread (Bullish Bias)
+
+Call Credit Spread (Bearish Bias)
+
+Update all relevant places (Greg evaluation module + UI rendering) so that:
+
+User-facing labels become:
+
+Strategy F: Bull Put Spread
+
+Strategy F: Bear Call Spread
+
+You can optionally keep the old descriptions as subtitles if there is space, e.g.:
+
+Strategy F: Bull Put Spread (Bullish Bias)
+
+Strategy F: Bear Call Spread (Bearish Bias)
+
+Make sure:
+
+The strategy_key still aligns with the JSON spec ("STRATEGY_F_BULL_PUT_SPREAD" / "STRATEGY_F_BEAR_CALL_SPREAD").
+
+Only the human-readable label changes.
+
+Update any tests that assert on these labels so they expect the new names.
+
+Task 3 – Small UX polish on Bots tab
+
+We want the Bots UX to reflect recommendations clearly and reduce clutter.
+
+3A. Treat “No Trade” as a recommendation, not a “PASS” strategy
+
+Currently, in Strategy Matches (All Bots) we show:
+
+Strategy: No Trade (Conditions Unfavorable)
+
+Status: PASS (green)
+
+This is confusing.
+
+Change the logic in the client-side JS that renders Strategy Matches:
+
+For entries where strategy_key corresponds to NO_TRADE:
+
+Show in the table as:
+
+Bot: GregBot
+
+Underlying: BTC / ETH
+
+Recommendation: NO TRADE (styled as a yellow/red “caution” badge rather than a green “PASS”)
+
+Reason: from the summary string (e.g. “VRP < 0 and ADX high → not a good time to short vol.”)
+
+For other strategies that pass (once conditions are favorable):
+
+Show:
+
+Recommendation: strategy label (e.g. Strategy A: ATM Straddle)
+
+Status: maybe “Preferred Setup” or keep it as PASS but with a green badge.
+
+You may change column names from:
+
+Bot | Underlying | Strategy | Status
+
+to:
+
+Bot | Underlying | Recommendation | Status/Reason
+
+Adjust the JS accordingly; no API shape change is needed.
+
+3B. Optional filters on Expert Bots table
+
+Above the Expert Bots table (#bots-expert-table):
+
+Add a very simple filter section:
+
+<div id="bots-expert-filters">
+  <label><input type="checkbox" id="filter-show-pass" checked> Show PASS</label>
+  <label><input type="checkbox" id="filter-show-blocked" checked> Show BLOCKED</label>
+  <label><input type="checkbox" id="filter-show-nodata" checked> Show NO DATA</label>
+</div>
+
+
+In the JS rendering code:
+
+Respect these filters when building rows, so I can hide NO DATA rows when I want less noise.
+
+Defaults:
+
+PASS & BLOCKED: checked.
+
+NO DATA: checked (so behaviour is unchanged until I toggle).
+
+3C. Improve Details tooltips (no API changes)
+
+When rendering StrategyEvaluation.criteria into the “Details” cell:
+
+Keep the existing short inline text (e.g. vrp_30d X; rsi_14d OK; skew_25d ?).
+
+Also build a tooltip (title attribute) from criteria:
+
+Example:
+
+vrp_30d: -6.05 (needs > 5) – FAIL
+chop_factor_7d: 0.86 (needs < 0.6) – FAIL
+adx_14d: 38.0 (needs < 25) – FAIL
+rsi_14d: 51.6 (in [30,70]) – OK
+skew_25d: missing – NO DATA
+
+
+No backend changes needed; just use the existing criteria list already returned in JSON.
+
+Task 4 – Tests
+
+Add or update tests so this remains stable.
+
+Create/extend a test module such as:
+
+tests/test_greg_sensors_and_bots.py
+
+Key checks (via FastAPI TestClient):
+
+GET /api/bots/market_sensors:
+
+Returns ok=True.
+
+For BTC, the sensors dict contains keys:
+
+vrp_30d, chop_factor_7d,
+
+iv_rank_6m, term_structure_spread, skew_25d,
+
+adx_14d, rsi_14d, price_vs_ma200.
+
+It’s fine if some are None in test, but the keys must exist.
+
+GET /api/bots/strategies:
+
+Returns ok=True and a list under strategies.
+
+Each entry has:
+
+bot_name, expert_id, underlying,
+
+strategy_key, label, status, criteria.
+
+Assert that no strategy label or key includes “Jade Lizard” or “Ratio Spread”.
+
+Assert that labels for spreads include the new text:
+
+"Strategy F: Bull Put Spread"
+
+"Strategy F: Bear Call Spread"
+
+Optional: small unit test for compute_greg_sensors that:
+
+Fakes or stubs vol data so term_structure_spread, skew_25d, and iv_rank_6m are non-None.
+
+Ensures the mapping from underlying → sensor keys is correct.
+
+All existing tests must continue to pass.
+
+Task 5 – UX confirmation
+
+When you’re done, I should be able to:
+
+Open the dashboard in Replit web preview.
+
+Go to the Bots section.
+
+See that:
+
+Live Market Sensors now show numbers (not just --) for IV Rank 6m, Term Spread, and Skew 25d for BTC (and for ETH when data exists).
+
+There is no “Ratio Spread” or “Jade Lizard” row in the Expert Bots table.
+
+The two spreads are labeled:
+
+Strategy F: Bull Put Spread
+
+Strategy F: Bear Call Spread
+
+The Strategy Matches table shows a clear “NO TRADE” recommendation (with a caution color) instead of a confusing PASS for “No Trade (Conditions Unfavorable)”.
+
+I can toggle filters in Expert Bots to hide NO DATA rows if I want.
+
+All of this must remain read-only / analytics only – no trades are placed from these views.

@@ -67,6 +67,7 @@ class TestBotsStrategies:
             assert "expert_id" in strat
             assert "underlying" in strat
             assert "strategy_key" in strat
+            assert "label" in strat
             assert "status" in strat
             assert strat["status"] in ["pass", "blocked", "no_data"]
             assert "criteria" in strat
@@ -90,6 +91,34 @@ class TestBotsStrategies:
         assert data.get("ok") is True
         greg_strategies = [s for s in data["strategies"] if s.get("expert_id") == "greg_mandolini"]
         assert len(greg_strategies) > 0, "No GregBot strategies found"
+    
+    def test_no_jade_lizard_or_ratio_spread(self):
+        """Jade Lizard and Ratio Spread should not be present."""
+        response = client.get("/api/bots/strategies")
+        data = response.json()
+        assert data.get("ok") is True
+        for strat in data["strategies"]:
+            assert "jade_lizard" not in strat["strategy_key"].lower()
+            assert "ratio_spread" not in strat["strategy_key"].lower()
+            assert "jade lizard" not in strat["label"].lower()
+            assert "ratio spread" not in strat["label"].lower()
+    
+    def test_spread_labels_match_spec(self):
+        """Spread strategies should have correct labels per JSON spec."""
+        response = client.get("/api/bots/strategies")
+        data = response.json()
+        assert data.get("ok") is True
+        
+        labels = [s["label"] for s in data["strategies"]]
+        keys = [s["strategy_key"] for s in data["strategies"]]
+        
+        if "STRATEGY_F_BULL_PUT_SPREAD" in keys:
+            idx = keys.index("STRATEGY_F_BULL_PUT_SPREAD")
+            assert "bull put spread" in labels[idx].lower()
+        
+        if "STRATEGY_F_BEAR_CALL_SPREAD" in keys:
+            idx = keys.index("STRATEGY_F_BEAR_CALL_SPREAD")
+            assert "bear call spread" in labels[idx].lower()
 
 
 class TestBotsTypes:
@@ -134,3 +163,40 @@ class TestBotsTypes:
         assert criterion.min is None
         assert criterion.max is None
         assert criterion.note is None
+
+
+class TestGregSensors:
+    """Tests for Greg sensor computation."""
+    
+    def test_compute_greg_sensors(self):
+        """compute_greg_sensors should return all required keys."""
+        from src.bots.gregbot import compute_greg_sensors
+        
+        sensors = compute_greg_sensors("BTC")
+        
+        required_keys = [
+            "vrp_30d", "chop_factor_7d", "iv_rank_6m",
+            "term_structure_spread", "skew_25d", "adx_14d",
+            "rsi_14d", "price_vs_ma200"
+        ]
+        
+        for key in required_keys:
+            assert key in sensors, f"Missing sensor key: {key}"
+    
+    def test_gregbot_evaluations_structure(self):
+        """get_gregbot_evaluations_for_underlying should return correct structure."""
+        from src.bots.gregbot import get_gregbot_evaluations_for_underlying
+        
+        result = get_gregbot_evaluations_for_underlying("BTC")
+        
+        assert "underlying" in result
+        assert result["underlying"] == "BTC"
+        assert "sensors" in result
+        assert "strategies" in result
+        assert isinstance(result["strategies"], list)
+        assert len(result["strategies"]) > 0
+        
+        for strat in result["strategies"]:
+            assert isinstance(strat, StrategyEvaluation)
+            assert strat.bot_name == "GregBot"
+            assert strat.expert_id == "greg_mandolini"

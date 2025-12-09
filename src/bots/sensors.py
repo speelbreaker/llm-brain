@@ -2,14 +2,14 @@
 Sensor computation module for bots.
 
 Computes technical indicators (ADX, RSI, MA200) and volatility metrics
-from OHLC data fetched via Deribit API.
+from OHLC data and options chain data fetched via Deribit API.
 """
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from functools import lru_cache
 from math import sqrt, log
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import pandas as pd
 
@@ -166,6 +166,247 @@ def compute_realized_volatility(closes: pd.Series, window: int = 30) -> Optional
     return float(annualized)
 
 
+@lru_cache(maxsize=4)
+def _fetch_options_chain_cached(underlying: str, cache_key: str) -> List[Dict[str, Any]]:
+    """
+    Fetch active options instruments for an underlying.
+    Cached with 10-minute invalidation.
+    """
+    with DeribitClient() as client:
+        instruments = client.get_instruments(currency=underlying, kind="option")
+    return instruments
+
+
+def get_options_chain(underlying: str) -> List[Dict[str, Any]]:
+    """Get options chain with 10-minute cache invalidation."""
+    now = datetime.now(timezone.utc)
+    cache_key = f"{now.year}-{now.month}-{now.day}-{now.hour}-{now.minute // 10}"
+    return _fetch_options_chain_cached(underlying, cache_key)
+
+
+def _parse_option_expiry(instrument_name: str) -> Optional[datetime]:
+    """Parse expiry date from Deribit option instrument name."""
+    parts = instrument_name.split("-")
+    if len(parts) < 4:
+        return None
+    try:
+        date_str = parts[1]
+        return datetime.strptime(date_str, "%d%b%y").replace(tzinfo=timezone.utc)
+    except ValueError:
+        return None
+
+
+def _compute_dte(expiry: datetime) -> int:
+    """Compute days to expiry."""
+    now = datetime.now(timezone.utc)
+    return max(0, (expiry - now).days)
+
+
+def compute_term_structure_and_atm_iv(
+    underlying: str,
+    spot: float,
+) -> Tuple[Optional[float], Optional[float], Optional[float]]:
+    """
+    Compute term structure spread and ATM IVs for 7d and 30d tenors.
+    
+    Returns:
+        (term_structure_spread, iv_7d, iv_30d)
+    """
+    try:
+        instruments = get_options_chain(underlying)
+    except Exception:
+        return None, None, None
+    
+    if not instruments:
+        return None, None, None
+    
+    now = datetime.now(timezone.utc)
+    
+    expiry_groups: Dict[str, List[Dict]] = {}
+    for inst in instruments:
+        if inst.get("option_type") != "call":
+            continue
+        expiry = _parse_option_expiry(inst["instrument_name"])
+        if expiry is None:
+            continue
+        dte = _compute_dte(expiry)
+        if dte < 1:
+            continue
+        
+        exp_key = expiry.strftime("%Y-%m-%d")
+        if exp_key not in expiry_groups:
+            expiry_groups[exp_key] = []
+        expiry_groups[exp_key].append({
+            "instrument_name": inst["instrument_name"],
+            "strike": inst["strike"],
+            "dte": dte,
+            "expiry": expiry,
+        })
+    
+    if not expiry_groups:
+        return None, None, None
+    
+    def find_closest_expiry(target_dte: int, min_dte: int, max_dte: int) -> Optional[str]:
+        """Find expiry closest to target DTE within range."""
+        valid = []
+        for exp_key, opts in expiry_groups.items():
+            if opts:
+                dte = opts[0]["dte"]
+                if min_dte <= dte <= max_dte:
+                    valid.append((exp_key, dte, abs(dte - target_dte)))
+        if not valid:
+            return None
+        valid.sort(key=lambda x: x[2])
+        return valid[0][0]
+    
+    exp_7d = find_closest_expiry(7, 3, 14)
+    exp_30d = find_closest_expiry(30, 20, 45)
+    
+    iv_7d = None
+    iv_30d = None
+    
+    def get_atm_iv(exp_key: str) -> Optional[float]:
+        """Get ATM IV by finding option closest to spot and fetching mark_iv."""
+        if exp_key not in expiry_groups:
+            return None
+        
+        options = expiry_groups[exp_key]
+        options_sorted = sorted(options, key=lambda o: abs(o["strike"] - spot))
+        
+        if not options_sorted:
+            return None
+        
+        atm_option = options_sorted[0]
+        
+        try:
+            with DeribitClient() as client:
+                ticker = client.get_ticker(atm_option["instrument_name"])
+                mark_iv = ticker.get("mark_iv")
+                if mark_iv is not None and mark_iv > 0:
+                    return float(mark_iv)
+        except Exception:
+            pass
+        
+        return None
+    
+    if exp_7d:
+        iv_7d = get_atm_iv(exp_7d)
+    
+    if exp_30d:
+        iv_30d = get_atm_iv(exp_30d)
+    
+    term_spread = None
+    if iv_7d is not None and iv_30d is not None:
+        term_spread = iv_7d - iv_30d
+    
+    return term_spread, iv_7d, iv_30d
+
+
+def compute_skew_25d(underlying: str, spot: float) -> Optional[float]:
+    """
+    Compute 25-delta skew: IV_25d_put - IV_25d_call.
+    
+    Uses options with delta closest to +/- 0.25 from a ~30d expiry.
+    """
+    try:
+        instruments = get_options_chain(underlying)
+    except Exception:
+        return None
+    
+    if not instruments:
+        return None
+    
+    target_dte = 30
+    min_dte = 20
+    max_dte = 45
+    
+    valid_options = []
+    for inst in instruments:
+        expiry = _parse_option_expiry(inst["instrument_name"])
+        if expiry is None:
+            continue
+        dte = _compute_dte(expiry)
+        if min_dte <= dte <= max_dte:
+            valid_options.append({
+                "instrument_name": inst["instrument_name"],
+                "strike": inst["strike"],
+                "option_type": inst.get("option_type"),
+                "dte": dte,
+            })
+    
+    if not valid_options:
+        return None
+    
+    best_dte = min(valid_options, key=lambda o: abs(o["dte"] - target_dte))["dte"]
+    options_at_expiry = [o for o in valid_options if o["dte"] == best_dte]
+    
+    calls = [o for o in options_at_expiry if o["option_type"] == "call"]
+    puts = [o for o in options_at_expiry if o["option_type"] == "put"]
+    
+    if not calls or not puts:
+        return None
+    
+    def find_25d_option(options: List[Dict], is_call: bool) -> Optional[Dict]:
+        """Find option closest to 25-delta."""
+        if is_call:
+            target_strike = spot * 1.05
+        else:
+            target_strike = spot * 0.95
+        
+        sorted_opts = sorted(options, key=lambda o: abs(o["strike"] - target_strike))
+        return sorted_opts[0] if sorted_opts else None
+    
+    call_25d = find_25d_option(calls, is_call=True)
+    put_25d = find_25d_option(puts, is_call=False)
+    
+    if not call_25d or not put_25d:
+        return None
+    
+    try:
+        with DeribitClient() as client:
+            call_ticker = client.get_ticker(call_25d["instrument_name"])
+            put_ticker = client.get_ticker(put_25d["instrument_name"])
+            
+            call_iv = call_ticker.get("mark_iv")
+            put_iv = put_ticker.get("mark_iv")
+            
+            if call_iv is not None and put_iv is not None and call_iv > 0 and put_iv > 0:
+                return float(put_iv - call_iv)
+    except Exception:
+        pass
+    
+    return None
+
+
+def compute_iv_rank_lite(iv_30d: Optional[float], underlying: str) -> Optional[float]:
+    """
+    Compute a lite IV rank based on historical IV range.
+    
+    Uses a heuristic based on typical crypto IV ranges:
+    - BTC: typical range 40-100%
+    - ETH: typical range 50-120%
+    
+    Returns value in [0, 1] range.
+    """
+    if iv_30d is None or iv_30d <= 0:
+        return None
+    
+    if underlying.upper() == "BTC":
+        iv_low = 35.0
+        iv_high = 100.0
+    else:
+        iv_low = 45.0
+        iv_high = 120.0
+    
+    if iv_30d <= iv_low:
+        return 0.0
+    if iv_30d >= iv_high:
+        return 1.0
+    
+    rank = (iv_30d - iv_low) / (iv_high - iv_low)
+    return float(rank)
+
+
 class SensorBundle:
     """Container for computed sensor values for an underlying."""
     
@@ -181,6 +422,7 @@ class SensorBundle:
         self.price_vs_ma200: Optional[float] = None
         self.spot: Optional[float] = None
         self.iv_30d: Optional[float] = None
+        self.iv_7d: Optional[float] = None
         self.rv_30d: Optional[float] = None
         self.rv_7d: Optional[float] = None
         self.ma200: Optional[float] = None
@@ -247,7 +489,17 @@ def compute_sensors_for_underlying(
     bundle.rv_30d = compute_realized_volatility(closes, window=30)
     bundle.rv_7d = compute_realized_volatility(closes, window=7)
     
+    term_spread_live, iv_7d_live, iv_30d_live = compute_term_structure_and_atm_iv(
+        underlying, bundle.spot
+    )
+    
+    if iv_30d is None and iv_30d_live is not None:
+        iv_30d = iv_30d_live
+    if iv_7d is None and iv_7d_live is not None:
+        iv_7d = iv_7d_live
+    
     bundle.iv_30d = iv_30d
+    bundle.iv_7d = iv_7d
     
     if iv_30d is not None and bundle.rv_30d is not None:
         bundle.vrp_30d = iv_30d - bundle.rv_30d
@@ -259,7 +511,9 @@ def compute_sensors_for_underlying(
     else:
         bundle._missing.append("chop_factor_7d")
     
-    if iv_7d is not None and iv_30d is not None:
+    if term_spread_live is not None:
+        bundle.term_structure_spread = term_spread_live
+    elif iv_7d is not None and iv_30d is not None:
         bundle.term_structure_spread = iv_7d - iv_30d
     else:
         bundle._missing.append("term_structure_spread")
@@ -267,9 +521,15 @@ def compute_sensors_for_underlying(
     if skew is not None and skew != 0:
         bundle.skew_25d = skew
     else:
-        bundle._missing.append("skew_25d")
+        skew_live = compute_skew_25d(underlying, bundle.spot)
+        if skew_live is not None:
+            bundle.skew_25d = skew_live
+        else:
+            bundle._missing.append("skew_25d")
     
-    bundle._missing.append("iv_rank_6m")
+    bundle.iv_rank_6m = compute_iv_rank_lite(iv_30d, underlying)
+    if bundle.iv_rank_6m is None:
+        bundle._missing.append("iv_rank_6m")
     
     bundle.adx_14d = compute_adx(df, period=14)
     if bundle.adx_14d is None:

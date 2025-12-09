@@ -1,0 +1,126 @@
+The Bots → Expert Bots table is already working. Each row is a StrategyEvaluation, and the Details column is currently rendered as simple text like:
+
+vrp_30d X; adx_14d X; rsi_14d OK
+
+I want this column to be more informative for debugging:
+
+Show the actual numeric value and the threshold, and
+
+Use a green check for passing criteria and red X for failing ones.
+
+Example:
+
+Instead of: vrp_30d X
+
+Show: ❌ vrp_30d -6.05 < 15 (red)
+
+When it passes: ✅ vrp_30d 18.2 ≥ 15 (green)
+
+No backend changes; only HTML/CSS/JS.
+
+Task – Improve Details column formatting
+1. CSS classes
+
+In src/web_app.py (in the HTML template), extend the inline <style> block with:
+
+.criterion-ok {
+  color: #008000; /* green */
+  font-weight: 600;
+}
+
+.criterion-bad {
+  color: #c00000; /* red */
+  font-weight: 600;
+}
+
+.criterion-missing {
+  color: #777777;
+}
+
+2. JS formatter for criteria
+
+In the JavaScript that renders the Expert Bots table (where we currently build the Details cell from evaluation.criteria), add a helper:
+
+function formatCriterion(crit) {
+  const metric = crit.metric || "metric";
+  const value = crit.value;
+  const min = crit.min;
+  const max = crit.max;
+  const note = crit.note || "";
+
+  // Missing value
+  if (value === null || value === undefined || isNaN(value)) {
+    return `<span class="criterion-missing">❓ ${metric} missing${note ? " (" + note + ")" : ""}</span>`;
+  }
+
+  const v = Number(value);
+  let comparison = "";
+  if (min != null && max != null) {
+    comparison = `${v.toFixed(2)} ∈ [${min}, ${max}]`;
+  } else if (min != null) {
+    const symbol = crit.ok ? "≥" : "<";
+    comparison = `${v.toFixed(2)} ${symbol} ${min}`;
+  } else if (max != null) {
+    const symbol = crit.ok ? "≤" : ">";
+    comparison = `${v.toFixed(2)} ${symbol} ${max}`;
+  } else {
+    comparison = v.toFixed(2);
+  }
+
+  if (crit.ok) {
+    return `<span class="criterion-ok">✅ ${metric} ${comparison}</span>`;
+  } else {
+    return `<span class="criterion-bad">❌ ${metric} ${comparison}${note ? " (" + note + ")" : ""}</span>`;
+  }
+}
+
+3. Use the formatter when building the Details cell
+
+Where the Expert Bots table rows are created (in the JS that handles /api/bots/strategies), you currently build something like:
+
+// old pseudo-code
+const detailsText = eval.criteria
+  .map(c => `${c.metric} ${c.ok ? "OK" : c.value == null ? "?" : "X"}`)
+  .join("; ");
+detailsTd.textContent = detailsText;
+
+
+Replace this with HTML built from formatCriterion:
+
+const detailHtml = eval.criteria
+  .map(formatCriterion)
+  .join("; ");
+
+detailsTd.innerHTML = detailHtml;
+
+// Optional: more verbose tooltip using line breaks
+const tooltip = eval.criteria.map(c => {
+  const metric = c.metric || "metric";
+  const val = c.value == null ? "missing" : Number(c.value).toFixed(2);
+  const min = c.min != null ? `min=${c.min}` : "";
+  const max = c.max != null ? `max=${c.max}` : "";
+  const status = c.ok ? "PASS" : (c.value == null ? "NO DATA" : "FAIL");
+  return `${metric}: ${val} ${min} ${max} – ${status}`;
+}).join("\n");
+detailsTd.title = tooltip;
+
+
+Make sure you’re using innerHTML (not textContent) so the emojis and colored spans render.
+
+4. UX check
+
+After this change, in Bots → Expert Bots:
+
+The Details column should show entries like:
+
+❌ vrp_30d -6.05 < 15; ✅ rsi_14d 51.56 ∈ [30, 70]
+
+Passing criteria appear in green (criterion-ok with ✅).
+
+Failing criteria appear in red (criterion-bad with ❌).
+
+Missing metrics show a grey ❓ with “missing” note.
+
+The tooltip on hover should show a multi-line breakdown with PASS/FAIL per metric.
+
+No API or trading logic should be modified in this task – UI only.
