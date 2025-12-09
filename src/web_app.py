@@ -2752,6 +2752,9 @@ def index() -> str:
       
       // Load runtime config for controls
       await loadRuntimeConfig();
+      
+      // Load LLM & Strategy tuning config
+      await loadLLMStrategyConfig();
     }}
     
     async function loadRuntimeConfig() {{
@@ -2917,6 +2920,204 @@ def index() -> str:
           setTimeout(() => {{ feedbackEl.innerHTML = ''; }}, 3000);
         }} else {{
           feedbackEl.innerHTML = `<span style="color: #c62828;">✗ ${{data.errors?.join(', ') || 'Update failed'}}</span>`;
+        }}
+      }} catch (e) {{
+        feedbackEl.innerHTML = `<span style="color: #c62828;">✗ Error: ${{e.message}}</span>`;
+      }}
+    }}
+    
+    // ==============================================
+    // LLM & STRATEGY TUNING FUNCTIONS
+    // ==============================================
+    
+    async function loadLLMStrategyConfig() {{
+      // Load LLM status
+      try {{
+        const llmRes = await fetch('/api/llm_status');
+        const llmData = await llmRes.json();
+        if (llmData.ok) {{
+          document.getElementById('llm-mode-label').textContent = llmData.mode + ' / ' + llmData.decision_mode;
+          document.getElementById('llm-deribit-label').textContent = llmData.deribit_env;
+          
+          const llmEnabledToggle = document.getElementById('llm-enabled-toggle');
+          const llmEnabledLabel = document.getElementById('llm-enabled-label');
+          if (llmEnabledToggle) {{
+            llmEnabledToggle.checked = llmData.llm_enabled;
+            llmEnabledLabel.textContent = llmData.llm_enabled ? 'ON' : 'OFF';
+            llmEnabledLabel.style.color = llmData.llm_enabled ? '#1976d2' : '#333';
+          }}
+          
+          const exploreSlider = document.getElementById('explore-prob-slider');
+          if (exploreSlider) {{
+            exploreSlider.value = Math.round((llmData.explore_prob || 0) * 100);
+            document.getElementById('explore-prob-label').textContent = exploreSlider.value + '%';
+          }}
+        }}
+      }} catch (e) {{
+        console.error('Error loading LLM status:', e);
+      }}
+      
+      // Load strategy thresholds
+      try {{
+        const stratRes = await fetch('/api/strategy_thresholds');
+        const stratData = await stratRes.json();
+        if (stratData.ok) {{
+          const eff = stratData.effective;
+          document.getElementById('ivrv-min-input').value = eff.ivrv_min;
+          document.getElementById('delta-min-input').value = eff.delta_min;
+          document.getElementById('delta-max-input').value = eff.delta_max;
+          document.getElementById('dte-min-input').value = eff.dte_min;
+          document.getElementById('dte-max-input').value = eff.dte_max;
+          
+          const trainingProfileSelect = document.getElementById('training-profile-select');
+          if (trainingProfileSelect) {{
+            trainingProfileSelect.value = stratData.training_profile_mode || 'single';
+          }}
+        }}
+      }} catch (e) {{
+        console.error('Error loading strategy thresholds:', e);
+      }}
+      
+      // Load risk limits
+      try {{
+        const riskRes = await fetch('/api/risk_limits');
+        const riskData = await riskRes.json();
+        if (riskData.ok) {{
+          document.getElementById('max-margin-input').value = riskData.max_margin_used_pct;
+          document.getElementById('max-net-delta-input').value = riskData.max_net_delta_abs;
+        }}
+      }} catch (e) {{
+        console.error('Error loading risk limits:', e);
+      }}
+    }}
+    
+    function updateExploreProbLabel(value) {{
+      document.getElementById('explore-prob-label').textContent = value + '%';
+    }}
+    
+    async function updateLLMEnabled(enabled) {{
+      const feedbackEl = document.getElementById('llm-enabled-feedback');
+      const labelEl = document.getElementById('llm-enabled-label');
+      feedbackEl.innerHTML = '<span style="color: #666;">Updating...</span>';
+      try {{
+        const res = await fetch('/api/llm_status', {{
+          method: 'POST',
+          headers: {{'Content-Type': 'application/json'}},
+          body: JSON.stringify({{llm_enabled: enabled}})
+        }});
+        const data = await res.json();
+        if (data.ok) {{
+          labelEl.textContent = enabled ? 'ON' : 'OFF';
+          labelEl.style.color = enabled ? '#1976d2' : '#333';
+          feedbackEl.innerHTML = `<span style="color: #2e7d32;">✓ LLM ${{enabled ? 'enabled' : 'disabled'}}</span>`;
+          setTimeout(() => {{ feedbackEl.innerHTML = ''; }}, 3000);
+          loadSystemHealthStatus();
+        }} else {{
+          feedbackEl.innerHTML = `<span style="color: #c62828;">✗ ${{data.error || 'Update failed'}}</span>`;
+          document.getElementById('llm-enabled-toggle').checked = !enabled;
+        }}
+      }} catch (e) {{
+        feedbackEl.innerHTML = `<span style="color: #c62828;">✗ Error: ${{e.message}}</span>`;
+        document.getElementById('llm-enabled-toggle').checked = !enabled;
+      }}
+    }}
+    
+    async function saveExploreProb() {{
+      const feedbackEl = document.getElementById('explore-prob-feedback');
+      const sliderValue = parseInt(document.getElementById('explore-prob-slider').value);
+      const exploreProb = sliderValue / 100.0;
+      feedbackEl.innerHTML = '<span style="color: #666;">Updating...</span>';
+      try {{
+        const res = await fetch('/api/llm_status', {{
+          method: 'POST',
+          headers: {{'Content-Type': 'application/json'}},
+          body: JSON.stringify({{explore_prob: exploreProb}})
+        }});
+        const data = await res.json();
+        if (data.ok) {{
+          feedbackEl.innerHTML = `<span style="color: #2e7d32;">✓ Explore probability set to ${{sliderValue}}%</span>`;
+          setTimeout(() => {{ feedbackEl.innerHTML = ''; }}, 3000);
+        }} else {{
+          feedbackEl.innerHTML = `<span style="color: #c62828;">✗ ${{data.error || 'Update failed'}}</span>`;
+        }}
+      }} catch (e) {{
+        feedbackEl.innerHTML = `<span style="color: #c62828;">✗ Error: ${{e.message}}</span>`;
+      }}
+    }}
+    
+    async function updateTrainingProfile(mode) {{
+      const feedbackEl = document.getElementById('training-profile-feedback');
+      feedbackEl.innerHTML = '<span style="color: #666;">Updating...</span>';
+      try {{
+        const res = await fetch('/api/strategy_thresholds', {{
+          method: 'POST',
+          headers: {{'Content-Type': 'application/json'}},
+          body: JSON.stringify({{training_profile_mode: mode}})
+        }});
+        const data = await res.json();
+        if (data.ok) {{
+          feedbackEl.innerHTML = `<span style="color: #2e7d32;">✓ Training profile set to: ${{mode}}</span>`;
+          setTimeout(() => {{ feedbackEl.innerHTML = ''; }}, 3000);
+        }} else {{
+          feedbackEl.innerHTML = `<span style="color: #c62828;">✗ ${{data.error || 'Update failed'}}</span>`;
+        }}
+      }} catch (e) {{
+        feedbackEl.innerHTML = `<span style="color: #c62828;">✗ Error: ${{e.message}}</span>`;
+      }}
+    }}
+    
+    async function saveStrategyThresholds() {{
+      const feedbackEl = document.getElementById('strategy-thresholds-feedback');
+      feedbackEl.innerHTML = '<span style="color: #666;">Saving thresholds...</span>';
+      
+      const payload = {{
+        ivrv_min: parseFloat(document.getElementById('ivrv-min-input').value),
+        delta_min: parseFloat(document.getElementById('delta-min-input').value),
+        delta_max: parseFloat(document.getElementById('delta-max-input').value),
+        dte_min: parseInt(document.getElementById('dte-min-input').value),
+        dte_max: parseInt(document.getElementById('dte-max-input').value)
+      }};
+      
+      try {{
+        const res = await fetch('/api/strategy_thresholds', {{
+          method: 'POST',
+          headers: {{'Content-Type': 'application/json'}},
+          body: JSON.stringify(payload)
+        }});
+        const data = await res.json();
+        if (data.ok) {{
+          feedbackEl.innerHTML = '<span style="color: #2e7d32;">✓ Strategy thresholds updated</span>';
+          setTimeout(() => {{ feedbackEl.innerHTML = ''; }}, 3000);
+        }} else {{
+          feedbackEl.innerHTML = `<span style="color: #c62828;">✗ ${{data.error || 'Update failed'}}</span>`;
+        }}
+      }} catch (e) {{
+        feedbackEl.innerHTML = `<span style="color: #c62828;">✗ Error: ${{e.message}}</span>`;
+      }}
+    }}
+    
+    async function saveRiskLimits() {{
+      const feedbackEl = document.getElementById('risk-limits-feedback');
+      feedbackEl.innerHTML = '<span style="color: #666;">Saving risk limits...</span>';
+      
+      const payload = {{
+        max_margin_used_pct: parseFloat(document.getElementById('max-margin-input').value),
+        max_net_delta_abs: parseFloat(document.getElementById('max-net-delta-input').value)
+      }};
+      
+      try {{
+        const res = await fetch('/api/risk_limits', {{
+          method: 'POST',
+          headers: {{'Content-Type': 'application/json'}},
+          body: JSON.stringify(payload)
+        }});
+        const data = await res.json();
+        if (data.ok) {{
+          feedbackEl.innerHTML = '<span style="color: #2e7d32;">✓ Risk limits updated</span>';
+          setTimeout(() => {{ feedbackEl.innerHTML = ''; }}, 3000);
+          loadSystemHealthStatus();
+        }} else {{
+          feedbackEl.innerHTML = `<span style="color: #c62828;">✗ ${{data.error || 'Update failed'}}</span>`;
         }}
       }} catch (e) {{
         feedbackEl.innerHTML = `<span style="color: #c62828;">✗ Error: ${{e.message}}</span>`;
