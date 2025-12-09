@@ -445,6 +445,70 @@ class SensorBundle:
             "price_vs_ma200": self.price_vs_ma200,
         }
     
+    def to_debug_dict(self) -> Dict[str, Any]:
+        """Return sensor values with debug inputs for each sensor."""
+        underlying = self.underlying.upper()
+        iv_low = 35.0 if underlying == "BTC" else 45.0
+        iv_high = 100.0 if underlying == "BTC" else 120.0
+        
+        return {
+            "vrp_30d": {
+                "value": self.vrp_30d,
+                "inputs": {
+                    "atm_iv_30d": self.iv_30d,
+                    "rv_30d": self.rv_30d,
+                },
+            },
+            "chop_factor_7d": {
+                "value": self.chop_factor_7d,
+                "inputs": {
+                    "rv_7d": self.rv_7d,
+                    "iv_30d": self.iv_30d,
+                },
+            },
+            "iv_rank_6m": {
+                "value": self.iv_rank_6m,
+                "inputs": {
+                    "current_iv": self.iv_30d,
+                    "iv_min_6m": iv_low,
+                    "iv_max_6m": iv_high,
+                    "note": "Using heuristic range, not historical data",
+                },
+            },
+            "term_structure_spread": {
+                "value": self.term_structure_spread,
+                "inputs": {
+                    "iv_7d": self.iv_7d,
+                    "iv_30d": self.iv_30d,
+                },
+            },
+            "skew_25d": {
+                "value": self.skew_25d,
+                "inputs": {
+                    "note": "25-delta put IV - 25-delta call IV (from ~30d expiry)",
+                },
+            },
+            "adx_14d": {
+                "value": self.adx_14d,
+                "inputs": {
+                    "period": 14,
+                },
+            },
+            "rsi_14d": {
+                "value": self.rsi_14d,
+                "inputs": {
+                    "period": 14,
+                },
+            },
+            "price_vs_ma200": {
+                "value": self.price_vs_ma200,
+                "inputs": {
+                    "spot": self.spot,
+                    "ma200": self.ma200,
+                },
+            },
+        }
+    
     @property
     def missing_sensors(self) -> List[str]:
         """List of sensor names that are missing data."""

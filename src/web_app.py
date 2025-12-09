@@ -1191,22 +1191,35 @@ def get_greg_selector() -> JSONResponse:
 # =============================================================================
 
 @app.get("/api/bots/market_sensors")
-def get_bots_market_sensors() -> JSONResponse:
+def get_bots_market_sensors(debug: str = "0") -> JSONResponse:
     """
     Return current high-level sensors per underlying for Bots tab.
     Computes Greg Phase 1 sensor bundle for each underlying.
+    
+    Args:
+        debug: If "1" or "true", include debug_inputs with raw computation inputs.
     """
     try:
-        from src.bots.gregbot import compute_greg_sensors
+        from src.bots.gregbot import compute_greg_sensors, compute_greg_sensors_with_debug
         
+        include_debug = debug in ("1", "true", "True")
         underlyings = list(settings.underlyings or ["BTC", "ETH"])
-        data = {}
+        sensors_data = {}
+        debug_data = {}
         
         for u in underlyings:
-            sensors = compute_greg_sensors(u)
-            data[u] = sensors
+            if include_debug:
+                result = compute_greg_sensors_with_debug(u)
+                sensors_data[u] = result["sensors"]
+                debug_data[u] = result["debug_inputs"]
+            else:
+                sensors_data[u] = compute_greg_sensors(u)
         
-        return JSONResponse(content={"ok": True, "sensors": data})
+        response = {"ok": True, "sensors": sensors_data}
+        if include_debug:
+            response["debug_inputs"] = debug_data
+        
+        return JSONResponse(content=response)
     except Exception as e:
         return JSONResponse(content={"ok": False, "error": str(e)})
 
@@ -2590,13 +2603,23 @@ def index() -> str:
       <div style="background: #f8f9fa; padding: 1.5rem; border-radius: 8px; border-left: 4px solid #1565c0; margin-bottom: 1.5rem;">
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
           <h3 style="margin: 0; color: #1565c0; font-size: 1.1rem;">Live Market Sensors</h3>
-          <button onclick="refreshBotsSensors()" style="padding: 0.5rem 1rem; background: #1565c0; color: white; border: none; border-radius: 4px; cursor: pointer;">
-            Refresh Sensors
-          </button>
+          <div style="display: flex; align-items: center; gap: 1rem;">
+            <label style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.85rem; cursor: pointer;">
+              <input type="checkbox" id="bots-debug-toggle">
+              Show debug inputs
+            </label>
+            <button onclick="refreshBotsSensors()" style="padding: 0.5rem 1rem; background: #1565c0; color: white; border: none; border-radius: 4px; cursor: pointer;">
+              Refresh Sensors
+            </button>
+          </div>
         </div>
         <div id="bots-live-sensors" style="overflow-x: auto;">
           <p style="color: #666; font-style: italic;">Loading live market sensors...</p>
         </div>
+        <details id="bots-debug-panel" style="margin-top: 0.75rem; display: none;">
+          <summary style="cursor: pointer; color: #1565c0; font-weight: 500;">Debug: raw sensor inputs</summary>
+          <pre id="bots-debug-output" style="max-height: 400px; overflow: auto; background: #fff; padding: 1rem; border: 1px solid #ddd; border-radius: 4px; font-size: 0.8rem; white-space: pre-wrap; margin-top: 0.5rem;"></pre>
+        </details>
       </div>
       
       <!-- Strategy Matches (All Bots) -->
@@ -3002,10 +3025,16 @@ def index() -> str:
     
     async function refreshBotsSensors() {{
       const container = document.getElementById('bots-live-sensors');
+      const debugPanel = document.getElementById('bots-debug-panel');
+      const debugOutput = document.getElementById('bots-debug-output');
+      const debugToggle = document.getElementById('bots-debug-toggle');
+      
       container.innerHTML = '<p style="color: #666; font-style: italic;">Loading...</p>';
       
+      const debugMode = debugToggle && debugToggle.checked ? '1' : '0';
+      
       try {{
-        const res = await fetch('/api/bots/market_sensors');
+        const res = await fetch(`/api/bots/market_sensors?debug=${{debugMode}}`);
         const data = await res.json();
         
         if (data.ok) {{
@@ -3038,6 +3067,31 @@ def index() -> str:
           
           html += '</tbody></table>';
           container.innerHTML = html;
+          
+          // Handle debug panel
+          if (data.debug_inputs && debugPanel && debugOutput) {{
+            const debugLines = [];
+            for (const [underlying, sensorDebug] of Object.entries(data.debug_inputs || {{}})) {{
+              debugLines.push(`== ${{underlying}} ==`);
+              for (const [name, payload] of Object.entries(sensorDebug || {{}})) {{
+                const v = payload.value;
+                const inputs = payload.inputs || {{}};
+                const valStr = v !== null && v !== undefined ? Number(v).toFixed(4) : 'null';
+                debugLines.push(`${{name}}:`);
+                debugLines.push(`  value = ${{valStr}}`);
+                for (const [k, iv] of Object.entries(inputs)) {{
+                  const ivStr = typeof iv === 'number' ? iv.toFixed(4) : String(iv);
+                  debugLines.push(`  ${{k}} = ${{ivStr}}`);
+                }}
+              }}
+              debugLines.push('');
+            }}
+            debugOutput.textContent = debugLines.join('\\n');
+            debugPanel.style.display = 'block';
+          }} else if (debugPanel) {{
+            debugPanel.style.display = 'none';
+            if (debugOutput) debugOutput.textContent = '';
+          }}
         }} else {{
           container.innerHTML = `<p style="color: #c62828;">Error: ${{data.error}}</p>`;
         }}

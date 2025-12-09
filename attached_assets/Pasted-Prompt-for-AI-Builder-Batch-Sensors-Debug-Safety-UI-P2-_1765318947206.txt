@@ -1,0 +1,610 @@
+Prompt for AI Builder – Batch: Sensors Debug + Safety UI + P2 Cleanup
+
+You are an AI pair-programmer working on my “Options Trading Agent” repo.
+
+Repo: https://github.com/speelbreaker/llm-brain
+You’re editing the Replit version of this project (source of truth for code), but file paths and module names match the GitHub repo.
+
+High-level goals for this batch
+
+Improve Live Market Sensors for debugging
+Add a “Show debug inputs” toggle on the Bots tab that lets me see the raw values and inputs behind each sensor (VRP, Chop Factor, IV rank, term spread, skew, ADX, RSI, price vs MA200, etc.).
+
+Tackle a couple of safety / “P1-flavor” items from our backlog
+
+Wire proper UI controls to existing risk safety features:
+
+Global Kill Switch toggle
+
+Daily drawdown limit (%)
+
+Operating mode (research/production) and Dry run flag
+
+These should all be controllable from the dashboard without touching env vars.
+
+Tackle a couple of “P2” technical-debt items
+
+Remove clearly dead legacy entrypoints (main.py, server.py, old backtest/ root) and update docs.
+
+Absolutely critical constraints
+
+Do not send real trades. Respect existing dry_run, mode, and Deribit env behavior.
+
+All new controls are runtime-only – mutate the in-memory settings object, no writing to env or disk.
+
+Every change must have a visible UI affordance (button / toggle / input + status text) so a non-coder can confirm it works from the web UI only.
+
+Task 1 – “Show debug inputs” for Live Market Sensors (Bots tab)
+
+There is already a Bots tab with:
+
+A “Live Market Sensors” table
+with rows: VRP 30d, Chop Factor 7d, IV Rank 6m, Term Spread, Skew 25d, ADX 14d, RSI 14d, Price vs MA200
+and columns for BTC and ETH.
+
+This is powered by a FastAPI endpoint (something like /api/bots/market_sensors) and some JS in the index HTML.
+
+1A. Backend – optional debug payload
+
+Find the endpoint that serves the Live Market Sensors table for the Bots tab.
+
+It returns numeric values for at least:
+
+vrp_30d, chop_factor_7d, iv_rank_6m, term_structure_spread, skew_25d, adx_14d, rsi_14d, price_vs_ma200
+for BTC and ETH.
+
+Extend this endpoint to support a debug query parameter:
+
+If debug is absent or false → return exactly the current JSON shape (no breaking changes).
+
+If debug is "1" or "true" → return the same JSON plus a new debug_inputs object.
+
+Suggested shape (example):
+
+{
+  "ok": true,
+  "sensors": {
+    "BTC": { "vrp_30d": -2.34, "adx_14d": 38.0, ... },
+    "ETH": { "vrp_30d": -13.48, "adx_14d": 37.8, ... }
+  },
+  "debug_inputs": {
+    "BTC": {
+      "vrp_30d": {
+        "value": -2.34,
+        "inputs": {
+          "atm_iv_30d": 52.3,
+          "rv_30d": 54.6
+        }
+      },
+      "chop_factor_7d": {
+        "value": 0.713,
+        "inputs": {
+          "rv_7d": 53.2,
+          "iv_7d": 74.6
+        }
+      },
+      "iv_rank_6m": {
+        "value": 0.21,
+        "inputs": {
+          "current_iv": 60.0,
+          "iv_min_6m": 40.0,
+          "iv_max_6m": 90.0
+        }
+      },
+      "term_structure_spread": {
+        "value": -1.90,
+        "inputs": {
+          "iv_short_tenor": 60.0,
+          "iv_long_tenor": 58.1
+        }
+      },
+      "skew_25d": {
+        "value": 2.99,
+        "inputs": {
+          "put_25d_iv": 62.0,
+          "call_25d_iv": 59.0
+        }
+      },
+      "adx_14d": {
+        "value": 38.04,
+        "inputs": {
+          "period": 14
+        }
+      },
+      "rsi_14d": {
+        "value": 49.51,
+        "inputs": {
+          "period": 14
+        }
+      },
+      "price_vs_ma200": {
+        "value": -14.96,
+        "inputs": {
+          "price": 89000.0,
+          "ma200": 104000.0
+        }
+      }
+    },
+    "ETH": { "...": "..." }
+  }
+}
+
+
+You don’t have to match this inputs structure exactly – but:
+
+Each sensor should at least include its final value.
+
+Where possible, also include key inputs (e.g., IV vs RV, price vs MA, min/max IV for rank).
+
+It’s OK to leave some fields null or omit them if you don’t have the data yet (e.g., IV Rank 6m while you’re still stubbing history).
+
+Keep this entirely read-only; do not change any underlying calculations, just expose what you already compute.
+
+1B. Frontend – Show Debug Inputs toggle
+
+In the HTML returned by index() (Bots tab section):
+
+In the Live Market Sensors card:
+
+Just above or beside the “Refresh Sensors” button, add:
+
+<label style="margin-left: 1rem;">
+  <input type="checkbox" id="bots-debug-toggle">
+  Show debug inputs
+</label>
+
+
+Directly under the sensors table, add:
+
+<details id="bots-debug-panel" style="margin-top: 0.5rem; display: none;">
+  <summary>Debug: raw sensor inputs</summary>
+  <pre id="bots-debug-output" style="max-height: 300px; overflow: auto;"></pre>
+</details>
+
+
+In the JS that currently loads the Live Market Sensors:
+
+When you call the sensors API, read the checkbox:
+
+const debugToggle = document.getElementById("bots-debug-toggle");
+const debug = debugToggle && debugToggle.checked ? "1" : "0";
+const resp = await fetch(`/api/bots/market_sensors?debug=${debug}`);
+
+
+If debug_inputs exists in the JSON:
+
+Set #bots-debug-panel.style.display = "block".
+
+Fill #bots-debug-output.textContent with a pretty-printed view:
+
+const debugLines = [];
+for (const [underlying, sensors] of Object.entries(data.debug_inputs || {})) {
+  debugLines.push(`== ${underlying} ==`);
+  for (const [name, payload] of Object.entries(sensors)) {
+    const v = payload.value;
+    const inputs = payload.inputs || {};
+    debugLines.push(
+      `${name}: value=${v} inputs=${JSON.stringify(inputs)}`
+    );
+  }
+  debugLines.push("");
+}
+debugOutput.textContent = debugLines.join("\n");
+
+
+If debug_inputs is missing or debug=false:
+
+Hide the panel: #bots-debug-panel.style.display = "none" and clear #bots-debug-output.
+
+UX requirement:
+A non-coder should be able to:
+
+Tick “Show debug inputs”.
+
+Click “Refresh Sensors”.
+
+See a text block with raw numbers for BTC & ETH to cross-check manually.
+
+Task 2 – Safety / “P1-style” UI controls (Kill switch, DD limit, Mode & Dry Run)
+
+We’re now wiring up some safety controls that are already present in code/config but not fully exposed in the UI.
+
+2A. Risk Limits & Kill Switch UI
+
+We already have:
+
+src/config.Settings fields:
+
+max_margin_used_pct
+
+max_net_delta_abs
+
+daily_drawdown_limit_pct
+
+kill_switch_enabled
+
+/api/risk_limits (GET) returning some of this.
+
+src/risk_engine.check_action_allowed() using kill switch and drawdown limits.
+
+Goal: Extend both API and UI so I can fully control these from the dashboard.
+
+Backend
+
+Make sure /api/risk_limits:
+
+GET returns:
+
+{
+  "ok": true,
+  "max_margin_used_pct": ...,
+  "max_net_delta_abs": ...,
+  "daily_drawdown_limit_pct": ...,
+  "kill_switch_enabled": ...
+}
+
+
+POST (if not already present) accepts a Pydantic model like:
+
+class RiskLimitsUpdate(BaseModel):
+    max_margin_used_pct: Optional[float] = Field(default=None, ge=0.0, le=100.0)
+    max_net_delta_abs: Optional[float] = Field(default=None, ge=0.0)
+    daily_drawdown_limit_pct: Optional[float] = Field(default=None, ge=0.0, le=100.0)
+    kill_switch_enabled: Optional[bool] = None
+
+
+and updates settings in memory only:
+
+@app.post("/api/risk_limits")
+def update_risk_limits(req: RiskLimitsUpdate) -> JSONResponse:
+    try:
+        if req.max_margin_used_pct is not None:
+            settings.max_margin_used_pct = req.max_margin_used_pct
+        if req.max_net_delta_abs is not None:
+            settings.max_net_delta_abs = req.max_net_delta_abs
+        if req.daily_drawdown_limit_pct is not None:
+            settings.daily_drawdown_limit_pct = req.daily_drawdown_limit_pct
+        if req.kill_switch_enabled is not None:
+            settings.kill_switch_enabled = req.kill_switch_enabled
+        return get_risk_limits()
+    except Exception as e:
+        return JSONResponse(content={"ok": False, "error": str(e)})
+
+
+Do not persist these values to env or disk. They reset on restart.
+
+Frontend
+
+In the System Controls & Health area:
+
+In whichever panel currently shows risk limits / kill switch (or in the LLM & Strategy Tuning → “Risk Limits” fieldset), add:
+
+<fieldset>
+  <legend>Risk Limits & Kill Switch</legend>
+
+  <label>
+    Max Margin Used (%):
+    <input type="number" id="risk-max-margin-input">
+  </label>
+
+  <label>
+    Max Net Delta (abs):
+    <input type="number" step="0.1" id="risk-max-net-delta-input">
+  </label>
+
+  <label>
+    Daily Drawdown Limit (%):
+    <input type="number" id="risk-dd-limit-input" placeholder="0 = disabled">
+  </label>
+
+  <label>
+    <input type="checkbox" id="risk-kill-switch-toggle">
+    Enable Global Kill Switch
+  </label>
+</fieldset>
+
+
+In your JS (where you already call /api/risk_limits):
+
+On page load, fetch GET /api/risk_limits and populate:
+
+riskMaxMarginInput.value = data.max_margin_used_pct ?? "";
+riskMaxNetDeltaInput.value = data.max_net_delta_abs ?? "";
+riskDdLimitInput.value = data.daily_drawdown_limit_pct ?? "";
+riskKillSwitchToggle.checked = !!data.kill_switch_enabled;
+
+
+When the user clicks your “Apply LLM & Strategy Settings” (or similar) button, include these in the POST:
+
+await fetch("/api/risk_limits", {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({
+    max_margin_used_pct: parseFloat(riskMaxMarginInput.value),
+    max_net_delta_abs: parseFloat(riskMaxNetDeltaInput.value),
+    daily_drawdown_limit_pct: parseFloat(riskDdLimitInput.value),
+    kill_switch_enabled: riskKillSwitchToggle.checked
+  })
+});
+
+
+Show a status message near that button, e.g.:
+
+Success (green-ish):
+“Risk limits & kill switch updated (runtime only – resets on restart).”
+
+Error (red-ish) with the error string.
+
+Operator acceptance:
+From the UI I can:
+
+Enable/disable the Kill Switch.
+
+Tighten/loosen daily drawdown.
+
+Confirm they changed via /api/test_kill_switch or the risk status line.
+
+2B. Operating Mode & Dry Run runtime controls
+
+We already have:
+
+settings.mode ( "research" / "production" )
+
+settings.dry_run (bool)
+
+The header shows DRY RUN vs LIVE TRADING but there’s no UI toggle.
+
+Goal: Let me manage mode and dry_run from the dashboard – but keep it safe (don’t accidentally enable live trading).
+
+Backend
+
+In src/web_app.py, add a small model:
+
+from typing import Literal
+
+class RuntimeConfigUpdate(BaseModel):
+    mode: Optional[Literal["research", "production"]] = None
+    dry_run: Optional[bool] = None
+
+
+Add endpoints:
+
+@app.get("/api/runtime_config")
+def get_runtime_config() -> JSONResponse:
+    return JSONResponse(content={
+        "ok": True,
+        "mode": settings.mode,
+        "dry_run": settings.dry_run,
+        "deribit_env": settings.deribit_env,
+    })
+
+
+@app.post("/api/runtime_config")
+def update_runtime_config(req: RuntimeConfigUpdate) -> JSONResponse:
+    """
+    Runtime-only update for mode and dry_run.
+    Safe guard: this endpoint must NOT enable real trading by accident.
+    """
+    try:
+        if req.mode is not None:
+            settings.mode = req.mode
+
+        if req.dry_run is not None:
+            # Safety guard: do not allow turning dry_run OFF via UI for now.
+            # UI can only turn it ON, never OFF.
+            if req.dry_run is False:
+                # Ignore attempts to disable dry_run from UI.
+                pass
+            else:
+                settings.dry_run = True
+
+        return get_runtime_config()
+    except Exception as e:
+        return JSONResponse(content={"ok": False, "error": str(e)})
+
+
+Important safety rule: from this endpoint we never set dry_run=False.
+If we want to allow real trading later, we can do that via an explicit env/config change.
+
+Frontend
+
+In System Controls & Health, add a new subsection:
+
+### Operating Mode & Dry Run
+
+<div id="runtime-config-panel">
+  <p>
+    <strong>Deribit:</strong>
+    <span id="runtime-deribit-env-label">Loading...</span>
+  </p>
+
+  <label>
+    Operating Mode:
+    <select id="runtime-mode-select">
+      <option value="research">Research</option>
+      <option value="production">Production</option>
+    </select>
+  </label>
+
+  <label>
+    <input type="checkbox" id="runtime-dryrun-toggle">
+    Force Dry Run (no real orders)
+  </label>
+
+  <p>
+    <strong>Effective Status:</strong>
+    <span id="runtime-effective-label">Loading...</span>
+  </p>
+
+  <button id="runtime-apply-btn">Apply Runtime Config</button>
+  <div id="runtime-config-status" aria-live="polite"></div>
+</div>
+
+
+Add JS logic:
+
+On page load:
+
+const modeSelect = document.getElementById("runtime-mode-select");
+const dryRunToggle = document.getElementById("runtime-dryrun-toggle");
+const envLabel = document.getElementById("runtime-deribit-env-label");
+const effectiveLabel = document.getElementById("runtime-effective-label");
+
+async function loadRuntimeConfig() {
+  const resp = await fetch("/api/runtime_config");
+  const data = await resp.json();
+  if (!data.ok) return;
+
+  envLabel.textContent = data.deribit_env;
+  modeSelect.value = data.mode;
+  dryRunToggle.checked = !!data.dry_run;
+  effectiveLabel.textContent = `${data.mode.toUpperCase()} | ${data.dry_run ? "DRY RUN ONLY" : "LIVE TRADING POSSIBLE"}`;
+}
+
+document.addEventListener("DOMContentLoaded", loadRuntimeConfig);
+
+
+On “Apply Runtime Config” click:
+
+document.getElementById("runtime-apply-btn").addEventListener("click", async () => {
+  const statusEl = document.getElementById("runtime-config-status");
+  statusEl.textContent = "Applying runtime config...";
+
+  try {
+    const resp = await fetch("/api/runtime_config", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        mode: modeSelect.value,
+        dry_run: dryRunToggle.checked
+      })
+    });
+    const data = await resp.json();
+    if (!data.ok) {
+      statusEl.textContent = `Error: ${data.error || "unknown"}`;
+      statusEl.style.color = "red";
+      return;
+    }
+    statusEl.textContent = "Runtime config updated (runtime only – resets on restart).";
+    statusEl.style.color = "green";
+    // Refresh labels
+    envLabel.textContent = data.deribit_env;
+    effectiveLabel.textContent = `${data.mode.toUpperCase()} | ${data.dry_run ? "DRY RUN ONLY" : "LIVE TRADING POSSIBLE"}`;
+  } catch (err) {
+    statusEl.textContent = `Error: ${err}`;
+    statusEl.style.color = "red";
+  }
+});
+
+
+Operator acceptance:
+
+I can see Deribit env, Mode, and Dry Run status.
+
+I can switch mode, and I can force Dry Run ON from UI.
+
+UI clearly tells me whether live trading is even possible.
+
+Task 3 – P2 Technical debt: remove dead legacy code
+
+Follow HEALTHCHECK.md → P2 – Nice-to-Have / Cosmetic and the dead code table.
+
+3A. Remove unused entrypoints
+
+Confirm these files are not imported anywhere:
+
+main.py
+
+server.py
+
+backtest/env_simulator.py
+
+backtest/__init__.py (legacy root, not src/backtest/)
+
+Delete them from the codebase.
+
+Run:
+
+bash scripts/run_tests.sh
+
+All smoke tests from HEALTHCHECK.md (at least smoke_live_agent.sh and smoke_web_api.sh).
+
+to ensure nothing broke.
+
+3B. Update HEALTHCHECK.md
+
+In HEALTHCHECK.md, under the P2 & dead code tables:
+
+For each of:
+
+main.py
+
+server.py
+
+backtest/env_simulator.py
+
+backtest/__init__.py
+
+add a Status or note like:
+
+Status: REMOVED – Dec 2025 cleanup. Use src/web_app.py and src/backtest/covered_call_simulator.py as the canonical entrypoints.
+
+Make sure the table still renders correctly.
+
+Task 4 – Docs touch-ups (UI feature gaps + usage notes)
+
+UI_FEATURE_GAPS.md
+
+Under “Summary by Priority” / Medium Priority and High Priority sections, add a short note that:
+
+Kill switch toggle – now implemented as a checkbox in System Controls & Health → “Risk Limits & Kill Switch”.
+
+Daily drawdown limit – now editable in the same panel.
+
+LLM enabled toggle, Max margin/delta limits, Training profile mode, Strategy thresholds (IVRV, delta, DTE), Exploration probability – already implemented in the “LLM & Strategy Tuning” panel.
+
+You don’t have to rewrite the whole table; just add a short “Status: Implemented (Dec 2025)” note in the Notes column or a small section like “Recently implemented controls”.
+
+replit.md
+
+Add a short subsection under the web app section, for example:
+
+### System Controls & Health – runtime controls
+
+- **Operating Mode & Dry Run**: change `mode` (research vs production) and force `dry_run` on. These changes are runtime-only and do not persist across restarts.
+- **Risk Limits & Kill Switch**: adjust `max_margin_used_pct`, `max_net_delta_abs`, `daily_drawdown_limit_pct`, and toggle the global kill switch.
+- **Live Market Sensors – Debug Inputs**: in the Bots tab, enable “Show debug inputs” to see the raw values used to compute VRP, chop factor, IV rank, term spread, skew, ADX, RSI, and price vs MA200 for BTC/ETH. Helpful for verifying sensor calculations.
+
+Tests & Success Criteria
+
+Add/extend tests as needed:
+
+New endpoints
+
+tests/test_runtime_config_endpoints.py (or similar):
+
+GET /api/runtime_config returns ok=True and mode/dry_run.
+
+POST /api/runtime_config changes mode, and respects the safety rule (dry_run cannot be turned off).
+
+Extend existing tests for /api/risk_limits to cover new fields.
+
+Manual acceptance (what I will check in the browser)
+
+Bots → Live Market Sensors:
+
+I can tick “Show debug inputs”, refresh sensors, and see a debug block with raw inputs per sensor & underlying.
+
+System Controls & Health → Risk panel:
+
+I can change Max Margin, Max Net Delta, Daily DD, and toggle Kill Switch;
+
+I see a status message and can confirm via /api/test_kill_switch.
+
+System Controls & Health → Operating Mode & Dry Run:
+
+I can change Mode and force Dry Run ON;
+
+The panel shows the effective status and it matches /status//api/runtime_config.
+
+Dead files (main.py, server.py, backtest/env_simulator.py, backtest/__init__.py) are gone, tests still pass.

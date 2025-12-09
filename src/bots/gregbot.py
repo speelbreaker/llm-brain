@@ -202,10 +202,9 @@ def _build_strategy_evaluation(
     )
 
 
-def compute_greg_sensors(underlying: str) -> Dict[str, Optional[float]]:
+def _get_sensor_bundle(underlying: str) -> "SensorBundle":
     """
-    Compute Greg sensors for a given underlying.
-    Fetches OHLC data and options chain data for all indicators.
+    Internal helper to get the SensorBundle for a given underlying.
     """
     from src.config import settings
     from src.status_store import status_store
@@ -235,7 +234,28 @@ def compute_greg_sensors(underlying: str) -> Dict[str, Optional[float]]:
         skew=skew if skew != 0 else None,
     )
     
+    return bundle
+
+
+def compute_greg_sensors(underlying: str) -> Dict[str, Optional[float]]:
+    """
+    Compute Greg sensors for a given underlying.
+    Fetches OHLC data and options chain data for all indicators.
+    """
+    bundle = _get_sensor_bundle(underlying)
     return bundle.to_dict()
+
+
+def compute_greg_sensors_with_debug(underlying: str) -> Dict[str, Any]:
+    """
+    Compute Greg sensors with debug inputs for a given underlying.
+    Returns both sensor values and debug inputs.
+    """
+    bundle = _get_sensor_bundle(underlying)
+    return {
+        "sensors": bundle.to_dict(),
+        "debug_inputs": bundle.to_debug_dict(),
+    }
 
 
 def get_gregbot_evaluations_for_underlying(underlying: str) -> Dict[str, Any]:
