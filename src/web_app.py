@@ -10,7 +10,7 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import FastAPI, Body, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import cast
 
 from agent_loop import run_agent_loop_forever
