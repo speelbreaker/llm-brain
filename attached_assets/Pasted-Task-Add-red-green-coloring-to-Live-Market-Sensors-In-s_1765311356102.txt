@@ -1,0 +1,141 @@
+Task – Add red/green coloring to Live Market Sensors
+
+In src/web_app.py (the HTML+JS for the dashboard), update the Bots → Live Market Sensors UI so that each numeric sensor cell is colored according to whether it’s in a “good” or “bad” zone for our short-vol / Greg-style strategies.
+
+1. CSS classes
+
+Add a small inline <style> block (or extend the existing one) to define:
+
+.sensor-good {
+  color: #008000;      /* green */
+  font-weight: 600;
+}
+
+.sensor-bad {
+  color: #c00000;      /* red */
+  font-weight: 600;
+}
+
+.sensor-neutral {
+  color: inherit;
+}
+
+
+These classes will be applied to the numeric cells in the Live Market Sensors table.
+
+2. Threshold rules (front-end only)
+
+In the JavaScript that renders the Live Market Sensors table (Bots tab), add a helper function that classifies each sensor value:
+
+function classifySensorValue(sensorName, value) {
+  if (value === null || value === undefined || isNaN(value)) {
+    return "sensor-neutral";
+  }
+  const v = Number(value);
+
+  switch (sensorName) {
+    case "vrp_30d":
+      // Variance Risk Premium – good for short vol when meaningfully positive.
+      if (v >= 10) return "sensor-good";       // strong positive edge
+      if (v <= 0) return "sensor-bad";         // no edge or negative
+      return "sensor-neutral";
+
+    case "chop_factor_7d":
+      // RV / IV – lower is better for short vol; >1 = realized >= implied.
+      if (v <= 0.6) return "sensor-good";      // very choppy vs IV
+      if (v >= 0.9) return "sensor-bad";       // RV ≈ IV – no edge
+      return "sensor-neutral";
+
+    case "adx_14d":
+      // For Greg’s short-vol logic, lower ADX (non-trending) is better.
+      if (v <= 20) return "sensor-good";       // choppy / range-bound
+      if (v >= 30) return "sensor-bad";        // strong trend – dangerous to short vol
+      return "sensor-neutral";
+
+    case "rsi_14d":
+      // Standard RSI bands: extremes are “bad / risky”.
+      if (v < 30 || v > 70) return "sensor-bad";   // oversold / overbought extremes
+      return "sensor-good";                        // inside 30–70 is healthy / neutral
+
+    case "price_vs_ma200":
+      // Trend vs 200d MA – large deviations highlight trend strength.
+      if (v <= -15 || v >= 25) return "sensor-bad";  // big deviation (strong trend)
+      return "sensor-neutral";
+
+    case "iv_rank_6m":
+      // High IV rank = good for selling vol, very low rank = bad.
+      if (v >= 0.7) return "sensor-good";        // high IV rank
+      if (v <= 0.3) return "sensor-bad";         // cheap vol
+      return "sensor-neutral";
+
+    case "term_structure_spread":
+      // Positive front vs back can indicate event risk; treat big positives as “bad”.
+      if (v >= 5) return "sensor-bad";          // steep front-end premium
+      return "sensor-neutral";
+
+    case "skew_25d":
+      // Just highlight strong skew for now; direction depends on strategy.
+      if (Math.abs(v) >= 5) return "sensor-bad"; // strong skew – caution
+      return "sensor-neutral";
+
+    default:
+      return "sensor-neutral";
+  }
+}
+
+
+These thresholds are UI-only heuristics; do not change any backend trading logic.
+
+3. Apply classes when rendering the table
+
+In the JS code that builds the Live Market Sensors table:
+
+For each cell where you insert a numeric value (e.g. vrp_30d, chop_factor_7d, adx_14d, etc.):
+
+Determine the sensor name (e.g. "vrp_30d") and the numeric value.
+
+Call classifySensorValue(sensorName, value) to get one of:
+
+"sensor-good"
+
+"sensor-bad"
+
+"sensor-neutral"
+
+Add that class to the <td> element.
+
+Example (pseudo-code, adapt to your existing DOM code):
+
+function renderSensorCell(rowElem, sensorName, value) {
+  const td = document.createElement("td");
+  const display = (value === null || value === undefined || isNaN(value))
+    ? "--"
+    : value.toFixed(2);
+
+  td.textContent = display;
+  td.classList.add(classifySensorValue(sensorName, value));
+  rowElem.appendChild(td);
+}
+
+
+Make sure this is used when you render each sensor row (vrp_30d, chop_factor_7d, iv_rank_6m, term_structure_spread, skew_25d, adx_14d, rsi_14d, price_vs_ma200) for BTC and ETH.
+
+4. UX check
+
+After these changes:
+
+In the Bots → Live Market Sensors table:
+
+VRP 30d should appear green when significantly positive (e.g. ≥ 10), red when ≤ 0.
+
+Chop Factor 7d should be green when low (≤ 0.6), red when very high (≥ 0.9).
+
+ADX 14d should be green when low (≤ 20, choppy), red when high (≥ 30, trending).
+
+RSI should be green in the 30–70 band, red when <30 or >70.
+
+Other sensors are colored according to the rules above.
+
+These colors are cosmetic only and do not change any risk or strategy logic.
+
+Do not modify any API endpoints or backend trading behaviour for this task; only adjust the HTML/JS/CSS for the Bots tab.

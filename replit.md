@@ -64,26 +64,25 @@ A quantitative volatility risk premium (VRP) strategy selector based on market s
 - Displays recommendation with pass/blocked/no_data status per strategy
 - No orders placed - purely advisory
 
-**Sensor Mapping (computed from OHLC + vol_state):**
-- `vrp_30d`: IV - RV spread (requires IV from vol_state)
+**Sensor Mapping (computed from OHLC + real options chain data):**
+- `vrp_30d`: IV - RV spread (computed from ATM options mark_iv)
 - `chop_factor_7d`: RV_7d / IV_30d ratio
-- `iv_rank_6m`: 6-month IV percentile rank (requires historical IV data - not yet available)
-- `term_structure_spread`: IV_7d - IV_30d (requires term structure data - not yet available)
-- `skew_25d`: 25-delta put-call skew (requires skew data from vol_state)
+- `iv_rank_6m`: 6-month IV percentile rank (computed from historical IV range)
+- `term_structure_spread`: IV_7d - IV_30d (computed from term structure options)
+- `skew_25d`: 25-delta put-call skew (computed from OTM put/call mark_iv)
 - `adx_14d`: 14-day Average Directional Index (computed from OHLC)
 - `rsi_14d`: 14-day Relative Strength Index (computed from OHLC)
 - `price_vs_ma200`: % distance from 200-day moving average (computed from OHLC)
 
-**Strategies Evaluated:**
+**Strategies Evaluated (8 per underlying):**
 1. STRATEGY_A_STRADDLE - ATM Straddle (High VRP, Calm)
-2. STRATEGY_B_STRANGLE - OTM Strangle (Moderate VRP, Ranging)
-3. STRATEGY_C_CALENDAR - Calendar Spread (Term Structure)
-4. STRATEGY_D_IRON_BUTTERFLY - Iron Butterfly (Low Vol, Pinned)
-5. STRATEGY_E_PUT_SPREAD - Put Credit Spread (Bullish Bias)
-6. STRATEGY_F_CALL_SPREAD - Call Credit Spread (Bearish Bias)
-7. STRATEGY_G_RATIO_SPREAD - Ratio Spread (Trending + Skewed)
-8. STRATEGY_H_JADE_LIZARD - Jade Lizard (Bullish + High VRP)
-9. NO_TRADE - Default fallback
+2. STRATEGY_A_STRANGLE - OTM Strangle (Moderate VRP, Ranging)
+3. STRATEGY_B_CALENDAR - Calendar Spread (Term Structure)
+4. STRATEGY_C_SHORT_PUT - Short Put (Bullish)
+5. STRATEGY_D_IRON_BUTTERFLY - Iron Butterfly (Low Vol, Pinned)
+6. STRATEGY_F_BULL_PUT_SPREAD - Bull Put Spread (Bullish Bias)
+7. STRATEGY_F_BEAR_CALL_SPREAD - Bear Call Spread (Bearish Bias)
+8. NO_TRADE - Default fallback (displayed as orange caution badge)
 
 **Spec Location:** `docs/greg_mandolini/GREG_SELECTOR_RULES_FINAL.json`
 
