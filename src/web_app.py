@@ -2563,6 +2563,111 @@ def index() -> str:
           
         </div>
       </div>
+      
+      <!-- LLM & Strategy Tuning Section -->
+      <div style="margin-top: 2rem;">
+        <h2 style="margin-bottom: 0.5rem;">LLM & Strategy Tuning</h2>
+        <p style="color: #666; margin-bottom: 1.5rem;">Adjust LLM, strategy thresholds, and risk limits. Changes are runtime-only and will reset on restart.</p>
+        
+        <div id="llm-strategy-panel">
+          <div style="display: flex; gap: 1rem; margin-bottom: 1rem; flex-wrap: wrap;">
+            <div style="padding: 0.75rem; background: #e8eaf6; border-radius: 6px;">
+              <strong>Mode:</strong> <span id="llm-mode-label">Loading...</span>
+            </div>
+            <div style="padding: 0.75rem; background: #e8eaf6; border-radius: 6px;">
+              <strong>Deribit:</strong> <span id="llm-deribit-label">Loading...</span>
+            </div>
+          </div>
+          
+          <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 1.5rem;">
+            
+            <!-- LLM Enabled Toggle -->
+            <div style="background: #e3f2fd; padding: 1.25rem; border-radius: 8px; border-left: 4px solid #1976d2;">
+              <h3 style="margin: 0 0 0.75rem 0; color: #1976d2; font-size: 1rem;">LLM Enabled</h3>
+              <p style="font-size: 0.8rem; color: #666; margin-bottom: 1rem;">Toggle LLM-powered decision making on/off.</p>
+              <div style="display: flex; align-items: center; gap: 1rem;">
+                <label class="switch">
+                  <input type="checkbox" id="llm-enabled-toggle" onchange="updateLLMEnabled(this.checked)">
+                  <span class="slider round"></span>
+                </label>
+                <span id="llm-enabled-label" style="font-weight: 600; color: #333;">OFF</span>
+              </div>
+              <div id="llm-enabled-feedback" style="font-size: 0.8rem; min-height: 1.5rem; margin-top: 0.75rem;"></div>
+            </div>
+            
+            <!-- Explore Probability -->
+            <div style="background: #f3e5f5; padding: 1.25rem; border-radius: 8px; border-left: 4px solid #8e24aa;">
+              <h3 style="margin: 0 0 0.75rem 0; color: #8e24aa; font-size: 1rem;">Explore Probability</h3>
+              <p style="font-size: 0.8rem; color: #666; margin-bottom: 1rem;">Chance of exploration vs. best-score action.</p>
+              <div style="display: flex; align-items: center; gap: 0.5rem;">
+                <input type="range" id="explore-prob-slider" min="0" max="100" step="5" style="flex: 1;" oninput="updateExploreProbLabel(this.value)">
+                <span id="explore-prob-label" style="font-weight: 600; min-width: 40px;">0%</span>
+              </div>
+              <button onclick="saveExploreProb()" style="margin-top: 0.75rem; width: 100%;">Save Explore %</button>
+              <div id="explore-prob-feedback" style="font-size: 0.8rem; min-height: 1.5rem; margin-top: 0.5rem;"></div>
+            </div>
+            
+            <!-- Training Profile Mode -->
+            <div style="background: #e8f5e9; padding: 1.25rem; border-radius: 8px; border-left: 4px solid #388e3c;">
+              <h3 style="margin: 0 0 0.75rem 0; color: #388e3c; font-size: 1rem;">Training Profile</h3>
+              <p style="font-size: 0.8rem; color: #666; margin-bottom: 1rem;">Single = one config; Ladder = sweep parameters.</p>
+              <select id="training-profile-select" onchange="updateTrainingProfile(this.value)" style="width: 100%; padding: 0.5rem; border: 1px solid #ccc; border-radius: 4px;">
+                <option value="single">Single</option>
+                <option value="ladder">Ladder</option>
+              </select>
+              <div id="training-profile-feedback" style="font-size: 0.8rem; min-height: 1.5rem; margin-top: 0.75rem;"></div>
+            </div>
+            
+          </div>
+          
+          <!-- Strategy Thresholds Fieldset -->
+          <fieldset style="margin-top: 1.5rem; padding: 1.25rem; border: 2px solid #00bcd4; border-radius: 8px;">
+            <legend style="color: #00838f; font-weight: 600; padding: 0 0.5rem;">Strategy Thresholds (effective for current mode)</legend>
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem;">
+              <div>
+                <label style="display: block; font-size: 0.85rem; color: #555; margin-bottom: 0.25rem;">Min IV/RV Ratio</label>
+                <input type="number" id="ivrv-min-input" step="0.1" min="0" style="width: 100%; padding: 0.5rem; border: 1px solid #ccc; border-radius: 4px;">
+              </div>
+              <div>
+                <label style="display: block; font-size: 0.85rem; color: #555; margin-bottom: 0.25rem;">Delta Min</label>
+                <input type="number" id="delta-min-input" step="0.01" min="0" max="1" style="width: 100%; padding: 0.5rem; border: 1px solid #ccc; border-radius: 4px;">
+              </div>
+              <div>
+                <label style="display: block; font-size: 0.85rem; color: #555; margin-bottom: 0.25rem;">Delta Max</label>
+                <input type="number" id="delta-max-input" step="0.01" min="0" max="1" style="width: 100%; padding: 0.5rem; border: 1px solid #ccc; border-radius: 4px;">
+              </div>
+              <div>
+                <label style="display: block; font-size: 0.85rem; color: #555; margin-bottom: 0.25rem;">DTE Min (days)</label>
+                <input type="number" id="dte-min-input" min="0" style="width: 100%; padding: 0.5rem; border: 1px solid #ccc; border-radius: 4px;">
+              </div>
+              <div>
+                <label style="display: block; font-size: 0.85rem; color: #555; margin-bottom: 0.25rem;">DTE Max (days)</label>
+                <input type="number" id="dte-max-input" min="0" style="width: 100%; padding: 0.5rem; border: 1px solid #ccc; border-radius: 4px;">
+              </div>
+            </div>
+            <button onclick="saveStrategyThresholds()" style="margin-top: 1rem;">Save Strategy Thresholds</button>
+            <div id="strategy-thresholds-feedback" style="font-size: 0.8rem; min-height: 1.5rem; margin-top: 0.5rem;"></div>
+          </fieldset>
+          
+          <!-- Risk Limits Fieldset -->
+          <fieldset style="margin-top: 1.5rem; padding: 1.25rem; border: 2px solid #e53935; border-radius: 8px;">
+            <legend style="color: #c62828; font-weight: 600; padding: 0 0.5rem;">Risk Limits</legend>
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem;">
+              <div>
+                <label style="display: block; font-size: 0.85rem; color: #555; margin-bottom: 0.25rem;">Max Margin Used (%)</label>
+                <input type="number" id="max-margin-input" min="0" max="100" step="1" style="width: 100%; padding: 0.5rem; border: 1px solid #ccc; border-radius: 4px;">
+              </div>
+              <div>
+                <label style="display: block; font-size: 0.85rem; color: #555; margin-bottom: 0.25rem;">Max Net Delta (abs)</label>
+                <input type="number" id="max-net-delta-input" min="0" step="0.1" style="width: 100%; padding: 0.5rem; border: 1px solid #ccc; border-radius: 4px;">
+              </div>
+            </div>
+            <button onclick="saveRiskLimits()" style="margin-top: 1rem;">Save Risk Limits</button>
+            <div id="risk-limits-feedback" style="font-size: 0.8rem; min-height: 1.5rem; margin-top: 0.5rem;"></div>
+          </fieldset>
+          
+        </div>
+      </div>
     </div>
   </div>
 
