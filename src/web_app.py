@@ -3075,13 +3075,15 @@ def index() -> str:
               debugLines.push(`== ${{underlying}} ==`);
               for (const [name, payload] of Object.entries(sensorDebug || {{}})) {{
                 const v = payload.value;
+                const formula = payload.formula || '';
                 const inputs = payload.inputs || {{}};
                 const valStr = v !== null && v !== undefined ? Number(v).toFixed(4) : 'null';
-                debugLines.push(`${{name}}:`);
-                debugLines.push(`  value = ${{valStr}}`);
+                debugLines.push(`${{name}}: ${{valStr}}`);
+                if (formula) debugLines.push(`  formula: ${{formula}}`);
                 for (const [k, iv] of Object.entries(inputs)) {{
+                  if (iv === null || iv === undefined) continue;
                   const ivStr = typeof iv === 'number' ? iv.toFixed(4) : String(iv);
-                  debugLines.push(`  ${{k}} = ${{ivStr}}`);
+                  debugLines.push(`  ${{k}}: ${{ivStr}}`);
                 }}
               }}
               debugLines.push('');

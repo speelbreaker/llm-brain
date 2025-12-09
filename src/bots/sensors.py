@@ -446,65 +446,105 @@ class SensorBundle:
         }
     
     def to_debug_dict(self) -> Dict[str, Any]:
-        """Return sensor values with debug inputs for each sensor."""
+        """Return sensor values with debug inputs and intermediate calculations for each sensor."""
         underlying = self.underlying.upper()
         iv_low = 35.0 if underlying == "BTC" else 45.0
         iv_high = 100.0 if underlying == "BTC" else 120.0
         
+        vrp_diff = None
+        if self.iv_30d is not None and self.rv_30d is not None:
+            vrp_diff = self.iv_30d - self.rv_30d
+        
+        chop_ratio = None
+        if self.rv_7d is not None and self.iv_30d is not None and self.iv_30d > 0:
+            chop_ratio = self.rv_7d / self.iv_30d
+        
+        term_diff = None
+        if self.iv_7d is not None and self.iv_30d is not None:
+            term_diff = self.iv_7d - self.iv_30d
+        
+        iv_rank_numerator = None
+        iv_rank_denominator = iv_high - iv_low
+        if self.iv_30d is not None:
+            iv_rank_numerator = self.iv_30d - iv_low
+        
+        price_ratio = None
+        price_pct = None
+        if self.spot is not None and self.ma200 is not None and self.ma200 > 0:
+            price_ratio = self.spot / self.ma200
+            price_pct = (price_ratio - 1) * 100
+        
         return {
             "vrp_30d": {
                 "value": self.vrp_30d,
+                "formula": "IV_30d - RV_30d",
                 "inputs": {
                     "atm_iv_30d": self.iv_30d,
                     "rv_30d": self.rv_30d,
+                    "difference": vrp_diff,
                 },
             },
             "chop_factor_7d": {
                 "value": self.chop_factor_7d,
+                "formula": "RV_7d / IV_30d",
                 "inputs": {
                     "rv_7d": self.rv_7d,
-                    "iv_30d": self.iv_30d,
+                    "iv_30d_denom": self.iv_30d,
+                    "ratio": chop_ratio,
                 },
             },
             "iv_rank_6m": {
                 "value": self.iv_rank_6m,
+                "formula": "(current_iv - iv_min) / (iv_max - iv_min)",
                 "inputs": {
                     "current_iv": self.iv_30d,
                     "iv_min_6m": iv_low,
                     "iv_max_6m": iv_high,
-                    "note": "Using heuristic range, not historical data",
+                    "numerator": iv_rank_numerator,
+                    "denominator": iv_rank_denominator,
                 },
             },
             "term_structure_spread": {
                 "value": self.term_structure_spread,
+                "formula": "IV_7d - IV_30d",
                 "inputs": {
                     "iv_7d": self.iv_7d,
                     "iv_30d": self.iv_30d,
+                    "difference": term_diff,
                 },
             },
             "skew_25d": {
                 "value": self.skew_25d,
+                "formula": "25delta_put_IV - 25delta_call_IV",
                 "inputs": {
-                    "note": "25-delta put IV - 25-delta call IV (from ~30d expiry)",
+                    "source": "Live options chain (~30d expiry)",
+                    "note": "Use calibration tab for detailed skew breakdown",
                 },
             },
             "adx_14d": {
                 "value": self.adx_14d,
+                "formula": "Average Directional Index (14-period)",
                 "inputs": {
                     "period": 14,
+                    "source": "OHLC candle data",
                 },
             },
             "rsi_14d": {
                 "value": self.rsi_14d,
+                "formula": "100 - (100 / (1 + avg_gain/avg_loss))",
                 "inputs": {
                     "period": 14,
+                    "source": "Close prices",
                 },
             },
             "price_vs_ma200": {
                 "value": self.price_vs_ma200,
+                "formula": "((spot / MA200) - 1) * 100",
                 "inputs": {
                     "spot": self.spot,
                     "ma200": self.ma200,
+                    "spot_over_ma": price_ratio,
+                    "pct_above_ma": price_pct,
                 },
             },
         }
