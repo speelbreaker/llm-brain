@@ -2996,7 +2996,7 @@ def index() -> str:
       if (crit.ok) {{
         return `<span class="criterion-ok">✅ ${{metric}} ${{comparison}}</span>`;
       }} else {{
-        return `<span class="criterion-bad">❌ ${{metric}} ${{comparison}}${{note ? " (" + note + ")" : ""}}</span>`;
+        return `<span class="criterion-bad">❌ ${{metric}} ${{comparison}}</span>`;
       }}
     }}
     
