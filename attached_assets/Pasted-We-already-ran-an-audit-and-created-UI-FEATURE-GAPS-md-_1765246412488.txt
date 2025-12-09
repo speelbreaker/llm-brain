@@ -1,0 +1,314 @@
+We already ran an audit and created UI_FEATURE_GAPS.md in the project root. It lists many config features that are only partially exposed in the UI. The “High Priority” section of that file is our scope for this task:
+
+High Priority (Safety & Core Operations)
+
+Kill switch toggle
+
+Daily drawdown limit
+
+Decision mode selector
+
+Dry run mode toggle
+
+Position reconcile action
+
+Use UI_FEATURE_GAPS.md only as a guide; the source of truth is the actual code in src/.
+
+Goal
+
+Add runtime controls in the web UI for the high-priority safety/ops features, so the operator can change them from the System Health tab and see live feedback, without editing env vars.
+
+Concretely, implement:
+
+Backend API to read & update a small set of runtime settings
+
+UI controls (toggles / dropdowns / inputs) on the System Health page wired to those APIs
+
+Clear visual confirmation in the UI when changes succeed or fail
+
+You MUST verify the actual field names and wiring from code before making changes (no guessing).
+
+Scope of settings
+
+These settings already exist somewhere in the code base (as per the audit); wire them up:
+
+Kill switch
+
+Field: settings.kill_switch_enabled
+
+Used in: risk engine / kill switch checks (see src/risk_engine.py etc.)
+
+Daily drawdown limit
+
+Field: settings.daily_drawdown_limit_pct (float)
+
+Used in: _check_daily_drawdown_limit() in src/risk_engine.py
+
+Decision mode
+
+Field: settings.decision_mode (string enum: "rule_only", "llm_only", "hybrid_shadow")
+
+Used wherever decisions are orchestrated (LLM vs rules), e.g. hybrid decision pipeline.
+
+Dry run mode
+
+Field: settings.dry_run (bool)
+
+Used in src/config.py and execution code to decide whether to place real orders.
+
+Position reconcile action
+
+Field: settings.position_reconcile_action ("halt" or "auto_heal")
+
+Used wherever reconciliation decides what to do on mismatch.
+
+If you find slightly different names or locations, align with the actual code and update the UI accordingly.
+
+Backend changes (FastAPI)
+
+Work in src/web_app.py (already the main FastAPI app) and any nearby modules if needed.
+
+1) Add a new API to fetch current runtime settings
+
+Add a new endpoint:
+
+@app.get("/api/system/runtime-config")
+def get_runtime_config() -> JSONResponse:
+    ...
+
+
+Return JSON with at least:
+
+{
+  "kill_switch_enabled": true,
+  "daily_drawdown_limit_pct": 20.0,
+  "decision_mode": "rule_only",
+  "dry_run": true,
+  "position_reconcile_action": "halt"
+}
+
+
+Implementation notes:
+
+Read values directly from src.config.settings (or the appropriate config object).
+
+If some of these values are already present in whatever powers the current “System Health” tab (e.g. StrategyStatus / config snapshot), keep them consistent.
+
+Don’t add any heavy logic here – just reflect the current in-memory config.
+
+2) Add an API to update runtime settings
+
+Add a companion endpoint:
+
+from pydantic import BaseModel, field_validator
+
+class RuntimeConfigUpdate(BaseModel):
+    kill_switch_enabled: Optional[bool] = None
+    daily_drawdown_limit_pct: Optional[float] = None
+    decision_mode: Optional[str] = None
+    dry_run: Optional[bool] = None
+    position_reconcile_action: Optional[str] = None
+
+    # validate decision_mode (must match existing enum values)
+    # validate position_reconcile_action ("halt", "auto_heal")
+    # validate daily_drawdown_limit_pct >= 0
+    ...
+
+@app.post("/api/system/runtime-config")
+def update_runtime_config(update: RuntimeConfigUpdate) -> JSONResponse:
+    ...
+
+
+Behavior:
+
+Treat all fields as optional (partial updates).
+
+For each non-None field:
+
+Validate (e.g. allowed values for decision_mode, position_reconcile_action).
+
+Apply the change to the in-memory configuration:
+
+Mirror how training_mode is toggled today in /api/training/toggle, which does settings.training_mode = enable (direct assignment).
+
+Use the same pattern for:
+
+settings.kill_switch_enabled
+
+settings.daily_drawdown_limit_pct
+
+settings.decision_mode
+
+settings.dry_run
+
+settings.position_reconcile_action
+
+Return a JSON payload like:
+
+{
+  "ok": true,
+  "updated": {
+    "kill_switch_enabled": false,
+    "decision_mode": "hybrid_shadow"
+  },
+  "current": { ...full current config snapshot as in GET... }
+}
+
+
+Error handling:
+
+If validation fails, return 400 with {"ok": false, "error": "message"}.
+
+Do not crash the app; keep responses user-friendly.
+
+Persistence:
+
+It’s acceptable that these changes live only in memory and do not survive a process restart. (We can add persistence later.)
+
+You MUST NOT implicitly switch Deribit env (deribit_env) or anything that could move us off testnet here.
+
+UI changes – System Health tab
+
+The UI already has a System Health tab with cards showing read-only status for many of these values (from earlier work). Extend that UI so I can click and see that something changed.
+
+Update the existing System Health page/components wherever they live (likely under attached_assets or a templates/static folder). Search in the repo for "System Health" and the existing API paths you saw in web_app.py (e.g. /api/agent/decisions, /api/strategy-status, /api/agent_healthcheck etc.) and extend that same UI.
+
+Controls to add
+
+Global Kill Switch
+
+UI: Toggle switch labeled “Global Kill Switch”
+
+Placement: In the Risk Limits / System Health card (where the kill switch status is currently displayed).
+
+Behavior:
+
+Initial value comes from GET /api/system/runtime-config.
+
+When the user toggles it, send POST /api/system/runtime-config with { "kill_switch_enabled": <bool> }.
+
+After success, refresh the displayed value and show a small success indicator:
+
+e.g. green text: “Kill switch updated (ON/OFF)” for a few seconds.
+
+Daily Drawdown Limit %
+
+UI: Numeric input (e.g. small number field) labeled “Daily Drawdown Limit %” plus a small “Save” button.
+
+Placement: Same Risk Limits section, under or next to the kill switch.
+
+Behavior:
+
+Initial value from GET.
+
+On clicking Save, send POST with { "daily_drawdown_limit_pct": <float> }.
+
+Show a short success message like “Daily drawdown limit updated” or an error if validation fails.
+
+Decision Mode selector
+
+UI: Dropdown labeled “Decision Mode” with options:
+
+Rule Only
+
+LLM Only
+
+Hybrid (LLM Shadow)
+
+Mapping to config values:
+
+"rule_only", "llm_only", "hybrid_shadow".
+
+Placement: In the LLM / Decisions section of System Health (where you already show current decision mode via badges).
+
+Behavior:
+
+Initial value from GET.
+
+On change, send POST with { "decision_mode": "<value>" }.
+
+Show confirmation text like “Decision mode changed to: Hybrid (LLM Shadow)”.
+
+Dry Run Mode toggle
+
+UI: Toggle switch labeled “Dry Run Mode”.
+
+Placement: Possibly in the header/status card or near decision mode (this is a core safety control).
+
+Behavior:
+
+Initial value from GET.
+
+On toggle, send POST with { "dry_run": <bool> }.
+
+Show confirmation text: “Dry run mode is now ON/OFF”.
+
+NOTE: This must toggle settings.dry_run only. Do not accidentally change Deribit environment or mode here.
+
+Position Reconcile Action
+
+UI: Dropdown labeled “On Position Mismatch” with options:
+
+Halt
+
+Auto-Heal
+
+Mapping:
+
+"halt", "auto_heal".
+
+Placement: In the Position Reconciliation section of System Health.
+
+Behavior:
+
+Initial value from GET.
+
+On change, POST { "position_reconcile_action": "<value>" }.
+
+Show confirmation text: “Reconciliation behavior updated to: Auto-Heal”.
+
+General UX rules
+
+Every time a POST succeeds:
+
+Refresh the local UI state from the current config returned by the API, so the UI and backend are always in sync.
+
+Show a short, visible confirmation (small green label under the control is enough).
+
+On error:
+
+Show a concise red error under the control (e.g. “Invalid value: must be >= 0”).
+
+Reuse existing styling/components already used in the dashboard (don’t introduce a completely new UI framework).
+
+Documentation
+
+Update replit.md and/or any existing docs section describing the dashboard to mention these new controls:
+
+Where to find them (System Health tab).
+
+What each control does (one-sentence explanation).
+
+A note that they update runtime configuration only and do not persist across restarts (for now).
+
+Acceptance criteria
+
+There is a working GET /api/system/runtime-config and POST /api/system/runtime-config in src/web_app.py.
+
+The System Health tab now contains:
+
+Kill switch toggle
+
+Daily drawdown % input
+
+Decision mode dropdown
+
+Dry run toggle
+
+Position reconcile action dropdown
+
+Changing any control updates the backend and gives visible feedback in the UI without needing to read logs or the console.
+
+Existing behavior (healthcheck, LLM tests, reconciliation buttons, training toggle, etc.) continues to work.
+
+Please implement the above, run the existing test suite, and add any small tests if appropriate for the new API endpoints.

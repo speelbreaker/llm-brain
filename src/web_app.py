@@ -979,6 +979,87 @@ def run_healthcheck_endpoint() -> JSONResponse:
         return JSONResponse(content={"ok": False, "error": str(e)})
 
 
+class RuntimeConfigUpdate(BaseModel):
+    """Request model for updating runtime configuration."""
+    kill_switch_enabled: Optional[bool] = None
+    daily_drawdown_limit_pct: Optional[float] = None
+    decision_mode: Optional[str] = None
+    dry_run: Optional[bool] = None
+    position_reconcile_action: Optional[str] = None
+
+
+@app.get("/api/system/runtime-config")
+def get_runtime_config() -> JSONResponse:
+    """Fetch current runtime configuration settings."""
+    return JSONResponse(content={
+        "ok": True,
+        "kill_switch_enabled": settings.kill_switch_enabled,
+        "daily_drawdown_limit_pct": settings.daily_drawdown_limit_pct,
+        "decision_mode": settings.decision_mode,
+        "dry_run": settings.dry_run,
+        "position_reconcile_action": settings.position_reconcile_action,
+    })
+
+
+@app.post("/api/system/runtime-config")
+def update_runtime_config(update: RuntimeConfigUpdate) -> JSONResponse:
+    """Update runtime configuration settings (in-memory only, does not persist across restarts)."""
+    updated = {}
+    errors = []
+    
+    if update.kill_switch_enabled is not None:
+        settings.kill_switch_enabled = update.kill_switch_enabled
+        updated["kill_switch_enabled"] = update.kill_switch_enabled
+    
+    if update.daily_drawdown_limit_pct is not None:
+        if update.daily_drawdown_limit_pct < 0:
+            errors.append("daily_drawdown_limit_pct must be >= 0")
+        else:
+            settings.daily_drawdown_limit_pct = update.daily_drawdown_limit_pct
+            updated["daily_drawdown_limit_pct"] = update.daily_drawdown_limit_pct
+    
+    if update.decision_mode is not None:
+        valid_modes = ["rule_only", "llm_only", "hybrid_shadow"]
+        if update.decision_mode not in valid_modes:
+            errors.append(f"decision_mode must be one of: {', '.join(valid_modes)}")
+        else:
+            settings.decision_mode = update.decision_mode  # type: ignore
+            updated["decision_mode"] = update.decision_mode
+    
+    if update.dry_run is not None:
+        settings.dry_run = update.dry_run
+        updated["dry_run"] = update.dry_run
+    
+    if update.position_reconcile_action is not None:
+        valid_actions = ["halt", "auto_heal"]
+        if update.position_reconcile_action not in valid_actions:
+            errors.append(f"position_reconcile_action must be one of: {', '.join(valid_actions)}")
+        else:
+            settings.position_reconcile_action = update.position_reconcile_action  # type: ignore
+            updated["position_reconcile_action"] = update.position_reconcile_action
+    
+    if errors:
+        return JSONResponse(
+            status_code=400,
+            content={
+                "ok": False,
+                "errors": errors,
+            }
+        )
+    
+    return JSONResponse(content={
+        "ok": True,
+        "updated": updated,
+        "current": {
+            "kill_switch_enabled": settings.kill_switch_enabled,
+            "daily_drawdown_limit_pct": settings.daily_drawdown_limit_pct,
+            "decision_mode": settings.decision_mode,
+            "dry_run": settings.dry_run,
+            "position_reconcile_action": settings.position_reconcile_action,
+        }
+    })
+
+
 @app.get("/", response_class=HTMLResponse)
 def index() -> str:
     """Full HTML dashboard with Live Agent view and Backtesting Lab."""
