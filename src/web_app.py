@@ -1143,6 +1143,49 @@ def update_strategy_thresholds(req: StrategyThresholdsUpdate) -> JSONResponse:
         return JSONResponse(content={"ok": False, "error": str(e)})
 
 
+# =============================================================================
+# GREG MANDOLINI VRP HARVESTER - PHASE 1 MASTER SELECTOR
+# =============================================================================
+
+@app.get("/api/strategies/greg/selector")
+def get_greg_selector() -> JSONResponse:
+    """
+    Phase 1: Greg Mandolini VRP Harvester - Master Selector snapshot.
+
+    Uses the latest AgentState (from status_store if available) to compute sensors
+    and run the Greg decision tree. Read-only, no trades.
+    """
+    try:
+        from src.strategies.greg_selector import (
+            build_sensors_from_state,
+            evaluate_greg_selector,
+        )
+        from src.models import AgentState
+
+        status = status_store.get() or {}
+        state_dict = status.get("state")
+
+        if not state_dict:
+            from src.deribit_client import DeribitClient
+            from src.state_builder import build_agent_state
+
+            with DeribitClient() as client:
+                state = build_agent_state(client, settings)
+        else:
+            state = AgentState.model_validate(state_dict)
+
+        sensors = build_sensors_from_state(state)
+        decision = evaluate_greg_selector(sensors)
+
+        payload = decision.model_dump()
+        payload["ok"] = True
+        payload["timestamp"] = datetime.now(timezone.utc).isoformat()
+
+        return JSONResponse(content=payload)
+    except Exception as e:
+        return JSONResponse(content={"ok": False, "error": str(e)})
+
+
 @app.post("/api/test_kill_switch")
 def test_kill_switch() -> JSONResponse:
     """Test risk engine with a synthetic action (dry run)."""
@@ -1853,6 +1896,7 @@ def index() -> str:
     <button class="tab" onclick="showTab('backtest')">Backtesting Lab</button>
     <button class="tab" onclick="showTab('runs')">Backtest Runs</button>
     <button class="tab" onclick="showTab('calibration')">Calibration</button>
+    <button class="tab" onclick="showTab('strategies')">Strategies</button>
     <button class="tab" onclick="showTab('health')">System Health</button>
     <button class="tab" onclick="showTab('chat')">Chat</button>
   </div>
@@ -2479,6 +2523,67 @@ def index() -> str:
     </div>
   </div>
 
+  <!-- STRATEGIES TAB -->
+  <div id="tab-strategies" class="tab-content">
+    <div class="section">
+      <h2>Strategies</h2>
+      
+      <!-- Greg Mandolini VRP Harvester - Phase 1 -->
+      <div id="greg-strategy-panel" style="background: #f8f9fa; padding: 1.5rem; border-radius: 8px; border-left: 4px solid #7c4dff; margin-bottom: 1.5rem;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+          <div>
+            <h3 style="margin: 0; color: #7c4dff; font-size: 1.1rem;">Greg Mandolini - VRP Harvester</h3>
+            <span id="greg-meta-label" style="font-size: 0.85rem; color: #666;">Phase 1 - Master Selector</span>
+          </div>
+          <button id="greg-refresh-btn" onclick="refreshGregSelector()" style="padding: 0.5rem 1rem; background: #7c4dff; color: white; border: none; border-radius: 4px; cursor: pointer;">
+            Refresh Greg Selector Now
+          </button>
+        </div>
+        
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; margin-bottom: 1rem;">
+          <!-- Decision Panel -->
+          <div style="background: white; padding: 1rem; border-radius: 6px; border: 1px solid #e0e0e0;">
+            <h4 style="margin: 0 0 0.75rem 0; color: #333; font-size: 0.95rem;">Current Decision</h4>
+            <div style="margin-bottom: 0.5rem;">
+              <span style="font-size: 0.85rem; color: #666;">Selected Strategy:</span>
+              <div id="greg-selected-strategy" style="font-size: 1.2rem; font-weight: 600; color: #7c4dff; margin-top: 0.25rem;">--</div>
+            </div>
+            <div>
+              <span style="font-size: 0.85rem; color: #666;">Reasoning:</span>
+              <div id="greg-selected-reason" style="font-size: 0.9rem; color: #444; margin-top: 0.25rem; font-style: italic;">--</div>
+            </div>
+          </div>
+          
+          <!-- Sensors Panel -->
+          <div style="background: white; padding: 1rem; border-radius: 6px; border: 1px solid #e0e0e0;">
+            <h4 style="margin: 0 0 0.75rem 0; color: #333; font-size: 0.95rem;">Sensor Values</h4>
+            <table style="width: 100%; font-size: 0.85rem;">
+              <tbody>
+                <tr><td style="color: #666; padding: 0.25rem 0;">VRP 30d:</td><td id="greg-sensor-vrp-30d" style="text-align: right; font-weight: 500;">--</td></tr>
+                <tr><td style="color: #666; padding: 0.25rem 0;">Chop Factor 7d:</td><td id="greg-sensor-chop-7d" style="text-align: right; font-weight: 500;">--</td></tr>
+                <tr><td style="color: #666; padding: 0.25rem 0;">IV Rank 6m:</td><td id="greg-sensor-ivrank-6m" style="text-align: right; font-weight: 500;">--</td></tr>
+                <tr><td style="color: #666; padding: 0.25rem 0;">Term Spread:</td><td id="greg-sensor-term-spread" style="text-align: right; font-weight: 500;">--</td></tr>
+                <tr><td style="color: #666; padding: 0.25rem 0;">Skew 25d:</td><td id="greg-sensor-skew-25d" style="text-align: right; font-weight: 500;">--</td></tr>
+                <tr><td style="color: #666; padding: 0.25rem 0;">ADX 14d:</td><td id="greg-sensor-adx-14d" style="text-align: right; font-weight: 500;">--</td></tr>
+                <tr><td style="color: #666; padding: 0.25rem 0;">RSI 14d:</td><td id="greg-sensor-rsi-14d" style="text-align: right; font-weight: 500;">--</td></tr>
+                <tr><td style="color: #666; padding: 0.25rem 0;">Price vs MA200:</td><td id="greg-sensor-price-ma200" style="text-align: right; font-weight: 500;">--</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+        
+        <div id="greg-selector-status" style="font-size: 0.8rem; color: #666; text-align: right;">
+          Not yet loaded
+        </div>
+      </div>
+      
+      <p style="color: #888; font-size: 0.85rem; margin-top: 1rem;">
+        <strong>Phase 1 (Read-Only):</strong> Computes sensors, runs decision tree, displays recommendation. No orders placed.
+        <br>Phase 2 (Execution) and Phase 3 (Global Risk) coming soon.
+      </p>
+    </div>
+  </div>
+
   <!-- SYSTEM HEALTH TAB -->
   <div id="tab-health" class="tab-content">
     <div class="section">
@@ -2746,6 +2851,58 @@ def index() -> str:
       }}
       if (name === 'health') {{
         loadSystemHealthStatus();
+      }}
+      if (name === 'strategies') {{
+        refreshGregSelector();
+      }}
+    }}
+    
+    // ==============================================
+    // GREG SELECTOR FUNCTIONS
+    // ==============================================
+    
+    async function refreshGregSelector() {{
+      const statusEl = document.getElementById('greg-selector-status');
+      statusEl.textContent = 'Loading...';
+      statusEl.style.color = '#666';
+      
+      try {{
+        const res = await fetch('/api/strategies/greg/selector');
+        const data = await res.json();
+        
+        if (data.ok) {{
+          // Update meta label
+          const metaLabel = document.getElementById('greg-meta-label');
+          if (metaLabel && data.meta) {{
+            metaLabel.textContent = `${{data.meta.version || 'Phase 1'}} - ${{data.meta.author_style || 'Master Selector'}}`;
+          }}
+          
+          // Update decision
+          document.getElementById('greg-selected-strategy').textContent = data.selected_strategy || '--';
+          document.getElementById('greg-selected-reason').textContent = data.reasoning || '--';
+          
+          // Update sensors
+          const sensors = data.sensors || {{}};
+          document.getElementById('greg-sensor-vrp-30d').textContent = sensors.vrp_30d !== null ? sensors.vrp_30d.toFixed(2) : '--';
+          document.getElementById('greg-sensor-chop-7d').textContent = sensors.chop_factor_7d !== null ? sensors.chop_factor_7d.toFixed(3) : '--';
+          document.getElementById('greg-sensor-ivrank-6m').textContent = sensors.iv_rank_6m !== null ? (sensors.iv_rank_6m * 100).toFixed(1) + '%' : '--';
+          document.getElementById('greg-sensor-term-spread').textContent = sensors.term_structure_spread !== null ? sensors.term_structure_spread.toFixed(2) : '--';
+          document.getElementById('greg-sensor-skew-25d').textContent = sensors.skew_25d !== null ? sensors.skew_25d.toFixed(2) : '--';
+          document.getElementById('greg-sensor-adx-14d').textContent = sensors.adx_14d !== null ? sensors.adx_14d.toFixed(1) : '--';
+          document.getElementById('greg-sensor-rsi-14d').textContent = sensors.rsi_14d !== null ? sensors.rsi_14d.toFixed(1) : '--';
+          document.getElementById('greg-sensor-price-ma200').textContent = sensors.price_vs_ma200 !== null ? sensors.price_vs_ma200.toFixed(2) : '--';
+          
+          // Update status
+          const time = data.timestamp ? new Date(data.timestamp).toLocaleTimeString() : new Date().toLocaleTimeString();
+          statusEl.textContent = `Updated at ${{time}} UTC (strategy: ${{data.selected_strategy}})`;
+          statusEl.style.color = '#2e7d32';
+        }} else {{
+          statusEl.textContent = `Error: ${{data.error}}`;
+          statusEl.style.color = '#c62828';
+        }}
+      }} catch (e) {{
+        statusEl.textContent = `Error: ${{e.message}}`;
+        statusEl.style.color = '#c62828';
       }}
     }}
     

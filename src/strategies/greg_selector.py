@@ -89,17 +89,31 @@ def build_sensors_from_state(state: AgentState) -> GregSelectorSensors:
     """
     Map AgentState / market_context / vol_state into the Greg selector sensors.
     Uses whatever fields are available; leaves others as None.
+    
+    Currently available mappings:
+    - vrp_30d: Computed as btc_iv - btc_rv from vol_state
+    - chop_factor_7d: Computed as rv_7d / btc_iv
+    - skew_25d: From vol_state.btc_skew
+    - price_vs_ma200: Computed from market_context.pct_from_200d_ma
+    
+    Not yet available (require external data sources):
+    - iv_rank_6m: Requires 6-month IV history for percentile calculation
+    - term_structure_spread: Requires term structure curve (7d vs 30d IV)
+    - adx_14d: Requires 14-day price history for ADX calculation
+    - rsi_14d: Requires 14-day price history for RSI calculation
     """
     sensors = GregSelectorSensors()
     
     vol = state.vol_state
     ctx = state.market_context
+    spot_btc = state.spot.get("BTC", 0)
     
     btc_iv = vol.btc_iv if vol.btc_iv > 0 else None
     btc_rv = vol.btc_rv if vol.btc_rv > 0 else None
+    rv_30d = ctx.realized_vol_30d if ctx and ctx.realized_vol_30d > 0 else btc_rv
     
-    if btc_iv is not None and btc_rv is not None:
-        sensors.vrp_30d = btc_iv - btc_rv
+    if btc_iv is not None and rv_30d is not None:
+        sensors.vrp_30d = btc_iv - rv_30d
     
     rv_7d = None
     if ctx and ctx.realized_vol_7d > 0:
@@ -111,11 +125,11 @@ def build_sensors_from_state(state: AgentState) -> GregSelectorSensors:
     if vol.btc_skew != 0:
         sensors.skew_25d = vol.btc_skew
     
-    if ctx:
+    if ctx and spot_btc > 0:
         if ctx.pct_from_200d_ma != 0:
-            spot_btc = state.spot.get("BTC", 0)
-            if spot_btc > 0:
-                sensors.price_vs_ma200 = ctx.pct_from_200d_ma * spot_btc / 100.0
+            sensors.price_vs_ma200 = ctx.pct_from_200d_ma * spot_btc / 100.0
+        elif ctx.pct_from_200d_ma == 0:
+            sensors.price_vs_ma200 = 0.0
     
     return sensors
 

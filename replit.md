@@ -39,6 +39,25 @@ The agent features a clear separation of concerns, with modules for configuratio
 - **Structured Logging**: Uses JSONL for logging decisions and actions.
 - **Position Persistence**: Bot-managed positions are saved to `data/positions.json` and restored on restart.
 
+### Greg Mandolini VRP Harvester (Phase 1)
+The Strategies tab showcases the Greg Mandolini VRP Harvester - a quantitative volatility risk premium (VRP) strategy selector based on market sensors.
+
+**Phase 1 (Current - Read-Only):**
+- Computes volatility sensors from current AgentState (VRP, chop factor, skew, price vs MA200)
+- Runs decision tree to select optimal strategy (straddle, strangle, calendar, iron butterfly, spreads, or NO_TRADE)
+- Displays recommendation on dashboard with sensor values
+- No orders placed - purely advisory
+
+**Sensor Mapping:**
+- `vrp_30d`: IV - RV spread
+- `chop_factor_7d`: Realized vol / Implied vol ratio
+- `skew_25d`: Put-call skew from vol state
+- `price_vs_ma200`: Distance from 200-day moving average
+
+**API Endpoint:** `GET /api/strategies/greg/selector`
+
+**Spec Location:** `docs/greg_mandolini/GREG_SELECTOR_RULES_FINAL.json`
+
 ### Strategy Layer
 A pluggable architecture (`src/strategies/`) allows multiple trading strategies to run concurrently, sharing market data and risk controls.
 
