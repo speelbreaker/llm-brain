@@ -1421,6 +1421,16 @@ def index() -> str:
     .badge-live {{ background: #e8f5e9; color: #2e7d32; }}
     .badge-training {{ background: #ffecb3; color: #ff6f00; }}
     
+    /* Bots sensor coloring */
+    .sensor-good {{ color: #008000; font-weight: 600; }}
+    .sensor-bad {{ color: #c00000; font-weight: 600; }}
+    .sensor-neutral {{ color: inherit; }}
+    
+    /* Bots criterion coloring */
+    .criterion-ok {{ color: #008000; font-weight: 600; }}
+    .criterion-bad {{ color: #c00000; font-weight: 600; }}
+    .criterion-missing {{ color: #777777; }}
+    
     .switch {{
       position: relative;
       display: inline-block;
@@ -2919,6 +2929,77 @@ def index() -> str:
       return typeof val === 'number' ? val.toFixed(decimals) : String(val);
     }}
     
+    function classifySensorValue(sensorName, value) {{
+      if (value === null || value === undefined || isNaN(value)) {{
+        return "sensor-neutral";
+      }}
+      const v = Number(value);
+      switch (sensorName) {{
+        case "vrp_30d":
+          if (v >= 10) return "sensor-good";
+          if (v <= 0) return "sensor-bad";
+          return "sensor-neutral";
+        case "chop_factor_7d":
+          if (v <= 0.6) return "sensor-good";
+          if (v >= 0.9) return "sensor-bad";
+          return "sensor-neutral";
+        case "adx_14d":
+          if (v <= 20) return "sensor-good";
+          if (v >= 30) return "sensor-bad";
+          return "sensor-neutral";
+        case "rsi_14d":
+          if (v < 30 || v > 70) return "sensor-bad";
+          return "sensor-good";
+        case "price_vs_ma200":
+          if (v <= -15 || v >= 25) return "sensor-bad";
+          return "sensor-neutral";
+        case "iv_rank_6m":
+          if (v >= 0.7) return "sensor-good";
+          if (v <= 0.3) return "sensor-bad";
+          return "sensor-neutral";
+        case "term_structure_spread":
+          if (v >= 5) return "sensor-bad";
+          return "sensor-neutral";
+        case "skew_25d":
+          if (Math.abs(v) >= 5) return "sensor-bad";
+          return "sensor-neutral";
+        default:
+          return "sensor-neutral";
+      }}
+    }}
+    
+    function formatCriterion(crit) {{
+      const metric = crit.metric || "metric";
+      const value = crit.value;
+      const min = crit.min;
+      const max = crit.max;
+      const note = crit.note || "";
+      
+      if (value === null || value === undefined || (typeof value === 'number' && isNaN(value))) {{
+        return `<span class="criterion-missing">❓ ${{metric}} missing${{note ? " (" + note + ")" : ""}}</span>`;
+      }}
+      
+      const v = Number(value);
+      let comparison = "";
+      if (min != null && max != null) {{
+        comparison = `${{v.toFixed(2)}} ∈ [${{min}}, ${{max}}]`;
+      }} else if (min != null) {{
+        const symbol = crit.ok ? "≥" : "<";
+        comparison = `${{v.toFixed(2)}} ${{symbol}} ${{min}}`;
+      }} else if (max != null) {{
+        const symbol = crit.ok ? "≤" : ">";
+        comparison = `${{v.toFixed(2)}} ${{symbol}} ${{max}}`;
+      }} else {{
+        comparison = v.toFixed(2);
+      }}
+      
+      if (crit.ok) {{
+        return `<span class="criterion-ok">✅ ${{metric}} ${{comparison}}</span>`;
+      }} else {{
+        return `<span class="criterion-bad">❌ ${{metric}} ${{comparison}}${{note ? " (" + note + ")" : ""}}</span>`;
+      }}
+    }}
+    
     async function refreshBotsSensors() {{
       const container = document.getElementById('bots-live-sensors');
       container.innerHTML = '<p style="color: #666; font-style: italic;">Loading...</p>';
@@ -2949,8 +3030,8 @@ def index() -> str:
               ${{underlyings.map(u => {{
                 const val = sensors[u] ? sensors[u][name] : null;
                 const display = formatSensorValue(val, name === 'chop_factor_7d' ? 3 : 2);
-                const color = val !== null ? '#333' : '#999';
-                return `<td style="text-align: right; padding: 0.5rem; color: ${{color}}; font-weight: ${{val !== null ? '500' : '400'}};">${{display}}</td>`;
+                const sensorClass = classifySensorValue(name, val);
+                return `<td style="text-align: right; padding: 0.5rem;" class="${{sensorClass}}">${{display}}</td>`;
               }}).join('')}}
             </tr>`;
           }}
@@ -3092,26 +3173,21 @@ def index() -> str:
         let tooltipLines = [];
         if (s.criteria && s.criteria.length > 0) {{
           for (const c of s.criteria) {{
-            const valStr = formatSensorValue(c.value);
-            let status = c.ok ? 'OK' : 'FAIL';
-            if (c.note === 'missing_data') status = 'NO DATA';
-            
-            let threshold = '';
-            if (c.min !== null && c.min !== undefined) threshold += `min:${{c.min}} `;
-            if (c.max !== null && c.max !== undefined) threshold += `max:${{c.max}}`;
-            
-            tooltipLines.push(`${{c.metric}}: ${{valStr}} (${{threshold.trim() || 'n/a'}}) - ${{status}}`);
+            const valStr = c.value == null ? 'missing' : Number(c.value).toFixed(2);
+            const min = c.min != null ? `min=${{c.min}}` : '';
+            const max = c.max != null ? `max=${{c.max}}` : '';
+            const status = c.ok ? 'PASS' : (c.value == null ? 'NO DATA' : 'FAIL');
+            tooltipLines.push(`${{c.metric}}: ${{valStr}} ${{min}} ${{max}} – ${{status}}`);
           }}
         }} else if (isNoTrade) {{
           tooltipLines.push(s.summary || 'No favorable conditions detected');
         }}
         const tooltip = tooltipLines.join('\\n');
         
-        // Short inline details
-        const shortDetails = s.criteria.slice(0, 3).map(c => {{
-          const mark = c.ok ? 'OK' : (c.note === 'missing_data' ? '?' : 'X');
-          return `${{c.metric}} ${{mark}}`;
-        }}).join('; ');
+        // Build detailed HTML using formatCriterion
+        const detailsHtml = s.criteria && s.criteria.length > 0 
+          ? s.criteria.map(formatCriterion).join('; ')
+          : (s.summary ? s.summary.substring(0, 50) : '');
         
         const displayLabel = isNoTrade ? 'No Trade' : s.label;
         const rowBg = isNoTrade && s.status === 'pass' ? '#fff3e0' : 'transparent';
@@ -3120,7 +3196,7 @@ def index() -> str:
           <td style="padding: 0.5rem;">${{displayLabel}}</td>
           <td style="padding: 0.5rem;">${{s.underlying}}</td>
           <td style="padding: 0.5rem; text-align: center; color: ${{statusColors[s.status]}}; font-weight: 600;">${{statusLabels[s.status]}}</td>
-          <td style="padding: 0.5rem; font-size: 0.8rem; color: #666;">${{shortDetails || s.summary.substring(0, 50)}}</td>
+          <td style="padding: 0.5rem; font-size: 0.8rem;">${{detailsHtml}}</td>
         </tr>`;
       }}
       
