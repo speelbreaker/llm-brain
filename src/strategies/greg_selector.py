@@ -110,7 +110,15 @@ def build_sensors_from_state(state: AgentState) -> GregSelectorSensors:
     
     btc_iv = vol.btc_iv if vol.btc_iv > 0 else None
     btc_rv = vol.btc_rv if vol.btc_rv > 0 else None
-    rv_30d = ctx.realized_vol_30d if ctx and ctx.realized_vol_30d > 0 else btc_rv
+    
+    if btc_rv is None and btc_iv is not None and vol.btc_ivrv > 0:
+        btc_rv = btc_iv / vol.btc_ivrv
+    
+    rv_30d = None
+    if ctx and ctx.realized_vol_30d > 0:
+        rv_30d = ctx.realized_vol_30d
+    elif btc_rv is not None:
+        rv_30d = btc_rv
     
     if btc_iv is not None and rv_30d is not None:
         sensors.vrp_30d = btc_iv - rv_30d
@@ -118,6 +126,8 @@ def build_sensors_from_state(state: AgentState) -> GregSelectorSensors:
     rv_7d = None
     if ctx and ctx.realized_vol_7d > 0:
         rv_7d = ctx.realized_vol_7d
+    elif btc_rv is not None:
+        rv_7d = btc_rv
     
     if rv_7d is not None and btc_iv is not None and btc_iv > 0:
         sensors.chop_factor_7d = rv_7d / btc_iv
