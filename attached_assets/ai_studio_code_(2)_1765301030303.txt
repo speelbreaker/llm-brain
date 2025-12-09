@@ -1,0 +1,212 @@
+// FILE: GREG_SELECTOR_RULES_FINAL.md
+{
+  "meta": {
+    "bot_name": "Magadini_VRP_Harvester",
+    "version": "4.1-Platinum-Master",
+    "market_type": "Deribit_Cash_Settled",
+    "author_style": "Quantitative_Vol_Selling_&_Accumulation"
+  },
+
+  // ------------------------------------------------------------------
+  // 1. GLOBAL CONSTRAINTS (THE GUARD RAILS)
+  // ------------------------------------------------------------------
+  "global_constraints": {
+    "allowed_entry_dte": {
+      "default_min": 25,
+      "default_max": 45,
+      "exceptions": [
+        {"strategy": "STRATEGY_B_CALENDAR", "front_leg_min": 7, "front_leg_max": 14},
+        {"strategy": "STRATEGY_F_SPREADS", "min": 20, "max": 35}
+      ]
+    },
+    "risk_limits": {
+      "max_risk_per_trade": "2.0% of Equity (Portfolio Margin Impact)",
+      "max_short_vega_notional": "30% of Total Account Equity",
+      "max_strategies_per_underlying": 2
+    }
+  },
+
+  // ------------------------------------------------------------------
+  // 2. SENSORS (INPUT VARIABLES)
+  // ------------------------------------------------------------------
+  "sensors": {
+    "volatility_metrics": {
+      "vrp_30d": "Implied_Vol_30d - Realized_Vol_30d",
+      "chop_factor_7d": "Realized_Vol_7d / Implied_Vol_30d", // < 0.6 = Calm
+      "iv_rank_6m": "(Current_IV - 6m_Low) / (6m_High - 6m_Low)",
+      "term_structure_spread": "Implied_Vol_7d - Implied_Vol_30d",
+      "skew_25d": "Implied_Vol_25d_Put - Implied_Vol_25d_Call"
+    },
+    "trend_metrics": {
+      "adx_14d": "Average_Directional_Index",
+      "rsi_14d": "Relative_Strength_Index",
+      "price_vs_ma200": "Current_Price - MA_200d"
+    }
+  },
+
+  // ------------------------------------------------------------------
+  // 3. DECISION LOGIC (PRIORITY TREE)
+  // ------------------------------------------------------------------
+  "decision_tree": [
+    
+    // 1. SAFETY FILTER
+    {
+      "condition": "adx_14d > 35 OR chop_factor_7d > 0.85",
+      "selected_strategy": "NO_TRADE",
+      "reasoning": "Trend too strong or Realized Vol is matching Implied Vol."
+    },
+
+    // 2. TERM STRUCTURE (Calendar)
+    {
+      "condition": "term_structure_spread > 5.0 AND iv_rank_6m <= 0.80",
+      "selected_strategy": "STRATEGY_B_CALENDAR",
+      "reasoning": "Front-end event pricing detected."
+    },
+
+    // 3. EXTREME VOL DEFENSE (Iron Fly)
+    {
+      "condition": "iv_rank_6m > 0.80 AND vrp_30d > 10",
+      "selected_strategy": "STRATEGY_D_IRON_BUTTERFLY",
+      "reasoning": "Vol is too high for naked exposure. Defined risk only."
+    },
+
+    // 4. STRADDLE (Pure Alpha)
+    {
+      "condition": "vrp_30d > 15.0 AND chop_factor_7d < 0.6 AND adx_14d < 20",
+      "selected_strategy": "STRATEGY_A_STRADDLE",
+      "reasoning": "High premium, low realized movement."
+    },
+
+    // 5. STRANGLE (Wider Alpha)
+    {
+      "condition": "vrp_30d >= 10.0 AND chop_factor_7d < 0.8 AND adx_14d < 30",
+      "selected_strategy": "STRATEGY_A_STRANGLE",
+      "reasoning": "Good edge, but market drifting. Strangle accommodates drift."
+    },
+
+    // 6. ACCUMULATION (Short Put)
+    {
+      "condition": "skew_25d > 5.0 AND price_vs_ma200 > 0 AND iv_rank_6m > 0.50",
+      "selected_strategy": "STRATEGY_C_SHORT_PUT",
+      "reasoning": "Bullish trend, expensive Puts. Paid to buy."
+    },
+
+    // 7. DIRECTIONAL SPREADS
+    {
+      "condition": "skew_25d > 5.0 AND rsi_14d < 30",
+      "selected_strategy": "STRATEGY_F_BULL_PUT_SPREAD",
+      "reasoning": "Oversold + Fear Skew."
+    },
+    {
+      "condition": "skew_25d < -5.0 AND rsi_14d > 70",
+      "selected_strategy": "STRATEGY_F_BEAR_CALL_SPREAD",
+      "reasoning": "Overbought + FOMO Skew."
+    },
+
+    // 8. DEFAULT
+    {
+      "condition": "default",
+      "selected_strategy": "NO_TRADE",
+      "reasoning": "No valid setup found."
+    }
+  ],
+
+  // ------------------------------------------------------------------
+  // 4. STRATEGY DEFINITIONS
+  // ------------------------------------------------------------------
+  "strategy_definitions": {
+
+    "STRATEGY_A_STRADDLE": {
+      "structure": "Sell ATM Call + Sell ATM Put",
+      "target_dte": "30-45 days",
+      "management": {
+        "hedge_mode": "DYNAMIC_DELTA",
+        "hedge_trigger": "Net_Delta > |0.10|",
+        "close_profit": "50% of credit",
+        "close_stop": "200% of credit OR IV expands > 10 points",
+        "expiry_rule": "HARD_CLOSE_24H_BEFORE_EXPIRY"
+      }
+    },
+
+    "STRATEGY_A_STRANGLE": {
+      "structure": "Sell 15-Delta Call + Sell 15-Delta Put",
+      "target_dte": "30-45 days",
+      "management": {
+        "hedge_mode": "DYNAMIC_DELTA",
+        "hedge_trigger": "Net_Delta > |0.12|",
+        "close_profit": "50% of credit",
+        "close_stop": "200% of credit",
+        "expiry_rule": "HARD_CLOSE_24H_BEFORE_EXPIRY"
+      }
+    },
+
+    "STRATEGY_B_CALENDAR": {
+      "structure": "Sell ATM (7-14 DTE) + Buy ATM (30-45 DTE)",
+      "management": {
+        "hedge_mode": "LIGHT_DELTA",
+        "hedge_trigger": "Net_Delta > |0.20|",
+        "close_profit": "Front_IV < Back_IV OR 25% ROC",
+        "close_stop": "Price moves > 5% from strike OR Loss > 100% of Debit",
+        "expiry_rule": "Close Short Leg 24h before expiry"
+      }
+    },
+
+    // --- C: CASH SECURED PUT (ACCUMULATION) ---
+    "STRATEGY_C_SHORT_PUT": {
+      "structure": "Sell 20-25 Delta Put",
+      "target_dte": "30-45 days",
+      "notes": "Requires 100% Cash Collateral for Strike. True accumulation / bullish VRP.",
+      "management": {
+        "hedge_mode": "NONE",
+        "close_profit": "70% of credit",
+        "close_stop": "ABS(Option_Delta) > 0.80",
+        "expiry_rule": "IF ITM: Close Option & Buy Spot Perp (Synthetic Assignment)"
+      }
+    },
+
+    "STRATEGY_D_IRON_BUTTERFLY": {
+      "structure": "Sell ATM Straddle + Buy Wings at 10-Delta",
+      "target_dte": "30-45 days",
+      "management": {
+        "hedge_mode": "LOOSE_DELTA",
+        "close_profit": "40% of max profit",
+        "close_stop": "Price touches Wing Strikes OR 200% of Credit",
+        "expiry_rule": "HARD_CLOSE_24H_BEFORE_EXPIRY"
+      }
+    },
+
+    "STRATEGY_F_BULL_PUT_SPREAD": {
+      "structure": "Sell 25-Delta Put + Buy 10-Delta Put",
+      "target_dte": "20-35 days",
+      "management": {
+        "hedge_mode": "NONE",
+        "close_profit": "60% of max profit",
+        "close_stop": "Loss > 200% of Credit Received", 
+        "expiry_rule": "Close if ITM"
+      }
+    },
+
+    "STRATEGY_F_BEAR_CALL_SPREAD": {
+      "structure": "Sell 25-Delta Call + Buy 10-Delta Call",
+      "target_dte": "20-35 days",
+      "management": {
+        "hedge_mode": "NONE",
+        "close_profit": "60% of max profit",
+        "close_stop": "Loss > 200% of Credit Received",
+        "expiry_rule": "Close if ITM"
+      }
+    }
+  },
+
+  // ------------------------------------------------------------------
+  // 5. BLACK SWAN PROTOCOL
+  // ------------------------------------------------------------------
+  "black_swan_protocol": {
+    "trigger": "Crypto_Market_Cap_Change_24h < -10%",
+    "actions": {
+      "SHORT_VOL_STRATEGIES (A, B, D, F)": "CLOSE_IMMEDIATELY_AT_MARKET",
+      "ACCUMULATION_STRATEGY (C)": "HOLD_AND_MONITOR",
+      "notes": "For Strategy C: Verify account Health > 1.2. If Health < 1.2, Close C to preserve solvency."
+    }
+  }
+}

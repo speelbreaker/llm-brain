@@ -1,0 +1,407 @@
+High-level goal for this task
+
+Add a new “Strategies” section to the dashboard that showcases Greg Mandolini’s VRP Harvester – Phase 1 Master Selector.
+
+Phase 1 is read-only:
+
+We compute “sensors” (IV/RV, skew, ADX, RSI, etc.),
+
+Run a decision tree that picks one recommended strategy (or NO_TRADE),
+
+Display this live on the dashboard.
+
+No orders are placed, no existing behaviour is changed.
+
+Later we’ll wire Phase 2 (execution) and Phase 3 (global risk), but not in this task.
+
+Source of truth – Greg selector JSON
+
+Create a new file:
+
+docs/greg_mandolini/GREG_SELECTOR_RULES_FINAL.json
+
+and populate it with the following JSON (no comments):
+
+{
+  "meta": {
+    "bot_name": "Magadini_VRP_Harvester",
+    "version": "4.1-Platinum-Master",
+    "market_type": "Deribit_Cash_Settled",
+    "author_style": "Quantitative_Vol_Selling_&_Accumulation"
+  },
+
+  "global_constraints": {
+    "allowed_entry_dte": {
+      "default_min": 25,
+      "default_max": 45,
+      "exceptions": [
+        {"strategy": "STRATEGY_B_CALENDAR", "front_leg_min": 7, "front_leg_max": 14},
+        {"strategy": "STRATEGY_F_SPREADS", "min": 20, "max": 35}
+      ]
+    },
+    "risk_limits": {
+      "max_risk_per_trade": "2.0% of Equity (Portfolio Margin Impact)",
+      "max_short_vega_notional": "30% of Total Account Equity",
+      "max_strategies_per_underlying": 2
+    }
+  },
+
+  "sensors": {
+    "volatility_metrics": {
+      "vrp_30d": "Implied_Vol_30d - Realized_Vol_30d",
+      "chop_factor_7d": "Realized_Vol_7d / Implied_Vol_30d",
+      "iv_rank_6m": "(Current_IV - 6m_Low) / (6m_High - 6m_Low)",
+      "term_structure_spread": "Implied_Vol_7d - Implied_Vol_30d",
+      "skew_25d": "Implied_Vol_25d_Put - Implied_Vol_25d_Call"
+    },
+    "trend_metrics": {
+      "adx_14d": "Average_Directional_Index",
+      "rsi_14d": "Relative_Strength_Index",
+      "price_vs_ma200": "Current_Price - MA_200d"
+    }
+  },
+
+  "decision_tree": [
+    {
+      "condition": "adx_14d > 35 OR chop_factor_7d > 0.85",
+      "selected_strategy": "NO_TRADE",
+      "reasoning": "Trend too strong or Realized Vol is matching Implied Vol."
+    },
+    {
+      "condition": "term_structure_spread > 5.0 AND iv_rank_6m <= 0.80",
+      "selected_strategy": "STRATEGY_B_CALENDAR",
+      "reasoning": "Front-end event pricing detected."
+    },
+    {
+      "condition": "iv_rank_6m > 0.80 AND vrp_30d > 10",
+      "selected_strategy": "STRATEGY_D_IRON_BUTTERFLY",
+      "reasoning": "Vol is too high for naked exposure. Defined risk only."
+    },
+    {
+      "condition": "vrp_30d > 15.0 AND chop_factor_7d < 0.6 AND adx_14d < 20",
+      "selected_strategy": "STRATEGY_A_STRADDLE",
+      "reasoning": "High premium, low realized movement."
+    },
+    {
+      "condition": "vrp_30d >= 10.0 AND chop_factor_7d < 0.8 AND adx_14d < 30",
+      "selected_strategy": "STRATEGY_A_STRANGLE",
+      "reasoning": "Good edge, but market drifting. Strangle accommodates drift."
+    },
+    {
+      "condition": "skew_25d > 5.0 AND price_vs_ma200 > 0 AND iv_rank_6m > 0.50",
+      "selected_strategy": "STRATEGY_C_SHORT_PUT",
+      "reasoning": "Bullish trend, expensive Puts. Paid to buy."
+    },
+    {
+      "condition": "skew_25d > 5.0 AND rsi_14d < 30",
+      "selected_strategy": "STRATEGY_F_BULL_PUT_SPREAD",
+      "reasoning": "Oversold + Fear Skew."
+    },
+    {
+      "condition": "skew_25d < -5.0 AND rsi_14d > 70",
+      "selected_strategy": "STRATEGY_F_BEAR_CALL_SPREAD",
+      "reasoning": "Overbought + FOMO Skew."
+    },
+    {
+      "condition": "default",
+      "selected_strategy": "NO_TRADE",
+      "reasoning": "No valid setup found."
+    }
+  ],
+
+  "strategy_definitions": {
+    "STRATEGY_A_STRADDLE": {
+      "structure": "Sell ATM Call + Sell ATM Put",
+      "target_dte": "30-45 days",
+      "management": {
+        "hedge_mode": "DYNAMIC_DELTA",
+        "hedge_trigger": "Net_Delta > |0.10|",
+        "close_profit": "50% of credit",
+        "close_stop": "200% of credit OR IV expands > 10 points",
+        "expiry_rule": "HARD_CLOSE_24H_BEFORE_EXPIRY"
+      }
+    },
+    "STRATEGY_A_STRANGLE": {
+      "structure": "Sell 15-Delta Call + Sell 15-Delta Put",
+      "target_dte": "30-45 days",
+      "management": {
+        "hedge_mode": "DYNAMIC_DELTA",
+        "hedge_trigger": "Net_Delta > |0.12|",
+        "close_profit": "50% of credit",
+        "close_stop": "200% of credit",
+        "expiry_rule": "HARD_CLOSE_24H_BEFORE_EXPIRY"
+      }
+    },
+    "STRATEGY_B_CALENDAR": {
+      "structure": "Sell ATM (7-14 DTE) + Buy ATM (30-45 DTE)",
+      "management": {
+        "hedge_mode": "LIGHT_DELTA",
+        "hedge_trigger": "Net_Delta > |0.20|",
+        "close_profit": "Front_IV < Back_IV OR 25% ROC",
+        "close_stop": "Price moves > 5% from strike OR Loss > 100% of Debit",
+        "expiry_rule": "Close Short Leg 24h before expiry"
+      }
+    },
+    "STRATEGY_C_SHORT_PUT": {
+      "structure": "Sell 20-25 Delta Put",
+      "target_dte": "30-45 days",
+      "notes": "Requires 100% Cash Collateral for Strike. True accumulation / bullish VRP.",
+      "management": {
+        "hedge_mode": "NONE",
+        "close_profit": "70% of credit",
+        "close_stop": "ABS(Option_Delta) > 0.80",
+        "expiry_rule": "IF ITM: Close Option & Buy Spot Perp (Synthetic Assignment)"
+      }
+    },
+    "STRATEGY_D_IRON_BUTTERFLY": {
+      "structure": "Sell ATM Straddle + Buy Wings at 10-Delta",
+      "target_dte": "30-45 days",
+      "management": {
+        "hedge_mode": "LOOSE_DELTA",
+        "close_profit": "40% of max profit",
+        "close_stop": "Price touches Wing Strikes OR 200% of Credit",
+        "expiry_rule": "HARD_CLOSE_24H_BEFORE_EXPIRY"
+      }
+    },
+    "STRATEGY_F_BULL_PUT_SPREAD": {
+      "structure": "Sell 25-Delta Put + Buy 10-Delta Put",
+      "target_dte": "20-35 days",
+      "management": {
+        "hedge_mode": "NONE",
+        "close_profit": "60% of max profit",
+        "close_stop": "Loss > 200% of Credit Received",
+        "expiry_rule": "Close if ITM"
+      }
+    },
+    "STRATEGY_F_BEAR_CALL_SPREAD": {
+      "structure": "Sell 25-Delta Call + Buy 10-Delta Call",
+      "target_dte": "20-35 days",
+      "management": {
+        "hedge_mode": "NONE",
+        "close_profit": "60% of max profit",
+        "close_stop": "Loss > 200% of Credit Received",
+        "expiry_rule": "Close if ITM"
+      }
+    }
+  },
+
+  "black_swan_protocol": {
+    "trigger": "Crypto_Market_Cap_Change_24h < -10%",
+    "actions": {
+      "SHORT_VOL_STRATEGIES (A, B, D, F)": "CLOSE_IMMEDIATELY_AT_MARKET",
+      "ACCUMULATION_STRATEGY (C)": "HOLD_AND_MONITOR",
+      "notes": "For Strategy C: Verify account Health > 1.2. If Health < 1.2, Close C to preserve solvency."
+    }
+  }
+}
+
+Task 1 – Greg selector module (backend)
+
+Create a new module:
+
+src/strategies/greg_selector.py
+
+In this file:
+
+Define two Pydantic models:
+
+from pydantic import BaseModel
+from typing import Optional, Dict, Any
+
+class GregSelectorSensors(BaseModel):
+    vrp_30d: Optional[float] = None
+    chop_factor_7d: Optional[float] = None
+    iv_rank_6m: Optional[float] = None
+    term_structure_spread: Optional[float] = None
+    skew_25d: Optional[float] = None
+    adx_14d: Optional[float] = None
+    rsi_14d: Optional[float] = None
+    price_vs_ma200: Optional[float] = None
+
+class GregSelectorDecision(BaseModel):
+    selected_strategy: str
+    reasoning: str
+    sensors: GregSelectorSensors
+    rule_index: int
+    meta: Dict[str, Any]
+
+
+Add a helper to load the JSON spec once (with a module-level cache) from docs/greg_mandolini/GREG_SELECTOR_RULES_FINAL.json.
+
+Implement:
+
+from src.models import AgentState
+
+def build_sensors_from_state(state: AgentState) -> GregSelectorSensors:
+    """
+    Map AgentState / market_context into the Greg selector sensors.
+    Use whatever fields exist today (IV, RV, term structure, ...
+    If a metric is not available yet, leave it as None.
+    """
+    ...
+
+
+Use state.market_context / VolState if available. Do NOT introduce external API calls here.
+
+Implement:
+
+def evaluate_greg_selector(sensors: GregSelectorSensors) -> GregSelectorDecision:
+    """
+    Walk the decision_tree from the JSON in order, first match wins.
+    Implement each condition explicitly in Python; do not use eval().
+    If no condition matches, fall back to the 'default' entry.
+    """
+
+
+Carefully mirror the decision tree from the JSON.
+
+Consider None values as “condition not satisfied” (i.e., don’t crash).
+
+Task 2 – New API endpoint
+
+In src/web_app.py, under the existing “SYSTEM CONTROLS & HEALTH API ENDPOINTS” section, add a new endpoint for the Greg selector.
+
+Import the models:
+
+from src.strategies.greg_selector import (
+    GregSelectorSensors,
+    GregSelectorDecision,
+    build_sensors_from_state,
+    evaluate_greg_selector,
+)
+from src.models import AgentState
+
+
+Add:
+
+@app.get("/api/strategies/greg/selector")
+def get_greg_selector() -> JSONResponse:
+    """
+    Phase 1: Greg Mandolini VRP Harvester – Master Selector snapshot.
+
+    Uses the latest AgentState (from status_store if available) to compute sensors
+    and run the Greg decision tree. Read-only, no trades.
+    """
+    try:
+        status = status_store.get() or {}
+        state_dict = status.get("state")
+
+        if not state_dict:
+            # Fallback: build a fresh AgentState via DeribitClient
+            from src.deribit_client import DeribitClient
+            from src.state_builder import build_agent_state
+
+            with DeribitClient() as client:
+                state = build_agent_state(client, settings)
+        else:
+            state = AgentState.model_validate(state_dict)
+
+        sensors = build_sensors_from_state(state)
+        decision = evaluate_greg_selector(sensors)
+
+        payload = decision.model_dump()
+        payload["ok"] = True
+        payload["timestamp"] = datetime.now(timezone.utc).isoformat()
+
+        return JSONResponse(content=payload)
+    except Exception as e:
+        return JSONResponse(content={"ok": False, "error": str(e)})
+
+
+This endpoint must not place trades or mutate risk settings.
+
+Task 3 – “Strategies” section in the dashboard
+
+In index() in src/web_app.py:
+
+In the navigation line near the top, insert “Strategies”:
+
+Live Agent Backtesting Lab Backtest Runs Calibration Strategies System Health Chat
+
+
+Before the existing ## System Controls & Health heading, insert the Strategies section:
+
+Use exactly the HTML/Markdown block given in section 4.2 of this prompt:
+
+## Strategies
+
+### Greg Mandolini – VRP Harvester (Phase 1 – Master Selector)
+
+The <div id="greg-strategy-panel">... block with table, button, and status.
+
+Keep all existing sections intact.
+
+At the bottom of the HTML string, add a <script> block (or extend the existing one if you already added scripts in earlier tasks) that:
+
+On DOMContentLoaded, calls GET /api/strategies/greg/selector.
+
+Populates:
+
+greg-meta-label
+
+greg-selected-strategy
+
+greg-selected-reason
+
+Sensor cells by ID:
+
+greg-sensor-vrp-30d
+
+greg-sensor-chop-7d
+
+greg-sensor-ivrank-6m
+
+greg-sensor-term-spread
+
+greg-sensor-skew-25d
+
+greg-sensor-adx-14d
+
+greg-sensor-rsi-14d
+
+greg-sensor-price-ma200
+
+Hooks greg-refresh-btn to re-call the endpoint on click.
+
+Writes a status message to greg-selector-status:
+
+On success: “Updated at HH:MM:SS UTC (strategy: STRATEGY_XYZ)”
+
+On error: “Error: ${error}”
+
+Use vanilla JS + fetch, no external libraries.
+
+IMPORTANT: This feature must be visible to me from the UI – I should be able to click “Refresh Greg Selector Now” and watch the fields update.
+
+Task 4 – Tests
+
+Add a small test module:
+
+tests/test_greg_selector.py
+
+The tests should:
+
+Construct a fake AgentState with simple sensor values and verify that:
+
+build_sensors_from_state returns a GregSelectorSensors object.
+
+evaluate_greg_selector returns a decision with a non-empty selected_strategy and reasoning.
+
+Use TestClient(app) to hit GET /api/strategies/greg/selector with the app, mocking status_store.get() or build_agent_state as needed so the test is deterministic and does not call real Deribit.
+
+Constraints / Safety
+
+Do not change or break any existing API endpoints or behaviours.
+
+Do not place real trades or change risk limits in this task.
+
+Changes must be runtime safe for my current Deribit testnet + DRY_RUN setup.
+
+Re-run the full test suite; all tests must pass and the new tests must pass too.
+
+When you’re done, please:
+
+Summarize which files you changed.
+
+Confirm that the new Strategies section appears on the dashboard and that
+clicking “Refresh Greg Selector Now” updates the panel.
