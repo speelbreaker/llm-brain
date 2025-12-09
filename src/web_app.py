@@ -955,6 +955,8 @@ def get_risk_limits() -> JSONResponse:
             "max_net_delta_abs": settings.max_net_delta_abs,
             "daily_drawdown_limit_pct": getattr(settings, "daily_drawdown_limit_pct", 0.0),
             "kill_switch_enabled": getattr(settings, "kill_switch_enabled", False),
+            "liquidity_max_spread_pct": settings.liquidity_max_spread_pct,
+            "liquidity_min_open_interest": settings.liquidity_min_open_interest,
         })
     except Exception as e:
         return JSONResponse(content={"ok": False, "error": str(e)})
@@ -962,10 +964,12 @@ def get_risk_limits() -> JSONResponse:
 
 class RiskLimitsUpdate(BaseModel):
     """Request model for updating risk limits."""
-    max_margin_used_pct: Optional[float] = None
-    max_net_delta_abs: Optional[float] = None
-    daily_drawdown_limit_pct: Optional[float] = None
+    max_margin_used_pct: Optional[float] = Field(default=None, ge=0.0, le=100.0)
+    max_net_delta_abs: Optional[float] = Field(default=None, ge=0.0)
+    daily_drawdown_limit_pct: Optional[float] = Field(default=None, ge=0.0, le=100.0)
     kill_switch_enabled: Optional[bool] = None
+    liquidity_max_spread_pct: Optional[float] = Field(default=None, ge=0.0, le=100.0)
+    liquidity_min_open_interest: Optional[int] = Field(default=None, ge=0)
 
 
 @app.post("/api/risk_limits")
@@ -999,7 +1003,57 @@ def update_risk_limits(req: RiskLimitsUpdate) -> JSONResponse:
         if req.kill_switch_enabled is not None:
             settings.kill_switch_enabled = req.kill_switch_enabled
         
+        if req.liquidity_max_spread_pct is not None:
+            settings.liquidity_max_spread_pct = req.liquidity_max_spread_pct
+        
+        if req.liquidity_min_open_interest is not None:
+            settings.liquidity_min_open_interest = req.liquidity_min_open_interest
+        
         return get_risk_limits()
+    except Exception as e:
+        return JSONResponse(content={"ok": False, "error": str(e)})
+
+
+class ReconciliationConfigUpdate(BaseModel):
+    """Request model for updating position reconciliation configuration."""
+    position_reconcile_action: Optional[Literal["halt", "auto_heal"]] = None
+    position_reconcile_on_startup: Optional[bool] = None
+    position_reconcile_on_each_loop: Optional[bool] = None
+    position_reconcile_tolerance_usd: Optional[float] = Field(default=None, ge=0.0)
+
+
+@app.get("/api/reconciliation_config")
+def get_reconciliation_config() -> JSONResponse:
+    """Get current position reconciliation configuration."""
+    try:
+        return JSONResponse(content={
+            "ok": True,
+            "position_reconcile_action": settings.position_reconcile_action,
+            "position_reconcile_on_startup": settings.position_reconcile_on_startup,
+            "position_reconcile_on_each_loop": settings.position_reconcile_on_each_loop,
+            "position_reconcile_tolerance_usd": settings.position_reconcile_tolerance_usd,
+        })
+    except Exception as e:
+        return JSONResponse(content={"ok": False, "error": str(e)})
+
+
+@app.post("/api/reconciliation_config")
+def update_reconciliation_config(req: ReconciliationConfigUpdate) -> JSONResponse:
+    """Update position reconciliation config at runtime (in-memory only)."""
+    try:
+        if req.position_reconcile_action is not None:
+            settings.position_reconcile_action = req.position_reconcile_action
+        
+        if req.position_reconcile_on_startup is not None:
+            settings.position_reconcile_on_startup = req.position_reconcile_on_startup
+        
+        if req.position_reconcile_on_each_loop is not None:
+            settings.position_reconcile_on_each_loop = req.position_reconcile_on_each_loop
+        
+        if req.position_reconcile_tolerance_usd is not None:
+            settings.position_reconcile_tolerance_usd = req.position_reconcile_tolerance_usd
+        
+        return get_reconciliation_config()
     except Exception as e:
         return JSONResponse(content={"ok": False, "error": str(e)})
 
@@ -2883,9 +2937,54 @@ def index() -> str:
                 <label style="display: block; font-size: 0.85rem; color: #555; margin-bottom: 0.25rem;">Max Net Delta (abs)</label>
                 <input type="number" id="max-net-delta-input" min="0" step="0.1" style="width: 100%; padding: 0.5rem; border: 1px solid #ccc; border-radius: 4px;">
               </div>
+              <div>
+                <label style="display: block; font-size: 0.85rem; color: #555; margin-bottom: 0.25rem;">Max Bid/Ask Spread (%)</label>
+                <input type="number" id="liquidity-max-spread-input" min="0" max="100" step="0.1" style="width: 100%; padding: 0.5rem; border: 1px solid #ccc; border-radius: 4px;">
+              </div>
+              <div>
+                <label style="display: block; font-size: 0.85rem; color: #555; margin-bottom: 0.25rem;">Min Open Interest</label>
+                <input type="number" id="liquidity-min-oi-input" min="0" step="1" style="width: 100%; padding: 0.5rem; border: 1px solid #ccc; border-radius: 4px;">
+              </div>
             </div>
+            <p style="font-size: 0.8rem; color: #666; margin-top: 0.75rem; margin-bottom: 0;">
+              Liquidity guard: max spread <span id="liquidity-max-spread-label">--</span>%, min OI <span id="liquidity-min-oi-label">--</span> contracts.
+            </p>
             <button onclick="saveRiskLimits()" style="margin-top: 1rem;">Save Risk Limits</button>
             <div id="risk-limits-feedback" style="font-size: 0.8rem; min-height: 1.5rem; margin-top: 0.5rem;"></div>
+          </fieldset>
+          
+          <!-- Position Reconciliation Fieldset -->
+          <fieldset style="margin-top: 1.5rem; padding: 1.25rem; border: 2px solid #ff9800; border-radius: 8px;">
+            <legend style="color: #e65100; font-weight: 600; padding: 0 0.5rem;">Position Reconciliation</legend>
+            <p style="font-size: 0.85rem; color: #666; margin-bottom: 1rem;">
+              Configure how the bot reacts if local positions ever diverge from Deribit.
+              These settings are runtime-only and reset on restart.
+            </p>
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem;">
+              <div>
+                <label style="display: block; font-size: 0.85rem; color: #555; margin-bottom: 0.25rem;">On Position Mismatch</label>
+                <select id="reconcile-action-config-select" style="width: 100%; padding: 0.5rem; border: 1px solid #ccc; border-radius: 4px;">
+                  <option value="halt">Halt trading (safe)</option>
+                  <option value="auto_heal">Auto-heal from exchange</option>
+                </select>
+              </div>
+              <div>
+                <label style="display: block; font-size: 0.85rem; color: #555; margin-bottom: 0.25rem;">Mismatch Tolerance (USD)</label>
+                <input type="number" id="reconcile-tolerance-input" min="0" step="1" style="width: 100%; padding: 0.5rem; border: 1px solid #ccc; border-radius: 4px;">
+              </div>
+              <div style="display: flex; flex-direction: column; gap: 0.5rem; justify-content: center;">
+                <label style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.85rem; color: #555; cursor: pointer;">
+                  <input type="checkbox" id="reconcile-on-startup-checkbox">
+                  Run on startup
+                </label>
+                <label style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.85rem; color: #555; cursor: pointer;">
+                  <input type="checkbox" id="reconcile-on-each-loop-checkbox">
+                  Run on each loop
+                </label>
+              </div>
+            </div>
+            <button onclick="saveReconciliationConfig()" style="margin-top: 1rem;">Apply Reconciliation Settings</button>
+            <div id="reconcile-feedback" style="font-size: 0.8rem; min-height: 1.5rem; margin-top: 0.5rem;"></div>
           </fieldset>
           
         </div>
@@ -3535,9 +3634,27 @@ def index() -> str:
         if (riskData.ok) {{
           document.getElementById('max-margin-input').value = riskData.max_margin_used_pct;
           document.getElementById('max-net-delta-input').value = riskData.max_net_delta_abs;
+          document.getElementById('liquidity-max-spread-input').value = riskData.liquidity_max_spread_pct;
+          document.getElementById('liquidity-min-oi-input').value = riskData.liquidity_min_open_interest;
+          document.getElementById('liquidity-max-spread-label').textContent = riskData.liquidity_max_spread_pct.toFixed(1);
+          document.getElementById('liquidity-min-oi-label').textContent = riskData.liquidity_min_open_interest;
         }}
       }} catch (e) {{
         console.error('Error loading risk limits:', e);
+      }}
+      
+      // Load reconciliation config
+      try {{
+        const reconcileRes = await fetch('/api/reconciliation_config');
+        const reconcileData = await reconcileRes.json();
+        if (reconcileData.ok) {{
+          document.getElementById('reconcile-action-config-select').value = reconcileData.position_reconcile_action;
+          document.getElementById('reconcile-on-startup-checkbox').checked = !!reconcileData.position_reconcile_on_startup;
+          document.getElementById('reconcile-on-each-loop-checkbox').checked = !!reconcileData.position_reconcile_on_each_loop;
+          document.getElementById('reconcile-tolerance-input').value = reconcileData.position_reconcile_tolerance_usd;
+        }}
+      }} catch (e) {{
+        console.error('Error loading reconciliation config:', e);
       }}
     }}
     
@@ -3652,7 +3769,9 @@ def index() -> str:
       
       const payload = {{
         max_margin_used_pct: parseFloat(document.getElementById('max-margin-input').value),
-        max_net_delta_abs: parseFloat(document.getElementById('max-net-delta-input').value)
+        max_net_delta_abs: parseFloat(document.getElementById('max-net-delta-input').value),
+        liquidity_max_spread_pct: parseFloat(document.getElementById('liquidity-max-spread-input').value),
+        liquidity_min_open_interest: parseInt(document.getElementById('liquidity-min-oi-input').value, 10)
       }};
       
       try {{
@@ -3663,9 +3782,40 @@ def index() -> str:
         }});
         const data = await res.json();
         if (data.ok) {{
-          feedbackEl.innerHTML = '<span style="color: #2e7d32;">✓ Risk limits updated</span>';
+          feedbackEl.innerHTML = '<span style="color: #2e7d32;">✓ Risk limits updated (runtime only)</span>';
+          document.getElementById('liquidity-max-spread-label').textContent = data.liquidity_max_spread_pct.toFixed(1);
+          document.getElementById('liquidity-min-oi-label').textContent = data.liquidity_min_open_interest;
           setTimeout(() => {{ feedbackEl.innerHTML = ''; }}, 3000);
           loadSystemHealthStatus();
+        }} else {{
+          feedbackEl.innerHTML = `<span style="color: #c62828;">✗ ${{data.error || 'Update failed'}}</span>`;
+        }}
+      }} catch (e) {{
+        feedbackEl.innerHTML = `<span style="color: #c62828;">✗ Error: ${{e.message}}</span>`;
+      }}
+    }}
+    
+    async function saveReconciliationConfig() {{
+      const feedbackEl = document.getElementById('reconcile-feedback');
+      feedbackEl.innerHTML = '<span style="color: #666;">Applying reconciliation settings...</span>';
+      
+      const payload = {{
+        position_reconcile_action: document.getElementById('reconcile-action-config-select').value,
+        position_reconcile_on_startup: document.getElementById('reconcile-on-startup-checkbox').checked,
+        position_reconcile_on_each_loop: document.getElementById('reconcile-on-each-loop-checkbox').checked,
+        position_reconcile_tolerance_usd: parseFloat(document.getElementById('reconcile-tolerance-input').value)
+      }};
+      
+      try {{
+        const res = await fetch('/api/reconciliation_config', {{
+          method: 'POST',
+          headers: {{'Content-Type': 'application/json'}},
+          body: JSON.stringify(payload)
+        }});
+        const data = await res.json();
+        if (data.ok) {{
+          feedbackEl.innerHTML = '<span style="color: #2e7d32;">✓ Reconciliation settings updated (runtime only)</span>';
+          setTimeout(() => {{ feedbackEl.innerHTML = ''; }}, 3000);
         }} else {{
           feedbackEl.innerHTML = `<span style="color: #c62828;">✗ ${{data.error || 'Update failed'}}</span>`;
         }}

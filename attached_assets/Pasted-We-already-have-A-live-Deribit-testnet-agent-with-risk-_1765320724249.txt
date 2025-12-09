@@ -1,0 +1,518 @@
+We already have:
+
+A live Deribit testnet agent with risk engine + rule/LLM policies.
+
+A web dashboard with:
+
+System Controls & Health (LLM & Strategy Tuning, Risk Limits, Kill Switch, etc.).
+
+Bots tab with GregBot + Live Market Sensors (VRP, ADX, RSI, etc.).
+
+Updated docs: ROADMAP_BACKLOG.md, UI_FEATURE_GAPS.md, and the “Expert Rules Audit – Deribit Options Agent” (risk + expert rule families).
+
+For this batch, focus on Priority A safety and closing some UI gaps, without changing backtest logic or sending real trades.
+
+Overall Goals for this batch
+
+Add liquidity & slippage safeguards to the risk engine and surface them in the UI:
+
+Avoid trading illiquid, wide-spread strikes.
+
+Require a minimum open interest per candidate.
+
+Make this visible + configurable at runtime.
+
+Expose position reconciliation configuration in the UI:
+
+position_reconcile_action, position_reconcile_on_startup, position_reconcile_on_each_loop, position_reconcile_tolerance_usd are currently code-only.
+
+UI_FEATURE_GAPS (1)
+
+I want a small “Position Reconciliation” panel on the dashboard so I can see and tweak these without editing env vars.
+
+Add risk-engine boundary tests:
+
+Freeze the behaviour of max margin used, max net delta, and max expiry exposure (and daily DD if practical) so future changes don't accidentally weaken risk checks.
+
+All changes must be:
+
+Runtime-only (mutate in-memory settings, no env/disk writes).
+
+Safe: no change in how real trades would be sent, beyond blocking more unsafe trades.
+
+Backwards-compatible with existing endpoints and UI.
+
+Task 1 – Liquidity & OI Safeguards (Risk Engine + UI)
+
+This implements the “Liquidity & slippage safeguards” from the Expert Rules list (5.1/5.2 + C4 in the roadmap) – protect against trading illiquid strikes with wide spreads or tiny OI.
+
+1A. Add config fields in src/config.py
+
+In Settings (Pydantic BaseSettings), add liquidity guard fields (runtime-tunable):
+
+class Settings(BaseSettings):
+    # ... existing fields ...
+
+    # Liquidity safeguards (per-strike)
+    liquidity_max_spread_pct: float = 5.0   # e.g. 5% max bid/ask spread
+    liquidity_min_open_interest: int = 50   # min OI contracts per strike
+
+
+Notes:
+
+Interpret liquidity_max_spread_pct as percent of mid, e.g. 5.0 == 5%.
+
+Defaults should be conservative but not crazy; you can tweak based on current code patterns.
+
+1B. Wire liquidity metrics into option candidates
+
+In the live candidate builder (likely src/state_builder.py / a CandidateOption/OptionCandidate model):
+
+Compute bid/ask spread per candidate:
+
+Use whatever fields already exist for best bid/ask (e.g. bid_price / ask_price or best_bid / best_ask).
+
+Compute:
+
+mid = (bid + ask) / 2
+spread_abs = ask - bid
+spread_pct = spread_abs / mid if mid > 0 else None
+
+
+Attach these fields to the candidate structure used by the risk engine, e.g.:
+
+candidate.spread_pct = spread_pct
+candidate.open_interest = <from Deribit instrument or orderbook>
+
+
+Re-use existing open interest / volume fields from the Deribit client; if you already have OI on instruments, just thread it through.
+
+Do not change how premiums or IV are computed; only add extra metadata.
+
+Make sure this metadata is:
+
+Available in the live agent state used by risk_engine.check_action_allowed.
+
+Included in the flight recorder / logs where reasonable (e.g. in candidate debugging payloads), but don’t bloat logs excessively.
+
+1C. Enforce liquidity guards in src/risk_engine.py
+
+In risk_engine.check_action_allowed(...) (or equivalent), add a liquidity check that runs for actions that open or increase exposure (e.g. OPEN_COVERED_CALL, ROLL_COVERED_CALL when size increases):
+
+Implement a helper, e.g.:
+
+def _check_liquidity_limits(settings: Settings, candidate) -> list[str]:
+    """
+    Returns a list of human-readable reasons if the candidate fails liquidity checks.
+    Empty list means liquidity is OK.
+    """
+    reasons: list[str] = []
+
+    spread_pct = getattr(candidate, "spread_pct", None)
+    oi = getattr(candidate, "open_interest", None)
+
+    if spread_pct is not None and spread_pct * 100.0 > settings.liquidity_max_spread_pct:
+        reasons.append(
+            f"Liquidity: bid/ask spread {spread_pct*100:.2f}% > max {settings.liquidity_max_spread_pct:.2f}%"
+        )
+
+    if oi is not None and oi < settings.liquidity_min_open_interest:
+        reasons.append(
+            f"Liquidity: open interest {oi} < min {settings.liquidity_min_open_interest}"
+        )
+
+    return reasons
+
+
+In check_action_allowed, when evaluating a candidate for an opening action:
+
+Call _check_liquidity_limits.
+
+If any reasons are returned, treat this as blocked, appending the reasons into the existing risk reason list / diagnostics object (follow the existing pattern you use for margin/delta/expiry checks).
+
+Do not change logic for closing/hedging actions – they should not be blocked purely on liquidity grounds.
+
+1D. Expose liquidity guards in /api/risk_limits
+
+We already have /api/risk_limits GET + POST with a RiskLimitsUpdate model for margin, delta, daily DD, kill switch, etc.
+
+Extend them:
+
+Pydantic model:
+
+class RiskLimitsUpdate(BaseModel):
+    max_margin_used_pct: Optional[float] = Field(default=None, ge=0.0, le=100.0)
+    max_net_delta_abs: Optional[float] = Field(default=None, ge=0.0)
+    daily_drawdown_limit_pct: Optional[float] = Field(default=None, ge=0.0, le=100.0)
+    kill_switch_enabled: Optional[bool] = None
+
+    liquidity_max_spread_pct: Optional[float] = Field(default=None, ge=0.0, le=100.0)
+    liquidity_min_open_interest: Optional[int] = Field(default=None, ge=0)
+
+
+GET /api/risk_limits – include the new fields in the JSON payload:
+
+return JSONResponse(
+    content={
+        "ok": True,
+        # existing fields...
+        "max_margin_used_pct": settings.max_margin_used_pct,
+        "max_net_delta_abs": settings.max_net_delta_abs,
+        "daily_drawdown_limit_pct": settings.daily_drawdown_limit_pct,
+        "kill_switch_enabled": settings.kill_switch_enabled,
+        "max_expiry_exposure": settings.max_expiry_exposure,
+        # NEW:
+        "liquidity_max_spread_pct": settings.liquidity_max_spread_pct,
+        "liquidity_min_open_interest": settings.liquidity_min_open_interest,
+    }
+)
+
+
+POST /api/risk_limits – update runtime settings:
+
+if req.liquidity_max_spread_pct is not None:
+    settings.liquidity_max_spread_pct = req.liquidity_max_spread_pct
+
+if req.liquidity_min_open_interest is not None:
+    settings.liquidity_min_open_interest = req.liquidity_min_open_interest
+
+
+Return the same shape as GET for convenience.
+
+1E. UI: Liquidity inputs + status in System Controls & Health
+
+In src/web_app.py, update the main HTML returned by index():
+
+In the “System Controls & Health” area, inside the section where Risk Limits are shown (same area you already use for Max Margin / Max Net Delta):
+
+Add new inputs inside the Risk Limits fieldset:
+
+<label>
+  Max Bid/Ask Spread (%):
+  <input type="number" id="liquidity-max-spread-input" step="0.1">
+</label>
+<label>
+  Min Open Interest (contracts):
+  <input type="number" id="liquidity-min-oi-input" step="1">
+</label>
+
+
+In the LLM & Strategy Tuning / Risk summary text, add a short line like:
+
+Liquidity guard: max spread <span id="liquidity-max-spread-label">…</span>%, min OI <span id="liquidity-min-oi-label">…</span>.
+
+In the existing <script> for the dashboard:
+
+On DOMContentLoaded, when handling GET /api/risk_limits:
+
+Populate:
+
+document.getElementById("liquidity-max-spread-input").value = data.liquidity_max_spread_pct;
+document.getElementById("liquidity-min-oi-input").value = data.liquidity_min_open_interest;
+document.getElementById("liquidity-max-spread-label").textContent = data.liquidity_max_spread_pct.toFixed(1);
+document.getElementById("liquidity-min-oi-label").textContent = data.liquidity_min_open_interest;
+
+
+In the code that POSTs /api/risk_limits when the “Apply LLM & Strategy Settings” button is clicked, include these fields:
+
+const liquidityMaxSpread = parseFloat(document.getElementById("liquidity-max-spread-input").value);
+const liquidityMinOi = parseInt(document.getElementById("liquidity-min-oi-input").value, 10);
+
+const riskPayload = {
+  max_margin_used_pct: maxMargin,
+  max_net_delta_abs: maxNetDelta,
+  daily_drawdown_limit_pct: dailyDrawdownLimit,
+  kill_switch_enabled: killSwitchEnabled,
+  liquidity_max_spread_pct: liquidityMaxSpread,
+  liquidity_min_open_interest: liquidityMinOi
+};
+
+
+Keep the existing success/error messaging; no new endpoint is needed.
+
+(Optional but nice) In the Bots / GregBot strategy tables, when a strategy is blocked for liquidity reasons, include those liquidity reason strings in the “Details” column alongside the existing sensor info (same pattern you use now for vrp_30d, adx_14d, etc.).
+
+Task 2 – Position Reconciliation Config Panel + API
+
+UI_FEATURE_GAPS.md flags the position reconciliation controls as code-only but important risk knobs.
+We already implemented reconciliation logic + divergence guardrail in a previous batch (helper module, config flag, agent loop wiring, and scripts). Now we just need UI controls + API.
+
+2A. Add reconciliation config API in src/web_app.py
+
+Create a new request model:
+
+class ReconciliationConfigUpdate(BaseModel):
+    position_reconcile_action: Optional[Literal["halt", "auto_heal"]] = None
+    position_reconcile_on_startup: Optional[bool] = None
+    position_reconcile_on_each_loop: Optional[bool] = None
+    position_reconcile_tolerance_usd: Optional[float] = Field(default=None, ge=0.0)
+
+
+Add endpoints near the other System Health APIs:
+
+@app.get("/api/reconciliation_config")
+def get_reconciliation_config() -> JSONResponse:
+    try:
+        return JSONResponse(
+            content={
+                "ok": True,
+                "position_reconcile_action": settings.position_reconcile_action,
+                "position_reconcile_on_startup": settings.position_reconcile_on_startup,
+                "position_reconcile_on_each_loop": settings.position_reconcile_on_each_loop,
+                "position_reconcile_tolerance_usd": settings.position_reconcile_tolerance_usd,
+            }
+        )
+    except Exception as e:
+        return JSONResponse(content={"ok": False, "error": str(e)})
+
+@app.post("/api/reconciliation_config")
+def update_reconciliation_config(req: ReconciliationConfigUpdate) -> JSONResponse:
+    """
+    Runtime-only updates for position reconciliation behaviour.
+    Does NOT persist to env or disk.
+    """
+    try:
+        if req.position_reconcile_action is not None:
+            settings.position_reconcile_action = req.position_reconcile_action
+
+        if req.position_reconcile_on_startup is not None:
+            settings.position_reconcile_on_startup = req.position_reconcile_on_startup
+
+        if req.position_reconcile_on_each_loop is not None:
+            settings.position_reconcile_on_each_loop = req.position_reconcile_on_each_loop
+
+        if req.position_reconcile_tolerance_usd is not None:
+            settings.position_reconcile_tolerance_usd = req.position_reconcile_tolerance_usd
+
+        return get_reconciliation_config()
+    except Exception as e:
+        return JSONResponse(content={"ok": False, "error": str(e)})
+
+2B. UI: “Position Reconciliation” panel in System Controls & Health
+
+In the index() HTML in web_app.py, under System Controls & Health, add a new subsection after Risk Limits:
+
+### Position Reconciliation
+
+<p>
+  Configure how the bot reacts if local positions ever diverge from Deribit.
+  These settings are runtime-only and reset on restart.
+</p>
+
+<div id="reconciliation-panel">
+  <label>
+    On Position Mismatch:
+    <select id="reconcile-action-select">
+      <option value="halt">Halt trading (safe)</option>
+      <option value="auto_heal">Auto-heal from exchange</option>
+    </select>
+  </label>
+
+  <label>
+    <input type="checkbox" id="reconcile-on-startup-checkbox">
+    Run reconciliation on startup
+  </label>
+
+  <label>
+    <input type="checkbox" id="reconcile-on-each-loop-checkbox">
+    Run reconciliation on each agent loop
+  </label>
+
+  <label>
+    Mismatch Tolerance (USD):
+    <input type="number" id="reconcile-tolerance-input" step="1">
+  </label>
+
+  <button id="apply-reconcile-btn">Apply Reconciliation Settings</button>
+  <div id="reconcile-status" aria-live="polite"></div>
+</div>
+
+2C. JavaScript wiring for reconciliation panel
+
+In the existing <script>:
+
+On DOMContentLoaded, fetch the reconciliation config:
+
+fetch("/api/reconciliation_config")
+  .then(r => r.json())
+  .then(data => {
+    if (!data.ok) return;
+
+    document.getElementById("reconcile-action-select").value = data.position_reconcile_action;
+    document.getElementById("reconcile-on-startup-checkbox").checked = !!data.position_reconcile_on_startup;
+    document.getElementById("reconcile-on-each-loop-checkbox").checked = !!data.position_reconcile_on_each_loop;
+    document.getElementById("reconcile-tolerance-input").value = data.position_reconcile_tolerance_usd;
+  })
+  .catch(err => {
+    console.error("Failed to load reconciliation config", err);
+  });
+
+
+On click of Apply Reconciliation Settings:
+
+document.getElementById("apply-reconcile-btn").addEventListener("click", async () => {
+  const statusEl = document.getElementById("reconcile-status");
+  statusEl.textContent = "Applying reconciliation settings...";
+
+  const payload = {
+    position_reconcile_action: document.getElementById("reconcile-action-select").value,
+    position_reconcile_on_startup: document.getElementById("reconcile-on-startup-checkbox").checked,
+    position_reconcile_on_each_loop: document.getElementById("reconcile-on-each-loop-checkbox").checked,
+    position_reconcile_tolerance_usd: parseFloat(
+      document.getElementById("reconcile-tolerance-input").value
+    ),
+  };
+
+  try {
+    const resp = await fetch("/api/reconciliation_config", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify(payload),
+    });
+    const data = await resp.json();
+    if (data.ok) {
+      statusEl.textContent = "Reconciliation settings updated (runtime only).";
+    } else {
+      statusEl.textContent = "Error: " + (data.error || "unknown error");
+    }
+  } catch (err) {
+    console.error(err);
+    statusEl.textContent = "Error updating reconciliation settings.";
+  }
+});
+
+
+Optional: In any existing System Health status text where you show reconciliation status (e.g. “Positions in sync” vs “DIVERGENCE – trading halted”), mention the current action (halt/auto-heal) for extra clarity, reusing settings.position_reconcile_action.
+
+Task 3 – Risk Engine Boundary Tests (Safety Regression Guard)
+
+From the roadmap’s testing section, we want more explicit tests around the risk limits: max margin used %, max net delta, max expiry exposure, and daily drawdown if feasible.
+
+Goal: Do not change the core semantics unless you find clear inconsistencies. Instead, codify the current behaviour in tests so we don’t regress later.
+
+3A. New test module
+
+Create tests/test_risk_engine_boundaries.py.
+
+In this module:
+
+Import the existing risk engine and settings:
+
+import pytest
+
+from src.config import Settings
+from src import risk_engine
+# import whatever minimal Action / AgentState / candidate types you need
+
+
+Use the same patterns as any existing tests around check_action_allowed (if a test module already exists, follow its structure). If not, create minimal stubs / helper factories to construct:
+
+A Settings instance with known values.
+
+A minimal state / agent_state containing current margin usage, net delta, expiry exposures, etc.
+
+A candidate action that would just pass, hit, and exceed the configured limits.
+
+3B. What to assert
+
+For each of these guardrails:
+
+Max margin used %
+
+Max net delta abs
+
+Max expiry exposure
+
+(Optional) Daily drawdown limit %
+
+Create tests that:
+
+Set the relevant limit in Settings (e.g., margin 100%, max delta 0.5, etc.).
+
+Craft scenarios where the resulting metric is:
+
+clearly below the limit,
+
+at the exact limit,
+
+clearly above the limit.
+
+Call check_action_allowed(...) (or equivalent) and assert:
+
+For below limit, new exposures are allowed (no blocking reason from that check).
+
+For above limit, the action is blocked and the reasons include a human-readable message mentioning the metric and limit (follow existing reason text style).
+
+For exact limit, assert whatever the current code does – almost always we want “<= limit allowed, > limit blocked”, so if you see a > comparison in the code, tests should reflect that.
+
+If you discover inconsistent boundary handling across these checks (e.g. some use > while others use >=), you may:
+
+Standardise on: allow when metric <= limit, block when it would exceed, adjusting comparisons + tests accordingly.
+
+Add a short comment/docstring in the test file explaining that convention.
+
+Do not make the risk engine more permissive; if in doubt, choose the safer interpretation.
+
+3C. Test runtime only
+
+Tests must be pure Python unit tests:
+
+No Deribit API calls.
+
+No web requests.
+
+No DB or filesystem I/O beyond what existing tests already use.
+
+Update pytest / test discovery if needed so this file runs with the rest of the suite.
+
+Task 4 – Docs Touchups
+
+UI_FEATURE_GAPS.md
+
+In the Risk & Safety table, add a short note that Position Reconciliation now has a UI panel in System Health.
+
+In the “Next Steps” or notes, mention that Liquidity guards are now configurable at runtime via the Risk Limits section and surfaced in Strategy & Safeguards.
+
+ROADMAP_BACKLOG.md / ROADMAP.md
+
+Under the relevant items (C4 Liquidity & slippage safeguards, and H2 Risk engine boundary tests), mark them as partially or fully implemented, with a short note like:
+
+“Liquidity & OI guardrails implemented in risk_engine + UI.”
+
+“Risk engine boundary behaviour covered by unit tests.”
+
+Success Criteria
+
+When you’re done, all of the following should be true:
+
+App starts normally; existing endpoints & UI still work.
+
+The System Controls & Health panel now includes:
+
+Liquidity guard controls (max spread %, min OI) alongside other Risk Limits.
+
+A “Position Reconciliation” panel where I can:
+
+Choose Halt vs Auto-heal,
+
+Toggle “Run on startup / on each loop”,
+
+Adjust mismatch tolerance in USD,
+
+See a status message after clicking Apply.
+
+When I adjust these values and click Apply, the UI clearly tells me:
+
+Success, with a note that changes are runtime-only, or
+
+An error message with details if something fails.
+
+The liquidity guard actually blocks unsafe candidates:
+
+For example, if a strike has a 10% spread and my max is 5%, new trades for that strike are blocked with a clear liquidity reason.
+
+pytest passes, including the new test_risk_engine_boundaries.py tests, which clearly document what happens at the exact risk limits.
+
+No new real-trade side effects are introduced – the only behavioural changes are extra safety blocks for illiquid trades.
+
+Use this prompt exactly as written, and feel free to inspect existing code/tests to align naming and patterns.

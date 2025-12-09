@@ -16,6 +16,29 @@ _daily_drawdown_state: dict[str, Any] = {
 }
 
 
+def _check_liquidity_limits(settings: Settings, candidate) -> list[str]:
+    """
+    Returns a list of human-readable reasons if the candidate fails liquidity checks.
+    Empty list means liquidity is OK.
+    """
+    reasons: list[str] = []
+
+    spread_pct = getattr(candidate, "spread_pct", None)
+    oi = getattr(candidate, "open_interest", None)
+
+    if spread_pct is not None and spread_pct > settings.liquidity_max_spread_pct:
+        reasons.append(
+            f"Liquidity: bid/ask spread {spread_pct:.2f}% > max {settings.liquidity_max_spread_pct:.2f}%"
+        )
+
+    if oi is not None and oi < settings.liquidity_min_open_interest:
+        reasons.append(
+            f"Liquidity: open interest {oi} < min {settings.liquidity_min_open_interest}"
+        )
+
+    return reasons
+
+
 def _check_daily_drawdown_limit(
     portfolio: Any,
     cfg: Settings,
@@ -188,6 +211,18 @@ def check_action_allowed(
                     f"Not enough {underlying} spot to consider this a covered call: "
                     f"have {underlying_spot:.4f}, need at least {size:.4f}."
                 )
+
+            # Liquidity check for opening actions
+            candidate = params.get("candidate")
+            if candidate is None:
+                # Try to find candidate from agent_state by symbol
+                for c in agent_state.candidate_options:
+                    if c.symbol == symbol:
+                        candidate = c
+                        break
+            if candidate is not None:
+                liquidity_reasons = _check_liquidity_limits(cfg, candidate)
+                reasons.extend(liquidity_reasons)
     
     if action_type == ActionType.CLOSE_COVERED_CALL:
         symbol = params.get("symbol", "")
@@ -225,6 +260,17 @@ def check_action_allowed(
             
             if not has_candidate:
                 reasons.append("No valid candidate options available to roll into")
+        else:
+            # Liquidity check for the target option in a roll
+            roll_candidate = params.get("candidate")
+            if roll_candidate is None:
+                for c in agent_state.candidate_options:
+                    if c.symbol == to_symbol:
+                        roll_candidate = c
+                        break
+            if roll_candidate is not None:
+                liquidity_reasons = _check_liquidity_limits(cfg, roll_candidate)
+                reasons.extend(liquidity_reasons)
     
     allowed = len(reasons) == 0
     return allowed, reasons

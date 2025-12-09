@@ -277,6 +277,16 @@ class Settings(BaseSettings):
         description="Tolerance in USD for size mismatches (to avoid panicking over tiny rounding differences)",
     )
 
+    # Liquidity safeguards (per-strike)
+    liquidity_max_spread_pct: float = Field(
+        default=5.0,
+        description="Maximum bid/ask spread as percentage of mid price (e.g. 5.0 = 5%)",
+    )
+    liquidity_min_open_interest: int = Field(
+        default=50,
+        description="Minimum open interest (contracts) per strike for liquidity checks",
+    )
+
     @property
     def is_research(self) -> bool:
         """Check if running in research mode."""

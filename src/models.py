@@ -163,6 +163,16 @@ class CandidateOption(BaseModel):
     iv: float = Field(default=0.0, description="Implied volatility")
     rv: float = Field(default=0.0, description="Realized volatility (placeholder)")
     ivrv: float = Field(default=1.0, description="IV/RV ratio")
+    
+    # Liquidity metrics
+    spread_pct: Optional[float] = Field(
+        default=None,
+        description="Bid/ask spread as percentage of mid price",
+    )
+    open_interest: Optional[int] = Field(
+        default=None,
+        description="Open interest (contracts) for this strike",
+    )
 
 
 class VolState(BaseModel):
