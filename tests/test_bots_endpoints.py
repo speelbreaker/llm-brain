@@ -200,3 +200,113 @@ class TestGregSensors:
             assert isinstance(strat, StrategyEvaluation)
             assert strat.bot_name == "GregBot"
             assert strat.expert_id == "greg_mandolini"
+
+
+class TestETHSensors:
+    """Tests for ETH sensor computation - Task 1 validation."""
+    
+    def test_eth_sensors_present_in_market_sensors(self):
+        """GET /api/bots/market_sensors should include ETH."""
+        response = client.get("/api/bots/market_sensors")
+        data = response.json()
+        assert data.get("ok") is True
+        assert "ETH" in data["sensors"], "ETH should be in sensors response"
+    
+    def test_eth_has_all_sensor_fields(self):
+        """ETH should have all 8 sensor fields present (values may be None)."""
+        response = client.get("/api/bots/market_sensors")
+        data = response.json()
+        assert data.get("ok") is True
+        
+        eth_sensors = data["sensors"].get("ETH", {})
+        required_keys = [
+            "vrp_30d", "chop_factor_7d", "iv_rank_6m",
+            "term_structure_spread", "skew_25d", "adx_14d",
+            "rsi_14d", "price_vs_ma200"
+        ]
+        for key in required_keys:
+            assert key in eth_sensors, f"ETH missing sensor key: {key}"
+    
+    def test_eth_ohlc_sensors_computed(self):
+        """ETH OHLC-based sensors (ADX, RSI, MA200) should be non-null."""
+        response = client.get("/api/bots/market_sensors")
+        data = response.json()
+        assert data.get("ok") is True
+        
+        eth_sensors = data["sensors"].get("ETH", {})
+        assert eth_sensors.get("adx_14d") is not None, "ETH adx_14d should be computed"
+        assert eth_sensors.get("rsi_14d") is not None, "ETH rsi_14d should be computed"
+        assert eth_sensors.get("price_vs_ma200") is not None, "ETH price_vs_ma200 should be computed"
+    
+    def test_eth_strategies_in_bots_strategies(self):
+        """GET /api/bots/strategies should include ETH strategies."""
+        response = client.get("/api/bots/strategies")
+        data = response.json()
+        assert data.get("ok") is True
+        
+        eth_strategies = [s for s in data["strategies"] if s.get("underlying") == "ETH"]
+        assert len(eth_strategies) > 0, "Should have at least one ETH strategy"
+    
+    def test_eth_compute_greg_sensors(self):
+        """compute_greg_sensors('ETH') should return all keys."""
+        from src.bots.gregbot import compute_greg_sensors
+        
+        sensors = compute_greg_sensors("ETH")
+        
+        required_keys = [
+            "vrp_30d", "chop_factor_7d", "iv_rank_6m",
+            "term_structure_spread", "skew_25d", "adx_14d",
+            "rsi_14d", "price_vs_ma200"
+        ]
+        for key in required_keys:
+            assert key in sensors, f"ETH missing sensor key: {key}"
+
+
+class TestSkew25d:
+    """Tests for skew_25d computation - Task 2 validation."""
+    
+    def test_skew_25d_field_exists_for_btc(self):
+        """BTC should have skew_25d field in sensors."""
+        response = client.get("/api/bots/market_sensors")
+        data = response.json()
+        assert data.get("ok") is True
+        assert "skew_25d" in data["sensors"].get("BTC", {}), "BTC should have skew_25d field"
+    
+    def test_skew_25d_field_exists_for_eth(self):
+        """ETH should have skew_25d field in sensors."""
+        response = client.get("/api/bots/market_sensors")
+        data = response.json()
+        assert data.get("ok") is True
+        assert "skew_25d" in data["sensors"].get("ETH", {}), "ETH should have skew_25d field"
+    
+    def test_strategies_using_skew_have_criterion(self):
+        """Strategies using skew (C_SHORT_PUT, F_BULL_PUT_SPREAD, F_BEAR_CALL_SPREAD) should have skew_25d criterion."""
+        response = client.get("/api/bots/strategies")
+        data = response.json()
+        assert data.get("ok") is True
+        
+        skew_strategies = ["STRATEGY_C_SHORT_PUT", "STRATEGY_F_BULL_PUT_SPREAD", "STRATEGY_F_BEAR_CALL_SPREAD"]
+        
+        for strat in data["strategies"]:
+            if strat["strategy_key"] in skew_strategies:
+                criteria_metrics = [c["metric"] for c in strat.get("criteria", [])]
+                assert "skew_25d" in criteria_metrics, f"{strat['strategy_key']} should have skew_25d criterion"
+    
+    def test_compute_skew_25d_returns_numeric_or_none(self):
+        """compute_skew_25d should return float or None."""
+        from src.bots.sensors import compute_skew_25d, get_ohlc_data
+        
+        df = get_ohlc_data("BTC")
+        if not df.empty:
+            spot = float(df["close"].iloc[-1])
+            skew = compute_skew_25d("BTC", spot)
+            assert skew is None or isinstance(skew, float), "skew_25d should be float or None"
+    
+    def test_sensor_bundle_includes_skew(self):
+        """SensorBundle.to_dict() should include skew_25d."""
+        from src.bots.sensors import compute_sensors_for_underlying
+        
+        bundle = compute_sensors_for_underlying("BTC")
+        sensor_dict = bundle.to_dict()
+        
+        assert "skew_25d" in sensor_dict, "SensorBundle should include skew_25d"
