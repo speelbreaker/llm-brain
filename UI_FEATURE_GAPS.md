@@ -109,13 +109,15 @@ This document identifies which important features and configuration options exis
 
 ### Medium Priority (Operational Flexibility)
 
-| Feature | Current State | Recommended UI |
-|---------|---------------|----------------|
-| LLM enabled toggle | Display only | Add toggle switch |
-| Max margin/delta limits | Display only | Add editable inputs |
-| Training profile mode | Hidden | Add dropdown selector |
-| Strategy thresholds (IVRV, delta, DTE) | Hidden | Add filter controls panel |
-| Exploration probability | Display only | Add slider |
+| Feature | Current State | Recommended UI | Status |
+|---------|---------------|----------------|--------|
+| LLM enabled toggle | Display only | Add toggle switch | **Implemented** - System Health → LLM & Strategy Tuning panel |
+| Max margin/delta limits | Display only | Add editable inputs | **Implemented** - System Health → LLM & Strategy Tuning panel |
+| Training profile mode | Hidden | Add dropdown selector | **Implemented** - System Health → LLM & Strategy Tuning panel |
+| Strategy thresholds (IVRV, delta, DTE) | Hidden | Add filter controls panel | **Implemented** - System Health → LLM & Strategy Tuning panel |
+| Exploration probability | Display only | Add slider | **Implemented** - System Health → LLM & Strategy Tuning panel |
+
+> **Note (December 2025):** All Medium Priority features have been implemented in the "LLM & Strategy Tuning" panel under the System Health tab. Changes are runtime-only and do not persist across restarts.
 
 ### Low Priority (Advanced/Rare Use)
 

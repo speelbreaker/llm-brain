@@ -23,6 +23,13 @@ The agent features a clear separation of concerns, with modules for configuratio
 - **LLM Fine-Tuning Data**: Scripts transform candidate CSVs into chat-style JSONL corpora for LLM fine-tuning, supporting per-candidate classification and per-decision ranking tasks.
 - **Web Dashboard**: A FastAPI application offering "Live Agent" status, "Backtesting Lab" with interactive charts, "Backtest Runs" management, "Calibration" for price comparison, "System Health" with runtime controls, and a "Chat" interface for natural language interaction.
 - **Runtime Controls**: The System Health tab includes interactive controls for adjusting safety and operational settings without editing environment variables. Controls include: Global Kill Switch toggle, Daily Drawdown Limit input, Decision Mode selector, Dry Run Mode toggle, and Position Reconcile Action dropdown. Changes apply immediately but do not persist across restarts.
+- **LLM & Strategy Tuning**: The System Health tab includes an "LLM & Strategy Tuning" panel for adjusting LLM and strategy configuration at runtime:
+  - **LLM Enabled toggle**: Turn LLM-powered decision making on/off
+  - **Explore Probability slider**: Adjust epsilon-greedy exploration percentage (0-100%)
+  - **Training Profile dropdown**: Switch between "Single" and "Ladder" training modes
+  - **Strategy Thresholds**: Edit Min IV/RV, Delta Min/Max, DTE Min/Max (effective values for current mode)
+  - **Risk Limits**: Edit Max Margin Used % and Max Net Delta abs
+  All changes are runtime-only and will reset on restart.
 - **Persistent Backtest Runs**: Stores backtest results in PostgreSQL using SQLAlchemy ORM for status tracking, viewing, and downloading. Supports `synthetic`, `live_deribit`, and `real_scraper` data sources.
 - **Comparison & Health Check Scripts**: Tools for comparing synthetic vs. live backtests, generating diff reports, and performing strategy health checks.
 - **Agent Healthcheck Module**: Self-contained healthcheck system (`src/healthcheck.py`) that exercises the critical pipeline (config → Deribit → state builder). Includes CLI script (`scripts/agent_healthcheck.py`) and automatic startup integration with PASS/WARN/FAIL status display.
