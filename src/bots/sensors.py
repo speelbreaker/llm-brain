@@ -259,8 +259,11 @@ def compute_term_structure_and_atm_iv(
         valid.sort(key=lambda x: x[2])
         return valid[0][0]
     
-    exp_7d = find_closest_expiry(7, 3, 14)
-    exp_30d = find_closest_expiry(30, 20, 45)
+    # Expanded ranges to handle limited testnet expiries
+    # 7d: look for anything in 2-20 DTE range
+    # 30d: look for anything in 14-60 DTE range (broader to catch monthly expiries)
+    exp_7d = find_closest_expiry(7, 2, 20)
+    exp_30d = find_closest_expiry(30, 14, 60)
     
     iv_7d = None
     iv_30d = None
@@ -316,9 +319,10 @@ def compute_skew_25d(underlying: str, spot: float) -> Optional[float]:
     if not instruments:
         return None
     
+    # Expanded ranges to handle limited testnet expiries
     target_dte = 30
-    min_dte = 20
-    max_dte = 45
+    min_dte = 14
+    max_dte = 60
     
     valid_options = []
     for inst in instruments:

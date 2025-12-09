@@ -1,0 +1,237 @@
+We already have the Bots tab with:
+
+Live Market Sensors (VRP 30d, Chop Factor 7d, IV Rank 6m, Term Spread, Skew 25d, ADX 14d, RSI 14d, Price vs MA200)
+
+Strategy Matches (All Bots)
+
+Expert Bots → GregBot table
+
+Right now:
+
+BTC shows values for: vrp_30d, chop_factor_7d, adx_14d, rsi_14d, price_vs_ma200
+
+ETH shows values only for the OHLC-based metrics (ADX, RSI, MA200), while VRP 30d, Chop 7d, Term Spread, Skew 25d, IV Rank 6m are "--" or "?"
+
+Skew 25d is still not fully wired end-to-end for either BTC or ETH.
+
+Your task: wire the missing ETH sensors and implement Skew 25d properly for both BTC and ETH, so the Live Market Sensors and GregBot strategy tables can use them.
+
+Context & specs
+
+The Greg selector JSON spec (docs / uploaded file) defines the sensors as:
+
+vrp_30d = Implied_Vol_30d - Realized_Vol_30d
+
+chop_factor_7d = Realized_Vol_7d / Implied_Vol_30d
+
+iv_rank_6m = (Current_IV - 6m_Low) / (6m_High - 6m_Low)
+
+term_structure_spread = Implied_Vol_7d - Implied_Vol_30d
+
+skew_25d = Implied_Vol_25d_Put - Implied_Vol_25d_Call
+
+adx_14d, rsi_14d, price_vs_ma200 are already implemented from OHLC data
+
+We already have a Greg sensors module and Bots API:
+
+src/bots/greg_sensors.py (or similarly named)
+
+Functions like compute_greg_sensors_from_state(...) and evaluate_greg_strategies(...)
+
+src/web_app.py
+
+Endpoints like /api/bots/market_sensors and /api/bots/strategies
+
+Settings: settings.underlyings is typically ["BTC", "ETH"]
+
+Vol data lives in the agent state / vol_state and/or a helper that talks to Deribit for IV surface data.
+
+If any file names differ slightly, adapt accordingly but keep the overall structure.
+
+Task 1 – Make ETH sensors first-class (same as BTC)
+
+Goal: For every underlying in settings.underlyings (at least BTC, ETH), GET /api/bots/market_sensors should return a sensor row with:
+
+vrp_30d
+
+chop_factor_7d
+
+iv_rank_6m
+
+term_structure_spread
+
+skew_25d
+
+adx_14d
+
+rsi_14d
+
+price_vs_ma200
+
+even if some of them are temporarily null because of missing data.
+
+Steps:
+
+Locate the Greg sensor computation code
+
+Find the function that currently returns BTC sensors (vrp_30d, chop_factor_7d, etc.) for the Live Market Sensors table (likely in src/bots/greg_sensors.py).
+
+Confirm how BTC vrp_30d and chop_factor_7d are computed now (from vol_state, CrashMeter, or Deribit IV/RV).
+
+Generalize to all underlyings
+
+Change the sensor computation to iterate over settings.underlyings (at least "BTC" and "ETH").
+
+For each underlying:
+
+Pull realized vol (7d, 30d) from the same place you already use for BTC (market_context, RV cache, or similar).
+
+Pull implied vols (7d, 25d put/call, 30d) from the same vol/IV data used for BTC (vol surface, DeribitClient helper, etc.).
+
+Ensure ETH is not hard-coded to None or skipped anywhere.
+
+Compute the sensors per underlying
+
+For both BTC and ETH, implement:
+
+vrp_30d = iv_30d - rv_30d
+
+If either side is missing, set None and add a small internal comment about why.
+
+chop_factor_7d = rv_7d / iv_30d
+
+Guard against division by zero; if iv_30d <= 0, set None.
+
+iv_rank_6m = (current_iv_30d - iv_30d_low_6m) / (iv_30d_high_6m - iv_30d_low_6m)
+
+Clamp to [0, 1], and set None if the denominator is ≤ 0 or any piece is missing.
+
+term_structure_spread = iv_7d - iv_30d
+
+Same underlying, same moneyness convention as BTC.
+
+skew_25d = iv_25d_put - iv_25d_call
+
+Use 25-delta options at similar DTE (around 30d) for each underlying.
+
+If either leg is missing, set None.
+
+Reuse any existing helpers you created earlier for term structure or skew. If those helpers are currently BTC-only, refactor them to accept an underlying: str parameter and work for both BTC and ETH.
+
+Wire sensors into /api/bots/market_sensors
+
+Ensure GET /api/bots/market_sensors returns a dict/JSON where both BTC and ETH have a full set of keys listed above.
+
+It is fine if some values are null due to lack of historical data, but:
+
+ADX, RSI, Price vs MA200 should be non-null for both BTC and ETH (we already compute those from OHLC).
+
+VRP and Chop Factor should be non-null for ETH as soon as 7d/30d RV/IV are available, just like BTC.
+
+UI-visible result for me:
+
+In the Bots → Live Market Sensors table:
+
+ETH will no longer show -- / ? for VRP 30d and Chop Factor 7d when data is available – I should see actual numbers.
+
+Once IV history is present, IV Rank 6m, Term Spread, and Skew 25d will also show values for ETH instead of --.
+
+Task 2 – Implement and surface Skew 25d correctly
+
+Goal: make skew_25d a real, meaningful metric for both BTC and ETH, used consistently across:
+
+Live Market Sensors table
+
+GregBot strategy evaluations (Expert Bots table)
+
+Steps:
+
+Implement skew_25d computation
+
+In the Greg sensors module (or a dedicated helper like src/bots/vol_helpers.py), create a function:
+
+def compute_skew_25d(underlying: str, vol_data: VolDataType) -> Optional[float]:
+    """
+    Compute 25-delta skew for the given underlying:
+    skew_25d = IV_25d_put - IV_25d_call
+    Using ~30D options at 25-delta put/call if available.
+    """
+
+
+Use your existing IV surface / vol_state / Deribit helpers to get:
+
+25-delta put IV (slightly OTM put)
+
+25-delta call IV (slightly OTM call)
+
+Return None if you cannot locate both legs reliably.
+
+Integrate into sensor snapshot
+
+For each underlying in settings.underlyings, call compute_skew_25d and store the result in the sensor dict as skew_25d.
+
+Ensure that when you render the GregBot Expert Bots table, the Details column uses the new skew_25d value and threshold, like:
+
+skew_25d (7.2 > 5.0) ✅
+
+or skew_25d (-3.1 > 5.0) ❌ depending on Greg’s rule.
+
+This should work for both BTC and ETH.
+
+Task 3 – Keep the UI & details column consistent
+
+No major layout changes, but please ensure:
+
+The existing Live Market Sensors table row for “Skew 25d” now shows numbers for BTC & ETH when available.
+
+In the Expert Bots → GregBot table:
+
+For strategies that depend on skew (e.g. STRATEGY_C_SHORT_PUT, STRATEGY_F_BULL_PUT_SPREAD, STRATEGY_F_BEAR_CALL_SPREAD from the JSON spec):
+
+The Details cell uses the same “value vs threshold” format we added earlier, e.g.:
+
+skew_25d (6.3 > 5.0) ✅
+
+skew_25d (2.0 < 5.0) ❌
+
+This way, I can visually confirm from the UI that Skew 25d is wired and influencing the strategy status.
+
+Task 4 – Tests
+
+Add or extend tests (e.g., in tests/test_greg_sensors_and_bots.py) to cover ETH and skew:
+
+ETH sensors present
+
+Use TestClient(app) to call GET /api/bots/market_sensors.
+
+Assert that the response contains entries for both "BTC" and "ETH".
+
+For each of them, assert that the keys vrp_30d, chop_factor_7d, skew_25d, adx_14d, rsi_14d, price_vs_ma200 are present (values can be None in tests; we’re checking wiring, not live data).
+
+Skew 25d wiring
+
+If you can mock or fix a sample vol surface:
+
+Monkeypatch the helper you use for IV lookup so that:
+
+25d put IV = 0.80, 25d call IV = 0.70
+
+Assert that skew_25d returned in the sensors JSON equals 0.10 for that underlying.
+
+At minimum, test that the field exists and is numeric when vol data is present.
+
+Success criteria
+
+The FastAPI app still starts normally; all existing tests pass; new tests pass.
+
+In the Bots → Live Market Sensors table:
+
+ETH now shows real values for VRP 30d & Chop Factor 7d (and other metrics when data is available), not just “--”.
+
+Skew 25d shows numbers for both BTC and ETH if vol data is present.
+
+In the Expert Bots → GregBot table:
+
+Strategies that depend on skew display skew_25d (value vs threshold) in the Details column for both BTC and ETH.
+
+All of these are read-only analytics; they do not place trades or change any risk settings.
