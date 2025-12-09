@@ -3052,7 +3052,7 @@ def index() -> str:
           return `${{c.metric}} ${{mark}}`;
         }}).join('; ');
         
-        const tooltip = s.criteria.map(c => `${{c.metric}}: ${{formatSensorValue(c.value)}} (${{c.note || 'ok'}})`).join('\n');
+        const tooltip = s.criteria.map(c => `${{c.metric}}: ${{formatSensorValue(c.value)}} (${{c.note || 'ok'}})`).join('\\n');
         
         html += `<tr style="border-bottom: 1px solid #eee;" title="${{tooltip}}">
           <td style="padding: 0.5rem;">${{s.label}}</td>
