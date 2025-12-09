@@ -1058,42 +1058,22 @@ def update_strategy_thresholds(req: StrategyThresholdsUpdate) -> JSONResponse:
         if req.ivrv_min is not None:
             if req.ivrv_min < 0:
                 return JSONResponse(status_code=400, content={"ok": False, "error": "ivrv_min must be >= 0"})
-            if use_research:
-                settings.research_ivrv_min = req.ivrv_min
-            else:
-                settings.ivrv_min = req.ivrv_min
         
         if req.delta_min is not None:
             if req.delta_min < 0 or req.delta_min > 1:
                 return JSONResponse(status_code=400, content={"ok": False, "error": "delta_min must be between 0 and 1"})
-            if use_research:
-                settings.research_delta_min = req.delta_min
-            else:
-                settings.delta_min = req.delta_min
         
         if req.delta_max is not None:
             if req.delta_max < 0 or req.delta_max > 1:
                 return JSONResponse(status_code=400, content={"ok": False, "error": "delta_max must be between 0 and 1"})
-            if use_research:
-                settings.research_delta_max = req.delta_max
-            else:
-                settings.delta_max = req.delta_max
         
         if req.dte_min is not None:
             if req.dte_min < 0:
                 return JSONResponse(status_code=400, content={"ok": False, "error": "dte_min must be >= 0"})
-            if use_research:
-                settings.research_dte_min = req.dte_min
-            else:
-                settings.dte_min = req.dte_min
         
         if req.dte_max is not None:
             if req.dte_max < 0:
                 return JSONResponse(status_code=400, content={"ok": False, "error": "dte_max must be >= 0"})
-            if use_research:
-                settings.research_dte_max = req.dte_max
-            else:
-                settings.dte_max = req.dte_max
         
         if req.training_profile_mode is not None:
             valid_modes = ["single", "ladder"]
@@ -1102,6 +1082,60 @@ def update_strategy_thresholds(req: StrategyThresholdsUpdate) -> JSONResponse:
                     status_code=400,
                     content={"ok": False, "error": f"training_profile_mode must be one of: {', '.join(valid_modes)}"}
                 )
+        
+        current_delta_min = settings.research_delta_min if use_research else settings.delta_min
+        current_delta_max = settings.research_delta_max if use_research else settings.delta_max
+        current_dte_min = settings.research_dte_min if use_research else settings.dte_min
+        current_dte_max = settings.research_dte_max if use_research else settings.dte_max
+        
+        new_delta_min = req.delta_min if req.delta_min is not None else current_delta_min
+        new_delta_max = req.delta_max if req.delta_max is not None else current_delta_max
+        new_dte_min = req.dte_min if req.dte_min is not None else current_dte_min
+        new_dte_max = req.dte_max if req.dte_max is not None else current_dte_max
+        
+        if new_delta_min > new_delta_max:
+            return JSONResponse(
+                status_code=400,
+                content={"ok": False, "error": f"delta_min ({new_delta_min}) cannot be greater than delta_max ({new_delta_max})"}
+            )
+        
+        if new_dte_min > new_dte_max:
+            return JSONResponse(
+                status_code=400,
+                content={"ok": False, "error": f"dte_min ({new_dte_min}) cannot be greater than dte_max ({new_dte_max})"}
+            )
+        
+        if req.ivrv_min is not None:
+            if use_research:
+                settings.research_ivrv_min = req.ivrv_min
+            else:
+                settings.ivrv_min = req.ivrv_min
+        
+        if req.delta_min is not None:
+            if use_research:
+                settings.research_delta_min = req.delta_min
+            else:
+                settings.delta_min = req.delta_min
+        
+        if req.delta_max is not None:
+            if use_research:
+                settings.research_delta_max = req.delta_max
+            else:
+                settings.delta_max = req.delta_max
+        
+        if req.dte_min is not None:
+            if use_research:
+                settings.research_dte_min = req.dte_min
+            else:
+                settings.dte_min = req.dte_min
+        
+        if req.dte_max is not None:
+            if use_research:
+                settings.research_dte_max = req.dte_max
+            else:
+                settings.dte_max = req.dte_max
+        
+        if req.training_profile_mode is not None:
             settings.training_profile_mode = req.training_profile_mode  # type: ignore
         
         return get_strategy_thresholds()

@@ -142,6 +142,22 @@ class TestStrategyThresholdsEndpoint:
         data = response.json()
         assert data["ok"] is False
 
+    def test_post_strategy_thresholds_delta_min_greater_than_max(self, client):
+        """POST /api/strategy_thresholds rejects delta_min > delta_max."""
+        response = client.post("/api/strategy_thresholds", json={"delta_min": 0.5, "delta_max": 0.3})
+        assert response.status_code == 400
+        data = response.json()
+        assert data["ok"] is False
+        assert "delta_min" in data["error"]
+
+    def test_post_strategy_thresholds_dte_min_greater_than_max(self, client):
+        """POST /api/strategy_thresholds rejects dte_min > dte_max."""
+        response = client.post("/api/strategy_thresholds", json={"dte_min": 30, "dte_max": 5})
+        assert response.status_code == 400
+        data = response.json()
+        assert data["ok"] is False
+        assert "dte_min" in data["error"]
+
 
 class TestRiskLimitsEndpoint:
     """Tests for GET and POST /api/risk_limits."""
