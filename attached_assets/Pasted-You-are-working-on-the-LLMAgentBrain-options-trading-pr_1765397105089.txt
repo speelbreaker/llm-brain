@@ -1,0 +1,440 @@
+You are working on the LLMAgentBrain options-trading project (FastAPI web app + backtesting + Postgres).
+Your task: implement an automatic IV multiplier calibration pipeline using the Deribit harvester data, store the results in a calibration_history table, and wire this into the Calibration tab with a “Use latest recommended multiplier” button.
+
+Please read this whole prompt before coding.
+
+0. Context (what exists today)
+
+The Calibration tab (/calibration in src/web_app.py) can:
+
+Compare Black-Scholes synthetic call prices vs live Deribit mark prices for an underlying (BTC/ETH).
+
+Take a user-provided iv_multiplier and compute a recommended multiplier that minimizes MAE over a small set of near-dated options.
+
+Synthetic pricing is done via existing Black-Scholes helpers (e.g. in src/backtest/pricing.py or src/calibration.py).
+
+We now have a harvester / exam dataset system:
+
+src/data/live_deribit_exam.py exposes build_live_deribit_exam_dataset(...) which loads option data from harvested parquet snapshots.
+
+There is a LIVE_DERIBIT data source used in backtests.
+
+Backtest runs and other metadata are persisted in Postgres using an existing DB helper (whatever is currently used for backtest runs).
+
+Right now:
+
+The iv multiplier is effectively a config value.
+
+Calibration uses only “today’s” marks via the Deribit public API.
+
+There is no persistent calibration_history table and no way to apply a recommended multiplier except by hand-editing config.
+
+1. Add a calibration_history table
+
+Goal: Persist a time series of auto-calculated IV multipliers, keyed by underlying and DTE range, so we can:
+
+See how the recommended multiplier evolves over time.
+
+Optionally apply the latest value to the synthetic engine.
+
+1.1 Schema
+
+Create a new table calibration_history in the same Postgres database used for backtest runs.
+
+Use the same pattern you already use for other tables (e.g. backtest_runs): either SQLAlchemy models or raw SQL helpers, whichever is present.
+
+Suggested columns:
+
+id – primary key
+
+underlying – text (e.g. 'BTC', 'ETH')
+
+dte_min – integer (min days to expiry used in sample)
+
+dte_max – integer (max days to expiry)
+
+lookback_days – integer (how many days of harvester data were used)
+
+multiplier – numeric(10,6)
+
+mae_pct – numeric(10,6) – mean absolute error as % of mark price across the sample
+
+num_samples – integer – number of option snapshots used
+
+created_at – timestamptz default NOW()
+
+Tasks:
+
+Add the table definition in the same module where other DB tables are defined.
+
+Add helper functions:
+
+def insert_calibration_history(entry: CalibrationHistoryEntry) -> None: ...
+def get_latest_calibration(underlying: str, dte_min: int, dte_max: int) -> Optional[CalibrationHistoryEntry]: ...
+def list_recent_calibrations(underlying: str, limit: int = 20) -> list[CalibrationHistoryEntry]: ...
+
+
+Use a small @dataclass or Pydantic model CalibrationHistoryEntry similar to how backtest runs are represented.
+
+Add a minimal unit test in tests/ that:
+
+Inserts a fake entry.
+
+Fetches it back with get_latest_calibration.
+
+Verifies the fields round-trip correctly.
+(You can use the same test DB fixture you already use for backtest tests.)
+
+2. Auto-calibration script using harvester data
+
+Create a new script:
+
+scripts/auto_calibrate_iv.py
+
+
+This script will:
+
+Load a multi-day dataset of option snapshots from the harvester (parquet) via build_live_deribit_exam_dataset.
+
+Filter to near-ATM, near-dated calls.
+
+Fit an IV multiplier that minimizes MAE between synthetic BS prices and observed mark prices.
+
+Store the result in calibration_history.
+
+2.1 CLI interface
+
+Script usage example:
+
+python scripts/auto_calibrate_iv.py \
+  --underlying BTC \
+  --dte-min 3 \
+  --dte-max 10 \
+  --lookback-days 14
+
+
+Arguments:
+
+--underlying (required): "BTC" or "ETH".
+
+--dte-min (default 3): minimum days to expiry.
+
+--dte-max (default 10): maximum days to expiry.
+
+--lookback-days (default 14): number of days of harvester snapshots to use backwards from “now”.
+
+--max-samples (optional, default 5000): cap number of option snapshots for speed.
+
+2.2 Data collection (from harvester)
+
+Inside the script:
+
+Use build_live_deribit_exam_dataset or the appropriate helper in src/data/live_deribit_exam.py to load a DataFrame / list of records containing at least:
+
+timestamp
+
+underlying
+
+strike
+
+expiry or DTE
+
+mark_price (or mid)
+
+underlying_price
+
+mark_iv (as a percentage if that’s how it’s stored)
+
+Filter rows:
+
+underlying == args.underlying
+
+DTE in [dte_min, dte_max]
+
+Call options only (option_type == "call" / "C")
+
+Near-ATM: abs(strike / underlying_price - 1.0) <= 0.1 (±10% moneyness) – feel free to reuse any existing moneyness filter helpers.
+
+Drop rows with missing or non-positive mark_iv or mark_price.
+
+If there are more than max_samples, randomly sample down to max_samples rows for speed.
+
+2.3 Calibration logic
+
+Re-use your existing Black-Scholes / synthetic pricing helpers (src/backtest/pricing.py or similar).
+
+For each record:
+
+Convert mark_iv_pct to decimal: iv = mark_iv_pct / 100.0.
+
+For a candidate multiplier m, synthetic price is:
+
+synthetic = bs_call_price(
+    spot=underlying_price,
+    strike=strike,
+    dte_days=dte,
+    iv=iv * m,
+    r=0.0,          # or whatever you're currently using
+)
+
+
+Define an objective function:
+
+For a candidate m, compute, over all rows:
+
+error per row: abs(synthetic - mark_price) / max(mark_price, 1e-8)
+
+mae_pct = mean(error) * 100
+
+Then:
+
+Search for m in a reasonable range, e.g. [0.5, 1.5].
+
+Use either:
+
+scipy.optimize if already used in src/calibration.py, or
+
+A simple grid search over N=100 values in [0.5, 1.5] if you want to avoid new dependencies.
+
+Return:
+
+best_multiplier
+
+mae_pct
+
+num_samples used.
+
+Encapsulate this in a helper, e.g.:
+
+def calibrate_iv_multiplier_from_dataset(rows: Sequence[ExamRow]) -> tuple[float, float]:
+    ...
+
+
+Put this shared helper into a small module so it can also be reused later from src/calibration.py if needed (e.g. src/calibration_core.py).
+
+2.4 Persist result + console output
+
+At the end of auto_calibrate_iv.py:
+
+Insert a new row into calibration_history:
+
+insert_calibration_history(
+    CalibrationHistoryEntry(
+        underlying=args.underlying,
+        dte_min=args.dte_min,
+        dte_max=args.dte_max,
+        lookback_days=args.lookback_days,
+        multiplier=best_multiplier,
+        mae_pct=mae_pct,
+        num_samples=num_samples,
+    )
+)
+
+
+Print a summary, e.g.:
+
+Auto IV calibration complete:
+
+  Underlying: BTC
+  DTE range: 3–10 days
+  Lookback: 14 days
+  Samples: 1243
+  Recommended multiplier: 1.154
+  MAE: 7.85% of mark
+
+Row saved to calibration_history (id=…)
+
+
+Add a tiny shell helper scripts/smoke_auto_calibrate.sh that:
+
+#!/usr/bin/env bash
+set -e
+python scripts/auto_calibrate_iv.py --underlying BTC --dte-min 3 --dte-max 10 --lookback-days 7 --max-samples 500
+
+
+(Optional but nice for quick checks.)
+
+3. “Use latest recommended multiplier” button in Calibration tab
+
+Update the Calibration tab in src/web_app.py and associated HTML/JS to:
+
+3.1 Backend API
+
+Add two new endpoints:
+
+GET /api/calibration/history
+
+Query params: underlying (BTC/ETH), limit (default 20).
+
+Returns JSON:
+
+{
+  "underlying": "BTC",
+  "entries": [
+    {
+      "created_at": "...",
+      "dte_min": 3,
+      "dte_max": 10,
+      "lookback_days": 14,
+      "multiplier": 1.154,
+      "mae_pct": 7.85,
+      "num_samples": 1243
+    },
+    ...
+  ]
+}
+
+
+POST /api/calibration/use_latest
+
+Body: {"underlying": "BTC", "dte_min": 3, "dte_max": 10}
+
+Behavior:
+
+Find the latest calibration_history row for that underlying and DTE range.
+
+If none exists → return 400 with an error message.
+
+Otherwise:
+
+Update a small in-memory override mapping, e.g. in a new module src/calibration_store.py:
+
+# calibration_store.py
+_overrides: dict[tuple[str, int, int], float] = {}
+
+def set_iv_multiplier_override(underlying: str, dte_min: int, dte_max: int, value: float) -> None: ...
+def get_iv_multiplier_override(underlying: str, dte_min: int, dte_max: int) -> Optional[float]: ...
+
+
+Return the applied multiplier and metadata, e.g.:
+
+{
+  "status": "ok",
+  "underlying": "BTC",
+  "dte_min": 3,
+  "dte_max": 10,
+  "multiplier": 1.154
+}
+
+
+Important: Do NOT write to .env or modify source files. This should be a runtime override only; on restart, config falls back to defaults.
+
+Update your synthetic pricing path (where iv_multiplier is used) to:
+
+First check calibration_store.get_iv_multiplier_override(underlying, dte_min, dte_max) (or, if that’s too granular, just by underlying).
+
+Fallback to the existing config value from settings.
+
+Keep the logic simple: if you don’t have DTE context in the place where synthetic pricing is called, you can just key overrides by (underlying,) and ignore DTE in use_latest for now.
+
+3.2 Frontend UI changes
+
+In the Calibration tab:
+
+Next to the existing “Run Calibration” button, add:
+
+A primary button: “Use Latest Recommended Multiplier”.
+
+Disabled while a request is in flight.
+
+Below the existing calibration results table, add a small “Calibration History” section:
+
+On load (and after Run Calibration or Use Latest), call GET /api/calibration/history?underlying=....
+
+Display a small table with columns:
+
+Date
+
+DTE Range
+
+Lookback
+
+Multiplier
+
+MAE %
+
+Samples
+
+When the user clicks “Use Latest Recommended Multiplier”:
+
+Send POST /api/calibration/use_latest for the current underlying and the DTE range configured in the UI.
+
+On success:
+
+Show a toast / banner: Applied latest BTC calibration: multiplier=1.154 (MAE 7.85%, 1243 samples).
+
+On error:
+
+Show a red toast with the error message (e.g. “No calibration history for BTC in 3–10 DTE range”).
+
+4. “Calibrate synthetic universe vs harvester dataset” path
+
+The auto_calibrate_iv.py script is already the core of this, but make sure the overall path is clear and documented:
+
+Data source: harvested Deribit snapshots (used by LIVE_DERIBIT).
+
+Sampling:
+
+Use several days/weeks of data via --lookback-days.
+
+Focus on:
+
+Near-dated options (DTE range).
+
+Near-ATM calls (moneyness filter).
+
+Fitting:
+
+Use the Black-Scholes pricing code and your new shared calibration helper.
+
+Persistence:
+
+Store results in calibration_history.
+
+Application:
+
+User either:
+
+Clicks “Use Latest Recommended Multiplier” in the Calibration tab, or
+
+Runs auto_calibrate_iv.py on a schedule (e.g. daily) via cron/Replit scheduler.
+
+Synthetic universe and backtests read the override at runtime when computing synthetic prices.
+
+Please also:
+
+Add a short section to ARCHITECTURE_OVERVIEW.md or HEALTHCHECK.md explaining:
+
+What calibration_history is for,
+
+How auto_calibrate_iv.py works,
+
+How the runtime override vs config works.
+
+5. Acceptance checklist
+
+ calibration_history table exists and is accessible through helper functions.
+
+ scripts/auto_calibrate_iv.py runs successfully with BTC/ETH and prints a summary.
+
+ Running the script inserts a new row into calibration_history.
+
+ GET /api/calibration/history returns recent rows.
+
+ POST /api/calibration/use_latest updates an in-memory override and returns the applied multiplier.
+
+ The Calibration tab shows:
+
+Current iv multiplier,
+
+Calibration history table,
+
+“Use Latest Recommended Multiplier” button that works.
+
+ Synthetic pricing uses the override if present, otherwise falls back to config.
+
+ All existing smoke tests still pass (live agent, backtest, training, web API).
+
+ New minimal tests for calibration helpers pass under bash scripts/run_tests.sh.
+
+If anything is unclear from this spec, inspect the existing modules first (especially src/calibration.py, src/data/live_deribit_exam.py, backtest DB helpers, and the current Calibration tab implementation) and follow their style.

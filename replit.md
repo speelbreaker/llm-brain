@@ -43,6 +43,12 @@ The web dashboard provides a user-friendly interface with sections for "Live Age
 - **State-Aware Chat Assistant**: A multi-turn assistant that understands current trading state, answers questions, and provides project information.
 - **Position Reconciliation**: Compares local position tracker against exchange positions, with configurable actions.
 - **Calibration vs Deribit**: Compares synthetic Black-Scholes prices against live Deribit marks.
+- **Auto IV Calibration Pipeline**: 
+  - **calibration_history table**: Persists time series of auto-calculated IV multipliers keyed by underlying and DTE range.
+  - **scripts/auto_calibrate_iv.py**: CLI script that loads harvester data, fits an IV multiplier minimizing MAE, and stores results in the database.
+  - **calibration_store.py**: Runtime in-memory override store for IV multipliers (resets on restart).
+  - **API endpoints**: `GET /api/calibration/history` returns recent calibrations; `POST /api/calibration/use_latest` applies the latest multiplier as a runtime override.
+  - **Calibration tab UI**: Includes "Use Latest Recommended" button and "Calibration History" table to view and apply historical calibrations.
 - **Bots System**: Provides a comprehensive view of expert trading bots, market sensors, and strategy evaluations, including debug mode for sensor computations.
     - **Greg Mandolini VRP Harvester (GregBot) v6.0 "Diamond-Grade"**: A quantitative VRP strategy selector based on 11 volatility sensors and a decision tree. Currently advisory (read-only) with 8 evaluated strategies per underlying. Sensor mapping and calibration variables are defined.
 - **Strategy Layer**: A pluggable architecture allowing multiple trading strategies to run concurrently (`src/strategies/`). Strategies are built from settings via `build_default_registry()` and decisions include `strategy_id` for attribution.

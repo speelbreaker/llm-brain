@@ -54,5 +54,6 @@ def init_db() -> None:
     if engine is None:
         raise RuntimeError("Database not configured. Set DATABASE_URL environment variable.")
     from src.db.models_backtest import BacktestRun, BacktestMetric, BacktestChain
+    from src.db.models_calibration import CalibrationHistory
     Base.metadata.create_all(bind=engine)
     print("[DB] Database tables created/verified")

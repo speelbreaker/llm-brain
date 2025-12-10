@@ -403,6 +403,118 @@ def get_calibration(
         )
 
 
+@app.get("/api/calibration/history")
+def get_calibration_history(
+    underlying: str = "BTC",
+    limit: int = 20,
+) -> JSONResponse:
+    """
+    Get recent calibration history entries from the database.
+    """
+    if underlying not in ("BTC", "ETH"):
+        return JSONResponse(
+            status_code=400,
+            content={"error": "underlying must be BTC or ETH"},
+        )
+    
+    try:
+        from src.db.models_calibration import list_recent_calibrations
+        entries = list_recent_calibrations(underlying=underlying, limit=limit)
+        
+        return JSONResponse(content={
+            "underlying": underlying,
+            "entries": [
+                {
+                    "id": e.id,
+                    "created_at": e.created_at.isoformat() if e.created_at else None,
+                    "dte_min": e.dte_min,
+                    "dte_max": e.dte_max,
+                    "lookback_days": e.lookback_days,
+                    "multiplier": e.multiplier,
+                    "mae_pct": e.mae_pct,
+                    "num_samples": e.num_samples,
+                }
+                for e in entries
+            ],
+        })
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={"error": "failed_to_fetch_history", "message": str(e)},
+        )
+
+
+@app.post("/api/calibration/use_latest")
+def use_latest_calibration(request: dict) -> JSONResponse:
+    """
+    Apply the latest calibration multiplier from history as a runtime override.
+    
+    Body: {"underlying": "BTC", "dte_min": 3, "dte_max": 10}
+    """
+    underlying = request.get("underlying", "BTC")
+    dte_min = request.get("dte_min", 3)
+    dte_max = request.get("dte_max", 10)
+    
+    if underlying not in ("BTC", "ETH"):
+        return JSONResponse(
+            status_code=400,
+            content={"error": "underlying must be BTC or ETH"},
+        )
+    
+    try:
+        from src.db.models_calibration import get_latest_calibration
+        from src.calibration_store import set_iv_multiplier_override
+        
+        entry = get_latest_calibration(
+            underlying=underlying,
+            dte_min=dte_min,
+            dte_max=dte_max,
+        )
+        
+        if entry is None:
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "error": "no_calibration_found",
+                    "message": f"No calibration history for {underlying} in {dte_min}-{dte_max} DTE range. Run auto_calibrate_iv.py first.",
+                },
+            )
+        
+        set_iv_multiplier_override(underlying, entry.multiplier, dte_min, dte_max)
+        
+        return JSONResponse(content={
+            "status": "ok",
+            "underlying": underlying,
+            "dte_min": dte_min,
+            "dte_max": dte_max,
+            "multiplier": entry.multiplier,
+            "mae_pct": entry.mae_pct,
+            "num_samples": entry.num_samples,
+            "created_at": entry.created_at.isoformat() if entry.created_at else None,
+        })
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={"error": "failed_to_apply_calibration", "message": str(e)},
+        )
+
+
+@app.get("/api/calibration/overrides")
+def get_calibration_overrides() -> JSONResponse:
+    """
+    Get current IV multiplier runtime overrides.
+    """
+    try:
+        from src.calibration_store import get_all_overrides
+        overrides = get_all_overrides()
+        return JSONResponse(content={"overrides": overrides})
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={"error": "failed_to_get_overrides", "message": str(e)},
+        )
+
+
 @app.get("/api/data_status/intraday")
 def intraday_data_status() -> JSONResponse:
     """
@@ -3142,7 +3254,10 @@ def index() -> str:
             <input id="calib-iv-mult" type="number" step="0.1" value="1.0" style="width:70px;padding:0.3rem;">
           </label>
           <button id="calib-run-btn" onclick="runCalibration()">Run Calibration</button>
+          <button id="calib-use-latest-btn" onclick="useLatestCalibration()" style="background:#9c27b0;color:#fff;">Use Latest Recommended</button>
         </div>
+        
+        <div id="calib-override-status" style="font-size:0.85rem;margin-bottom:8px;color:#9c27b0;display:none;"></div>
         
         <div id="calib-summary" style="font-size:0.9rem;margin-bottom:8px;color:#555;">
           Click "Run Calibration" to compare synthetic vs Deribit prices.
@@ -3162,6 +3277,33 @@ def index() -> str:
             </thead>
             <tbody id="calib-rows-body">
               <tr><td colspan="6" style="text-align:center;color:#666;">No data</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+      
+      <div class="card" style="margin-top:1rem;">
+        <h3 style="margin-top:0;">Calibration History</h3>
+        <p style="color:#666;font-size:0.9rem;margin-bottom:12px;">
+          Historical IV multiplier calibrations from harvester data. Run <code>scripts/auto_calibrate_iv.py</code> to add new entries.
+        </p>
+        <div style="display:flex;gap:8px;margin-bottom:12px;">
+          <button id="calib-history-refresh-btn" onclick="fetchCalibrationHistory()" style="background:#2196f3;color:#fff;border:none;padding:6px 12px;border-radius:4px;cursor:pointer;">Refresh History</button>
+        </div>
+        <div style="overflow-x:auto;max-height:280px;overflow-y:auto;">
+          <table class="steps-table">
+            <thead>
+              <tr>
+                <th>Date</th>
+                <th>DTE Range</th>
+                <th>Lookback</th>
+                <th>Multiplier</th>
+                <th>MAE %</th>
+                <th>Samples</th>
+              </tr>
+            </thead>
+            <tbody id="calib-history-body">
+              <tr><td colspan="6" style="text-align:center;color:#666;">No history data</td></tr>
             </tbody>
           </table>
         </div>
@@ -5222,6 +5364,87 @@ def index() -> str:
       }}
     }}
     
+    async function fetchCalibrationHistory() {{
+      const underlying = document.getElementById('calib-underlying').value || 'BTC';
+      const tbody = document.getElementById('calib-history-body');
+      
+      tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:#666;">Loading...</td></tr>';
+      
+      try {{
+        const res = await fetch(`/api/calibration/history?underlying=${{underlying}}&limit=20`);
+        if (!res.ok) throw new Error(`HTTP ${{res.status}}`);
+        const data = await res.json();
+        
+        const entries = data.entries || [];
+        if (entries.length === 0) {{
+          tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:#666;">No calibration history. Run scripts/auto_calibrate_iv.py</td></tr>';
+          return;
+        }}
+        
+        tbody.innerHTML = entries.map(e => {{
+          const dt = e.created_at ? new Date(e.created_at).toLocaleString() : 'N/A';
+          return `<tr>
+            <td style="font-size:0.85rem;">${{dt}}</td>
+            <td>${{e.dte_min}}-${{e.dte_max}}d</td>
+            <td>${{e.lookback_days}}d</td>
+            <td style="font-weight:600;">${{e.multiplier.toFixed(4)}}</td>
+            <td>${{e.mae_pct.toFixed(2)}}%</td>
+            <td>${{e.num_samples.toLocaleString()}}</td>
+          </tr>`;
+        }}).join('');
+      }} catch (err) {{
+        console.error('Failed to fetch calibration history:', err);
+        tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:#c00;">Error loading history</td></tr>';
+      }}
+    }}
+    
+    async function useLatestCalibration() {{
+      const btn = document.getElementById('calib-use-latest-btn');
+      const underlying = document.getElementById('calib-underlying').value || 'BTC';
+      const dteMin = parseInt(document.getElementById('calib-min-dte').value || '3');
+      const dteMax = parseInt(document.getElementById('calib-max-dte').value || '10');
+      const overrideStatus = document.getElementById('calib-override-status');
+      
+      btn.disabled = true;
+      btn.innerText = 'Applying...';
+      
+      try {{
+        const res = await fetch('/api/calibration/use_latest', {{
+          method: 'POST',
+          headers: {{ 'Content-Type': 'application/json' }},
+          body: JSON.stringify({{ underlying, dte_min: dteMin, dte_max: dteMax }})
+        }});
+        
+        const data = await res.json();
+        
+        if (!res.ok) {{
+          alert(data.message || data.error || 'Failed to apply calibration');
+          overrideStatus.style.display = 'none';
+          return;
+        }}
+        
+        const msg = `Applied ${{underlying}} calibration: multiplier=${{data.multiplier.toFixed(4)}} (MAE ${{data.mae_pct.toFixed(2)}}%, ${{data.num_samples}} samples)`;
+        overrideStatus.textContent = msg;
+        overrideStatus.style.display = 'block';
+        overrideStatus.style.color = '#4caf50';
+        
+        document.getElementById('calib-iv-mult').value = data.multiplier.toFixed(4);
+        
+        fetchCalibrationHistory();
+      }} catch (err) {{
+        console.error('Failed to apply calibration:', err);
+        alert('Error applying calibration: ' + err.message);
+        overrideStatus.style.display = 'none';
+      }} finally {{
+        btn.disabled = false;
+        btn.innerText = 'Use Latest Recommended';
+      }}
+    }}
+    
+    document.getElementById('calib-underlying').addEventListener('change', function() {{
+      fetchCalibrationHistory();
+    }});
+    
     async function toggleTraining(enable) {{
       try {{
         const res = await fetch('/api/training/toggle', {{
@@ -6132,6 +6355,7 @@ def index() -> str:
     fetchDecisions();
     refreshBacktestStatus();
     loadStewardReport();
+    fetchCalibrationHistory();
     setInterval(fetchStatus, 5000);
     setInterval(fetchDecisions, 10000);
     setInterval(refreshBacktestStatus, 3000);
