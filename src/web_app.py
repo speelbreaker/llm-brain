@@ -3486,6 +3486,67 @@ def index() -> str:
         </div>
       </div>
       
+      <!-- Calibration Coverage Panel -->
+      <div class="card" style="margin-top:1rem;border-left:4px solid #9c27b0;">
+        <h3 style="margin-top:0;color:#9c27b0;">Calibration Coverage</h3>
+        <div id="calib-coverage-explanation" style="background:#f3e5f5;padding:12px;border-radius:6px;margin-bottom:16px;font-size:0.9rem;color:#555;">
+          Calibration measures how well synthetic prices match market prices across option types (calls, puts) and expiry buckets (weekly, monthly, quarterly).
+        </div>
+        
+        <!-- Option Types Coverage -->
+        <div style="margin-bottom:16px;">
+          <h4 style="margin:0 0 8px 0;color:#7b1fa2;">Option Types Used</h4>
+          <div id="calib-option-types-status" style="font-size:0.9rem;color:#333;margin-bottom:8px;">
+            <span style="background:#e1bee7;padding:4px 10px;border-radius:12px;font-size:0.85rem;" id="calib-types-badge">Calls only</span>
+          </div>
+        </div>
+        
+        <!-- Calls vs Puts Metrics Table -->
+        <div id="calib-by-type-section" style="margin-bottom:16px;">
+          <h4 style="margin:0 0 8px 0;color:#7b1fa2;">Metrics by Option Type</h4>
+          <div style="overflow-x:auto;">
+            <table class="steps-table" style="font-size:0.85rem;">
+              <thead>
+                <tr>
+                  <th>Option Type</th>
+                  <th>Count</th>
+                  <th>MAE %</th>
+                  <th>Bias %</th>
+                  <th>MAE Vol Pts</th>
+                  <th>Vega-Weighted MAE %</th>
+                </tr>
+              </thead>
+              <tbody id="calib-by-type-body">
+                <tr><td colspan="6" style="text-align:center;color:#666;">Run calibration to see metrics</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+        
+        <!-- Term Buckets Table -->
+        <div id="calib-term-buckets-section">
+          <h4 style="margin:0 0 8px 0;color:#7b1fa2;">Term Structure (DTE Buckets)</h4>
+          <div style="overflow-x:auto;max-height:320px;overflow-y:auto;">
+            <table class="steps-table" style="font-size:0.85rem;">
+              <thead>
+                <tr>
+                  <th>Band</th>
+                  <th>DTE Range</th>
+                  <th>Option Type</th>
+                  <th>Count</th>
+                  <th>MAE %</th>
+                  <th>Bias %</th>
+                  <th>Rec. IV Mult</th>
+                </tr>
+              </thead>
+              <tbody id="calib-term-buckets-body">
+                <tr><td colspan="7" style="text-align:center;color:#666;">Run calibration to see term structure</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+      
       <!-- Update Policy Panel -->
       <div class="card" style="margin-top:1rem;border-left:4px solid #4caf50;">
         <h3 style="margin-top:0;color:#4caf50;">IV Calibration Update Policy</h3>
@@ -5565,6 +5626,105 @@ def index() -> str:
       }}
     }}
     
+    function updateCalibrationCoverage(data) {{
+      // Update option types badge
+      const typesBadge = document.getElementById('calib-types-badge');
+      const typesUsed = data.option_types_used || ['C'];
+      let typesLabel = 'Calls only';
+      if (typesUsed.includes('C') && typesUsed.includes('P')) {{
+        typesLabel = 'Calls + Puts';
+      }} else if (typesUsed.includes('P')) {{
+        typesLabel = 'Puts only';
+      }}
+      typesBadge.textContent = typesLabel;
+      
+      // Update explanation text
+      const explanationEl = document.getElementById('calib-coverage-explanation');
+      const bandsInfo = data.bands ? `across ${{data.bands.length}} term buckets` : 'across weekly, monthly, quarterly buckets';
+      if (typesUsed.includes('C') && typesUsed.includes('P')) {{
+        explanationEl.innerHTML = `Calibration now measures both <strong>calls</strong> and <strong>puts</strong> ${{bandsInfo}}. Differences between call and put errors can indicate skew or crash risk mismatches.`;
+      }} else if (typesUsed.includes('P')) {{
+        explanationEl.innerHTML = `Calibration measures <strong>puts only</strong> ${{bandsInfo}} for skew/crash analysis.`;
+      }} else {{
+        explanationEl.innerHTML = `Calibration measures <strong>calls only</strong> ${{bandsInfo}}.`;
+      }}
+      
+      // Update by-type metrics table
+      const byTypeBody = document.getElementById('calib-by-type-body');
+      const byOptionType = data.by_option_type || {{}};
+      const typeKeys = Object.keys(byOptionType);
+      
+      if (typeKeys.length === 0) {{
+        byTypeBody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:#666;">No per-type metrics available</td></tr>';
+      }} else {{
+        byTypeBody.innerHTML = typeKeys.map(typeCode => {{
+          const m = byOptionType[typeCode];
+          const typeName = typeCode === 'C' ? 'Calls (C)' : 'Puts (P)';
+          return `<tr>
+            <td style="font-weight:600;">${{typeName}}</td>
+            <td>${{m.count || 0}}</td>
+            <td>${{(m.mae_pct || 0).toFixed(2)}}%</td>
+            <td>${{(m.bias_pct || 0).toFixed(2)}}%</td>
+            <td>${{m.mae_vol_points ? m.mae_vol_points.toFixed(3) : '-'}}</td>
+            <td>${{m.vega_weighted_mae_pct ? m.vega_weighted_mae_pct.toFixed(2) + '%' : '-'}}</td>
+          </tr>`;
+        }}).join('');
+      }}
+      
+      // Update term buckets table
+      const termBody = document.getElementById('calib-term-buckets-body');
+      
+      // Collect all band results (from by_option_type for granular view, or from data.bands as fallback)
+      let bandRows = [];
+      for (const typeCode of typeKeys) {{
+        const typeData = byOptionType[typeCode];
+        if (typeData.bands && typeData.bands.length > 0) {{
+          for (const band of typeData.bands) {{
+            bandRows.push({{
+              name: band.name,
+              min_dte: band.min_dte,
+              max_dte: band.max_dte,
+              option_type: typeCode === 'C' ? 'Calls' : 'Puts',
+              count: band.count,
+              mae_pct: band.mae_pct,
+              bias_pct: band.bias_pct,
+              rec_mult: band.recommended_iv_multiplier,
+            }});
+          }}
+        }}
+      }}
+      
+      // If no per-type bands, fall back to global bands
+      if (bandRows.length === 0 && data.bands && data.bands.length > 0) {{
+        bandRows = data.bands.map(b => ({{
+          name: b.name,
+          min_dte: b.min_dte,
+          max_dte: b.max_dte,
+          option_type: 'All',
+          count: b.count,
+          mae_pct: b.mae_pct,
+          bias_pct: b.bias_pct,
+          rec_mult: b.recommended_iv_multiplier,
+        }}));
+      }}
+      
+      if (bandRows.length === 0) {{
+        termBody.innerHTML = '<tr><td colspan="7" style="text-align:center;color:#666;">No term buckets available</td></tr>';
+      }} else {{
+        termBody.innerHTML = bandRows.map(b => {{
+          return `<tr>
+            <td>${{b.name}}</td>
+            <td>${{b.min_dte.toFixed(0)}}-${{b.max_dte.toFixed(0)}}d</td>
+            <td>${{b.option_type}}</td>
+            <td>${{b.count}}</td>
+            <td>${{(b.mae_pct || 0).toFixed(2)}}%</td>
+            <td>${{(b.bias_pct || 0).toFixed(2)}}%</td>
+            <td>${{b.rec_mult ? b.rec_mult.toFixed(4) : '-'}}</td>
+          </tr>`;
+        }}).join('');
+      }}
+    }}
+    
     async function runCalibration() {{
       const btn = document.getElementById('calib-run-btn');
       const underlying = document.getElementById('calib-underlying').value || 'BTC';
@@ -5643,6 +5803,9 @@ def index() -> str:
             </tr>`;
           }}).join('');
         }}
+        
+        // Update Calibration Coverage panels
+        updateCalibrationCoverage(data);
       }} catch (err) {{
         console.error('Calibration error:', err);
         summaryEl.textContent = 'Calibration failed. Check console/logs.';

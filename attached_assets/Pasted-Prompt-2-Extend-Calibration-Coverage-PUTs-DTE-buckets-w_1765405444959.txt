@@ -1,0 +1,249 @@
+Prompt #2 – Extend Calibration Coverage (PUTs + DTE buckets) with UI
+
+Here’s the Builder-ready prompt, in the same style as Prompt #1, and explicitly asking to reflect everything in the UI.
+
+AI BUILDER PROMPT – Calibration Coverage: Puts + Term Buckets + UI
+
+You are working inside my Options Trading Agent project.
+
+We already have:
+
+CalibrationConfig (src/calibration_config.py) with:
+
+source, harvest, bands, bucket_by_dte, bucket_by_abs_delta,
+
+filters, fit_skew, emit_recommended_vol_surface, return_rows.
+
+Calibration engine (src/calibration_extended.py) with:
+
+run_calibration_extended() for live/harvested data,
+
+run_historical_calibration_from_harvest() for Parquet.
+
+Vol surface config (VolSurfaceConfig in src/synthetic/vol_surface.py) with:
+
+global iv_multiplier, DTE-band multipliers.
+
+Calibration UI panel (from Prompt #1), which shows:
+
+current applied multipliers,
+
+latest calibration run and whether it was applied,
+
+recent calibration history.
+
+Do not change existing calibration math or regime logic.
+
+Your tasks:
+
+Extend calibration to explicitly handle puts as well as calls.
+
+Ensure calibration always reports multiple standard DTE buckets (term structure).
+
+Reflect all of this clearly in the UI, with call vs put and multi-band visibility.
+
+1) Extend CalibrationConfig – option types & standard term bands
+1.1 Add option-type control
+
+In CalibrationConfig:
+
+Add a field to control which option types to include in calibration:
+
+option_types: List[str] = Field(default_factory=lambda: ["C"])
+# Allowed values: "C" for calls, "P" for puts.
+# Examples:
+#   ["C"]          # calls only (current behavior)
+#   ["C", "P"]     # both calls and puts
+#   ["P"]          # puts only (for debugging / skew tests)
+
+
+Behavior:
+
+If option_types includes "C", include calls.
+
+If option_types includes "P", include puts.
+
+If neither is present (should not happen), treat it as ["C"] fallback.
+
+Backward compatibility:
+If the user doesn’t specify option_types, it defaults to ["C"] and behaves like now.
+
+1.2 Standard term buckets when bands are missing
+
+We already have bands: List[BandConfig] for multi-DTE calibration.
+
+Add a simple rule in run_calibration_extended():
+
+If config.bands is not provided:
+
+Construct a standard set of DTE bands just for reporting (do not automatically change any vol surface settings):
+
+default_bands = [
+    BandConfig(name="weekly",   min_dte=3,  max_dte=10),
+    BandConfig(name="monthly",  min_dte=20, max_dte=40),
+    BandConfig(name="quarterly", min_dte=60, max_dte=100),
+]
+
+
+Use these default_bands to compute band-level metrics (mae, bias, recommended_iv_multiplier per band) if config.bands is None.
+
+If config.bands is provided by the user, do not override; use their bands as-is.
+
+Important:
+We’re not forcing these bands into VolSurfaceConfig yet; they’re for diagnostics and visualization. Updating vol surface (e.g., weekly/monthly multipliers) still uses the existing logic from Prompt #1.
+
+2) Extend run_calibration_extended – calls vs puts + band metrics
+2.1 Option filtering by type
+
+In run_calibration_extended() and run_historical_calibration_from_harvest():
+
+After reading instruments/Parquet rows and before DTE filtering:
+
+Filter rows by option_type according to config.option_types.
+
+Store the actual mix used in the result, e.g.:
+
+"option_types_used": ["C", "P"]   # from config intersected with available data
+
+
+Keep all existing logic (DTE filters, liquidity filters, buckets, skew fit) but now they operate on the filtered set.
+
+2.2 Metrics split by option type
+
+We want visibility into calls vs puts, especially to understand skew drift.
+
+Extend the result dict to include:
+
+"by_option_type": {
+  "C": {
+    "count": ...,
+    "mae_pct": ...,
+    "bias_pct": ...,
+    "mae_vol_points": ...,
+    "vega_weighted_mae_pct": ...,
+    "bands": [
+      {
+        "name": "weekly",
+        "min_dte": 3,
+        "max_dte": 10,
+        "count": ...,
+        "mae_pct": ...,
+        "bias_pct": ...,
+        "recommended_iv_multiplier": ...
+      },
+      ...
+    ]
+  },
+  "P": {
+    # same fields, for puts (only if option_types includes "P" and there is data)
+  }
+}
+
+
+Notes:
+
+If no puts are present (e.g. config.option_types==["C"]), by_option_type["P"] can be omitted or have count=0 with a clear indicator.
+
+For now, recommended_vol_surface remains based on the combined set (or calls, if that’s the main use); but we expose the put-side metrics so we can see if skew is misfitting.
+
+3) UI: show calls vs puts & term buckets clearly
+
+I am not a coder; I need to see what changed in the web interface.
+
+Extend the existing Calibration panel (created in Prompt #1) to show:
+
+3.1 Option type coverage
+
+Add a small section or card:
+
+Title: “Calibration Coverage”
+
+Show:
+
+Current option_types (e.g. “Calls only” or “Calls + Puts”).
+
+A short description, like:
+
+“The calibration currently fits both calls and puts over weekly / monthly / quarterly tenors.”
+
+Where possible, read the actual option_types_used from the latest run, not just config.
+
+3.2 Calls vs Puts metrics
+
+Add a table (or two side-by-side cards) summarizing:
+
+For each type present in by_option_type:
+
+Option Type	Count	MAE %	Bias %	MAE Vol Pts	Vega-weighted MAE %
+Calls (C)	1234	2.7	0.5	0.03	2.1
+Puts (P)	850	3.4	1.3	0.04	2.8
+
+Make sure the labels are plain English (“Calls (C)”, “Puts (P)”) so I can understand without reading code.
+
+3.3 Term-structure band view
+
+Extend the calibration panel with a Term Buckets section:
+
+For each DTE band in bands (or default_bands if none in config), show a small table, e.g.:
+
+Band Name	DTE Range	Option Type	Count	MAE %	Bias %	Rec. IV Multiplier
+weekly	3–10	Calls	500	2.5	0.4	1.08
+weekly	3–10	Puts	300	3.2	1.1	1.10
+monthly	20–40	Calls	400	2.9	0.8	1.03
+monthly	20–40	Puts	250	3.6	1.4	1.06
+
+If puts are not included, just show the call rows.
+
+Use the same styling as existing tables in the UI (no fancy new design system needed).
+
+3.4 Short explanation text
+
+On the calibration panel, add a short explanatory block:
+
+“Calibration now measures how well synthetic prices match both calls and puts across several time-to-expiry buckets (weekly, monthly, quarterly).
+Differences between call and put errors can indicate skew or crash risk mismatches.”
+
+Make the text dynamic where it’s easy (e.g. if option_types is calls-only, mention only calls).
+
+4) Tests & Docs
+4.1 Tests
+
+Add unit tests that:
+
+When option_types=["C"], only calls are used and by_option_type contains only "C".
+
+When option_types=["C", "P"], both types are included and metrics for "P" appear if the dataset has puts.
+
+When bands is None, run_calibration_extended():
+
+Creates default bands (weekly/monthly/quarterly) for reporting,
+
+Does not crash, and includes them in the result.
+
+Where possible, use small synthetic datasets with known call/put sets.
+
+4.2 Developer notes / README
+
+Add a short section to the appropriate docs (e.g. replit.md or a calibration README) explaining:
+
+How to configure option_types in CalibrationConfig.
+
+What the standard DTE bands are when bands is omitted.
+
+Where in the UI to see:
+
+Calls vs puts metrics,
+
+Term buckets for weekly/monthly/quarterly.
+
+Key constraints:
+
+Do not alter core pricing/regime logic.
+
+Keep all previous behavior working when option_types=["C"].
+
+Ensure all new behavior is clearly visible in the UI so a non-coder can understand:
+
+Whether we used calls, puts, or both.
+
+How weekly/monthly/quarterly buckets are behaving.

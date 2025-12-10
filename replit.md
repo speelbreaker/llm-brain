@@ -53,6 +53,10 @@ The web dashboard provides a user-friendly interface with sections for "Live Age
 - **Extended Calibration System (v2)**:
   - `src/calibration_config.py`: Pydantic models for CalibrationConfig, HarvestConfig, BandConfig, CalibrationFilters
   - `src/calibration_extended.py`: Enhanced run_calibration_extended() with liquidity filtering, multi-DTE bands, bucket metrics, skew fitting, recommended vol_surface generation
+  - **Option Types**: `CalibrationConfig.option_types` field controls which option types to calibrate: `["C"]` for calls only (default), `["P"]` for puts only, `["C", "P"]` for both
+  - **Default Term Bands**: When `bands` is not provided, uses default weekly (3-10d), monthly (20-40d), quarterly (60-100d) bands for reporting
+  - **Per-Type Metrics**: `by_option_type` field in results provides separate MAE/bias/bands for calls vs puts
+  - **UI Calibration Coverage**: Shows option types used, per-type metrics table, and term structure buckets in the Calibration tab
   - `src/synthetic/vol_surface.py`: VolSurfaceConfig with DTE-band-specific IV multipliers and skew templates
   - `scripts/update_vol_surface_from_calibration.py`: CLI to run calibration and generate vol_surface config
   - `scripts/realism_check.py`: Realism checker comparing synthetic vs harvested distributions

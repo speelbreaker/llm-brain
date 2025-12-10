@@ -67,6 +67,39 @@ def black_scholes_call_price(
     return spot * nd1 - strike * math.exp(-r * t_years) * nd2
 
 
+def black_scholes_put_price(
+    spot: float,
+    strike: float,
+    t_years: float,
+    sigma: float,
+    r: float = 0.0,
+) -> float:
+    """
+    Standard Black-Scholes European put price.
+    
+    Args:
+        spot: Current underlying price
+        strike: Option strike price
+        t_years: Time to expiration in years
+        sigma: Implied volatility (annualized)
+        r: Risk-free rate (continuous compounding)
+    
+    Returns:
+        Put option price
+    """
+    if t_years <= 0 or sigma <= 0 or spot <= 0 or strike <= 0:
+        return max(0.0, strike - spot)
+
+    sqrt_t = math.sqrt(t_years)
+    d1 = (math.log(spot / strike) + (r + 0.5 * sigma ** 2) * t_years) / (sigma * sqrt_t)
+    d2 = d1 - sigma * sqrt_t
+
+    nd1 = _norm_cdf(-d1)
+    nd2 = _norm_cdf(-d2)
+
+    return strike * math.exp(-r * t_years) * nd2 - spot * nd1
+
+
 def deribit_get(path: str, params: Dict[str, Any]) -> Any:
     """Make a GET request to Deribit public API."""
     url = f"{DERIBIT_API}/{path}"
@@ -196,6 +229,98 @@ def get_call_chain(
                 OptionQuote(
                     instrument_name=instrument_name,
                     kind="call",
+                    strike=strike,
+                    expiration=expiration,
+                    mark_price=mark_price,
+                    mark_iv=float(mark_iv) if mark_iv is not None else None,
+                    delta=float(delta) if delta is not None else None,
+                    dte_days=dte_days,
+                    settlement_currency=settlement_currency,
+                )
+            )
+        except Exception:
+            continue
+
+    return quotes
+
+
+def get_option_chain(
+    underlying: str,
+    min_dte: float,
+    max_dte: float,
+    option_types: List[str] = ["C"],
+) -> List[OptionQuote]:
+    """
+    Fetch options for the given underlying, filtering by DTE and option type.
+    
+    Args:
+        underlying: BTC or ETH
+        min_dte: Minimum days to expiry
+        max_dte: Maximum days to expiry
+        option_types: List of option types to include: 'C' for calls, 'P' for puts
+                     Default ['C'] for backward compatibility
+    
+    Returns:
+        List of OptionQuote objects
+    """
+    type_map = {"C": "call", "P": "put"}
+    allowed_types = set()
+    for ot in option_types:
+        ot_upper = ot.upper()
+        if ot_upper in type_map:
+            allowed_types.add(type_map[ot_upper])
+        elif ot_upper in ("CALL", "PUT"):
+            allowed_types.add(ot_upper.lower())
+    
+    if not allowed_types:
+        allowed_types = {"call"}
+    
+    result = deribit_get(
+        "public/get_instruments",
+        {
+            "currency": underlying,
+            "kind": "option",
+            "expired": "false",
+        },
+    )
+    instruments = result
+
+    now = datetime.now(timezone.utc)
+    quotes: List[OptionQuote] = []
+
+    for inst in instruments:
+        opt_type = inst.get("option_type")
+        if opt_type not in allowed_types:
+            continue
+
+        instrument_name = inst["instrument_name"]
+        strike = float(inst["strike"])
+        expiration_ts_ms = inst["expiration_timestamp"]
+        expiration = datetime.fromtimestamp(expiration_ts_ms / 1000.0, tz=timezone.utc)
+
+        dte_days = (expiration - now).total_seconds() / 86400.0
+        if dte_days < min_dte or dte_days > max_dte:
+            continue
+
+        settlement_currency = inst.get("settlement_currency", underlying)
+        
+        try:
+            ticker = deribit_get(
+                "public/ticker",
+                {"instrument_name": instrument_name},
+            )
+            mark_price = float(ticker.get("mark_price", 0.0) or 0.0)
+            mark_iv = ticker.get("mark_iv", None)
+            greeks = ticker.get("greeks") or {}
+            delta = greeks.get("delta", None)
+            
+            if mark_price <= 0.0:
+                continue
+
+            quotes.append(
+                OptionQuote(
+                    instrument_name=instrument_name,
+                    kind=opt_type,
                     strike=strike,
                     expiration=expiration,
                     mark_price=mark_price,

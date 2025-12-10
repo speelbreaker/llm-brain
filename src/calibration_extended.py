@@ -24,7 +24,9 @@ from src.calibration import (
     get_index_price,
     get_spot_history_for_rv,
     get_call_chain,
+    get_option_chain,
     black_scholes_call_price,
+    black_scholes_put_price,
     OptionQuote,
 )
 from src.calibration_config import (
@@ -43,6 +45,8 @@ from src.calibration_config import (
     RecommendedVolSurface,
     VolSurfaceDiff,
     SnapshotSensors,
+    OptionTypeMetrics,
+    DEFAULT_TERM_BANDS,
 )
 from src.backtest.pricing import (
     compute_realized_volatility,
@@ -375,7 +379,8 @@ def run_calibration_extended(
     else:
         rv_annualized = config.default_iv
     
-    quotes = get_call_chain(underlying, min_dte=config.min_dte, max_dte=config.max_dte)
+    option_types = config.option_types if config.option_types else ["C"]
+    quotes = get_option_chain(underlying, min_dte=config.min_dte, max_dte=config.max_dte, option_types=option_types)
     quotes = sorted(quotes, key=lambda q: (q.dte_days, q.strike))
     
     quotes, liquidity_result = apply_liquidity_filters(quotes, config.filters)
@@ -424,6 +429,9 @@ def run_calibration_extended(
     for q in quotes:
         t_years = max(0.0001, q.dte_days / 365.0)
         
+        is_call = q.kind == "call"
+        opt_type_code = "C" if is_call else "P"
+        
         base_iv = max(1e-6, rv_annualized * config.iv_multiplier)
         abs_delta = abs(bs_call_delta(
             spot=spot,
@@ -435,7 +443,7 @@ def run_calibration_extended(
         
         sigma = compute_synthetic_iv_with_skew(
             underlying=underlying,
-            option_type="call",
+            option_type="call" if is_call else "put",
             abs_delta=abs_delta,
             rv_annualized=rv_annualized,
             iv_multiplier=config.iv_multiplier,
@@ -444,13 +452,22 @@ def run_calibration_extended(
             skew_max_dte=skew_max_dte,
         )
         
-        synthetic_price_usd = black_scholes_call_price(
-            spot=spot,
-            strike=q.strike,
-            t_years=t_years,
-            sigma=sigma,
-            r=config.risk_free_rate,
-        )
+        if is_call:
+            synthetic_price_usd = black_scholes_call_price(
+                spot=spot,
+                strike=q.strike,
+                t_years=t_years,
+                sigma=sigma,
+                r=config.risk_free_rate,
+            )
+        else:
+            synthetic_price_usd = black_scholes_put_price(
+                spot=spot,
+                strike=q.strike,
+                t_years=t_years,
+                sigma=sigma,
+                r=config.risk_free_rate,
+            )
         
         is_inverse = q.settlement_currency.upper() in ("BTC", "ETH")
         if is_inverse:
@@ -473,6 +490,7 @@ def run_calibration_extended(
             "syn_iv": sigma,
             "abs_delta": abs_delta,
             "delta": q.delta,
+            "option_type": opt_type_code,
         })
     
     global_metrics = compute_global_metrics(rows)
@@ -484,11 +502,44 @@ def run_calibration_extended(
         rv_annualized,
     )
     
-    bands_results: Optional[List[DteBandResult]] = None
-    if config.bands:
-        bands_results = []
-        for band in config.bands:
-            band_rows = [r for r in rows if band.min_dte <= r.get("dte", 0) <= band.max_dte]
+    bands_to_use = config.bands if config.bands else DEFAULT_TERM_BANDS
+    bands_results: List[DteBandResult] = []
+    for band in bands_to_use:
+        band_rows = [r for r in rows if band.min_dte <= r.get("dte", 0) <= band.max_dte]
+        if band_rows:
+            band_errors = [abs(r.get("diff_pct", 0.0)) for r in band_rows]
+            mae = float(np.mean(band_errors))
+            bias = float(np.mean([r.get("diff_pct", 0.0) for r in band_rows]))
+            
+            avg_mark = np.mean([r.get("mark_iv", 0.0) for r in band_rows if r.get("mark_iv")])
+            rec_mult = None
+            if rv_annualized > 0 and avg_mark and avg_mark > 0:
+                rec_mult = round(float(avg_mark) / 100.0 / rv_annualized, 4)
+            
+            bands_results.append(DteBandResult(
+                name=band.name,
+                min_dte=band.min_dte,
+                max_dte=band.max_dte,
+                count=len(band_rows),
+                mae_pct=mae,
+                bias_pct=bias,
+                recommended_iv_multiplier=rec_mult,
+                avg_mark_iv=float(avg_mark) if avg_mark else None,
+            ))
+    
+    option_types_used = list(set(r.get("option_type", "C") for r in rows))
+    by_option_type: Dict[str, OptionTypeMetrics] = {}
+    
+    for opt_type in option_types_used:
+        type_rows = [r for r in rows if r.get("option_type") == opt_type]
+        if not type_rows:
+            continue
+        
+        type_metrics = compute_global_metrics(type_rows)
+        
+        type_bands: List[DteBandResult] = []
+        for band in bands_to_use:
+            band_rows = [r for r in type_rows if band.min_dte <= r.get("dte", 0) <= band.max_dte]
             if band_rows:
                 band_errors = [abs(r.get("diff_pct", 0.0)) for r in band_rows]
                 mae = float(np.mean(band_errors))
@@ -499,7 +550,7 @@ def run_calibration_extended(
                 if rv_annualized > 0 and avg_mark and avg_mark > 0:
                     rec_mult = round(float(avg_mark) / 100.0 / rv_annualized, 4)
                 
-                bands_results.append(DteBandResult(
+                type_bands.append(DteBandResult(
                     name=band.name,
                     min_dte=band.min_dte,
                     max_dte=band.max_dte,
@@ -508,7 +559,18 @@ def run_calibration_extended(
                     bias_pct=bias,
                     recommended_iv_multiplier=rec_mult,
                     avg_mark_iv=float(avg_mark) if avg_mark else None,
+                    option_type=opt_type,
                 ))
+        
+        by_option_type[opt_type] = OptionTypeMetrics(
+            option_type=opt_type,
+            count=len(type_rows),
+            mae_pct=type_metrics.mae_pct,
+            bias_pct=type_metrics.bias_pct,
+            mae_vol_points=type_metrics.mae_vol_points,
+            vega_weighted_mae_pct=type_metrics.vega_weighted_mae_pct,
+            bands=type_bands if type_bands else None,
+        )
     
     skew_result: Optional[SkewFitResult] = None
     skew_misfit: Optional[SkewMisfit] = None
@@ -558,8 +620,10 @@ def run_calibration_extended(
         global_metrics=global_metrics,
         residuals_summary=residuals_summary if buckets else None,
         buckets=buckets if buckets else None,
-        bands=bands_results,
+        bands=bands_results if bands_results else None,
         liquidity_filters=liquidity_result,
+        option_types_used=option_types_used if option_types_used else None,
+        by_option_type=by_option_type if by_option_type else None,
         recommended_skew=skew_result,
         skew_misfit=skew_misfit,
         recommended_vol_surface=recommended_vol_surface,
@@ -691,8 +755,20 @@ def run_historical_calibration_from_harvest(
         (df["dte_days"] >= config.min_dte) &
         (df["dte_days"] <= config.max_dte)
     )
+    
+    option_types = config.option_types if config.option_types else ["C"]
+    allowed_types = set()
+    for ot in option_types:
+        ot_upper = ot.upper()
+        if ot_upper == "C":
+            allowed_types.update(["CALL", "C"])
+        elif ot_upper == "P":
+            allowed_types.update(["PUT", "P"])
+    if not allowed_types:
+        allowed_types = {"CALL", "C"}
+    
     if "option_type" in df.columns:
-        mask = mask & (df["option_type"].str.upper().isin(["CALL", "C"]))
+        mask = mask & (df["option_type"].str.upper().isin(allowed_types))
     
     df = df[mask]
     
@@ -737,6 +813,10 @@ def run_historical_calibration_from_harvest(
             mark_price = row.get("mark_price", 0.0)
             mark_iv = row.get("mark_iv")
             
+            raw_opt_type = str(row.get("option_type", "call")).upper()
+            is_call = raw_opt_type in ("CALL", "C")
+            opt_type_code = "C" if is_call else "P"
+            
             if mark_price <= 0 or strike <= 0 or spot <= 0:
                 continue
             
@@ -745,7 +825,10 @@ def run_historical_calibration_from_harvest(
             
             sigma = rv * config.iv_multiplier
             
-            syn_price_usd = black_scholes_call_price(spot, strike, t_years, sigma, 0.0)
+            if is_call:
+                syn_price_usd = black_scholes_call_price(spot, strike, t_years, sigma, 0.0)
+            else:
+                syn_price_usd = black_scholes_put_price(spot, strike, t_years, sigma, 0.0)
             syn_price = syn_price_usd / spot
             
             diff = syn_price - mark_price
@@ -763,6 +846,7 @@ def run_historical_calibration_from_harvest(
                 "syn_iv": sigma,
                 "abs_delta": abs_delta,
                 "snapshot_time": snap_time,
+                "option_type": opt_type_code,
             })
     
     global_metrics = compute_global_metrics(all_rows)
@@ -787,6 +871,76 @@ def run_historical_calibration_from_harvest(
         config.bucket_by_abs_delta,
         rv_median,
     )
+    
+    bands_to_use = config.bands if config.bands else DEFAULT_TERM_BANDS
+    bands_results: List[DteBandResult] = []
+    for band in bands_to_use:
+        band_rows = [r for r in all_rows if band.min_dte <= r.get("dte", 0) <= band.max_dte]
+        if band_rows:
+            band_errors = [abs(r.get("diff_pct", 0.0)) for r in band_rows]
+            mae = float(np.mean(band_errors))
+            bias = float(np.mean([r.get("diff_pct", 0.0) for r in band_rows]))
+            
+            avg_mark = np.mean([r.get("mark_iv", 0.0) for r in band_rows if r.get("mark_iv")])
+            rec_mult = None
+            if rv_median > 0 and avg_mark and avg_mark > 0:
+                rec_mult = round(float(avg_mark) / 100.0 / rv_median, 4)
+            
+            bands_results.append(DteBandResult(
+                name=band.name,
+                min_dte=band.min_dte,
+                max_dte=band.max_dte,
+                count=len(band_rows),
+                mae_pct=mae,
+                bias_pct=bias,
+                recommended_iv_multiplier=rec_mult,
+                avg_mark_iv=float(avg_mark) if avg_mark else None,
+            ))
+    
+    option_types_used = list(set(r.get("option_type", "C") for r in all_rows))
+    by_option_type: Dict[str, OptionTypeMetrics] = {}
+    
+    for opt_type in option_types_used:
+        type_rows = [r for r in all_rows if r.get("option_type") == opt_type]
+        if not type_rows:
+            continue
+        
+        type_metrics = compute_global_metrics(type_rows)
+        
+        type_bands: List[DteBandResult] = []
+        for band in bands_to_use:
+            band_rows = [r for r in type_rows if band.min_dte <= r.get("dte", 0) <= band.max_dte]
+            if band_rows:
+                band_errors = [abs(r.get("diff_pct", 0.0)) for r in band_rows]
+                mae = float(np.mean(band_errors))
+                bias = float(np.mean([r.get("diff_pct", 0.0) for r in band_rows]))
+                
+                avg_mark = np.mean([r.get("mark_iv", 0.0) for r in band_rows if r.get("mark_iv")])
+                rec_mult = None
+                if rv_median > 0 and avg_mark and avg_mark > 0:
+                    rec_mult = round(float(avg_mark) / 100.0 / rv_median, 4)
+                
+                type_bands.append(DteBandResult(
+                    name=band.name,
+                    min_dte=band.min_dte,
+                    max_dte=band.max_dte,
+                    count=len(band_rows),
+                    mae_pct=mae,
+                    bias_pct=bias,
+                    recommended_iv_multiplier=rec_mult,
+                    avg_mark_iv=float(avg_mark) if avg_mark else None,
+                    option_type=opt_type,
+                ))
+        
+        by_option_type[opt_type] = OptionTypeMetrics(
+            option_type=opt_type,
+            count=len(type_rows),
+            mae_pct=type_metrics.mae_pct,
+            bias_pct=type_metrics.bias_pct,
+            mae_vol_points=type_metrics.mae_vol_points,
+            vega_weighted_mae_pct=type_metrics.vega_weighted_mae_pct,
+            bands=type_bands if type_bands else None,
+        )
     
     skew_result = None
     if config.fit_skew:
@@ -822,6 +976,9 @@ def run_historical_calibration_from_harvest(
         global_metrics=global_metrics,
         residuals_summary=residuals if buckets else None,
         buckets=buckets if buckets else None,
+        bands=bands_results if bands_results else None,
+        option_types_used=option_types_used if option_types_used else None,
+        by_option_type=by_option_type if by_option_type else None,
         recommended_skew=skew_result,
         recommended_vol_surface=recommended_vol_surface,
         rows=all_rows if config.return_rows else None,

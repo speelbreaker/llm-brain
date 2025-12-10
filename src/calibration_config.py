@@ -71,6 +71,11 @@ class CalibrationConfig(BaseModel):
     source: Literal["live", "harvested"] = Field(default="live", description="Data source: live API or harvested Parquet")
     harvest: Optional[HarvestConfig] = Field(default=None, description="Harvest configuration (when source='harvested')")
     
+    option_types: List[str] = Field(
+        default_factory=lambda: ["C"],
+        description="Option types to include: 'C' for calls, 'P' for puts. Default ['C'] for backward compatibility."
+    )
+    
     bands: Optional[List[BandConfig]] = Field(default=None, description="Optional DTE bands for multi-band calibration")
     bucket_by_dte: Optional[List[Tuple[float, float]]] = Field(default=None, description="DTE buckets for metrics [(min, max), ...]")
     bucket_by_abs_delta: Optional[List[Tuple[float, float]]] = Field(default=None, description="Absolute delta buckets [(min, max), ...]")
@@ -85,6 +90,13 @@ class CalibrationConfig(BaseModel):
         extra = "allow"
 
 
+DEFAULT_TERM_BANDS = [
+    BandConfig(name="weekly", min_dte=3, max_dte=10),
+    BandConfig(name="monthly", min_dte=20, max_dte=40),
+    BandConfig(name="quarterly", min_dte=60, max_dte=100),
+]
+
+
 class DteBandResult(BaseModel):
     """Result for a single DTE band."""
     name: str
@@ -96,6 +108,7 @@ class DteBandResult(BaseModel):
     recommended_iv_multiplier: Optional[float] = None
     avg_mark_iv: Optional[float] = None
     avg_synth_iv: Optional[float] = None
+    option_type: Optional[str] = None
 
 
 class BucketResult(BaseModel):
@@ -173,6 +186,17 @@ class LiquidityFilterResult(BaseModel):
     dropped_count: int = 0
 
 
+class OptionTypeMetrics(BaseModel):
+    """Metrics for a single option type (calls or puts)."""
+    option_type: str = Field(..., description="'C' for calls, 'P' for puts")
+    count: int = 0
+    mae_pct: float = 0.0
+    bias_pct: float = 0.0
+    mae_vol_points: Optional[float] = None
+    vega_weighted_mae_pct: Optional[float] = None
+    bands: Optional[List[DteBandResult]] = None
+
+
 class ExtendedCalibrationResult(BaseModel):
     """
     Extended calibration result with all new metrics.
@@ -198,6 +222,9 @@ class ExtendedCalibrationResult(BaseModel):
     buckets: Optional[List[BucketResult]] = None
     bands: Optional[List[DteBandResult]] = None
     liquidity_filters: Optional[LiquidityFilterResult] = None
+    
+    option_types_used: Optional[List[str]] = Field(default=None, description="Option types included: ['C'], ['P'], or ['C', 'P']")
+    by_option_type: Optional[Dict[str, OptionTypeMetrics]] = Field(default=None, description="Metrics split by option type")
     
     recommended_skew: Optional[SkewFitResult] = None
     skew_misfit: Optional[SkewMisfit] = None
