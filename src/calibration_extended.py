@@ -1032,6 +1032,8 @@ def run_historical_calibration_from_harvest(
             diff = syn_price - mark_price
             diff_pct = (diff / mark_price) * 100.0 if mark_price > 0 else 0.0
             
+            vega = row.get("greek_vega") if "greek_vega" in row else None
+            
             all_rows.append({
                 "instrument": row.get("instrument_name", ""),
                 "dte": row.get("dte_days", 0),
@@ -1045,6 +1047,7 @@ def run_historical_calibration_from_harvest(
                 "abs_delta": abs_delta,
                 "snapshot_time": snap_time,
                 "option_type": opt_type_code,
+                "vega": vega,
             })
     
     global_metrics = compute_global_metrics(all_rows)
@@ -1084,6 +1087,8 @@ def run_historical_calibration_from_harvest(
             if rv_median > 0 and avg_mark and avg_mark > 0:
                 rec_mult = round(float(avg_mark) / 100.0 / rv_median, 4)
             
+            band_vega_mae = compute_vega_weighted_mae(band_rows)
+            
             bands_results.append(DteBandResult(
                 name=band.name,
                 min_dte=band.min_dte,
@@ -1093,6 +1098,7 @@ def run_historical_calibration_from_harvest(
                 bias_pct=bias,
                 recommended_iv_multiplier=rec_mult,
                 avg_mark_iv=float(avg_mark) if avg_mark else None,
+                vega_weighted_mae_pct=band_vega_mae,
             ))
     
     option_types_used = list(set(r.get("option_type", "C") for r in all_rows))
@@ -1118,6 +1124,8 @@ def run_historical_calibration_from_harvest(
                 if rv_median > 0 and avg_mark and avg_mark > 0:
                     rec_mult = round(float(avg_mark) / 100.0 / rv_median, 4)
                 
+                band_vega_mae = compute_vega_weighted_mae(band_rows)
+                
                 type_bands.append(DteBandResult(
                     name=band.name,
                     min_dte=band.min_dte,
@@ -1128,6 +1136,7 @@ def run_historical_calibration_from_harvest(
                     recommended_iv_multiplier=rec_mult,
                     avg_mark_iv=float(avg_mark) if avg_mark else None,
                     option_type=opt_type,
+                    vega_weighted_mae_pct=band_vega_mae,
                 ))
         
         by_option_type[opt_type] = OptionTypeMetrics(

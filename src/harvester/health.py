@@ -31,6 +31,9 @@ REQUIRED_COLUMNS: Dict[str, str] = {
     "mark_iv": "float64",
     "open_interest": "float64",
     "volume": "float64",
+}
+
+OPTIONAL_COLUMNS: Dict[str, str] = {
     "greek_delta": "float64",
     "greek_vega": "float64",
 }
