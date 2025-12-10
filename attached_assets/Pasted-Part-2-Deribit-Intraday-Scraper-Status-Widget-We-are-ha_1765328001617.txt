@@ -1,0 +1,237 @@
+Part 2 – Deribit Intraday Scraper Status Widget
+
+We are harvesting intraday data from Deribit into our own DB (not Tardis). I want a simple status box in the UI so I can see that the scraper is working and growing.
+
+2A. Backend status helper
+
+Create a module src/data_status.py (if it doesn’t exist):
+
+from dataclasses import dataclass
+from datetime import datetime
+from typing import Optional
+
+@dataclass
+class IntradayDataStatus:
+    ok: bool
+    source: str  # e.g. "Deribit intraday"
+    backend: str  # e.g. "sqlite", "csv", "parquet"
+    rows_total: int
+    days_covered: int
+    first_timestamp: Optional[datetime]
+    last_timestamp: Optional[datetime]
+    approx_size_mb: float
+    target_interval_sec: int
+    is_running: bool
+    error: Optional[str] = None
+
+
+Add a function:
+
+from .config import Settings  # or wherever Settings is
+
+def get_intraday_data_status(settings: Settings) -> IntradayDataStatus:
+    """
+    Inspect the intraday data store and report simple stats.
+    This should be read-only and safe if no data exists yet.
+    """
+
+
+Implementation guidelines:
+
+Use whatever backend you’re actually logging to (DB, CSV, etc.):
+
+If SQLite: query the intraday table: COUNT(*), MIN(timestamp), MAX(timestamp).
+
+If CSV/parquet in a directory (e.g. data/intraday/):
+
+Sum file sizes for approx_size_mb.
+
+Optionally read min/max timestamps (or use a metadata file if you have one).
+
+Compute:
+
+rows_total
+
+first_timestamp, last_timestamp
+
+days_covered = (last.date() - first.date()).days + 1 (if both exist)
+
+approx_size_mb = total bytes / (1024*1024), rounded to 1 decimal.
+
+target_interval_sec:
+
+If there is a specific scrape interval in Settings (e.g. intraday_interval_sec), use that.
+
+Else use a sensible default (e.g. 300 for “every 5 min”).
+
+is_running:
+
+If last_timestamp is within 2 * target_interval_sec of now, set True, else False.
+
+If there is no data yet:
+
+ok can still be True, but with rows_total = 0, days_covered = 0, first_timestamp = None, last_timestamp = None.
+
+Or set ok = False with error = "No intraday data found yet". Either is fine as long as UI is clear.
+
+2B. API endpoint
+
+In src/web_app.py:
+
+Import the helper:
+
+from src.data_status import get_intraday_data_status
+
+
+Add:
+
+@app.get("/api/data_status/intraday")
+def intraday_data_status() -> JSONResponse:
+    """
+    Return status of the Deribit intraday data scraping / storage.
+    Read-only; does not trigger scraping.
+    """
+    try:
+        status = get_intraday_data_status(settings)
+        return JSONResponse(
+            content={
+                "ok": status.ok,
+                "source": status.source,
+                "backend": status.backend,
+                "rows_total": status.rows_total,
+                "days_covered": status.days_covered,
+                "first_timestamp": status.first_timestamp.isoformat() if status.first_timestamp else None,
+                "last_timestamp": status.last_timestamp.isoformat() if status.last_timestamp else None,
+                "approx_size_mb": status.approx_size_mb,
+                "target_interval_sec": status.target_interval_sec,
+                "is_running": status.is_running,
+                "error": status.error,
+            }
+        )
+    except Exception as e:
+        return JSONResponse(content={"ok": False, "error": str(e)}, status_code=500)
+
+2C. UI – Backtesting Lab widget
+
+In index() (same HTML):
+
+Under the Backtesting Lab section, add:
+
+### Intraday Data & Scraper Status (Deribit)
+
+<div id="intraday-scraper-panel">
+  <p><strong>Source:</strong> <span id="scraper-source">Loading...</span></p>
+  <p><strong>Backend:</strong> <span id="scraper-backend">Loading...</span></p>
+  <p><strong>Rows total:</strong> <span id="scraper-rows">Loading...</span></p>
+  <p><strong>Days covered:</strong> <span id="scraper-days">Loading...</span></p>
+  <p><strong>First / Last timestamp:</strong> <span id="scraper-range">Loading...</span></p>
+  <p><strong>Approx DB size:</strong> <span id="scraper-size">Loading...</span></p>
+  <p><strong>Target update interval:</strong> <span id="scraper-interval">Loading...</span></p>
+  <p>
+    <strong>Status:</strong>
+    <span id="scraper-running">Unknown</span>
+  </p>
+
+  <button id="refresh-scraper-status-btn">Refresh Scraper Status</button>
+  <div id="scraper-status-message" aria-live="polite"></div>
+</div>
+
+
+In the <script> block, add:
+
+async function fetchIntradayScraperStatus() {
+  const statusMsg = document.getElementById("scraper-status-message");
+  if (statusMsg) {
+    statusMsg.textContent = "Loading scraper status...";
+    statusMsg.style.color = "";
+  }
+
+  try {
+    const resp = await fetch("/api/data_status/intraday");
+    const data = await resp.json();
+
+    if (!data.ok) {
+      if (statusMsg) {
+        statusMsg.textContent = "Error: " + (data.error || "unknown error");
+        statusMsg.style.color = "red";
+      }
+      return;
+    }
+
+    document.getElementById("scraper-source").textContent = data.source || "Deribit intraday";
+    document.getElementById("scraper-backend").textContent = data.backend || "unknown";
+    document.getElementById("scraper-rows").textContent =
+      (data.rows_total != null && data.rows_total.toLocaleString)
+        ? data.rows_total.toLocaleString()
+        : (data.rows_total ?? "0");
+    document.getElementById("scraper-days").textContent = data.days_covered ?? "0";
+
+    const first = data.first_timestamp || "n/a";
+    const last = data.last_timestamp || "n/a";
+    document.getElementById("scraper-range").textContent = first + " → " + last;
+
+    if (data.approx_size_mb != null) {
+      document.getElementById("scraper-size").textContent = data.approx_size_mb.toFixed(1) + " MB";
+    } else {
+      document.getElementById("scraper-size").textContent = "n/a";
+    }
+
+    if (data.target_interval_sec != null) {
+      document.getElementById("scraper-interval").textContent = data.target_interval_sec + " sec";
+    } else {
+      document.getElementById("scraper-interval").textContent = "n/a";
+    }
+
+    const runningEl = document.getElementById("scraper-running");
+    if (runningEl) {
+      if (data.is_running) {
+        runningEl.textContent = "RUNNING";
+        runningEl.style.color = "green";
+      } else {
+        runningEl.textContent = "STALE / STOPPED";
+        runningEl.style.color = "red";
+      }
+    }
+
+    if (statusMsg) {
+      statusMsg.textContent = "Scraper status updated.";
+      statusMsg.style.color = "green";
+    }
+  } catch (err) {
+    if (statusMsg) {
+      statusMsg.textContent = "Error fetching scraper status: " + err;
+      statusMsg.style.color = "red";
+    }
+  }
+}
+
+document.addEventListener("DOMContentLoaded", () => {
+  // existing initializations...
+
+  // Scraper status:
+  fetchIntradayScraperStatus();
+  const refreshBtn = document.getElementById("refresh-scraper-status-btn");
+  if (refreshBtn) {
+    refreshBtn.addEventListener("click", fetchIntradayScraperStatus);
+  }
+});
+
+Success checklist
+
+After you run the builder with this prompt, I’ll verify:
+
+✔️ Bots tab:
+
+Shows a Score column for Strategy Matches and GregBot strategies.
+
+Score changes when sensors change.
+
+✔️ Backtesting Lab:
+
+Shows an “Intraday Data & Scraper Status (Deribit)” section.
+
+I can click Refresh Scraper Status and see:
+
+Rows, days covered, size, timestamps.
+
+A status pill: RUNNING vs STALE / STOPPED.

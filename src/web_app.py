@@ -402,6 +402,35 @@ def get_calibration(
         )
 
 
+@app.get("/api/data_status/intraday")
+def intraday_data_status() -> JSONResponse:
+    """
+    Return status of the Deribit intraday data scraping / storage.
+    Read-only; does not trigger scraping.
+    """
+    from src.data_status import get_intraday_data_status
+    
+    try:
+        status = get_intraday_data_status(settings)
+        return JSONResponse(
+            content={
+                "ok": status.ok,
+                "source": status.source,
+                "backend": status.backend,
+                "rows_total": status.rows_total,
+                "days_covered": status.days_covered,
+                "first_timestamp": status.first_timestamp.isoformat() if status.first_timestamp else None,
+                "last_timestamp": status.last_timestamp.isoformat() if status.last_timestamp else None,
+                "approx_size_mb": status.approx_size_mb,
+                "target_interval_sec": status.target_interval_sec,
+                "is_running": status.is_running,
+                "error": status.error,
+            }
+        )
+    except Exception as e:
+        return JSONResponse(content={"ok": False, "error": str(e)}, status_code=500)
+
+
 class BacktestRequest(BaseModel):
     underlying: str = "BTC"
     start: str
@@ -2683,6 +2712,54 @@ def index() -> str:
           </thead>
           <tbody id="selector-scan-results-body"></tbody>
         </table>
+      </div>
+    </div>
+    
+    <!-- INTRADAY DATA & SCRAPER STATUS -->
+    <div class="section" style="margin-top:2rem;">
+      <h2>Intraday Data & Scraper Status (Deribit)</h2>
+      <p style="color:#666;margin-bottom:1rem;">
+        Monitor the Deribit intraday data harvester. This shows how much data has been collected and whether the scraper is actively running.
+      </p>
+      
+      <div class="card" id="intraday-scraper-panel">
+        <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(180px, 1fr));gap:12px;margin-bottom:12px;">
+          <div style="background:#2a2a2a;padding:10px;border-radius:6px;">
+            <div style="color:#888;font-size:0.85rem;">Source</div>
+            <div id="scraper-source" style="font-weight:600;">Loading...</div>
+          </div>
+          <div style="background:#2a2a2a;padding:10px;border-radius:6px;">
+            <div style="color:#888;font-size:0.85rem;">Backend</div>
+            <div id="scraper-backend" style="font-weight:600;">Loading...</div>
+          </div>
+          <div style="background:#2a2a2a;padding:10px;border-radius:6px;">
+            <div style="color:#888;font-size:0.85rem;">Rows Total</div>
+            <div id="scraper-rows" style="font-weight:600;">Loading...</div>
+          </div>
+          <div style="background:#2a2a2a;padding:10px;border-radius:6px;">
+            <div style="color:#888;font-size:0.85rem;">Days Covered</div>
+            <div id="scraper-days" style="font-weight:600;">Loading...</div>
+          </div>
+          <div style="background:#2a2a2a;padding:10px;border-radius:6px;">
+            <div style="color:#888;font-size:0.85rem;">First / Last Timestamp</div>
+            <div id="scraper-range" style="font-weight:600;font-size:0.9rem;">Loading...</div>
+          </div>
+          <div style="background:#2a2a2a;padding:10px;border-radius:6px;">
+            <div style="color:#888;font-size:0.85rem;">Approx DB Size</div>
+            <div id="scraper-size" style="font-weight:600;">Loading...</div>
+          </div>
+          <div style="background:#2a2a2a;padding:10px;border-radius:6px;">
+            <div style="color:#888;font-size:0.85rem;">Target Update Interval</div>
+            <div id="scraper-interval" style="font-weight:600;">Loading...</div>
+          </div>
+          <div style="background:#2a2a2a;padding:10px;border-radius:6px;">
+            <div style="color:#888;font-size:0.85rem;">Status</div>
+            <div id="scraper-running" style="font-weight:600;">Unknown</div>
+          </div>
+        </div>
+        
+        <button id="refresh-scraper-status-btn" style="background:#2196f3;color:#fff;border:none;padding:8px 16px;border-radius:4px;cursor:pointer;">Refresh Scraper Status</button>
+        <span id="scraper-status-message" aria-live="polite" style="margin-left:12px;font-size:0.9rem;"></span>
       </div>
     </div>
     
@@ -5391,6 +5468,75 @@ def index() -> str:
         statusDiv.innerHTML = `<span style="color:#f44336;">Error: ${{err.message}}</span>`;
       }}
     }}
+    
+    // Intraday Scraper Status
+    async function fetchIntradayScraperStatus() {{
+      const statusMsg = document.getElementById("scraper-status-message");
+      if (statusMsg) {{
+        statusMsg.textContent = "Loading scraper status...";
+        statusMsg.style.color = "#4fc3f7";
+      }}
+
+      try {{
+        const resp = await fetch("/api/data_status/intraday");
+        const data = await resp.json();
+
+        if (!data.ok) {{
+          if (statusMsg) {{
+            statusMsg.textContent = data.error || "Unknown error";
+            statusMsg.style.color = "#ff9800";
+          }}
+        }}
+
+        document.getElementById("scraper-source").textContent = data.source || "Deribit intraday";
+        document.getElementById("scraper-backend").textContent = data.backend || "unknown";
+        document.getElementById("scraper-rows").textContent =
+          (data.rows_total != null && data.rows_total.toLocaleString)
+            ? data.rows_total.toLocaleString()
+            : (data.rows_total ?? "0");
+        document.getElementById("scraper-days").textContent = data.days_covered ?? "0";
+
+        const first = data.first_timestamp ? data.first_timestamp.replace("T", " ").slice(0, 19) : "n/a";
+        const last = data.last_timestamp ? data.last_timestamp.replace("T", " ").slice(0, 19) : "n/a";
+        document.getElementById("scraper-range").textContent = first + " → " + last;
+
+        if (data.approx_size_mb != null) {{
+          document.getElementById("scraper-size").textContent = data.approx_size_mb.toFixed(1) + " MB";
+        }} else {{
+          document.getElementById("scraper-size").textContent = "n/a";
+        }}
+
+        if (data.target_interval_sec != null) {{
+          document.getElementById("scraper-interval").textContent = data.target_interval_sec + " sec";
+        }} else {{
+          document.getElementById("scraper-interval").textContent = "n/a";
+        }}
+
+        const runningEl = document.getElementById("scraper-running");
+        if (runningEl) {{
+          if (data.is_running) {{
+            runningEl.textContent = "RUNNING";
+            runningEl.style.color = "#4caf50";
+          }} else {{
+            runningEl.textContent = "STALE / STOPPED";
+            runningEl.style.color = "#f44336";
+          }}
+        }}
+
+        if (statusMsg && data.ok) {{
+          statusMsg.textContent = "Updated";
+          statusMsg.style.color = "#4caf50";
+        }}
+      }} catch (err) {{
+        if (statusMsg) {{
+          statusMsg.textContent = "Error: " + err.message;
+          statusMsg.style.color = "#f44336";
+        }}
+      }}
+    }}
+    
+    document.getElementById("refresh-scraper-status-btn").addEventListener("click", fetchIntradayScraperStatus);
+    fetchIntradayScraperStatus();
     
     // Selector Heatmap
     document.getElementById('selector-heatmap-run-btn').addEventListener('click', runSelectorHeatmap);
