@@ -792,6 +792,7 @@ def load_harvest_snapshots_with_quality(
         return pd.DataFrame(), DataQualitySummary()
     
     dfs = []
+    skipped_files = []
     for pf in parquet_files:
         try:
             df = pd.read_parquet(pf)
@@ -801,14 +802,12 @@ def load_harvest_snapshots_with_quality(
                 quality_reports.append(report)
                 
                 if not report.is_schema_valid:
-                    raise ValueError(
-                        f"Snapshot schema mismatch for {pf.name}: {'; '.join(report.schema_issues)}"
-                    )
+                    skipped_files.append(pf.name)
+                    continue
             
             dfs.append(df)
-        except ValueError:
-            raise
         except Exception:
+            skipped_files.append(pf.name)
             continue
     
     if not dfs:
