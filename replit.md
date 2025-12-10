@@ -68,6 +68,20 @@ The web dashboard provides a user-friendly interface with sections for "Live Age
   - **calibration_store.py**: Runtime in-memory override store for IV multipliers (resets on restart).
   - **API endpoints**: `GET /api/calibration/history` returns recent calibrations; `POST /api/calibration/use_latest` applies the latest multiplier as a runtime override.
   - **Calibration tab UI**: Includes "Use Latest Recommended" button and "Calibration History" table to view and apply historical calibrations.
+- **Calibration Update Policy System**:
+  - **src/calibration_update_policy.py**: Policy layer with smoothing (EWMA), thresholds (min_delta, min_sample_size, min_vega_sum), and file-based history storage.
+  - **History Storage**: JSON files saved to `data/calibration_runs/<timestamp>_<underlying>_<source>.json` with full run details, smoothed values, and apply decisions.
+  - **CalibrationUpdatePolicy**: Configurable thresholds (min_delta_global=0.03, min_sample_size=50, smoothing_window_days=14).
+  - **Decision Logic**: `should_apply_update()` checks sample size, vega sum, and delta thresholds before applying.
+  - **Smoothing**: EWMA over configurable window to prevent overreacting to noisy days.
+  - **CLI Integration**: `scripts/update_vol_surface_from_calibration.py` now uses policy layer with `--force` and `--no-policy` flags.
+  - **API Endpoints**: 
+    - `GET /api/calibration/policy`: Returns current policy thresholds and explanation.
+    - `GET /api/calibration/current_multipliers`: Returns currently applied IV multipliers.
+    - `GET /api/calibration/runs`: Returns recent calibration runs with apply status.
+    - `POST /api/calibration/force_apply`: Force-apply calibration bypassing thresholds.
+    - `POST /api/calibration/run_with_policy`: Run calibration respecting policy thresholds.
+  - **UI Panel**: "IV Calibration Update Policy" section in Calibration tab showing current multipliers, latest run status, policy explanation, and "Force-Apply" button.
 - **Bots System**: Provides a comprehensive view of expert trading bots, market sensors, and strategy evaluations, including debug mode for sensor computations.
     - **Greg Mandolini VRP Harvester (GregBot) v6.0 "Diamond-Grade"**: A quantitative VRP strategy selector based on 11 volatility sensors and a decision tree. Currently advisory (read-only) with 8 evaluated strategies per underlying. Sensor mapping and calibration variables are defined.
 - **Strategy Layer**: A pluggable architecture allowing multiple trading strategies to run concurrently (`src/strategies/`). Strategies are built from settings via `build_default_registry()` and decisions include `strategy_id` for attribution.

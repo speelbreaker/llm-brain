@@ -515,6 +515,210 @@ def get_calibration_overrides() -> JSONResponse:
         )
 
 
+@app.get("/api/calibration/policy")
+def get_calibration_policy() -> JSONResponse:
+    """
+    Get the current calibration update policy configuration.
+    This explains the thresholds used for deciding when to apply calibration updates.
+    """
+    try:
+        from src.calibration_update_policy import get_policy
+        policy = get_policy()
+        return JSONResponse(content={
+            "min_delta_global": policy.min_delta_global,
+            "min_delta_band": policy.min_delta_band,
+            "min_sample_size": policy.min_sample_size,
+            "min_vega_sum": policy.min_vega_sum,
+            "smoothing_window_days": policy.smoothing_window_days,
+            "ewma_alpha": policy.ewma_alpha,
+            "explanation": (
+                f"The system smooths calibration results over the last {policy.smoothing_window_days} days "
+                f"and only updates IV multipliers when: (1) The change is larger than {policy.min_delta_global} "
+                f"(e.g., 0.03), and (2) There are at least {policy.min_sample_size} samples with sufficient vega "
+                f"({policy.min_vega_sum}+). This prevents overreacting to noisy days and keeps the synthetic universe stable."
+            ),
+        })
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={"error": "failed_to_get_policy", "message": str(e)},
+        )
+
+
+@app.get("/api/calibration/current_multipliers")
+def get_current_multipliers(underlying: str = "BTC") -> JSONResponse:
+    """
+    Get the currently applied IV multipliers from the vol surface config.
+    """
+    try:
+        from src.calibration_update_policy import get_current_applied_multipliers, load_recent_calibration_history
+        from src.synthetic.vol_surface import get_vol_surface_config
+        
+        current = get_current_applied_multipliers()
+        history = load_recent_calibration_history(underlying, limit=10)
+        
+        last_applied = None
+        for rec in history:
+            if rec.applied:
+                last_applied = rec.timestamp.isoformat() if rec.timestamp else None
+                break
+        
+        bands_list = None
+        if current.band_multipliers:
+            bands_list = [
+                {
+                    "name": b.name,
+                    "min_dte": b.min_dte,
+                    "max_dte": b.max_dte,
+                    "iv_multiplier": b.iv_multiplier,
+                }
+                for b in current.band_multipliers
+            ]
+        
+        return JSONResponse(content={
+            "underlying": underlying,
+            "global_multiplier": current.global_multiplier,
+            "band_multipliers": bands_list,
+            "last_updated": last_applied,
+        })
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={"error": "failed_to_get_multipliers", "message": str(e)},
+        )
+
+
+@app.get("/api/calibration/runs")
+def get_calibration_runs(
+    underlying: str = "BTC",
+    limit: int = 20,
+) -> JSONResponse:
+    """
+    Get recent calibration runs from the file-based history store.
+    Returns full run details including smoothed values and apply decisions.
+    """
+    try:
+        from src.calibration_update_policy import load_recent_calibration_history
+        
+        runs = load_recent_calibration_history(underlying, limit=limit)
+        
+        return JSONResponse(content={
+            "underlying": underlying,
+            "runs": [
+                {
+                    "timestamp": r.timestamp.isoformat() if r.timestamp else None,
+                    "source": r.source,
+                    "recommended_iv_multiplier": r.recommended_iv_multiplier,
+                    "smoothed_global_multiplier": r.smoothed_global_multiplier,
+                    "sample_size": r.sample_size,
+                    "vega_sum": r.vega_sum,
+                    "applied": r.applied,
+                    "applied_reason": r.applied_reason,
+                    "bands": [
+                        {"name": b.name, "iv_multiplier": b.iv_multiplier}
+                        for b in (r.recommended_band_multipliers or [])
+                    ] if r.recommended_band_multipliers else None,
+                    "smoothed_bands": [
+                        {"name": b.name, "iv_multiplier": b.iv_multiplier}
+                        for b in (r.smoothed_band_multipliers or [])
+                    ] if r.smoothed_band_multipliers else None,
+                }
+                for r in runs
+            ],
+        })
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={"error": "failed_to_get_runs", "message": str(e)},
+        )
+
+
+class ForceApplyCalibrationRequest(BaseModel):
+    underlying: str = "BTC"
+    source: str = "live"
+    min_dte: float = 3.0
+    max_dte: float = 30.0
+
+
+@app.post("/api/calibration/force_apply")
+def force_apply_calibration(request: ForceApplyCalibrationRequest) -> JSONResponse:
+    """
+    Force-apply the latest calibration to the vol surface config.
+    This runs calibration with force=True, bypassing thresholds.
+    """
+    try:
+        from src.calibration_update_policy import run_calibration_with_policy
+        from typing import Literal
+        
+        source: Literal["live", "harvested"] = "live" if request.source == "live" else "harvested"
+        
+        record, decision = run_calibration_with_policy(
+            underlying=request.underlying,
+            source=source,
+            force=True,
+            min_dte=request.min_dte,
+            max_dte=request.max_dte,
+        )
+        
+        return JSONResponse(content={
+            "status": "ok",
+            "underlying": request.underlying,
+            "source": request.source,
+            "recommended_iv_multiplier": record.recommended_iv_multiplier,
+            "smoothed_iv_multiplier": record.smoothed_global_multiplier,
+            "applied": record.applied,
+            "applied_reason": record.applied_reason,
+            "sample_size": record.sample_size,
+            "timestamp": record.timestamp.isoformat() if record.timestamp else None,
+        })
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return JSONResponse(
+            status_code=500,
+            content={"error": "failed_to_force_apply", "message": str(e)},
+        )
+
+
+@app.post("/api/calibration/run_with_policy")
+def run_calibration_with_policy_endpoint(request: ForceApplyCalibrationRequest) -> JSONResponse:
+    """
+    Run calibration with the update policy (normal mode, respects thresholds).
+    """
+    try:
+        from src.calibration_update_policy import run_calibration_with_policy
+        from typing import Literal
+        
+        source: Literal["live", "harvested"] = "live" if request.source == "live" else "harvested"
+        
+        record, decision = run_calibration_with_policy(
+            underlying=request.underlying,
+            source=source,
+            force=False,
+            min_dte=request.min_dte,
+            max_dte=request.max_dte,
+        )
+        
+        return JSONResponse(content={
+            "status": "ok",
+            "underlying": request.underlying,
+            "source": request.source,
+            "recommended_iv_multiplier": record.recommended_iv_multiplier,
+            "smoothed_iv_multiplier": record.smoothed_global_multiplier,
+            "applied": record.applied,
+            "applied_reason": record.applied_reason,
+            "sample_size": record.sample_size,
+            "timestamp": record.timestamp.isoformat() if record.timestamp else None,
+        })
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return JSONResponse(
+            status_code=500,
+            content={"error": "failed_to_run_calibration", "message": str(e)},
+        )
+
+
 @app.get("/api/data_status/intraday")
 def intraday_data_status() -> JSONResponse:
     """
@@ -3282,8 +3486,92 @@ def index() -> str:
         </div>
       </div>
       
+      <!-- Update Policy Panel -->
+      <div class="card" style="margin-top:1rem;border-left:4px solid #4caf50;">
+        <h3 style="margin-top:0;color:#4caf50;">IV Calibration Update Policy</h3>
+        
+        <div id="policy-explanation-box" style="background:#f5f5f5;padding:12px;border-radius:6px;margin-bottom:16px;font-size:0.9rem;color:#555;">
+          Loading policy explanation...
+        </div>
+        
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px;">
+          <!-- Current Applied Multipliers -->
+          <div style="background:#e8f5e9;padding:12px;border-radius:6px;">
+            <h4 style="margin:0 0 8px 0;color:#2e7d32;font-size:0.95rem;">Current Applied Multipliers</h4>
+            <table class="steps-table" style="font-size:0.85rem;">
+              <thead>
+                <tr>
+                  <th>Scope</th>
+                  <th>Multiplier</th>
+                  <th>Last Updated</th>
+                </tr>
+              </thead>
+              <tbody id="current-multipliers-body">
+                <tr><td colspan="3" style="text-align:center;color:#666;">Loading...</td></tr>
+              </tbody>
+            </table>
+          </div>
+          
+          <!-- Latest Calibration Run -->
+          <div style="background:#e3f2fd;padding:12px;border-radius:6px;">
+            <h4 style="margin:0 0 8px 0;color:#1565c0;font-size:0.95rem;">Latest Calibration Run</h4>
+            <div id="latest-run-info" style="font-size:0.85rem;color:#333;">
+              <p style="margin:4px 0;"><strong>Source:</strong> <span id="latest-run-source">-</span></p>
+              <p style="margin:4px 0;"><strong>Recommended:</strong> <span id="latest-run-recommended">-</span></p>
+              <p style="margin:4px 0;"><strong>Smoothed:</strong> <span id="latest-run-smoothed">-</span></p>
+              <p style="margin:4px 0;"><strong>Status:</strong> <span id="latest-run-status">-</span></p>
+              <p style="margin:4px 0;"><strong>Reason:</strong> <span id="latest-run-reason">-</span></p>
+            </div>
+          </div>
+        </div>
+        
+        <!-- Actions -->
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px;">
+          <button id="run-policy-calibration-btn" onclick="runPolicyCalibration(false)" style="background:#2196f3;color:#fff;border:none;padding:8px 16px;border-radius:4px;cursor:pointer;">
+            Run Calibration (With Policy)
+          </button>
+          <button id="force-apply-btn" onclick="runPolicyCalibration(true)" style="background:#ff9800;color:#fff;border:none;padding:8px 16px;border-radius:4px;cursor:pointer;">
+            Force-Apply Latest
+          </button>
+          <button id="refresh-policy-btn" onclick="refreshPolicyUI()" style="background:#9e9e9e;color:#fff;border:none;padding:8px 16px;border-radius:4px;cursor:pointer;">
+            Refresh
+          </button>
+          <select id="policy-underlying-select" style="padding:6px 12px;border-radius:4px;border:1px solid #ccc;">
+            <option value="BTC">BTC</option>
+            <option value="ETH">ETH</option>
+          </select>
+          <select id="policy-source-select" style="padding:6px 12px;border-radius:4px;border:1px solid #ccc;">
+            <option value="live">Live API</option>
+            <option value="harvested">Harvested Data</option>
+          </select>
+        </div>
+        
+        <div id="policy-action-status" aria-live="polite" style="margin-bottom:12px;font-size:0.9rem;"></div>
+        
+        <!-- Recent Calibration Runs History -->
+        <h4 style="margin:0 0 8px 0;color:#555;">Recent Calibration Runs</h4>
+        <div style="overflow-x:auto;max-height:240px;overflow-y:auto;">
+          <table class="steps-table" style="font-size:0.85rem;">
+            <thead>
+              <tr>
+                <th>Time</th>
+                <th>Source</th>
+                <th>Recommended</th>
+                <th>Smoothed</th>
+                <th>Samples</th>
+                <th>Applied?</th>
+                <th>Reason</th>
+              </tr>
+            </thead>
+            <tbody id="policy-runs-body">
+              <tr><td colspan="7" style="text-align:center;color:#666;">No runs yet</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+      
       <div class="card" style="margin-top:1rem;">
-        <h3 style="margin-top:0;">Calibration History</h3>
+        <h3 style="margin-top:0;">Calibration History (Auto-Calibrate)</h3>
         <p style="color:#666;font-size:0.9rem;margin-bottom:12px;">
           Historical IV multiplier calibrations from harvester data. Run <code>scripts/auto_calibrate_iv.py</code> to add new entries.
         </p>
@@ -5444,6 +5732,186 @@ def index() -> str:
     document.getElementById('calib-underlying').addEventListener('change', function() {{
       fetchCalibrationHistory();
     }});
+    
+    // ===== Calibration Update Policy UI Functions =====
+    
+    async function refreshPolicyUI() {{
+      await Promise.all([
+        fetchPolicy(),
+        fetchCurrentMultipliers(),
+        fetchPolicyRuns()
+      ]);
+    }}
+    
+    async function fetchPolicy() {{
+      try {{
+        const res = await fetch('/api/calibration/policy');
+        if (!res.ok) throw new Error(`HTTP ${{res.status}}`);
+        const data = await res.json();
+        
+        const box = document.getElementById('policy-explanation-box');
+        box.innerHTML = `
+          <p style="margin:0 0 8px 0;font-weight:600;color:#333;">How the Update Policy Works:</p>
+          <p style="margin:0;">${{data.explanation}}</p>
+          <p style="margin:8px 0 0 0;font-size:0.85rem;color:#666;">
+            Thresholds: min_delta=${{data.min_delta_global}}, min_samples=${{data.min_sample_size}}, 
+            min_vega=${{data.min_vega_sum}}, smoothing=${{data.smoothing_window_days}} days
+          </p>
+        `;
+      }} catch (err) {{
+        console.error('Failed to fetch policy:', err);
+        document.getElementById('policy-explanation-box').textContent = 'Failed to load policy info.';
+      }}
+    }}
+    
+    async function fetchCurrentMultipliers() {{
+      const underlying = document.getElementById('policy-underlying-select')?.value || 'BTC';
+      const tbody = document.getElementById('current-multipliers-body');
+      
+      try {{
+        const res = await fetch(`/api/calibration/current_multipliers?underlying=${{underlying}}`);
+        if (!res.ok) throw new Error(`HTTP ${{res.status}}`);
+        const data = await res.json();
+        
+        let rows = `<tr>
+          <td style="font-weight:600;">Global</td>
+          <td>${{data.global_multiplier.toFixed(4)}}</td>
+          <td style="font-size:0.85rem;">${{data.last_updated ? new Date(data.last_updated).toLocaleDateString() : 'Never'}}</td>
+        </tr>`;
+        
+        if (data.band_multipliers && data.band_multipliers.length > 0) {{
+          rows += data.band_multipliers.map(b => `<tr>
+            <td>${{b.name}} (${{b.min_dte}}-${{b.max_dte}}d)</td>
+            <td>${{b.iv_multiplier.toFixed(4)}}</td>
+            <td style="font-size:0.85rem;">${{data.last_updated ? new Date(data.last_updated).toLocaleDateString() : '-'}}</td>
+          </tr>`).join('');
+        }}
+        
+        tbody.innerHTML = rows;
+      }} catch (err) {{
+        console.error('Failed to fetch current multipliers:', err);
+        tbody.innerHTML = '<tr><td colspan="3" style="text-align:center;color:#c00;">Error loading</td></tr>';
+      }}
+    }}
+    
+    async function fetchPolicyRuns() {{
+      const underlying = document.getElementById('policy-underlying-select')?.value || 'BTC';
+      const tbody = document.getElementById('policy-runs-body');
+      
+      tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;color:#666;">Loading...</td></tr>';
+      
+      try {{
+        const res = await fetch(`/api/calibration/runs?underlying=${{underlying}}&limit=10`);
+        if (!res.ok) throw new Error(`HTTP ${{res.status}}`);
+        const data = await res.json();
+        
+        const runs = data.runs || [];
+        if (runs.length === 0) {{
+          tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;color:#666;">No calibration runs. Run calibration to see history.</td></tr>';
+          
+          // Update latest run info
+          document.getElementById('latest-run-source').textContent = '-';
+          document.getElementById('latest-run-recommended').textContent = '-';
+          document.getElementById('latest-run-smoothed').textContent = '-';
+          document.getElementById('latest-run-status').innerHTML = '<span style="color:#888;">No runs</span>';
+          document.getElementById('latest-run-reason').textContent = '-';
+          return;
+        }}
+        
+        // Update latest run info
+        const latest = runs[0];
+        document.getElementById('latest-run-source').textContent = latest.source;
+        document.getElementById('latest-run-recommended').textContent = latest.recommended_iv_multiplier?.toFixed(4) || '-';
+        document.getElementById('latest-run-smoothed').textContent = latest.smoothed_global_multiplier?.toFixed(4) || '-';
+        document.getElementById('latest-run-status').innerHTML = latest.applied 
+          ? '<span style="background:#4caf50;color:#fff;padding:2px 8px;border-radius:4px;font-size:0.8rem;">Applied</span>'
+          : '<span style="background:#9e9e9e;color:#fff;padding:2px 8px;border-radius:4px;font-size:0.8rem;">Not Applied</span>';
+        document.getElementById('latest-run-reason').textContent = latest.applied_reason || '-';
+        
+        // Populate runs table
+        tbody.innerHTML = runs.map(r => {{
+          const ts = r.timestamp ? new Date(r.timestamp).toLocaleString() : 'N/A';
+          const appliedBadge = r.applied
+            ? '<span style="background:#4caf50;color:#fff;padding:1px 6px;border-radius:3px;font-size:0.75rem;">Yes</span>'
+            : '<span style="background:#9e9e9e;color:#fff;padding:1px 6px;border-radius:3px;font-size:0.75rem;">No</span>';
+          
+          return `<tr>
+            <td style="font-size:0.8rem;">${{ts}}</td>
+            <td>${{r.source}}</td>
+            <td>${{r.recommended_iv_multiplier?.toFixed(4) || '-'}}</td>
+            <td style="font-weight:600;">${{r.smoothed_global_multiplier?.toFixed(4) || '-'}}</td>
+            <td>${{r.sample_size}}</td>
+            <td>${{appliedBadge}}</td>
+            <td style="font-size:0.8rem;max-width:200px;overflow:hidden;text-overflow:ellipsis;">${{r.applied_reason || '-'}}</td>
+          </tr>`;
+        }}).join('');
+      }} catch (err) {{
+        console.error('Failed to fetch policy runs:', err);
+        tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;color:#c00;">Error loading runs</td></tr>';
+      }}
+    }}
+    
+    async function runPolicyCalibration(force = false) {{
+      const underlying = document.getElementById('policy-underlying-select')?.value || 'BTC';
+      const source = document.getElementById('policy-source-select')?.value || 'live';
+      const statusEl = document.getElementById('policy-action-status');
+      const runBtn = document.getElementById('run-policy-calibration-btn');
+      const forceBtn = document.getElementById('force-apply-btn');
+      
+      runBtn.disabled = true;
+      forceBtn.disabled = true;
+      statusEl.innerHTML = '<span style="color:#2196f3;">Running calibration...</span>';
+      
+      try {{
+        const endpoint = force ? '/api/calibration/force_apply' : '/api/calibration/run_with_policy';
+        const res = await fetch(endpoint, {{
+          method: 'POST',
+          headers: {{ 'Content-Type': 'application/json' }},
+          body: JSON.stringify({{ underlying, source, min_dte: 3, max_dte: 30 }})
+        }});
+        
+        const data = await res.json();
+        
+        if (!res.ok) {{
+          statusEl.innerHTML = `<span style="color:#c00;">Error: ${{data.message || data.error}}</span>`;
+          return;
+        }}
+        
+        const appliedMsg = data.applied
+          ? `<span style="color:#4caf50;font-weight:600;">Applied!</span> Smoothed multiplier: ${{data.smoothed_iv_multiplier?.toFixed(4)}}`
+          : `<span style="color:#ff9800;font-weight:600;">Not Applied:</span> ${{data.applied_reason}}`;
+        
+        statusEl.innerHTML = appliedMsg + ` (samples: ${{data.sample_size}})`;
+        
+        // Refresh all displays
+        await refreshPolicyUI();
+        
+      }} catch (err) {{
+        console.error('Failed to run policy calibration:', err);
+        statusEl.innerHTML = `<span style="color:#c00;">Error: ${{err.message}}</span>`;
+      }} finally {{
+        runBtn.disabled = false;
+        forceBtn.disabled = false;
+      }}
+    }}
+    
+    // Initialize policy UI when calibration tab is shown
+    document.addEventListener('DOMContentLoaded', function() {{
+      const calibTab = document.querySelector('button[onclick*="calibration"]');
+      if (calibTab) {{
+        calibTab.addEventListener('click', function() {{
+          setTimeout(refreshPolicyUI, 100);
+        }});
+      }}
+      
+      // Also refresh when underlying changes
+      const policyUnderlyingSelect = document.getElementById('policy-underlying-select');
+      if (policyUnderlyingSelect) {{
+        policyUnderlyingSelect.addEventListener('change', refreshPolicyUI);
+      }}
+    }});
+    
+    // ===== End Calibration Update Policy UI =====
     
     async function toggleTraining(enable) {{
       try {{

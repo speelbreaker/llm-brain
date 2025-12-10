@@ -2,10 +2,13 @@
 """
 CLI script to run calibration and update synthetic vol_surface configuration.
 
+Now with update policy support: smoothing, thresholds, and history tracking.
+
 Usage:
     python scripts/update_vol_surface_from_calibration.py --underlying BTC --min-dte 3 --max-dte 30
     python scripts/update_vol_surface_from_calibration.py --config calibration_config.json
     python scripts/update_vol_surface_from_calibration.py --underlying BTC --source harvested --data-root data/live_deribit
+    python scripts/update_vol_surface_from_calibration.py --underlying BTC --force  # Force apply regardless of thresholds
 
 Outputs a YAML/JSON snippet for vol_surface ready to paste into synthetic config.
 """
@@ -16,11 +19,19 @@ import json
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Literal
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.calibration_config import CalibrationConfig, HarvestConfig, BandConfig
 from src.calibration_extended import run_calibration_extended, build_vol_surface_from_calibration
+from src.calibration_update_policy import (
+    CalibrationUpdatePolicy,
+    run_calibration_with_policy,
+    get_policy,
+    load_recent_calibration_history,
+    get_current_applied_multipliers,
+)
 
 
 def parse_args() -> argparse.Namespace:
@@ -63,11 +74,142 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--format", type=str, choices=["json", "yaml"], default="json",
                        help="Output format")
     
+    parser.add_argument("--force", "-f", action="store_true",
+                       help="Force apply calibration regardless of policy thresholds")
+    parser.add_argument("--no-policy", action="store_true",
+                       help="Skip policy checks and just output recommended values (legacy mode)")
+    
+    parser.add_argument("--min-delta", type=float, default=None,
+                       help="Override policy min_delta_global threshold")
+    parser.add_argument("--min-samples", type=int, default=None,
+                       help="Override policy min_sample_size threshold")
+    parser.add_argument("--smoothing-days", type=int, default=None,
+                       help="Override policy smoothing_window_days")
+    
     return parser.parse_args()
 
 
 def main() -> int:
     args = parse_args()
+    
+    if args.no_policy:
+        return run_legacy_mode(args)
+    
+    return run_with_policy(args)
+
+
+def run_with_policy(args: argparse.Namespace) -> int:
+    """Run calibration with update policy (new behavior)."""
+    
+    policy = get_policy()
+    if args.min_delta is not None:
+        policy.min_delta_global = args.min_delta
+        policy.min_delta_band = args.min_delta
+    if args.min_samples is not None:
+        policy.min_sample_size = args.min_samples
+    if args.smoothing_days is not None:
+        policy.smoothing_window_days = args.smoothing_days
+    
+    source: Literal["live", "harvested"] = "live" if args.source == "live" else "harvested"
+    
+    print(f"Running calibration for {args.underlying}...", file=sys.stderr)
+    print(f"  Source: {source}", file=sys.stderr)
+    print(f"  DTE range: [{args.min_dte}, {args.max_dte}]", file=sys.stderr)
+    print(f"  Policy: min_delta={policy.min_delta_global}, min_samples={policy.min_sample_size}, smoothing={policy.smoothing_window_days}d", file=sys.stderr)
+    if args.force:
+        print(f"  FORCE mode: will apply regardless of thresholds", file=sys.stderr)
+    
+    try:
+        config_kwargs = {
+            "min_dte": args.min_dte,
+            "max_dte": args.max_dte,
+            "iv_multiplier": args.iv_multiplier,
+            "rv_window_days": args.rv_window,
+            "max_samples": args.max_samples,
+            "fit_skew": args.fit_skew,
+        }
+        
+        if source == "harvested":
+            config_kwargs["data_root"] = args.data_root
+        
+        if args.bands:
+            bands_list = json.loads(args.bands)
+            config_kwargs["bands"] = [BandConfig(**b) for b in bands_list]
+        
+        record, decision = run_calibration_with_policy(
+            underlying=args.underlying,
+            source=source,
+            force=args.force,
+            policy=policy,
+            **config_kwargs,
+        )
+        
+    except Exception as e:
+        print(f"ERROR: Calibration failed: {e}", file=sys.stderr)
+        import traceback
+        traceback.print_exc()
+        return 1
+    
+    print(f"\nCalibration results:", file=sys.stderr)
+    print(f"  Sample size: {record.sample_size}", file=sys.stderr)
+    print(f"  Vega sum: {record.vega_sum:.1f}", file=sys.stderr)
+    print(f"  Recommended IV multiplier: {record.recommended_iv_multiplier:.4f}", file=sys.stderr)
+    print(f"  Smoothed IV multiplier: {record.smoothed_global_multiplier:.4f}", file=sys.stderr)
+    
+    if record.recommended_band_multipliers:
+        print(f"  Band multipliers:", file=sys.stderr)
+        for band in record.recommended_band_multipliers:
+            smoothed = None
+            if record.smoothed_band_multipliers:
+                for sb in record.smoothed_band_multipliers:
+                    if sb.name == band.name:
+                        smoothed = sb.iv_multiplier
+                        break
+            smoothed_str = f" -> smoothed: {smoothed:.4f}" if smoothed else ""
+            print(f"    {band.name}: {band.iv_multiplier:.4f}{smoothed_str}", file=sys.stderr)
+    
+    print(f"\nPolicy decision:", file=sys.stderr)
+    if decision.should_apply:
+        print(f"  ✅ APPLIED: {decision.reason}", file=sys.stderr)
+    else:
+        print(f"  ❌ NOT APPLIED: {decision.reason}", file=sys.stderr)
+    
+    print(f"\nRun saved to: data/calibration_runs/", file=sys.stderr)
+    
+    current = get_current_applied_multipliers()
+    output_data = {
+        "timestamp": record.timestamp.isoformat(),
+        "underlying": record.underlying,
+        "source": record.source,
+        "recommended_iv_multiplier": record.recommended_iv_multiplier,
+        "smoothed_iv_multiplier": record.smoothed_global_multiplier,
+        "applied": record.applied,
+        "applied_reason": record.applied_reason,
+        "current_global_multiplier": current.global_multiplier,
+    }
+    
+    if args.format == "yaml":
+        try:
+            import yaml
+            output = yaml.dump(output_data, default_flow_style=False, sort_keys=False)
+        except ImportError:
+            output = json.dumps(output_data, indent=2)
+    else:
+        output = json.dumps(output_data, indent=2)
+    
+    if args.output:
+        with open(args.output, "w") as f:
+            f.write(output)
+        print(f"\nResult written to: {args.output}", file=sys.stderr)
+    else:
+        print("\n# Calibration result:", file=sys.stderr)
+        print(output)
+    
+    return 0
+
+
+def run_legacy_mode(args: argparse.Namespace) -> int:
+    """Run calibration without policy (legacy behavior for compatibility)."""
     
     if args.config:
         with open(args.config) as f:
@@ -110,7 +252,7 @@ def main() -> int:
             return_rows=False,
         )
     
-    print(f"Running calibration for {config.underlying}...", file=sys.stderr)
+    print(f"Running calibration for {config.underlying} (legacy mode)...", file=sys.stderr)
     print(f"  Source: {config.source}", file=sys.stderr)
     print(f"  DTE range: [{config.min_dte}, {config.max_dte}]", file=sys.stderr)
     

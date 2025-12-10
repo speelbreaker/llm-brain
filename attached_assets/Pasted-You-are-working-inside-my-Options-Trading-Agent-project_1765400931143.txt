@@ -1,0 +1,307 @@
+You are working inside my Options Trading Agent project (Python/FastAPI backend + web UI for settings/backtests).
+
+We already have:
+
+A calibration system with:
+
+CalibrationConfig (in src/calibration_config.py) with:
+
+source: "live" | "harvested",
+
+harvest, bands, bucket_by_dte, bucket_by_abs_delta,
+
+filters, fit_skew, emit_recommended_vol_surface, return_rows.
+
+run_calibration_extended() (in src/calibration_extended.py) that computes:
+
+liquidity filtering & dropped_count,
+
+multi-band metrics and recommended_iv_multiplier per band,
+
+bucketed DTE×delta metrics,
+
+global metrics (mae_vol_points, vega_weighted_mae_pct),
+
+skew fitting (anchor_ratios),
+
+recommended_vol_surface snippet,
+
+snapshot_sensors.
+
+run_historical_calibration_from_harvest() for Parquet-based calibration.
+
+A vol surface config (VolSurfaceConfig in src/synthetic/vol_surface.py) with:
+
+global iv_multiplier and DTE-band multipliers.
+
+CLI / helper tools:
+
+update_vol_surface_from_calibration.py
+
+realism_check.py
+
+Do not reimplement or change the basic calibration math.
+
+Your job is to add a calibration update policy layer (smoothing + thresholds + history) and expose it clearly in the UI, so a non-coder can see what’s going on and when multipliers actually change.
+
+1. Add a Calibration Update Policy (backend)
+1.1 New module / class for the policy
+
+Create a small module, e.g. src/calibration_update_policy.py, with something like:
+
+CalibrationUpdatePolicy (dataclass or simple class) with fields such as:
+
+min_delta_global: float – minimum change in global iv_multiplier to consider applying (e.g. 0.03).
+
+min_delta_band: float – min change for per-DTE-band multipliers (e.g. 0.03).
+
+min_sample_size: int – minimum number of options in calibration.
+
+min_vega_sum: float – minimum total vega to consider the result robust.
+
+smoothing_window_days: int – smoothing horizon for EWMA/rolling median (e.g. 14 or 30 days).
+
+Implement helper functions:
+
+record_calibration_result(...)
+Saves a calibration run summary to a history store (see 1.2).
+
+get_smoothed_multipliers(history, current_run)
+Takes past runs + current recommended_iv_multiplier (global + bands) and returns smoothed values (EWMA or rolling median).
+
+should_apply_update(current_applied, smoothed, policy, sample_stats) -> bool
+Returns True/False and a reason (string) based on:
+
+absolute delta vs min_delta_global / min_delta_band,
+
+sample size vs min_sample_size,
+
+vega sum vs min_vega_sum.
+
+Design it so we can later tweak thresholds just by changing the policy config, not the logic.
+
+1.2 History storage (simple file-based)
+
+Implement a minimal history store (don’t over-engineer DB):
+
+Directory: data/calibration_runs/
+
+One JSON file per run:
+data/calibration_runs/<timestamp>_<underlying>_<source>.json
+
+Each file should contain:
+
+timestamp, underlying, source ("live" / "harvested"),
+
+calibration config snapshot (or hash),
+
+global_metrics and bands,
+
+recommended_iv_multiplier (global + per band),
+
+sample_size, vega_sum,
+
+applied flag (True/False),
+
+applied_reason string (why applied or not).
+
+Also create a small helper:
+
+load_recent_calibration_history(underlying, limit=50) – returns recent runs sorted by timestamp.
+
+1.3 Apply policy when updating vol surface
+
+Update update_vol_surface_from_calibration.py to use the policy:
+
+Currently it probably:
+
+runs calibration,
+
+pulls recommended_vol_surface,
+
+writes into VolSurfaceConfig.
+
+Change it so it:
+
+Runs calibration (live or harvested, as before).
+
+Records the result in the history store via record_calibration_result.
+
+Loads recent history for that underlying.
+
+Computes smoothed multipliers via the policy.
+
+Computes whether to apply or not via should_apply_update.
+
+If applying:
+
+Update VolSurfaceConfig (global + bands) using smoothed multipliers.
+
+Mark this run’s JSON as applied=True with applied_reason like "Δ>0.03 and vega_sum>threshold".
+
+If not applying:
+
+Leave VolSurfaceConfig unchanged.
+
+Write applied=False with reason such as:
+
+"Δ<min_delta_global (0.02 < 0.03)",
+
+"insufficient sample size (72 < 150)", etc.
+
+Important:
+Do not break existing CLI usage; the script should still be callable in the same way, it just becomes smarter about when it actually modifies the vol surface.
+
+2. Reflect all of this clearly in the UI
+
+I am not a coder, so I need to clearly see what changed.
+
+Use the existing web UI stack and styling (reuse the same framework/templates that are already used for settings/backtests).
+
+2.1 Add or extend a “Calibration” panel in the UI
+
+If there is already a calibration/settings page for IV, extend it.
+If not, create a simple “Calibration” section under the existing dashboard/settings.
+
+This panel should show:
+
+Current applied IV multipliers
+
+Global iv_multiplier
+
+Per-DTE-band multipliers (e.g. weekly, monthly)
+
+Display as a small table:
+
+Scope	Multiplier	Last Updated
+Global	1.06	2025-12-10
+Weekly (3–10d)	1.08	2025-12-10
+Monthly (20–40d)	1.03	2025-12-10
+
+Latest calibration run (from the history)
+
+Show:
+
+Underlying, source (live/harvested),
+
+recommended_iv_multiplier (global + bands),
+
+smoothed multipliers,
+
+whether the run was applied or not,
+
+applied_reason (human-readable).
+
+Use color or badges to make it intuitive:
+
+Green “Applied” badge when the run actually changed config.
+
+Grey “Not applied” badge with reason (e.g. “change too small”, “sample too small”).
+
+Recent calibration history (compact)
+
+Show a small table listing the last ~10 runs:
+
+Time	Source	Rec Global	Smoothed	Applied?	Reason
+2025-12-10	live	1.09	1.08	✅	Δ>0.03, vega okay
+2025-12-09	harvested	1.07	1.07	❌	Δ<0.03
+
+Keep it readable for a non-coder: the “Reason” text should be plain English, not just internal codes.
+
+2.2 Explain the policy in the UI
+
+On the same panel, add a short explanatory text block (e.g. a card or info box) that says something like:
+
+“The system smooths calibration results over the last N days and only updates IV multipliers when:
+
+The change is larger than X (e.g. 0.03), and
+
+There is enough data and vega in the sample.
+
+This prevents overreacting to noisy days and keeps the synthetic universe stable.”
+
+Implement this text so that if we change thresholds (min_delta_*, min_sample_size), the UI pulls the actual values from the backend and renders them (not hard-coded numbers).
+
+2.3 Optional “Apply manually” button
+
+If it’s easy given current architecture, add:
+
+A button like “Force-apply latest calibration to synthetic config” on the calibration panel.
+
+Backend endpoint:
+
+Calls the policy but allows an override flag (force=True),
+
+Updates VolSurfaceConfig,
+
+Marks the run in history with applied=True and reason "forced by user".
+
+Make sure the UI:
+
+Shows a confirmation message (e.g. “Applied calibration from 2025-12-10 12:34 to vol surface”).
+
+Updates the “Current multipliers” table after applying.
+
+3. Tests & Developer Notes
+
+Even though I won’t read the code, I want the system to be robust:
+
+Unit tests:
+
+Test CalibrationUpdatePolicy.should_apply_update with:
+
+large vs small Δ,
+
+enough vs insufficient sample size,
+
+enough vs insufficient vega_sum.
+
+Test history writer/loader:
+
+A run is correctly serialized and deserialized.
+
+Test that update_vol_surface_from_calibration.py:
+
+Leaves VolSurfaceConfig unchanged when policy says “don’t apply”.
+
+Updates VolSurfaceConfig when policy says “apply”.
+
+UI-level smoke test (manual is fine):
+
+Run a calibration,
+
+Open the calibration panel,
+
+Verify:
+
+The latest run appears.
+
+It is clearly marked as applied/not applied with a reason.
+
+The “current multipliers” match what’s actually in the config.
+
+Developer docs / comments:
+
+Add a short section to replit.md or the appropriate README explaining:
+
+Where calibration history lives (data/calibration_runs/),
+
+How the update policy works,
+
+Where in the UI to see calibration state,
+
+How to trigger a calibration + apply step.
+
+Key constraints:
+
+Do not change the core calibration math or Regime/Synthetic engine behavior.
+
+Keep everything backward compatible with existing scripts and configs.
+
+Make the new UI elements obvious and understandable for a non-coder:
+
+Plain language labels,
+
+Clear “Applied / Not applied” status,
+
+Clear reasons for decisions.
