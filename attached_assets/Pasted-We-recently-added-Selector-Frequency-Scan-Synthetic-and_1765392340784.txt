@@ -1,0 +1,357 @@
+We recently added Selector Frequency Scan (Synthetic) and Selector Heatmap (Synthetic) to the Backtesting Lab. Those tools show how often Greg’s selector would allow trades, given different thresholds.
+
+Now I want a simpler, selector-free “Environment Occupancy Heatmap (Synthetic)” that shows:
+
+For a chosen pair of metrics (e.g. VRP vs ADX), what percentage of time the environment lives in each bucket, ignoring Greg’s rules and strategies entirely.
+
+This is counting opportunities in the environment, not trades or PnL.
+
+I’m a non-coder, so this MUST show up as a visible, clickable section in the Backtesting Lab UI.
+
+Task 1 – Backend: environment heatmap API
+1A. Reuse existing synthetic data & metric enums
+
+Reuse the same synthetic data source and metric definitions you already use for:
+
+Selector Frequency Scan (Synthetic)
+
+Selector Heatmap (Synthetic)
+
+Use the same metric keys / enum values (e.g. vrp_30d, max_adx_14d, iv_rank_6m, chop_factor_7d, skew_25d, rsi_14d, price_vs_ma200 etc.).
+
+No Deribit API calls; synthetic universe only.
+
+1B. New Pydantic request model
+
+In the same module where you defined the selector heatmap request, add:
+
+from pydantic import BaseModel, Field
+from typing import Literal
+
+class EnvironmentHeatmapRequest(BaseModel):
+    underlying: Literal["BTC", "ETH"]
+    x_metric: str  # use same metric names you already use in selector heatmap
+    y_metric: str
+    horizon_days: int = Field(365, ge=1, le=3650)
+    decision_interval_days: int = Field(1, ge=1, le=30)
+
+    x_start: float
+    x_step: float
+    x_points: int = Field(..., ge=2, le=20)
+
+    y_start: float
+    y_step: float
+    y_points: int = Field(..., ge=2, le=20)
+
+
+(If you already have a typed Metric enum, you can use that instead of str.)
+
+1C. Heatmap computation function
+
+In the same backend module you used for selector heatmaps, add a function like:
+
+from typing import List, Dict
+
+def compute_environment_heatmap(req: EnvironmentHeatmapRequest) -> Dict[str, Any]:
+    """
+    Compute a 2D occupancy heatmap over the synthetic universe.
+
+    Each cell value = % of decision steps where (x_metric, y_metric)
+    fell into that bucket, ignoring any selector or strategy.
+    """
+    # 1) Load synthetic time series for the requested underlying and horizon
+    #    using the same helper(s) as selector scans.
+    #    For each decision step, you should already be able to compute
+    #    metrics like vrp_30d, adx_14d, iv_rank_6m, etc.
+
+    # 2) Prepare counts grid: y_points rows x x_points columns
+    counts = [[0 for _ in range(req.x_points)] for _ in range(req.y_points)]
+    total_steps = 0
+
+    for step in synthetic_steps:  # pseudo-code; reuse your existing loop
+        metrics = step.metrics  # or however you expose vrp_30d, adx_14d, etc.
+
+        x_val = metrics[req.x_metric]
+        y_val = metrics[req.y_metric]
+
+        # Map to bucket indices
+        ix = int((x_val - req.x_start) / req.x_step)
+        iy = int((y_val - req.y_start) / req.y_step)
+
+        if 0 <= ix < req.x_points and 0 <= iy < req.y_points:
+            counts[iy][ix] += 1
+            total_steps += 1
+
+    if total_steps == 0:
+        # Avoid div-by-zero; return all zeros
+        occupancy = [[0.0 for _ in range(req.x_points)] for _ in range(req.y_points)]
+    else:
+        occupancy = [
+            [round((c / total_steps) * 100.0, 1) for c in row]
+            for row in counts
+        ]
+
+    x_labels = [req.x_start + i * req.x_step for i in range(req.x_points)]
+    y_labels = [req.y_start + j * req.y_step for j in range(req.y_points)]
+
+    return {
+        "ok": True,
+        "underlying": req.underlying,
+        "x_metric": req.x_metric,
+        "y_metric": req.y_metric,
+        "horizon_days": req.horizon_days,
+        "decision_interval_days": req.decision_interval_days,
+        "x_labels": x_labels,
+        "y_labels": y_labels,
+        "grid": occupancy,  # rows correspond to y_labels, columns to x_labels
+    }
+
+
+Feel free to adapt variable names to match your actual selector heatmap implementation; the key is that we return "grid" with % occupancy values.
+
+1D. FastAPI endpoint
+
+In src/web_app.py, near the selector heatmap endpoint:
+
+from src.<your_heatmap_module> import compute_environment_heatmap, EnvironmentHeatmapRequest
+# adjust import to match actual module name
+
+@app.post("/api/environment_heatmap")
+def environment_heatmap(req: EnvironmentHeatmapRequest) -> JSONResponse:
+    """
+    Environment-only occupancy heatmap over the synthetic universe.
+
+    Each cell = % of decision steps where the environment fell into the
+    (x_bucket, y_bucket), ignoring any selector or strategy.
+    """
+    try:
+        result = compute_environment_heatmap(req)
+        return JSONResponse(content=result)
+    except Exception as e:
+        return JSONResponse(content={"ok": False, "error": str(e)}, status_code=500)
+
+Task 2 – UI: “Environment Heatmap (Synthetic)” panel
+
+In index() in src/web_app.py, inside the Backtesting Lab section (below the existing Selector Heatmap (Synthetic) panel), add a new panel with similar styling.
+
+2A. HTML block
+### Environment Heatmap (Synthetic)
+
+Explore where the market actually spends time in the synthetic universe, for any pair of metrics (no selector / strategy applied).
+
+<div id="env-heatmap-panel">
+  <label>
+    Underlying:
+    <select id="env-underlying-select">
+      <option value="BTC">BTC</option>
+      <option value="ETH">ETH</option>
+    </select>
+  </label>
+
+  <label>
+    Horizon (days):
+    <input type="number" id="env-horizon-input" value="365" min="1" max="3650">
+  </label>
+
+  <label>
+    Decision interval (days):
+    <input type="number" id="env-decision-interval-input" value="1" min="1" max="30">
+  </label>
+
+  <h5>Axes &amp; Grids</h5>
+
+  <label>
+    X Metric:
+    <select id="env-x-metric-select"></select>
+  </label>
+
+  <label>
+    Y Metric:
+    <select id="env-y-metric-select"></select>
+  </label>
+
+  <div>
+    <label>
+      X Start:
+      <input type="number" id="env-x-start-input" value="5">
+    </label>
+    <label>
+      X Step:
+      <input type="number" id="env-x-step-input" value="5">
+    </label>
+    <label>
+      X Points:
+      <input type="number" id="env-x-points-input" value="5" min="2" max="20">
+    </label>
+  </div>
+
+  <div>
+    <label>
+      Y Start:
+      <input type="number" id="env-y-start-input" value="15">
+    </label>
+    <label>
+      Y Step:
+      <input type="number" id="env-y-step-input" value="5">
+    </label>
+    <label>
+      Y Points:
+      <input type="number" id="env-y-points-input" value="5" min="2" max="20">
+    </label>
+  </div>
+
+  <button id="env-heatmap-run-btn">Run Environment Heatmap</button>
+  <div id="env-heatmap-status" aria-live="polite"></div>
+
+  <table id="env-heatmap-table" class="heatmap-table">
+    <!-- Filled by JS: header = x_labels, rows = y_labels, cells = occupancy % -->
+  </table>
+</div>
+
+2B. JavaScript wiring
+
+In the existing <script> block (where you already wire the selector heatmap), add:
+
+document.addEventListener("DOMContentLoaded", () => {
+  // ...existing initializers...
+
+  const envPanel = document.getElementById("env-heatmap-panel");
+  if (!envPanel) return;
+
+  const envStatus = document.getElementById("env-heatmap-status");
+  const envTable = document.getElementById("env-heatmap-table");
+  const envRunBtn = document.getElementById("env-heatmap-run-btn");
+
+  // Reuse the same metric list you use for the selector heatmap
+  const metricOptions = [
+    { value: "vrp_30d", label: "VRP 30d" },
+    { value: "chop_factor_7d", label: "Chop Factor 7d" },
+    { value: "iv_rank_6m", label: "IV Rank 6m" },
+    { value: "term_structure_spread", label: "Term Spread" },
+    { value: "skew_25d", label: "Skew 25d" },
+    { value: "adx_14d", label: "ADX 14d" },
+    { value: "rsi_14d", label: "RSI 14d" },
+    { value: "price_vs_ma200", label: "Price vs MA200" },
+  ];
+
+  function populateMetricSelect(selectId) {
+    const sel = document.getElementById(selectId);
+    if (!sel) return;
+    sel.innerHTML = "";
+    metricOptions.forEach((opt) => {
+      const o = document.createElement("option");
+      o.value = opt.value;
+      o.textContent = opt.label;
+      sel.appendChild(o);
+    });
+  }
+
+  populateMetricSelect("env-x-metric-select");
+  populateMetricSelect("env-y-metric-select");
+
+  function renderEnvHeatmap(data) {
+    if (!data.ok) {
+      envStatus.textContent = "Error: " + (data.error || "unknown error");
+      envStatus.style.color = "red";
+      envTable.innerHTML = "";
+      return;
+    }
+
+    envStatus.textContent = "Heatmap complete. Cell value = % of decision steps (occupancy).";
+    envStatus.style.color = "green";
+
+    const xLabels = data.x_labels || [];
+    const yLabels = data.y_labels || [];
+    const grid = data.grid || [];
+
+    // Build table: header row with x labels
+    let html = "<thead><tr><th>" + data.y_metric + " \\ " + data.x_metric + "</th>";
+    xLabels.forEach((x) => {
+      html += "<th>" + x + "</th>";
+    });
+    html += "</tr></thead><tbody>";
+
+    for (let rowIdx = 0; rowIdx < yLabels.length; rowIdx++) {
+      const y = yLabels[rowIdx];
+      html += "<tr><th>" + y + "</th>";
+      const row = grid[rowIdx] || [];
+      for (let colIdx = 0; colIdx < xLabels.length; colIdx++) {
+        const v = row[colIdx] != null ? row[colIdx] : 0;
+        html += "<td>" + v + "%</td>";
+      }
+      html += "</tr>";
+    }
+
+    html += "</tbody>";
+    envTable.innerHTML = html;
+  }
+
+  if (envRunBtn) {
+    envRunBtn.addEventListener("click", () => {
+      envStatus.textContent = "Running environment heatmap...";
+      envStatus.style.color = "";
+
+      const body = {
+        underlying: document.getElementById("env-underlying-select").value,
+        horizon_days: parseInt(document.getElementById("env-horizon-input").value, 10),
+        decision_interval_days: parseInt(document.getElementById("env-decision-interval-input").value, 10),
+        x_metric: document.getElementById("env-x-metric-select").value,
+        y_metric: document.getElementById("env-y-metric-select").value,
+        x_start: parseFloat(document.getElementById("env-x-start-input").value),
+        x_step: parseFloat(document.getElementById("env-x-step-input").value),
+        x_points: parseInt(document.getElementById("env-x-points-input").value, 10),
+        y_start: parseFloat(document.getElementById("env-y-start-input").value),
+        y_step: parseFloat(document.getElementById("env-y-step-input").value),
+        y_points: parseInt(document.getElementById("env-y-points-input").value, 10),
+      };
+
+      fetch("/api/environment_heatmap", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      })
+        .then((r) => r.json())
+        .then(renderEnvHeatmap)
+        .catch((err) => {
+          envStatus.textContent = "Error calling environment heatmap: " + err;
+          envStatus.style.color = "red";
+        });
+    });
+  }
+});
+
+Task 3 – Light tests
+
+Add a small test file tests/test_environment_heatmap_endpoint.py that:
+
+Uses FastAPI TestClient.
+
+Sends a minimal valid request to /api/environment_heatmap (with metrics you know exist).
+
+Asserts:
+
+HTTP 200.
+
+ok == True in JSON.
+
+x_labels, y_labels, and grid are present and have matching shapes.
+
+Success criteria (for me as operator)
+
+In the Backtesting Lab tab I see a new section: “Environment Heatmap (Synthetic)”.
+
+I can:
+
+Choose underlying, metrics, and grid parameters.
+
+Click Run Environment Heatmap.
+
+See a table where:
+
+Rows = Y metric buckets,
+
+Columns = X metric buckets,
+
+Cells = % of decision steps (occupancy).
+
+No trades or Deribit calls are made; this is a pure analytics tool on the synthetic universe.

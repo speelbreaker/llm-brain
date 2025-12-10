@@ -64,6 +64,37 @@ class SelectorHeatmapResult(BaseModel):
     )
 
 
+class EnvironmentHeatmapRequest(BaseModel):
+    """Request model for environment occupancy heatmap."""
+    underlying: Literal["BTC", "ETH"]
+    x_metric: str
+    y_metric: str
+    horizon_days: int = Field(365, ge=1, le=3650)
+    decision_interval_days: int = Field(1, ge=1, le=30)
+    x_start: float
+    x_step: float
+    x_points: int = Field(..., ge=2, le=20)
+    y_start: float
+    y_step: float
+    y_points: int = Field(..., ge=2, le=20)
+
+
+class EnvironmentHeatmapResult(BaseModel):
+    """Result of an environment occupancy heatmap."""
+    ok: bool = True
+    underlying: str
+    x_metric: str
+    y_metric: str
+    horizon_days: int
+    decision_interval_days: int
+    x_labels: List[float]
+    y_labels: List[float]
+    grid: List[List[float]] = Field(
+        default_factory=list,
+        description="grid[y_index][x_index] = % occupancy (0-100)"
+    )
+
+
 GREG_STRATEGIES = [
     "STRATEGY_A_STRADDLE",
     "STRATEGY_A_STRANGLE",
@@ -290,4 +321,59 @@ def run_selector_heatmap(config: SelectorHeatmapConfig) -> SelectorHeatmapResult
         grid_x=config.grid_x,
         grid_y=config.grid_y,
         values=values,
+    )
+
+
+def compute_environment_heatmap(req: EnvironmentHeatmapRequest) -> EnvironmentHeatmapResult:
+    """
+    Compute a 2D occupancy heatmap over the synthetic universe.
+    
+    Each cell value = % of decision steps where (x_metric, y_metric)
+    fell into that bucket, ignoring any selector or strategy.
+    """
+    num_steps = int(req.horizon_days / req.decision_interval_days)
+    
+    counts = [[0 for _ in range(req.x_points)] for _ in range(req.y_points)]
+    total_in_range = 0
+    
+    seed = hash((req.underlying, req.horizon_days, req.x_metric, req.y_metric)) % (2**31)
+    rng = np.random.default_rng(seed)
+    
+    for step_idx in range(num_steps):
+        sensors = _generate_synthetic_sensors(req.underlying, step_idx, rng)
+        
+        x_val = sensors.get(req.x_metric)
+        y_val = sensors.get(req.y_metric)
+        
+        if x_val is None or y_val is None:
+            continue
+        
+        ix = int((x_val - req.x_start) / req.x_step) if req.x_step != 0 else 0
+        iy = int((y_val - req.y_start) / req.y_step) if req.y_step != 0 else 0
+        
+        if 0 <= ix < req.x_points and 0 <= iy < req.y_points:
+            counts[iy][ix] += 1
+            total_in_range += 1
+    
+    if total_in_range == 0:
+        occupancy = [[0.0 for _ in range(req.x_points)] for _ in range(req.y_points)]
+    else:
+        occupancy = [
+            [round((c / total_in_range) * 100.0, 1) for c in row]
+            for row in counts
+        ]
+    
+    x_labels = [round(req.x_start + i * req.x_step, 2) for i in range(req.x_points)]
+    y_labels = [round(req.y_start + j * req.y_step, 2) for j in range(req.y_points)]
+    
+    return EnvironmentHeatmapResult(
+        ok=True,
+        underlying=req.underlying,
+        x_metric=req.x_metric,
+        y_metric=req.y_metric,
+        horizon_days=req.horizon_days,
+        decision_interval_days=req.decision_interval_days,
+        x_labels=x_labels,
+        y_labels=y_labels,
+        grid=occupancy,
     )

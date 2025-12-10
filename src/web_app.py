@@ -898,6 +898,24 @@ def selector_heatmap(req: SelectorHeatmapRequest) -> JSONResponse:
         return JSONResponse(content={"ok": False, "error": str(e)})
 
 
+@app.post("/api/environment_heatmap")
+def environment_heatmap(req: dict) -> JSONResponse:
+    """
+    Environment-only occupancy heatmap over the synthetic universe.
+    
+    Each cell = % of decision steps where the environment fell into the
+    (x_bucket, y_bucket), ignoring any selector or strategy.
+    """
+    from src.backtest.selector_scan import EnvironmentHeatmapRequest, compute_environment_heatmap
+    
+    try:
+        heatmap_req = EnvironmentHeatmapRequest(**req)
+        result = compute_environment_heatmap(heatmap_req)
+        return JSONResponse(content=result.model_dump())
+    except Exception as e:
+        return JSONResponse(content={"ok": False, "error": str(e)}, status_code=500)
+
+
 # =============================================================================
 # SYSTEM CONTROLS & HEALTH API ENDPOINTS
 # =============================================================================
