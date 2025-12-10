@@ -1,0 +1,48 @@
+{
+  "timestamp": "2025-12-10T22:54:12.038157Z",
+  "underlying": "BTC",
+  "source": "live",
+  "config_hash": null,
+  "global_metrics": {
+    "mae_pct": 39.88552119484017,
+    "bias_pct": -39.88552119484017,
+    "mae_vol_points": 18.512316692178562,
+    "vega_weighted_mae_pct": null
+  },
+  "bands": [
+    {
+      "name": "weekly",
+      "min_dte": 3.0,
+      "max_dte": 10.0,
+      "count": 37,
+      "mae_pct": 18.742339779685064,
+      "bias_pct": -18.742339779685064,
+      "recommended_iv_multiplier": 1.2047,
+      "avg_mark_iv": 47.925135135135136,
+      "avg_synth_iv": null,
+      "option_type": null
+    }
+  ],
+  "recommended_iv_multiplier": 1.1139,
+  "recommended_band_multipliers": [
+    {
+      "name": "weekly",
+      "min_dte": 3.0,
+      "max_dte": 10.0,
+      "iv_multiplier": 1.2047
+    }
+  ],
+  "sample_size": 88,
+  "vega_sum": 880.0,
+  "smoothed_global_multiplier": 1.0924,
+  "smoothed_band_multipliers": [
+    {
+      "name": "weekly",
+      "min_dte": 3.0,
+      "max_dte": 10.0,
+      "iv_multiplier": 1.2077
+    }
+  ],
+  "applied": true,
+  "applied_reason": "global \u0394=0.0924; sample=88; vega=880"
+}

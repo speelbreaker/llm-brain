@@ -21,6 +21,7 @@ from src.chat_with_agent import chat_with_agent_full, get_chat_messages, clear_c
 from src.config import settings
 from src.position_tracker import position_tracker
 from src.calibration import run_calibration
+from src.calibration_extended import run_calibration_extended, CalibrationConfig
 from src.strategy_status import build_strategy_status, StrategyStatus
 from src.rules_summary import build_rules_summary, build_rules_summary_from_settings
 from src.backtest.config_schema import (
@@ -358,13 +359,44 @@ def get_calibration(
         )
     
     try:
-        result = run_calibration(
+        config = CalibrationConfig(
             underlying=underlying,
             min_dte=min_dte,
             max_dte=max_dte,
             iv_multiplier=iv_multiplier,
             default_iv=default_iv,
+            option_types=["C"],
+            return_rows=True,
         )
+        result = run_calibration_extended(config)
+
+        bands_data = None
+        if result.bands:
+            bands_data = [
+                {
+                    "band_name": b.name,
+                    "dte_range": f"{b.min_dte}-{b.max_dte}",
+                    "option_type": b.option_type,
+                    "count": b.count,
+                    "mae_pct": b.mae_pct,
+                    "bias_pct": b.bias_pct,
+                    "recommended_iv_multiplier": b.recommended_iv_multiplier,
+                }
+                for b in result.bands
+            ]
+        
+        by_option_type_data = None
+        if result.by_option_type:
+            by_option_type_data = {
+                ot: {
+                    "count": m.count,
+                    "mae_pct": m.mae_pct,
+                    "bias_pct": m.bias_pct,
+                    "mae_vol_points": m.mae_vol_points,
+                    "vega_weighted_mae_pct": m.vega_weighted_mae_pct,
+                }
+                for ot, m in result.by_option_type.items()
+            }
 
         payload = {
             "underlying": result.underlying,
@@ -380,20 +412,10 @@ def get_calibration(
             "mae_pct": result.mae_pct,
             "bias_pct": result.bias_pct,
             "timestamp": result.timestamp.isoformat(),
-            "rows": [
-                {
-                    "instrument": r.instrument,
-                    "dte": r.dte,
-                    "strike": r.strike,
-                    "mark_price": r.mark_price,
-                    "syn_price": r.syn_price,
-                    "diff": r.diff,
-                    "diff_pct": r.diff_pct,
-                    "mark_iv": r.mark_iv,
-                    "syn_iv": r.syn_iv,
-                }
-                for r in result.rows
-            ],
+            "option_types_used": result.option_types_used,
+            "bands": bands_data,
+            "by_option_type": by_option_type_data,
+            "rows": result.rows if result.rows else [],
         }
         return JSONResponse(content=payload)
     except Exception as e:

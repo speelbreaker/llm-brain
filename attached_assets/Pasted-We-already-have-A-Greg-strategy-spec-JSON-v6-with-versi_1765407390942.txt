@@ -1,0 +1,401 @@
+We already have:
+
+A Greg strategy spec JSON (v6) with "version": "6.0-Diamond-Grade" in "meta", including a "decision_tree" and "strategy_definitions".
+
+A Greg selector / bot that:
+
+Loads that JSON.
+
+Evaluates the decision tree against a metrics dict (vrp_30d, adx_14d, skew_25d, etc.).
+
+Feeds results into the Bots → GregBot UI tables.
+
+A heatmap / sweet-spot system, but this task is not about recomputing numbers; it’s about freezing and testing the current logic.
+
+My goal in this batch:
+
+Freeze the current v6 thresholds as “Greg-aligned v1” into a dedicated calibration block in the JSON.
+
+Refactor the decision tree conditions to use calibration variables instead of hard-coded numbers.
+
+Add unit tests that:
+
+Enforce safety invariants (things Greg would never do).
+
+Check a small set of Greg-style scenarios (things Greg would do).
+
+Add a tiny UI snippet so I can visually confirm which calibration we’re using.
+
+Do not change the actual behaviour of the selector (no strategy reorder, no new logic). This is a refactor + tests, not a redesign.
+
+Step 1 – Find the Greg JSON + selector functions
+
+Locate the Greg spec JSON file you previously created/updated (v6). It should contain:
+
+"meta": { "version": "6.0-Diamond-Grade", ... }
+
+"global_constraints" with a "calibration" block that already includes:
+
+skew_neutral_threshold
+
+min_vrp_floor
+
+"decision_tree" with nodes like:
+
+STRADDLE, STRANGLE, CALENDAR, SHORT PUT, BULL PUT SPREAD, BEAR CALL SPREAD, IRON BUTTERFLY, NO_TRADE.
+
+Keep the file path and name unchanged (e.g. docs/greg_mandolini/GREG_SELECTOR_RULES.json or whatever it currently is).
+
+Locate the Greg selector module that:
+
+Loads this JSON.
+
+Evaluates the decision tree against a metrics dict.
+
+Returns a selected strategy or a structured result.
+
+For example, it might be something like:
+
+from src.greg_selector import select_greg_strategy_for_metrics
+
+
+or a class like GregStrategySelector. Identify the main “pick strategy for this snapshot” function you will use in tests.
+
+Step 2 – Freeze thresholds into global_constraints.calibration
+
+We want to capture all magic thresholds in a single calibration block so the numbers are explicit and can be tuned later, while behaviour stays identical.
+
+In the Greg JSON, under global_constraints.calibration, add entries for every hard-coded numeric threshold currently used in the decision tree outside of skew_neutral_threshold and min_vrp_floor.
+
+Examples (names, not exact values – keep the current values you see in the JSON):
+
+"calibration": {
+  "skew_neutral_threshold": 4.0,
+  "min_vrp_floor": 0.0,
+
+  // Safety filter
+  "safety_adx_high": 35.0,
+  "safety_chop_high": 0.85,
+
+  // Straddle
+  "straddle_vrp_min": 15.0,
+  "straddle_adx_max": 20.0,
+  "straddle_chop_max": 0.6,
+
+  // Strangle
+  "strangle_vrp_min": 10.0,
+  "strangle_adx_max": 30.0,
+  "strangle_chop_max": 0.8,
+
+  // Calendar / term structure
+  "calendar_term_spread_min": 5.0,
+  "calendar_front_rv_iv_ratio_max": 0.8,
+  "calendar_vrp7_min": 5.0,
+
+  // Iron fly / extreme IV
+  "iv_rank_extreme_min": 0.8,        // or whatever value is currently used
+  "vrp_extreme_min": 25.0,
+
+  // Directional / accumulation (example, use the actual numbers from JSON)
+  "short_put_rsi_floor": 40.0,
+  "bear_call_rsi_ceiling": 70.0,
+  "price_vs_ma200_bullish_min": 0.0,  // above MA200
+  "price_vs_ma200_bearish_max": 0.0,  // below MA200
+
+  // Skew bands beyond neutral
+  "skew_directional_min": 5.0
+}
+
+
+Important:
+
+Use the exact numeric values already present in the existing conditions.
+
+It’s fine if the actual list is slightly different; the goal is:
+
+Every magic threshold currently used in decision_tree[*].condition is represented by a named key in calibration.
+
+Do not change any numbers now. We’re just moving them to explicit names.
+
+Step 3 – Refactor decision_tree conditions to use calibration vars
+
+Now update the condition strings in decision_tree so they refer to the calibration variables instead of literal numbers.
+
+Example:
+
+Before (current v6 style):
+
+"condition": "vrp_30d > 15.0 AND chop_factor_7d < 0.6 AND adx_14d < 20 AND ABS(skew_25d) < skew_neutral_threshold"
+
+
+After (using calibration names):
+
+"condition": "vrp_30d > straddle_vrp_min AND chop_factor_7d < straddle_chop_max AND adx_14d < straddle_adx_max AND ABS(skew_25d) < skew_neutral_threshold"
+
+
+Another example:
+
+Calendar:
+
+"condition": "term_structure_spread > calendar_term_spread_min AND front_rv_iv_ratio < calendar_front_rv_iv_ratio_max AND vrp_7d > calendar_vrp7_min"
+
+
+Safety:
+
+"condition": "adx_14d > safety_adx_high OR chop_factor_7d > safety_chop_high"
+
+
+Directional:
+
+"condition": "skew_25d > skew_neutral_threshold AND price_vs_ma200 > price_vs_ma200_bullish_min AND vrp_30d > min_vrp_floor"
+
+
+Make sure the expression evaluator that executes condition already has access to:
+
+The metrics dict (vrp_30d, adx_14d, etc.).
+
+The calibration dict values (e.g. straddle_vrp_min, safety_adx_high, etc.).
+
+If the evaluator currently only sees keys from metrics, extend it so it also injects all calibration keys as variables into the expression context. That way straddle_vrp_min is just another variable in the expression.
+
+Do not change the logical structure or ordering of the waterfall. Only replace numeric literals with named calibration variables.
+
+Step 4 – Add invariant tests (Greg “never do this” rules)
+
+Create a new test module, e.g.:
+
+tests/test_greg_selector_invariants.py
+
+Use the Greg selector function you found in Step 1 (e.g. select_greg_strategy_for_metrics), and write tests that construct minimal metric dicts.
+
+You may need a small helper to build a “baseline” metric dict and override a few keys for each scenario.
+
+Add tests for at least these invariants:
+
+No neutral short-vol when skew is extreme
+
+Scenario 1: High VRP, calm ADX, positive extreme skew:
+
+metrics = base_metrics(
+    vrp_30d=30.0,
+    adx_14d=10.0,
+    skew_25d=+8.0,   # > skew_neutral_threshold
+)
+
+
+Assert: the chosen strategy is not the neutral straddle / strangle IDs
+(e.g. not "STRATEGY_A_STRADDLE" and not "STRATEGY_A_STRANGLE").
+
+Scenario 2: Same but negative extreme skew:
+
+metrics = base_metrics(
+    vrp_30d=30.0,
+    adx_14d=10.0,
+    skew_25d=-8.0,
+)
+
+
+Again, no neutral short-vol.
+
+No Calendar in “Realized Trap”
+
+Term structure steep, but front RV >= front IV or no VRP:
+
+metrics = base_metrics(
+    term_structure_spread=6.0,
+    front_rv_iv_ratio=1.05,   # RV >= IV
+    vrp_7d=0.0,
+)
+
+
+Assert: selected strategy ID is not the Calendar ID (e.g. "STRATEGY_B_CALENDAR").
+
+No short-vol when VRP is negative
+
+Set vrp_30d = -5.0, iv_rank_6m = 0.25, other values benign:
+
+metrics = base_metrics(
+    vrp_30d=-5.0,
+    iv_rank_6m=0.25,
+)
+
+
+Assert: the selector does not return any short-vol strategy (straddles, strangles, short put, bull/bear spreads, iron fly).
+If the selector returns a structured object, check its strategy_id or similar.
+
+Safety filter overrides everything
+
+Scenario: “beautiful” straddle environment but with adx_14d above the safety threshold:
+
+metrics = base_metrics(
+    vrp_30d=25.0,
+    adx_14d=40.0,       # > safety_adx_high
+    skew_25d=0.0,
+)
+
+
+Assert: the result is the explicit NO_TRADE strategy (e.g. "NO_TRADE").
+
+Step 5 – Add Greg-style scenario tests (positive cases)
+
+Create another test module, e.g.:
+
+tests/test_greg_selector_scenarios.py
+
+Here we assert what should happen in a few canonical Greg environments. These can be approximate; they are about family of structure, not microscopic thresholds.
+
+Use reasonable metric combos that satisfy the current decision tree conditions.
+
+High VRP, calm, neutral skew → neutral short-vol
+
+metrics = base_metrics(
+    vrp_30d=28.0,
+    adx_14d=10.0,
+    skew_25d=0.0,
+    iv_rank_6m=0.35,
+    chop_factor_7d=0.5,
+)
+
+
+Assert: selected strategy is either Straddle or Strangle, not Calendar, not directional, not NO_TRADE.
+(Depending on how your current tree breaks ties, you can assert specifically one of them if it’s deterministic.)
+
+Moderate VRP, mild trend, neutral skew → Strangle preferred
+
+metrics = base_metrics(
+    vrp_30d=18.0,
+    adx_14d=22.0,   # higher than ideal for Straddle
+    skew_25d=0.0,
+    iv_rank_6m=0.35,
+    chop_factor_7d=0.7,
+)
+
+
+Assert: Strangle strategy ID is selected (or at least Strangle, not Straddle).
+
+Calendar environment: steep term structure + rich front IV vs RV
+
+metrics = base_metrics(
+    vrp_30d=15.0,
+    term_structure_spread=6.0,
+    front_rv_iv_ratio=0.6,
+    vrp_7d=8.0,
+    adx_14d=15.0,
+    skew_25d=0.0,
+)
+
+
+Assert: Calendar strategy ID is selected.
+
+Bullish accumulation: above MA200 + put skew + positive VRP
+
+metrics = base_metrics(
+    vrp_30d=10.0,
+    price_vs_ma200=5.0,    # above MA200
+    skew_25d=+6.0,         # put skew fear
+    rsi_14d=45.0,
+)
+
+
+Assert: either Short Put or Bull Put Spread strategy ID is selected (depending on how your current tree is written), not Straddle/Strangle, not Calendar.
+
+Bearish overbought: high RSI + negative skew
+
+metrics = base_metrics(
+    vrp_30d=10.0,
+    price_vs_ma200=5.0,
+    skew_25d=-6.0,         # call skew
+    rsi_14d=75.0,
+)
+
+
+Assert: Bear Call Spread strategy ID is selected.
+
+Implement base_metrics(...) as a helper inside the test module that fills all required keys with neutral defaults and overrides the ones passed as kwargs.
+
+Step 6 – Tiny UI hook to see calibration
+
+To give me visible confirmation that we’re using the calibration block, extend the Bots → GregBot UI with a small read-only calibration snapshot.
+
+Add a new API endpoint in src/web_app.py that exposes:
+
+Greg spec meta.version
+
+The calibration dict
+
+For example:
+
+@app.get("/api/greg/calibration")
+def get_greg_calibration() -> JSONResponse:
+    """
+    Return Greg spec version + calibration snapshot.
+    """
+    try:
+        spec = load_greg_spec()  # reuse whatever loader the selector uses
+        meta = spec.get("meta", {})
+        calib = spec.get("global_constraints", {}).get("calibration", {})
+        return JSONResponse(content={"ok": True, "version": meta.get("version"), "calibration": calib})
+    except Exception as e:
+        return JSONResponse(content={"ok": False, "error": str(e)}, status_code=500)
+
+
+In the Bots tab HTML, under the GregBot section, add a small block like:
+
+<h4>Greg Calibration (v1)</h4>
+<div id="greg-calibration-status">Loading...</div>
+<pre id="greg-calibration-values" style="font-size: 0.8em; white-space: pre-wrap;"></pre>
+
+
+In the main <script> block (where other Bots UI logic lives), on DOMContentLoaded:
+
+Call GET /api/greg/calibration.
+
+On success:
+
+Set greg-calibration-status to e.g. Version: 6.0-Diamond-Grade.
+
+Render a short subset of calibration values into greg-calibration-values (for example: skew_neutral_threshold, min_vrp_floor, straddle_vrp_min, strangle_vrp_min, calendar_term_spread_min, safety_adx_high).
+
+This gives me a quick visual sanity check that:
+
+The spec version is v6.0.
+
+The calibration values are exactly what we froze.
+
+Step 7 – Docs
+
+In replit.md (or the main README), add a short subsection:
+
+“Greg v1 – Calibration & Tests”
+
+Explain:
+
+The Greg decision logic is now backed by global_constraints.calibration, not scattered magic numbers.
+
+The unit tests in tests/test_greg_selector_invariants.py and tests/test_greg_selector_scenarios.py validate:
+
+Safety invariants (no straddles in extreme skew, no calendars in the realized trap, no short-vol when VRP is negative).
+
+Greg-style positive scenarios (which strategy family is chosen in classic edge regimes).
+
+The Bots → GregBot panel shows:
+
+Current spec version.
+
+A small calibration snapshot.
+
+Success criteria
+
+The Greg JSON still loads and the selector behaves exactly as before (no logical changes).
+
+All thresholds from the decision tree are now present as named keys in global_constraints.calibration and referenced by name in condition strings.
+
+New tests for invariants + scenarios pass.
+
+When I run the app and open the Bots tab:
+
+I see “Greg Calibration (v1)” with version 6.0-Diamond-Grade.
+
+I see key calibration values printed.
+
+This gives us a clean, test-backed “Greg-aligned v1” implementation that we can later retune by editing the calibration block, without touching logic or code.
