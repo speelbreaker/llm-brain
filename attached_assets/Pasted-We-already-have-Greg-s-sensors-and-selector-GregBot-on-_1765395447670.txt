@@ -1,0 +1,343 @@
+We already have:
+
+Greg’s sensors and selector (GregBot on the Bots tab).
+
+A heatmap / sweet-spot script that can produce
+backtest/output/greg_heatmap_sweetspots.json (or a similar path).
+
+A Backtesting Lab UI panel that calls GET /api/greg_sweetspots and lists sweet spots if that JSON exists.
+
+I want to fully automate the sweep:
+
+From the Backtesting Lab UI, I click a button: “Run Greg Sweet Spot Scan”.
+
+The backend runs the sweep for all pre-defined metric pairs and strategies.
+
+When it’s done, the UI automatically reloads and shows the new sweet spots.
+
+I never have to run a CLI command manually.
+
+Overall constraints
+
+Don’t remove or break any existing behaviour.
+
+Keep this as a research-only tool (no trades).
+
+Keep configuration simple: hard-code a small set of metric pairs/strategies in the sweep function; no need for complex CLI flags.
+
+Step 1 – Factor the heatmap logic into a reusable function
+
+Locate the module where the Greg environment heatmaps and sweet-spot summary are currently implemented.
+(From previous tasks this may be backtest/environment_heatmap.py + scripts/run_greg_environment_heatmaps.py or similar.)
+
+In a suitable module under backtest/ (for example backtest/greg_sweetspots.py), create a function:
+
+from pathlib import Path
+from typing import Sequence
+
+from .environment_heatmap import (
+    load_metric_samples_for_underlying,
+    compute_environment_heatmap,
+    compute_strategy_heatmap_for_pair,
+    save_heatmap_csv,
+)
+
+DEFAULT_METRICS: Sequence[str] = [
+    "vrp_30d",
+    "adx_14d",
+    "iv_rank_6m",
+    "skew_25d",
+    "term_structure_spread",
+    "front_rv_iv_ratio",
+    "price_vs_ma200",
+    "rsi_14d",
+]
+
+DEFAULT_STRATEGIES: Sequence[str] = [
+    "Strategy A: ATM Straddle",
+    "Strategy B: OTM Strangle",
+    "Strategy B: Calendar Spread",
+    "Strategy C: Short Put Accumulation",
+    "Strategy D: Iron Butterfly",
+    "Strategy F: Bull Put Spread",
+    "Strategy F: Bear Call Spread",
+]
+
+def run_greg_sweetspot_sweep(
+    base_dir: Path,
+    underlyings: Sequence[str] = ("BTC", "ETH"),
+    metrics: Sequence[str] = DEFAULT_METRICS,
+    strategies: Sequence[str] = DEFAULT_STRATEGIES,
+    x_bins: int = 20,
+    y_bins: int = 20,
+    min_env_frac: float = 0.005,   # 0.5% occupancy
+    min_pass_frac: float = 0.4,    # 40% strategy pass rate
+    top_k: int = 5,
+) -> Path:
+    """
+    Run a fixed Greg environment sweep across a curated list of metric pairs
+    and strategies, then save:
+
+    - Env heatmap CSVs under backtest/output/
+    - Sweet spot summary JSON under backtest/output/greg_heatmap_sweetspots.json
+
+    Returns the path to the JSON file.
+    """
+    ...
+
+
+Implementation details:
+
+Use base_dir to construct output paths:
+
+output_dir = base_dir / "backtest" / "output"
+output_dir.mkdir(parents=True, exist_ok=True)
+
+
+For each underlying in underlyings:
+
+Load samples via load_metric_samples_for_underlying(underlying, ...).
+
+For each unordered pair of metrics (x_metric, y_metric) from metrics:
+
+Compute environment heatmap and save CSV:
+
+env_cells = compute_environment_heatmap(samples, x_metric, y_metric, x_bins, y_bins)
+save_heatmap_csv(
+    env_cells,
+    output_dir / f"env_heatmap_{underlying}_{x_metric}_vs_{y_metric}.csv",
+    x_metric=x_metric,
+    y_metric=y_metric,
+    underlying=underlying,
+)
+
+
+For each strategy in strategies and each pair (x_metric, y_metric):
+
+Compute StrategyHeatmapCell data using your existing function (e.g. compute_strategy_heatmap_for_pair).
+
+For each cell, compute:
+
+sweetness = cell.occupancy_frac * cell.strategy_pass_frac
+
+
+Filter:
+
+occupancy_frac >= min_env_frac
+
+strategy_pass_frac >= min_pass_frac
+
+Sort by sweetness descending and keep top top_k.
+
+Collect summary entries in a list like:
+
+sweetspots_summary.append({
+    "underlying": underlying,
+    "strategy": strategy_name,
+    "x_metric": x_metric,
+    "y_metric": y_metric,
+    "sweet_spots": [
+        {
+            "x_low": cell.x_low,
+            "x_high": cell.x_high,
+            "y_low": cell.y_low,
+            "y_high": cell.y_high,
+            "occupancy_frac": cell.occupancy_frac,
+            "strategy_pass_frac": cell.strategy_pass_frac,
+            "sweetness": sweetness,
+        },
+        # ...
+    ],
+})
+
+
+Finally, dump to JSON:
+
+json_path = output_dir / "greg_heatmap_sweetspots.json"
+json_path.write_text(json.dumps(sweetspots_summary, indent=2), encoding="utf-8")
+return json_path
+
+
+Keep it deterministic and avoid external APIs; reuse existing metric-loading/selector logic.
+
+Step 2 – Add a POST endpoint to trigger the sweep
+
+In src/web_app.py, near other Backtesting Lab or analysis endpoints, add:
+
+from pathlib import Path
+from backtest.greg_sweetspots import run_greg_sweetspot_sweep
+
+@app.post("/api/greg_sweetspots/run")
+def run_greg_sweetspots() -> JSONResponse:
+    """
+    Trigger a Greg environment sweet spot sweep.
+
+    This is a research-only operation that may take a bit of time, but it should
+    run within a single request/response cycle for now.
+    """
+    try:
+        base_dir = Path(__file__).resolve().parent.parent  # adjust if BASE_DIR exists
+
+        json_path = run_greg_sweetspot_sweep(base_dir=base_dir)
+
+        return JSONResponse(
+            content={
+                "ok": True,
+                "message": "Greg sweet spot sweep completed.",
+                "json_path": str(json_path),
+            }
+        )
+    except Exception as e:
+        return JSONResponse(
+            content={"ok": False, "error": str(e)},
+            status_code=500,
+        )
+
+
+Notes:
+
+If you already have a BASE_DIR or PROJECT_ROOT constant, re-use that instead of recomputing.
+
+This runs synchronously: the request returns only when the sweep is finished and the JSON is written.
+
+Step 3 – Wire the Backtesting Lab UI button
+
+In index() in src/web_app.py, inside the Backtesting Lab section where you already have:
+
+### Greg Environment Sweet Spots
+
+<div id="greg-sweetspots-panel">
+  <button id="greg-sweetspots-refresh-btn">Refresh Sweet Spots</button>
+  <div id="greg-sweetspots-status" aria-live="polite"></div>
+  <div id="greg-sweetspots-content"></div>
+</div>
+
+
+Add another button above the refresh one:
+
+<div id="greg-sweetspots-panel">
+  <button id="greg-sweetspots-run-btn">Run Greg Sweet Spot Scan</button>
+  <button id="greg-sweetspots-refresh-btn">Refresh Sweet Spots</button>
+  <div id="greg-sweetspots-status" aria-live="polite"></div>
+  <div id="greg-sweetspots-content"></div>
+</div>
+
+
+Now update the <script> block at the bottom of the page where Greg sweet spots are wired:
+
+document.addEventListener("DOMContentLoaded", () => {
+  // ... other init code ...
+
+  const sweetPanel = document.getElementById("greg-sweetspots-panel");
+  if (sweetPanel) {
+    const runBtn = document.getElementById("greg-sweetspots-run-btn");
+    const refreshBtn = document.getElementById("greg-sweetspots-refresh-btn");
+    const statusEl = document.getElementById("greg-sweetspots-status");
+    const contentEl = document.getElementById("greg-sweetspots-content");
+
+    function renderSweetSpots(payload) {
+      // existing render logic (as previously implemented) ...
+    }
+
+    function fetchSweetSpots() {
+      statusEl.textContent = "Loading sweet spots...";
+      statusEl.style.color = "";
+      // optional: keep existing content until loaded
+      fetch("/api/greg_sweetspots")
+        .then((r) => r.json())
+        .then(renderSweetSpots)
+        .catch((err) => {
+          statusEl.textContent = "Error loading sweet spots: " + err;
+          statusEl.style.color = "red";
+          contentEl.innerHTML = "";
+        });
+    }
+
+    function runSweetSpotScan() {
+      statusEl.textContent = "Running Greg sweet spot scan...";
+      statusEl.style.color = "";
+      // Optional: disable buttons while running
+      if (runBtn) runBtn.disabled = true;
+      if (refreshBtn) refreshBtn.disabled = true;
+
+      fetch("/api/greg_sweetspots/run", {
+        method: "POST",
+      })
+        .then((r) => r.json())
+        .then((payload) => {
+          if (!payload.ok) {
+            statusEl.textContent = payload.error || "Sweet spot scan failed.";
+            statusEl.style.color = "red";
+          } else {
+            statusEl.textContent = payload.message || "Sweet spot scan completed.";
+            statusEl.style.color = "green";
+            // After success, reload the sweet spots list
+            fetchSweetSpots();
+          }
+        })
+        .catch((err) => {
+          statusEl.textContent = "Error running sweet spot scan: " + err;
+          statusEl.style.color = "red";
+        })
+        .finally(() => {
+          if (runBtn) runBtn.disabled = false;
+          if (refreshBtn) refreshBtn.disabled = false;
+        });
+    }
+
+    if (runBtn) {
+      runBtn.addEventListener("click", runSweetSpotScan);
+    }
+    if (refreshBtn) {
+      refreshBtn.addEventListener("click", fetchSweetSpots);
+    }
+
+    // Auto-load once when the page loads
+    fetchSweetSpots();
+  }
+});
+
+Step 4 – Tests & docs
+
+API test
+Add a small test file, e.g. tests/test_greg_sweetspots_run_api.py:
+
+Use FastAPI TestClient to call POST /api/greg_sweetspots/run.
+
+Assert ok=True and that the JSON file exists afterwards.
+
+Optionally, call GET /api/greg_sweetspots and assert it returns ok=True.
+
+Docs (e.g. in replit.md):
+
+Add a short section “Greg Sweet Spots”:
+
+How to:
+
+Open Backtesting Lab.
+
+Click Run Greg Sweet Spot Scan.
+
+See results in the Greg Environment Sweet Spots panel.
+
+Note that this is a research / analysis tool that uses synthetic or harvested data and does not place trades.
+
+Success Criteria (for me as the operator)
+
+In the Backtesting Lab, I see:
+
+Button: Run Greg Sweet Spot Scan
+
+Button: Refresh Sweet Spots
+
+A status line and a list of sweet spot regions.
+
+When I click Run Greg Sweet Spot Scan:
+
+Status changes to “Running…”
+
+After some time, it switches to “completed”.
+
+The list updates with new sweet spots.
+
+I never have to run a Python script manually to refresh these results.

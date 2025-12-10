@@ -1566,7 +1566,7 @@ def get_greg_sweetspots() -> JSONResponse:
             return JSONResponse(
                 content={
                     "ok": False,
-                    "error": "No sweet spots file found. Run the Greg heatmap script: python scripts/run_greg_environment_heatmaps.py"
+                    "error": "No sweet spots file found. Click 'Run Greg Sweet Spot Scan' to generate."
                 },
             )
         
@@ -1576,6 +1576,36 @@ def get_greg_sweetspots() -> JSONResponse:
         return JSONResponse(content={"ok": True, "data": data})
     except Exception as e:
         return JSONResponse(content={"ok": False, "error": str(e)}, status_code=500)
+
+
+@app.post("/api/greg_sweetspots/run")
+def run_greg_sweetspots() -> JSONResponse:
+    """
+    Trigger a Greg environment sweet spot sweep.
+
+    This is a research-only operation that runs synchronously within a single
+    request/response cycle. It analyzes synthetic market data across metric
+    pairs and strategies to find optimal trading regions.
+    """
+    try:
+        from src.backtest.greg_sweetspots import run_greg_sweetspot_sweep
+        
+        base_dir = Path(__file__).resolve().parent.parent
+        
+        json_path = run_greg_sweetspot_sweep(base_dir=base_dir)
+        
+        return JSONResponse(
+            content={
+                "ok": True,
+                "message": "Greg sweet spot sweep completed.",
+                "json_path": str(json_path),
+            }
+        )
+    except Exception as e:
+        return JSONResponse(
+            content={"ok": False, "error": str(e)},
+            status_code=500,
+        )
 
 
 class RuntimeConfigUpdate(BaseModel):
@@ -3070,9 +3100,12 @@ def index() -> str:
         <h3 style="margin-top:0;">Greg Environment Sweet Spots</h3>
         <p style="color:#666;font-size:0.9rem;margin-bottom:12px;">
           Shows regions where Greg's strategies pass AND the environment spends time.
-          Run <code>python scripts/run_greg_environment_heatmaps.py</code> to generate data.
+          Click "Run Greg Sweet Spot Scan" to analyze synthetic data across all metric pairs.
         </p>
-        <button id="greg-sweetspots-refresh-btn" style="background:#ff9800;color:#fff;border:none;padding:8px 16px;border-radius:4px;cursor:pointer;">Refresh Sweet Spots</button>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;">
+          <button id="greg-sweetspots-run-btn" style="background:#9c27b0;color:#fff;border:none;padding:8px 16px;border-radius:4px;cursor:pointer;">Run Greg Sweet Spot Scan</button>
+          <button id="greg-sweetspots-refresh-btn" style="background:#ff9800;color:#fff;border:none;padding:8px 16px;border-radius:4px;cursor:pointer;">Refresh Sweet Spots</button>
+        </div>
         <div id="greg-sweetspots-status" aria-live="polite" style="margin-top:8px;font-size:0.9rem;"></div>
         <div id="greg-sweetspots-content" style="margin-top:1rem;"></div>
       </div>
@@ -5994,7 +6027,8 @@ def index() -> str:
     // Greg Environment Sweet Spots panel
     const sweetPanel = document.getElementById('greg-sweetspots-panel');
     if (sweetPanel) {{
-      const sweetBtn = document.getElementById('greg-sweetspots-refresh-btn');
+      const runBtn = document.getElementById('greg-sweetspots-run-btn');
+      const refreshBtn = document.getElementById('greg-sweetspots-refresh-btn');
       const sweetStatus = document.getElementById('greg-sweetspots-status');
       const sweetContent = document.getElementById('greg-sweetspots-content');
       
@@ -6008,7 +6042,7 @@ def index() -> str:
         
         const data = payload.data || [];
         if (!Array.isArray(data) || data.length === 0) {{
-          sweetStatus.textContent = 'No sweet spot entries found in JSON.';
+          sweetStatus.textContent = 'No sweet spot entries found. Run a scan to generate data.';
           sweetStatus.style.color = '#ff9800';
           sweetContent.innerHTML = '';
           return;
@@ -6050,7 +6084,6 @@ def index() -> str:
       function fetchSweetSpots() {{
         sweetStatus.textContent = 'Loading sweet spots...';
         sweetStatus.style.color = '';
-        sweetContent.innerHTML = '';
         
         fetch('/api/greg_sweetspots')
           .then(r => r.json())
@@ -6062,7 +6095,36 @@ def index() -> str:
           }});
       }}
       
-      if (sweetBtn) sweetBtn.addEventListener('click', fetchSweetSpots);
+      function runSweetSpotScan() {{
+        sweetStatus.textContent = 'Running Greg sweet spot scan... This may take a minute.';
+        sweetStatus.style.color = '#9c27b0';
+        if (runBtn) runBtn.disabled = true;
+        if (refreshBtn) refreshBtn.disabled = true;
+        
+        fetch('/api/greg_sweetspots/run', {{ method: 'POST' }})
+          .then(r => r.json())
+          .then(payload => {{
+            if (!payload.ok) {{
+              sweetStatus.textContent = payload.error || 'Sweet spot scan failed.';
+              sweetStatus.style.color = '#f44336';
+            }} else {{
+              sweetStatus.textContent = payload.message || 'Sweet spot scan completed.';
+              sweetStatus.style.color = '#4caf50';
+              fetchSweetSpots();
+            }}
+          }})
+          .catch(err => {{
+            sweetStatus.textContent = 'Error running sweet spot scan: ' + err;
+            sweetStatus.style.color = '#f44336';
+          }})
+          .finally(() => {{
+            if (runBtn) runBtn.disabled = false;
+            if (refreshBtn) refreshBtn.disabled = false;
+          }});
+      }}
+      
+      if (runBtn) runBtn.addEventListener('click', runSweetSpotScan);
+      if (refreshBtn) refreshBtn.addEventListener('click', fetchSweetSpots);
       fetchSweetSpots();
     }}
 
