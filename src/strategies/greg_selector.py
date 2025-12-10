@@ -174,12 +174,22 @@ def _safe_check(value: Optional[float], op: str, threshold: float) -> bool:
 
 
 def _get_calibration_context(spec: Dict[str, Any]) -> Dict[str, float]:
-    """Extract calibration variables from the spec for expression evaluation."""
+    """
+    Extract all calibration variables from the spec for expression evaluation.
+    
+    Returns a dict with all numeric calibration values that can be used
+    as variables in decision tree condition expressions.
+    """
     calibration = spec.get("global_constraints", {}).get("calibration", {})
-    return {
-        "skew_neutral_threshold": calibration.get("skew_neutral_threshold", 4.0),
-        "min_vrp_floor": calibration.get("min_vrp_floor", 0.0),
-    }
+    ctx: Dict[str, float] = {}
+    for key, value in calibration.items():
+        if isinstance(value, (int, float)):
+            ctx[key] = float(value)
+    if "skew_neutral_threshold" not in ctx:
+        ctx["skew_neutral_threshold"] = 4.0
+    if "min_vrp_floor" not in ctx:
+        ctx["min_vrp_floor"] = 0.0
+    return ctx
 
 
 def evaluate_greg_selector(sensors: GregSelectorSensors) -> GregSelectorDecision:

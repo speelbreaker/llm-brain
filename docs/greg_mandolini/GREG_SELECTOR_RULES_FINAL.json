@@ -3,7 +3,8 @@
     "bot_name": "Magadini_VRP_Harvester",
     "version": "6.0-Diamond-Grade",
     "market_type": "Deribit_Cash_Settled",
-    "author_style": "Quantitative_Vol_Selling_&_Accumulation"
+    "author_style": "Quantitative_Vol_Selling_&_Accumulation",
+    "calibration_version": "Greg-aligned-v1"
   },
 
   "global_constraints": {
@@ -26,7 +27,30 @@
     },
     "calibration": {
       "skew_neutral_threshold": 4.0,
-      "min_vrp_floor": 0.0
+      "min_vrp_floor": 0.0,
+
+      "safety_adx_high": 35.0,
+      "safety_chop_high": 0.85,
+
+      "straddle_vrp_min": 15.0,
+      "straddle_adx_max": 20.0,
+      "straddle_chop_max": 0.6,
+
+      "strangle_vrp_min": 10.0,
+      "strangle_adx_max": 30.0,
+      "strangle_chop_max": 0.8,
+
+      "calendar_term_spread_min": 5.0,
+      "calendar_front_rv_iv_ratio_max": 0.8,
+
+      "iron_fly_iv_rank_min": 0.80,
+      "iron_fly_vrp_min": 10.0,
+
+      "short_put_iv_rank_min": 0.50,
+      "short_put_price_vs_ma200_min": 0.0,
+
+      "bull_put_rsi_max": 30.0,
+      "bear_call_rsi_min": 70.0
     }
   },
 
@@ -50,42 +74,42 @@
 
   "decision_tree": [
     {
-      "condition": "adx_14d > 35 OR chop_factor_7d > 0.85",
+      "condition": "adx_14d > safety_adx_high OR chop_factor_7d > safety_chop_high",
       "selected_strategy": "NO_TRADE",
       "reasoning": "Trend too strong or Realized Vol is matching Implied Vol."
     },
     {
-      "condition": "term_structure_spread > 5.0 AND front_rv_iv_ratio < 0.8 AND vrp_7d > min_vrp_floor",
+      "condition": "term_structure_spread > calendar_term_spread_min AND front_rv_iv_ratio < calendar_front_rv_iv_ratio_max AND vrp_7d > min_vrp_floor",
       "selected_strategy": "STRATEGY_B_CALENDAR",
       "reasoning": "Front-end event pricing detected with favorable RV/IV ratio."
     },
     {
-      "condition": "iv_rank_6m > 0.80 AND vrp_30d > 10",
+      "condition": "iv_rank_6m > iron_fly_iv_rank_min AND vrp_30d > iron_fly_vrp_min",
       "selected_strategy": "STRATEGY_D_IRON_BUTTERFLY",
       "reasoning": "Vol is too high for naked exposure. Defined risk only."
     },
     {
-      "condition": "vrp_30d > 15.0 AND chop_factor_7d < 0.6 AND adx_14d < 20 AND ABS(skew_25d) < skew_neutral_threshold",
+      "condition": "vrp_30d > straddle_vrp_min AND chop_factor_7d < straddle_chop_max AND adx_14d < straddle_adx_max AND ABS(skew_25d) < skew_neutral_threshold",
       "selected_strategy": "STRATEGY_A_STRADDLE",
       "reasoning": "High premium, low realized movement, neutral skew."
     },
     {
-      "condition": "vrp_30d >= 10.0 AND chop_factor_7d < 0.8 AND adx_14d < 30 AND ABS(skew_25d) < skew_neutral_threshold",
+      "condition": "vrp_30d >= strangle_vrp_min AND chop_factor_7d < strangle_chop_max AND adx_14d < strangle_adx_max AND ABS(skew_25d) < skew_neutral_threshold",
       "selected_strategy": "STRATEGY_A_STRANGLE",
       "reasoning": "Good edge, market drifting, neutral skew. Strangle accommodates drift."
     },
     {
-      "condition": "skew_25d > skew_neutral_threshold AND price_vs_ma200 > 0 AND iv_rank_6m > 0.50 AND vrp_30d > min_vrp_floor",
+      "condition": "skew_25d > skew_neutral_threshold AND price_vs_ma200 > short_put_price_vs_ma200_min AND iv_rank_6m > short_put_iv_rank_min AND vrp_30d > min_vrp_floor",
       "selected_strategy": "STRATEGY_C_SHORT_PUT",
       "reasoning": "Bullish trend, expensive Puts. Paid to buy."
     },
     {
-      "condition": "skew_25d > skew_neutral_threshold AND rsi_14d < 30 AND vrp_30d > min_vrp_floor",
+      "condition": "skew_25d > skew_neutral_threshold AND rsi_14d < bull_put_rsi_max AND vrp_30d > min_vrp_floor",
       "selected_strategy": "STRATEGY_F_BULL_PUT_SPREAD",
       "reasoning": "Oversold + Fear Skew with positive VRP."
     },
     {
-      "condition": "skew_25d < (skew_neutral_threshold * -1) AND rsi_14d > 70 AND vrp_30d > min_vrp_floor",
+      "condition": "skew_25d < (skew_neutral_threshold * -1) AND rsi_14d > bear_call_rsi_min AND vrp_30d > min_vrp_floor",
       "selected_strategy": "STRATEGY_F_BEAR_CALL_SPREAD",
       "reasoning": "Overbought + FOMO Skew with positive VRP."
     },
