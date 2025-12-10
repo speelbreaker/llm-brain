@@ -351,6 +351,7 @@ def get_calibration(
     """
     Run a quick synthetic-vs-Deribit calibration for near-dated calls.
     Returns JSON with summary metrics and up to ~80 sample rows.
+    Also returns term structure bands (weekly/monthly/quarterly) from broader DTE range.
     """
     if underlying not in ("BTC", "ETH"):
         return JSONResponse(
@@ -369,6 +370,34 @@ def get_calibration(
             return_rows=True,
         )
         result = run_calibration_extended(config)
+        
+        term_structure_bands = None
+        try:
+            broad_config = CalibrationConfig(
+                underlying=underlying,
+                min_dte=1.0,
+                max_dte=120.0,
+                iv_multiplier=iv_multiplier,
+                default_iv=default_iv,
+                option_types=["C"],
+                return_rows=False,
+            )
+            broad_result = run_calibration_extended(broad_config)
+            if broad_result.bands:
+                term_structure_bands = [
+                    {
+                        "band_name": b.name,
+                        "dte_range": f"{b.min_dte}-{b.max_dte}",
+                        "option_type": b.option_type,
+                        "count": b.count,
+                        "mae_pct": b.mae_pct,
+                        "bias_pct": b.bias_pct,
+                        "recommended_iv_multiplier": b.recommended_iv_multiplier,
+                    }
+                    for b in broad_result.bands
+                ]
+        except Exception:
+            pass
 
         bands_data = None
         if result.bands:
@@ -414,6 +443,7 @@ def get_calibration(
             "timestamp": result.timestamp.isoformat(),
             "option_types_used": result.option_types_used,
             "bands": bands_data,
+            "term_structure_bands": term_structure_bands,
             "by_option_type": by_option_type_data,
             "rows": result.rows if result.rows else [],
         }
@@ -5861,38 +5891,49 @@ def index() -> str:
       // Update term buckets table
       const termBody = document.getElementById('calib-term-buckets-body');
       
-      // Collect all band results (from by_option_type for granular view, or from data.bands as fallback)
+      // Use term_structure_bands if available (weekly/monthly/quarterly from broader DTE range)
       let bandRows = [];
-      for (const typeCode of typeKeys) {{
-        const typeData = byOptionType[typeCode];
-        if (typeData.bands && typeData.bands.length > 0) {{
-          for (const band of typeData.bands) {{
-            bandRows.push({{
-              name: band.name,
-              min_dte: band.min_dte,
-              max_dte: band.max_dte,
-              option_type: typeCode === 'C' ? 'Calls' : 'Puts',
-              count: band.count,
-              mae_pct: band.mae_pct,
-              bias_pct: band.bias_pct,
-              rec_mult: band.recommended_iv_multiplier,
-            }});
-          }}
-        }}
-      }}
-      
-      // If no per-type bands, fall back to global bands
-      if (bandRows.length === 0 && data.bands && data.bands.length > 0) {{
-        bandRows = data.bands.map(b => ({{
-          name: b.name,
-          min_dte: b.min_dte,
-          max_dte: b.max_dte,
-          option_type: 'All',
+      if (data.term_structure_bands && data.term_structure_bands.length > 0) {{
+        bandRows = data.term_structure_bands.map(b => ({{
+          name: b.band_name,
+          dte_range: b.dte_range,
+          option_type: b.option_type || 'Calls',
           count: b.count,
           mae_pct: b.mae_pct,
           bias_pct: b.bias_pct,
           rec_mult: b.recommended_iv_multiplier,
         }}));
+      }} else {{
+        // Fallback: collect per-type bands
+        for (const typeCode of typeKeys) {{
+          const typeData = byOptionType[typeCode];
+          if (typeData.bands && typeData.bands.length > 0) {{
+            for (const band of typeData.bands) {{
+              bandRows.push({{
+                name: band.name,
+                dte_range: `${{band.min_dte}}-${{band.max_dte}}`,
+                option_type: typeCode === 'C' ? 'Calls' : 'Puts',
+                count: band.count,
+                mae_pct: band.mae_pct,
+                bias_pct: band.bias_pct,
+                rec_mult: band.recommended_iv_multiplier,
+              }});
+            }}
+          }}
+        }}
+        
+        // If still no bands, fall back to global bands
+        if (bandRows.length === 0 && data.bands && data.bands.length > 0) {{
+          bandRows = data.bands.map(b => ({{
+            name: b.band_name,
+            dte_range: b.dte_range,
+            option_type: 'All',
+            count: b.count,
+            mae_pct: b.mae_pct,
+            bias_pct: b.bias_pct,
+            rec_mult: b.recommended_iv_multiplier,
+          }}));
+        }}
       }}
       
       if (bandRows.length === 0) {{
@@ -5901,7 +5942,7 @@ def index() -> str:
         termBody.innerHTML = bandRows.map(b => {{
           return `<tr>
             <td>${{b.name}}</td>
-            <td>${{b.min_dte.toFixed(0)}}-${{b.max_dte.toFixed(0)}}d</td>
+            <td>${{b.dte_range}}d</td>
             <td>${{b.option_type}}</td>
             <td>${{b.count}}</td>
             <td>${{(b.mae_pct || 0).toFixed(2)}}%</td>
