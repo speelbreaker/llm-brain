@@ -1,0 +1,256 @@
+You are working inside my Options Trading Agent project.
+
+We already have:
+
+run_calibration_extended() / run_historical_calibration_from_harvest() in src/calibration_extended.py
+
+They compute:
+
+global metrics including mae_vol_points and vega_weighted_mae_pct,
+
+per-band metrics,
+
+and skew fitting (fit_skew, recommended_skew, etc.) according to previous specs.
+
+A Calibration UI panel that shows:
+
+“Metrics by Option Type” table with columns:
+
+Option Type, Count, MAE %, Bias %, MAE Vol Pts, Vega-Weighted MAE %
+
+“Term Structure (DTE Buckets)” table with:
+
+Band, DTE Range, Option Type, Count, MAE %, Bias %, Rec. IV Mult
+
+Data Health & Reproducibility card.
+
+I see in the UI that Vega-Weighted MAE % is currently - (empty), and there is no visible skew-fit panel.
+
+Your job:
+
+Make sure vega-weighted MAE is computed and returned per option type and per term bucket.
+
+Wire those vega-weighted metrics into the existing UI tables.
+
+Expose skew-fitting results (anchor ratios and misfit) in the API + UI in a way that is understandable to a non-coder.
+
+Please do not change core pricing/regime logic or the basic calibration math – just compute missing aggregations and expose them.
+
+1) Vega-weighted MAE – backend
+1.1 Per-option row formula (for reference)
+
+For each option row in a calibration sample:
+
+mark = mark_price
+
+synth = synthetic_price
+
+pct_error = (synth - mark) / mark
+
+abs_pct_error = abs(pct_error)
+
+vega = greek_vega
+
+Then vega-weighted MAE over a group G:
+
+vega_weighted_mae_pct = sum(abs_pct_error_i * vega_i for i in G) / sum(vega_i for i in G)
+
+
+You already compute a global vega_weighted_mae_pct. Extend this to:
+
+by option type (C / P),
+
+by term bucket (weekly, monthly, quarterly, etc.),
+
+and, if easy, by band×option_type.
+
+1.2 Extend result structures
+
+In the “Metrics by Option Type” section of the calibration result:
+
+Each entry under by_option_type[opt_type] should include:
+
+"vega_weighted_mae_pct": <float or None>
+
+
+computed with the formula above over all rows of that option type.
+
+In the term structure band section (whatever key you use, e.g. term_structure_bands / bands):
+
+Each band entry should include:
+
+"vega_weighted_mae_pct": <float or None>
+
+
+computed over all rows in that band (and option type, if bands are split by option type).
+
+If there is insufficient data to compute vega-weighted MAE (e.g. sum vega ~ 0 or too few rows), set the value to null and let the UI show –.
+
+Keep the existing mae_vol_points untouched.
+
+2) Vega-weighted MAE – UI wiring
+
+Update the Calibration UI so that:
+
+Metrics by Option Type table:
+
+The Vega-Weighted MAE % column shows the formatted value from by_option_type[opt_type]["vega_weighted_mae_pct"] when present.
+
+If the value is null / missing, show a – (as now).
+
+Term Structure (DTE Buckets) table:
+
+Add a new column Vega-Weighted MAE % next to MAE % and Bias %.
+
+Populate it from each band’s vega_weighted_mae_pct.
+
+Again, use – when not available.
+
+Add a brief tooltip or helper text near “Vega-Weighted MAE %” explaining in plain English:
+
+“This error is weighted by each option’s vega, so ATM and near-ATM options matter more than far-OTM contracts with tiny prices.”
+
+Use the same styling and component system as the existing calibration tables.
+
+3) Skew-fitting – backend
+
+We already agreed on a skew-fit design:
+
+Anchors at absolute deltas like 0.15, 0.25, 0.35.
+
+For each anchor:
+
+Use options with |delta| near that value within the relevant DTE band.
+
+Compute average mark IV at that anchor.
+
+Divide by a baseline (RV * iv_multiplier or ATM IV) to get anchor_ratios.
+
+Confirm and/or implement the following fields in the calibration result when config.fit_skew == True:
+
+"recommended_skew": {
+  "anchor_ratios": {  # keys as strings: "0.15", "0.25", "0.35"
+    "0.15": <float>,
+    "0.25": <float>,
+    "0.35": <float>
+  },
+  "min_dte": <float>,  # DTE band for which skew was fitted
+  "max_dte": <float>
+},
+"current_skew": {
+  "anchor_ratios": {...},   # pulled from current vol_surface / settings
+  "min_dte": ...,
+  "max_dte": ...
+},
+"skew_misfit": {
+  "anchor_diffs": {         # recommended - current per anchor
+    "0.15": <float>,
+    "0.25": <float>,
+    "0.35": <float>
+  },
+  "max_abs_diff": <float>
+}
+
+
+If these already exist under slightly different names, keep the internal implementation but normalize / expose them in a stable structure like above.
+
+Ensure they are included both for live and harvested calibrations when fit_skew=True.
+
+4) Skew-fitting – UI
+
+Add a “Skew Fit” section to the Calibration page so a non-coder can see what’s going on.
+
+4.1 Skew summary card
+
+Create a small card titled “Skew Fit (Smile Anchors)” showing a table like:
+
+	0.15 Δ	0.25 Δ	0.35 Δ
+Current	1.10	1.00	0.94
+Recommended	1.14	1.03	0.97
+Difference	+0.04	+0.03	+0.03
+
+Populate:
+
+Current from current_skew.anchor_ratios.
+
+Recommended from recommended_skew.anchor_ratios.
+
+Difference from skew_misfit.anchor_diffs.
+
+Format numbers nicely (e.g. 2–3 decimal places).
+
+4.2 Plain-language interpretation
+
+Below the table, add a short description generated from the data, something like:
+
+If the wings are too low:
+
+“OTM call wings are priced lower in the synthetic surface than in Deribit. The recommended skew increases 0.15 Δ and 0.25 Δ vols by about 3–4% relative to ATM.”
+
+If differences are tiny:
+
+“Current and recommended skew are very close. No skew adjustment is needed.”
+
+You can implement this with a simple rule:
+
+Look at skew_misfit.max_abs_diff:
+
+If < 0.02 → say “skew is well aligned”.
+
+If 0.02–0.05 → “small adjustment”.
+
+If > 0.05 → “significant misfit”.
+
+4.3 Placement
+
+Put the “Skew Fit” section under the main calibration metrics tables, on the same page.
+
+Reuse existing styling (cards, headings, colors) – nothing fancy.
+
+5) Tests & docs
+
+Unit tests:
+
+For a synthetic dataset with known vega and errors, verify:
+
+vega_weighted_mae_pct is calculated correctly for:
+
+global,
+
+per option type,
+
+per band.
+
+For skew fitting:
+
+Given a simple mocked set of mark IVs and a current skew template,
+
+verify that recommended_skew.anchor_ratios and skew_misfit.anchor_diffs are computed as expected.
+
+UI smoke test:
+
+Run a calibration with fit_skew=True.
+
+Confirm in the UI:
+
+“Metrics by Option Type” shows a numeric Vega-Weighted MAE % (not just “–”).
+
+“Term Structure” table shows a Vega-Weighted MAE % column with values.
+
+“Skew Fit” card appears with current vs recommended anchor ratios and a short textual interpretation.
+
+Docs:
+
+Add a short section to the relevant README (replit.md / calibration docs) explaining:
+
+What vega-weighted MAE means.
+
+What the skew fit card shows.
+
+Where to see them in the UI.
+
+Constraints:
+
+Do not break existing API consumers – add fields, don’t rename/remove.
+
+Keep the UI understandable for a non-coder: plain labels, short explanations, no raw JSON or stack traces.

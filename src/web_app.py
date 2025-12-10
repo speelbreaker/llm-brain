@@ -368,6 +368,7 @@ def get_calibration(
             default_iv=default_iv,
             option_types=["C"],
             return_rows=True,
+            fit_skew=True,
         )
         result = run_calibration_extended(config)
         
@@ -393,6 +394,7 @@ def get_calibration(
                         "mae_pct": b.mae_pct,
                         "bias_pct": b.bias_pct,
                         "recommended_iv_multiplier": b.recommended_iv_multiplier,
+                        "vega_weighted_mae_pct": b.vega_weighted_mae_pct,
                     }
                     for b in broad_result.bands
                 ]
@@ -427,6 +429,32 @@ def get_calibration(
                 for ot, m in result.by_option_type.items()
             }
 
+        skew_fit_data = None
+        if result.recommended_skew:
+            current_skew = None
+            if hasattr(settings, 'synthetic_skew_anchor_15'):
+                current_skew = {
+                    "anchor_ratios": {
+                        "0.15": getattr(settings, 'synthetic_skew_anchor_15', 1.0),
+                        "0.25": getattr(settings, 'synthetic_skew_anchor_25', 1.0),
+                        "0.35": getattr(settings, 'synthetic_skew_anchor_35', 1.0),
+                    },
+                    "min_dte": result.recommended_skew.min_dte,
+                    "max_dte": result.recommended_skew.max_dte,
+                }
+            skew_fit_data = {
+                "recommended_skew": {
+                    "anchor_ratios": result.recommended_skew.anchor_ratios,
+                    "min_dte": result.recommended_skew.min_dte,
+                    "max_dte": result.recommended_skew.max_dte,
+                },
+                "current_skew": current_skew,
+                "skew_misfit": {
+                    "anchor_diffs": result.skew_misfit.anchor_diffs if result.skew_misfit else {},
+                    "max_abs_diff": result.skew_misfit.max_abs_diff if result.skew_misfit else 0.0,
+                } if result.skew_misfit else None,
+            }
+
         payload = {
             "underlying": result.underlying,
             "spot": result.spot,
@@ -445,6 +473,7 @@ def get_calibration(
             "bands": bands_data,
             "term_structure_bands": term_structure_bands,
             "by_option_type": by_option_type_data,
+            "skew_fit": skew_fit_data,
             "rows": result.rows if result.rows else [],
         }
         return JSONResponse(content=payload)
@@ -3610,15 +3639,40 @@ def index() -> str:
                   <th>Option Type</th>
                   <th>Count</th>
                   <th>MAE %</th>
+                  <th>Vega-Wtd MAE %</th>
                   <th>Bias %</th>
                   <th>Rec. IV Mult</th>
                 </tr>
               </thead>
               <tbody id="calib-term-buckets-body">
-                <tr><td colspan="7" style="text-align:center;color:#666;">Run calibration to see term structure</td></tr>
+                <tr><td colspan="8" style="text-align:center;color:#666;">Run calibration to see term structure</td></tr>
               </tbody>
             </table>
           </div>
+        </div>
+        
+        <!-- Skew Fit Panel -->
+        <div id="calib-skew-fit-section" style="margin-top:16px;display:none;">
+          <h4 style="margin:0 0 8px 0;color:#7b1fa2;">Skew Fit Analysis</h4>
+          <div style="background:#f3e5f5;padding:12px;border-radius:6px;margin-bottom:12px;font-size:0.9rem;color:#555;">
+            Compares the fitted skew anchor ratios (OTM IV / ATM IV) against the currently configured ratios.
+            A positive diff means the market has higher OTM IV than our model assumes.
+          </div>
+          <div style="overflow-x:auto;">
+            <table class="steps-table" style="font-size:0.85rem;">
+              <thead>
+                <tr>
+                  <th>Delta Bucket</th>
+                  <th>Current Ratio</th>
+                  <th>Recommended Ratio</th>
+                  <th>Diff</th>
+                </tr>
+              </thead>
+              <tbody id="calib-skew-fit-body">
+              </tbody>
+            </table>
+          </div>
+          <div id="skew-fit-summary" style="margin-top:10px;font-size:0.9rem;"></div>
         </div>
       </div>
       
@@ -5900,6 +5954,7 @@ def index() -> str:
           option_type: b.option_type || 'Calls',
           count: b.count,
           mae_pct: b.mae_pct,
+          vega_weighted_mae_pct: b.vega_weighted_mae_pct,
           bias_pct: b.bias_pct,
           rec_mult: b.recommended_iv_multiplier,
         }}));
@@ -5915,6 +5970,7 @@ def index() -> str:
                 option_type: typeCode === 'C' ? 'Calls' : 'Puts',
                 count: band.count,
                 mae_pct: band.mae_pct,
+                vega_weighted_mae_pct: band.vega_weighted_mae_pct,
                 bias_pct: band.bias_pct,
                 rec_mult: band.recommended_iv_multiplier,
               }});
@@ -5930,6 +5986,7 @@ def index() -> str:
             option_type: 'All',
             count: b.count,
             mae_pct: b.mae_pct,
+            vega_weighted_mae_pct: b.vega_weighted_mae_pct,
             bias_pct: b.bias_pct,
             rec_mult: b.recommended_iv_multiplier,
           }}));
@@ -5937,19 +5994,64 @@ def index() -> str:
       }}
       
       if (bandRows.length === 0) {{
-        termBody.innerHTML = '<tr><td colspan="7" style="text-align:center;color:#666;">No term buckets available</td></tr>';
+        termBody.innerHTML = '<tr><td colspan="8" style="text-align:center;color:#666;">No term buckets available</td></tr>';
       }} else {{
         termBody.innerHTML = bandRows.map(b => {{
+          const vegaWtd = b.vega_weighted_mae_pct != null ? (b.vega_weighted_mae_pct).toFixed(2) + '%' : '-';
           return `<tr>
             <td>${{b.name}}</td>
             <td>${{b.dte_range}}d</td>
             <td>${{b.option_type}}</td>
             <td>${{b.count}}</td>
             <td>${{(b.mae_pct || 0).toFixed(2)}}%</td>
+            <td>${{vegaWtd}}</td>
             <td>${{(b.bias_pct || 0).toFixed(2)}}%</td>
             <td>${{b.rec_mult ? b.rec_mult.toFixed(4) : '-'}}</td>
           </tr>`;
         }}).join('');
+      }}
+      
+      // Update skew fit panel
+      const skewSection = document.getElementById('calib-skew-fit-section');
+      const skewBody = document.getElementById('calib-skew-fit-body');
+      const skewSummary = document.getElementById('skew-fit-summary');
+      
+      if (data.skew_fit && data.skew_fit.recommended_skew) {{
+        skewSection.style.display = 'block';
+        const rec = data.skew_fit.recommended_skew;
+        const cur = data.skew_fit.current_skew;
+        const misfit = data.skew_fit.skew_misfit;
+        
+        const deltaLabels = {{'0.15': '15-delta OTM', '0.25': '25-delta OTM', '0.35': '35-delta OTM'}};
+        let rowsHtml = '';
+        
+        for (const [delta, recRatio] of Object.entries(rec.anchor_ratios || {{}})) {{
+          const curRatio = cur && cur.anchor_ratios ? (cur.anchor_ratios[delta] || 1.0) : 1.0;
+          const diff = misfit && misfit.anchor_diffs ? misfit.anchor_diffs[delta] : null;
+          const diffStr = diff != null ? (diff > 0 ? '+' : '') + diff.toFixed(4) : '-';
+          const diffColor = diff != null ? (Math.abs(diff) > 0.02 ? '#e65100' : '#2e7d32') : '#333';
+          
+          rowsHtml += `<tr>
+            <td>${{deltaLabels[delta] || delta}}</td>
+            <td>${{curRatio.toFixed(4)}}</td>
+            <td>${{recRatio.toFixed(4)}}</td>
+            <td style="color:${{diffColor}};font-weight:600;">${{diffStr}}</td>
+          </tr>`;
+        }}
+        
+        skewBody.innerHTML = rowsHtml || '<tr><td colspan="4" style="text-align:center;color:#666;">No skew data</td></tr>';
+        
+        // Summary
+        if (misfit && misfit.max_abs_diff != null) {{
+          const maxDiff = misfit.max_abs_diff;
+          const status = maxDiff > 0.05 ? 'Significant misfit' : maxDiff > 0.02 ? 'Minor misfit' : 'Good fit';
+          const statusColor = maxDiff > 0.05 ? '#c62828' : maxDiff > 0.02 ? '#ef6c00' : '#2e7d32';
+          skewSummary.innerHTML = `<span style="background:${{statusColor}};color:#fff;padding:4px 10px;border-radius:12px;font-size:0.85rem;">${{status}}</span> <span style="color:#666;margin-left:8px;">Max absolute diff: ${{maxDiff.toFixed(4)}}</span>`;
+        }} else {{
+          skewSummary.innerHTML = '';
+        }}
+      }} else {{
+        skewSection.style.display = 'none';
       }}
     }}
     

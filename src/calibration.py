@@ -170,6 +170,7 @@ class OptionQuote:
     delta: Optional[float]
     dte_days: float
     settlement_currency: str = "BTC"
+    vega: Optional[float] = None
 
 
 def get_call_chain(
@@ -221,6 +222,7 @@ def get_call_chain(
             mark_iv = ticker.get("mark_iv", None)
             greeks = ticker.get("greeks") or {}
             delta = greeks.get("delta", None)
+            vega = greeks.get("vega", None)
             
             if mark_price <= 0.0:
                 continue
@@ -236,6 +238,7 @@ def get_call_chain(
                     delta=float(delta) if delta is not None else None,
                     dte_days=dte_days,
                     settlement_currency=settlement_currency,
+                    vega=float(vega) if vega is not None else None,
                 )
             )
         except Exception:
@@ -313,6 +316,7 @@ def get_option_chain(
             mark_iv = ticker.get("mark_iv", None)
             greeks = ticker.get("greeks") or {}
             delta = greeks.get("delta", None)
+            vega = greeks.get("vega", None)
             
             if mark_price <= 0.0:
                 continue
@@ -328,6 +332,7 @@ def get_option_chain(
                     delta=float(delta) if delta is not None else None,
                     dte_days=dte_days,
                     settlement_currency=settlement_currency,
+                    vega=float(vega) if vega is not None else None,
                 )
             )
         except Exception:

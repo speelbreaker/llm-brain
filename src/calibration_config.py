@@ -109,6 +109,7 @@ class DteBandResult(BaseModel):
     avg_mark_iv: Optional[float] = None
     avg_synth_iv: Optional[float] = None
     option_type: Optional[str] = None
+    vega_weighted_mae_pct: Optional[float] = Field(default=None, description="Vega-weighted MAE percentage for the band")
 
 
 class BucketResult(BaseModel):

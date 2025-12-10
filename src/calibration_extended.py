@@ -185,6 +185,22 @@ def compute_bucket_metrics(
     )
 
 
+def compute_vega_weighted_mae(rows: List[Dict[str, Any]]) -> Optional[float]:
+    """
+    Compute vega-weighted MAE for a set of rows.
+    
+    Returns None if insufficient vega data.
+    """
+    vega_rows = [(r, r.get("vega", 0.0)) for r in rows if r.get("vega") and r.get("vega") > 0]
+    if not vega_rows:
+        return None
+    total_vega = sum(v for _, v in vega_rows)
+    if total_vega <= 0:
+        return None
+    weighted_sum = sum(abs(r.get("diff_pct", 0.0)) * v for r, v in vega_rows)
+    return weighted_sum / total_vega
+
+
 def compute_global_metrics(
     rows: List[Dict[str, Any]],
 ) -> GlobalMetrics:
@@ -501,6 +517,7 @@ def run_calibration_extended(
             "abs_delta": abs_delta,
             "delta": q.delta,
             "option_type": opt_type_code,
+            "vega": q.vega,
         })
     
     global_metrics = compute_global_metrics(rows)
@@ -526,6 +543,8 @@ def run_calibration_extended(
             if rv_annualized > 0 and avg_mark and avg_mark > 0:
                 rec_mult = round(float(avg_mark) / 100.0 / rv_annualized, 4)
             
+            band_vega_mae = compute_vega_weighted_mae(band_rows)
+            
             bands_results.append(DteBandResult(
                 name=band.name,
                 min_dte=band.min_dte,
@@ -535,6 +554,7 @@ def run_calibration_extended(
                 bias_pct=bias,
                 recommended_iv_multiplier=rec_mult,
                 avg_mark_iv=float(avg_mark) if avg_mark else None,
+                vega_weighted_mae_pct=band_vega_mae,
             ))
     
     option_types_used = list(set(r.get("option_type", "C") for r in rows))
@@ -560,6 +580,8 @@ def run_calibration_extended(
                 if rv_annualized > 0 and avg_mark and avg_mark > 0:
                     rec_mult = round(float(avg_mark) / 100.0 / rv_annualized, 4)
                 
+                band_vega_mae = compute_vega_weighted_mae(band_rows)
+                
                 type_bands.append(DteBandResult(
                     name=band.name,
                     min_dte=band.min_dte,
@@ -570,6 +592,7 @@ def run_calibration_extended(
                     recommended_iv_multiplier=rec_mult,
                     avg_mark_iv=float(avg_mark) if avg_mark else None,
                     option_type=opt_type,
+                    vega_weighted_mae_pct=band_vega_mae,
                 ))
         
         by_option_type[opt_type] = OptionTypeMetrics(
