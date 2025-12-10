@@ -1,0 +1,516 @@
+You are working inside my “Options Trading Agent” project (Python, FastAPI, Deribit options, synthetic universe, backtesting lab).
+
+0. Context & What’s Already Implemented (DO NOT REIMPLEMENT)
+
+These pieces already exist and are the single source of truth for regimes and regime-aware IV:
+
+src/synthetic/regimes.py
+
+Contains RegimeParams and RegimeModel dataclasses for regime characteristics.
+
+Performs K-Means clustering on Greg sensors (VRP, ADX, chop, IV rank, RV) to identify regimes.
+
+Implements AR(1) IV dynamics with VRP targets and regime-specific mean reversion.
+
+Handles skew template interpolation for realistic strike-based IV.
+
+Handles Markov chain regime transitions.
+
+Supports JSON persistence of calibrated models (e.g., data/greg_regimes.json).
+
+scripts/build_greg_regimes_from_harvester.py
+
+CLI tool that:
+
+Loads OHLC / intraday data either from Deribit API or harvester Parquet files.
+
+Computes Greg sensors from historical price data.
+
+Clusters into N distinct regimes using K-Means.
+
+Estimates transition probabilities (Markov matrix).
+
+Saves calibrated model to data/greg_regimes.json.
+
+src/backtest/pricing.py
+
+Has RegimeState, create_regime_state(), step_regime_state(), and
+get_regime_aware_iv_for_delta() for regime-aware synthetic pricing.
+
+Docs: ROADMAP_BACKLOG.md & replit.md updated for “Synthetic Universe v2 / Advanced Quant”.
+
+First calibration run (BTC):
+
+4 regimes from 181 days.
+
+Regime distribution (~26%, 33%, 20%, 21%).
+
+Transition matrix reflects realistic persistence & switches.
+
+Regime-aware pricing now drives IV dynamics via RegimeModel.
+
+IMPORTANT: Do not re-create clustering, AR(1) dynamics, Markov chain logic, or a separate regime builder script. Instead, use RegimeModel, RegimeParams, RegimeState, and build_greg_regimes_from_harvester.py as they are.
+
+1) Extend the Calibration CONFIG schema (JSON/YAML) – with source: "live" | "harvested"
+
+Goal: Enhance the existing calibration config so it can:
+
+Switch between live API and historical harvested Parquet.
+
+Support multi-DTE bands, DTE×delta buckets, liquidity filters, skew fitting, and output verbosity.
+
+Locate the calibration config model used by run_calibration (Pydantic model or dataclass).
+
+Existing fields (must stay working):
+
+underlying: str
+
+min_dte: float
+
+max_dte: float
+
+iv_multiplier: float
+
+default_iv: float
+
+rv_window_days: int
+
+risk_free_rate: float
+
+max_samples: int
+
+skew: { enabled, min_dte, max_dte }
+
+Add these new optional fields:
+
+source: Literal["live", "harvested"] = "live"
+
+harvest: Optional[HarvestConfig] = None
+# HarvestConfig fields:
+# - data_root: str              # e.g. "data/live_deribit"
+# - underlying: Optional[str]   # default to top-level underlying if None
+# - start_time: Optional[datetime]
+# - end_time: Optional[datetime]
+# - snapshot_step: int = 1      # use every Nth snapshot
+# - max_snapshots: Optional[int] = None
+
+bands: Optional[List[BandConfig]] = None
+# BandConfig: name: str, min_dte: float, max_dte: float, max_samples: Optional[int]
+
+bucket_by_dte: Optional[List[Tuple[float, float]]] = None
+bucket_by_abs_delta: Optional[List[Tuple[float, float]]] = None
+
+filters: Optional[CalibrationFilters] = None
+# CalibrationFilters: min_mark_price: Optional[float], min_open_interest: Optional[float], min_vega: Optional[float]
+
+fit_skew: bool = False
+return_rows: bool = True
+emit_recommended_vol_surface: bool = True
+
+
+Update any example JSON/YAML used by scripts or UI to show these new fields as examples (but keep them optional).
+
+Acceptance criteria:
+
+Existing configs without source, harvest, etc. still run unchanged.
+
+New fields can be parsed and used where appropriate.
+
+2) Extend run_calibration (live mode) – richer metrics & vol_surface snippet
+
+Keep run_calibration as the main entry point, now with:
+
+source switch,
+
+bucketed metrics,
+
+skew fitting,
+
+recommended vol_surface snippet,
+
+extra diagnostics.
+
+2.1 Behavior switch
+
+Inside run_calibration(config):
+
+If config.source == "live":
+
+Use the existing live behavior (Deribit HTTP APIs: index, TradingView, instruments, tickers).
+
+Then compute extra metrics as described below.
+
+If config.source == "harvested":
+
+Delegate to run_historical_calibration_from_harvest(config) (to be implemented in Section 3).
+
+Ensure that the returned structure has the same top-level keys (mae_pct, bias_pct, etc.) plus new extended fields.
+
+2.2 Liquidity filtering (both live & harvested paths)
+
+Before subsampling options:
+
+Apply filters if provided:
+
+min_mark_price: drop options with mark price below this.
+
+min_open_interest: drop options with OI below this (if available).
+
+min_vega: drop options with vega below this (if available).
+
+Track and return:
+
+"liquidity_filters": {
+  "min_mark_price": ...,
+  "min_open_interest": ...,
+  "min_vega": ...,
+  "dropped_count": <int>
+}
+
+2.3 Multi-band metrics (live path)
+
+If bands is provided:
+
+For each band {name, min_dte, max_dte, max_samples?}:
+
+Filter options to that DTE range.
+
+Apply max_samples at the band level (if set) or fallback to global max_samples.
+
+Compute:
+
+count, mae_pct, bias_pct.
+
+recommended_iv_multiplier for that band from mark IV vs RV (average mark_iv / rv_annualized in that band).
+
+Collect into:
+
+"bands": [
+  {
+    "name": "weekly",
+    "min_dte": ...,
+    "max_dte": ...,
+    "count": ...,
+    "mae_pct": ...,
+    "bias_pct": ...,
+    "recommended_iv_multiplier": ...
+  },
+  ...
+]
+
+2.4 Buckets by DTE and |delta|
+
+If bucket_by_dte or bucket_by_abs_delta is provided:
+
+For each DTE bucket [dte_min, dte_max] and each |delta| bucket [d_min, d_max]:
+
+Compute:
+
+mae_pct, bias_pct, count,
+
+avg_mark_iv, avg_synth_iv,
+
+recommended_iv_multiplier_bucket.
+
+Wrap in:
+
+"buckets": [
+  {
+    "name": "dte_0_7_abs_delta_0.25_0.40",
+    "count": ...,
+    "mae_pct": ...,
+    "bias_pct": ...,
+    "avg_mark_iv": ...,
+    "avg_synth_iv": ...,
+    "recommended_iv_multiplier": ...
+  },
+  ...
+]
+
+
+And a summary:
+
+"residuals_summary": {
+  "p50_pct_error": ...,
+  "p90_pct_error": ...,
+  "pct_gt_10pct_error": ...,
+  "by_delta_bucket": {...},  # keyed by bucket label
+  "by_dte_bucket": {...}
+}
+
+2.5 Additional global metrics
+
+Compute and return:
+
+"global_metrics": {
+  "mae_pct": ...,                 # same as top-level mae_pct, for convenience
+  "bias_pct": ...,
+  "mae_vol_points": ...,          # mean |mark_iv - synth_iv|
+  "vega_weighted_mae_pct": ...    # Σ |pct_error| * vega / Σ vega
+}
+
+2.6 Skew fitting (fit_skew=True)
+
+If fit_skew is True (in either live or harvested context):
+
+Use anchor |delta| points [0.15, 0.25, 0.35].
+
+For each anchor:
+
+Find options with |delta| near that anchor (within a small tolerance).
+
+Compute average mark_iv at that anchor.
+
+Use baseline IV = rv_annualized * iv_multiplier (or band-specific multiplier).
+
+Compute:
+
+anchor_ratio[delta] = avg_mark_iv / baseline_iv
+
+
+Return:
+
+"recommended_skew": {
+  "anchor_ratios": {"0.15": ..., "0.25": ..., "0.35": ...},
+  "min_dte": <skew_min_dte or primary DTE band>,
+  "max_dte": <skew_max_dte or primary DTE band>
+}
+
+
+If you can access the current skew template (from settings/config), compute:
+
+"skew_misfit": {
+  "max_abs_diff": ...,
+  "anchor_diffs": {"0.15": ..., "0.25": ..., "0.35": ...}
+}
+
+2.7 Recommended vol_surface snippet
+
+If emit_recommended_vol_surface is True:
+
+Build and return a dict ready to plug into the synthetic vol config (whatever the project currently uses — align with existing structures):
+
+"recommended_vol_surface": {
+  "iv_mode": "rv_window",
+  "rv_window_days": rv_window_days,
+  "iv_multiplier": recommended_global_multiplier,
+  "dte_bands": [
+    {"name": "weekly", "min_dte": 3, "max_dte": 10, "iv_multiplier": ...},
+    {"name": "monthly", "min_dte": 20, "max_dte": 40, "iv_multiplier": ...}
+  ],
+  "skew": {
+    "enabled": skew_enabled,
+    "min_dte": skew_min_dte,
+    "max_dte": skew_max_dte,
+    "anchor_ratios": {...}  # recommended or existing
+  }
+}
+
+
+Also include:
+
+"vol_surface_diff": {
+  "iv_multiplier_delta": recommended_global - current_global,
+  "anchor_ratios_delta": {...}
+}
+
+2.8 Snapshot sensors (live mode)
+
+When source=="live":
+
+Compute a Greg-sensor snapshot using current live data:
+
+"snapshot_sensors": {
+  "vrp_30d": ...,
+  "vrp_7d": ...,
+  "chop_factor": ...,
+  "adx_14": ...,
+  "iv_rank_30d": ...,
+  "skew_25d": ...,
+  "term_slope": ...
+}
+
+
+Backward compatibility: Existing callers relying only on mae_pct, bias_pct, count, rv_annualized, atm_iv, recommended_iv_multiplier, rows continue to work unchanged.
+
+3) run_historical_calibration_from_harvest() – using harvester Parquets & RegimeModel
+
+Create a new helper in the calibration module:
+
+def run_historical_calibration_from_harvest(config: CalibrationConfig) -> CalibrationResult:
+    ...
+
+
+Use what already exists:
+
+Harvester data layout:
+data/live_deribit/<asset>/<YYYY>/<MM>/<DD>/<ASSET>_<YYYY-MM-DD>_<HHMM>.parquet
+
+Columns include: harvest_time, instrument_name, underlying_price, mark_price, mark_iv, open_interest, greek_delta, greek_vega, etc.
+
+Regime logic lives in src/synthetic/regimes.py and data/greg_regimes.json.
+
+3.1 Load snapshots
+
+Using config.harvest:
+
+Load Parquet files from data_root/underlying/... between start_time and end_time.
+
+Sort by harvest_time.
+
+Subsample snapshots by snapshot_step.
+
+Cap total snapshot count by max_snapshots if set.
+
+3.2 Reconstruct underlying series & RV
+
+From all snapshots:
+
+Build a time series of underlying_price for the selected underlying.
+
+Compute rv_window_days-based RV (e.g., RV_7d, RV_30d) at each snapshot time (use your existing RV helper if you have one).
+
+3.3 Regime assignment (use RegimeModel)
+
+Load data/greg_regimes.json via RegimeModel (or appropriate loader).
+
+For each snapshot:
+
+Compute the sensor vector z_t (VRP, ADX, chop, IV rank, RV, etc.) in the same way as build_greg_regimes_from_harvester.py.
+
+Use RegimeModel to assign the snapshot to a regime cluster (e.g., via .predict_cluster(z_t) or similar method you have / can add).
+
+Optionally step a RegimeState if you want to reflect Markov transitions, though for calibration per-snapshot classification is enough.
+
+3.4 Per-snapshot calibration core
+
+For each selected snapshot:
+
+Extract options:
+
+Compute DTE from expiry_timestamp - harvest_time.
+
+Apply DTE band filters (or bands if present).
+
+Apply liquidity filters (min_mark_price, min_open_interest, min_vega).
+
+For each option:
+
+Use the same pricing pathway as synthetic:
+
+Get RV for the snapshot.
+
+Use RegimeModel + regime assignment to determine regime-specific IV target and dynamics.
+
+Derive synthetic IV:
+
+Either via existing get_regime_aware_iv_for_delta() for that delta/DTE,
+
+Or via a minimal version that matches what pricing uses for synthetic calls in the backtester.
+
+Price via Black–Scholes, compute:
+
+price diff, pct diff,
+
+IV diff (mark_iv - synth_iv).
+
+Aggregate per-snapshot metrics and accumulate them into global/bucketed metrics as in Section 2.
+
+3.5 Aggregate across snapshots
+
+Combine all snapshot residuals to compute:
+
+Global mae_pct, bias_pct, mae_vol_points, vega_weighted_mae_pct.
+
+DTE / |delta| bucket metrics.
+
+Band metrics if bands is set.
+
+Skew anchors (if fit_skew=True) using all relevant data.
+
+For snapshot_sensors, you can either:
+
+Return an overall summary (mean of sensors), or
+
+Add an extra environment_summary section with per-regime stats (see next step).
+
+Return a CalibrationResult object / dict that mirrors run_calibration’s extended output so the UI and scripts don’t need to branch heavily.
+
+4) Integrate calibration outputs with RegimeModel (optional but recommended)
+
+Add small utilities that:
+
+Take run_historical_calibration_from_harvest results,
+
+Map per-regime / per-band calibration back into RegimeParams.
+
+Examples:
+
+For each regime, compute average pricing bias / VRP drift and store as recommended tweaks to the regime’s parameters.
+
+Optionally write an updated greg_regimes_calibrated.json (or similar) that keeps the clustering and transitions but updates IV / skew calibration fields.
+
+Important: Do not destroy or fundamentally alter the existing regime structure. This step should be additive: e.g. add fields like:
+
+RegimeParams:
+    ...
+    calibrated_iv_multiplier: Optional[float]
+    calibrated_skew_scale: Optional[float]
+
+
+and fill them from historical calibration.
+
+5) Realism checker: synthetic vs harvester
+
+Add a new script, e.g. scripts/realism_check.py, that:
+
+Uses the harvest config to load historical data and compute:
+
+Distributions of sensors: VRP_30d, VRP_7d, chop_factor, ADX, skew_25d, term_slope, iv_rank_30d.
+
+Regime occupancy (via RegimeModel).
+
+Transition matrix from actual data.
+
+Runs the synthetic engine for a comparable duration using:
+
+The current RegimeModel (and regime-state stepping),
+
+get_regime_aware_iv_for_delta and current synthetic pipeline.
+
+Computes the same sensors and regime stats on the synthetic series.
+
+Compares:
+
+Sensor distributions (use KS distance or simple histogram differences).
+
+Regime occupancies and transition matrix.
+
+Produces:
+
+A realism_score (e.g., 0–1 based on distances),
+
+A small textual diagnostic report listing the biggest discrepancies (e.g. “synthetic VRP too often > 0.2”, “synthetic ADX too low in panic regimes”, etc.).
+
+The realism checker does not have to auto-tune anything. It’s an analysis tool.
+
+6) Tests & Smoke Checks
+
+Add tests for:
+
+run_calibration with source="live" and source="harvested" using small synthetic / fixture datasets.
+
+Bucketed metrics, skew fitting, and recommended_vol_surface structure.
+
+run_historical_calibration_from_harvest on a small test set of Parquet files, ensuring it:
+
+Loads snapshots,
+
+Assigns regimes using RegimeModel,
+
+Produces sane metrics.
+
+Add a smoke test for scripts/realism_check.py that runs on a small subset of harvested files and synthetic data and prints a score without crashing.
+
+End of updated prompt.
+Please implement these changes using the existing regime infrastructure (src/synthetic/regimes.py, RegimeModel, RegimeState, get_regime_aware_iv_for_delta, data/greg_regimes.json) and keep all current behavior backward compatible.

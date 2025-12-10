@@ -1,0 +1,701 @@
+🔧 AI BUILDER PROMPT – Synthetic Universe + Calibration + Harvested Data
+
+You are working inside my “Options Trading Agent” project (Python, FastAPI, Deribit options, synthetic universe, backtesting lab).
+
+We already have:
+
+A synthetic options universe driven by:
+
+CallSimulationConfig and related dataclasses.
+
+A synthetic Black–Scholes pricing path (pricing_mode="synthetic_bs").
+
+get_synthetic_iv and compute_synthetic_iv_with_skew, which:
+
+Derive IV from realized vol over synthetic_rv_window_days * synthetic_iv_multiplier.
+
+Optionally apply skew via delta-based anchor ratios and settings.synthetic_skew_enabled, synthetic_skew_min_dte, synthetic_skew_max_dte.
+
+A calibration helper run_calibration(...) that:
+
+For a given underlying and DTE band, fetches live Deribit data (index + TradingView history + instruments + tickers).
+
+Computes realized RV (rv_window_days), builds synthetic IV = RV * iv_multiplier (plus skew), prices with Black–Scholes.
+
+Compares synthetic prices vs marks and returns:
+
+mae_pct, bias_pct, count, rv_annualized, atm_iv, recommended_iv_multiplier, and rows with per-option details.
+
+A Deribit intraday harvester (scripts.data_harvester) that:
+
+Polls public/get_book_summary_by_currency every N minutes.
+
+Writes Parquet snapshots under data_root/<asset>/<YYYY>/<MM>/<DD>/<ASSET>_<YYYY-MM-DD>_<HHMM>.parquet.
+
+Columns include: harvest_time, instrument_name, underlying, expiry, expiry_timestamp, option_type, strike, underlying_price, mark_price, best_bid_price, best_ask_price, bid_iv, ask_iv, mark_iv, open_interest, volume, greek_delta, greek_gamma, greek_theta, greek_vega.
+
+Your tasks are to:
+
+Extend the calibration config and output schema.
+
+Extend run_calibration with richer metrics, buckets, skew fitting, and a recommended vol_surface snippet.
+
+Extend the synthetic universe config & engine to support regime-dependent IV/VRP/skew and DTE-band multipliers.
+
+Wire calibration → synthetic config.
+
+Add a “Calibration using harvested Parquet data” path with source: "live" | "harvested" and a new run_historical_calibration_from_harvest() helper.
+
+Build regimes from harvested sensor data and feed them into spot_path.regimes and vol_surface.
+
+Add a realism checker (synthetic vs harvester distributions).
+
+Keep everything backward compatible.
+
+1) Extend the calibration CONFIG schema (JSON/YAML)
+
+Goal: keep existing fields unchanged, but add optional knobs for:
+
+multi-DTE bands,
+
+DTE×delta buckets,
+
+liquidity filters,
+
+skew fitting,
+
+output verbosity,
+
+and data source (live vs harvested).
+
+Locate the calibration config model used by run_calibration (Pydantic model or dataclass).
+
+Existing fields (must remain as-is and keep working):
+
+underlying: str
+
+min_dte: float
+
+max_dte: float
+
+iv_multiplier: float
+
+default_iv: float
+
+rv_window_days: int
+
+risk_free_rate: float
+
+max_samples: int
+
+skew: { enabled, min_dte, max_dte }
+
+Add these new optional fields (with sensible defaults to preserve backward compatibility):
+
+source: Literal["live", "harvested"] = "live"  # NEW
+
+harvest: Optional[HarvestConfig] = None        # NEW
+# HarvestConfig fields:
+# - data_root: str          # e.g. "data/live_deribit"
+# - underlying: Optional[str]  # default to top-level underlying if None
+# - start_time: Optional[datetime]  # inclusive
+# - end_time: Optional[datetime]    # inclusive
+# - snapshot_step: int = 1   # use every N-th snapshot to thin the data
+# - max_snapshots: Optional[int] = None
+
+bands: Optional[List[BandConfig]] = None       # NEW
+# BandConfig: name, min_dte, max_dte, max_samples?
+
+bucket_by_dte: Optional[List[Tuple[float, float]]] = None      # NEW
+bucket_by_abs_delta: Optional[List[Tuple[float, float]]] = None # NEW
+
+filters: Optional[CalibrationFilters] = None    # NEW
+# CalibrationFilters: min_mark_price, min_open_interest, min_vega
+
+fit_skew: bool = False                          # NEW
+return_rows: bool = True                        # NEW
+emit_recommended_vol_surface: bool = True       # NEW
+
+
+Update example JSON/YAML files (or docs) to show the new fields as examples, but keep them optional.
+
+Acceptance criteria:
+
+Old configs without these fields still load and run.
+
+New fields show up in config auto-doc / help if you have such.
+
+2) Extend run_calibration implementation (for live source)
+
+We keep run_calibration as the main entry point, but it now supports:
+
+richer metrics,
+
+bucketed stats,
+
+skew fitting,
+
+recommended vol_surface snippet,
+
+and a switch on source (live vs harvested; harvested delegating to a new helper – see Section 5).
+
+2.1 Liquidity filtering
+
+Before sampling options:
+
+Apply filters if provided:
+
+If min_mark_price is set, drop options with mark price below it.
+
+If min_open_interest is set and OI is available, drop options below that.
+
+If min_vega is set and vega is available, drop options below that.
+
+Track:
+
+liquidity_filters = {
+  "min_mark_price": ...,
+  "min_open_interest": ...,
+  "min_vega": ...,
+  "dropped_count": <int>,
+}
+
+2.2 Multi-band handling (still in live mode)
+
+If bands is provided:
+
+For each band {name, min_dte, max_dte, max_samples?}:
+
+Restrict quotes to that DTE range.
+
+Apply band-level max_samples (if set) or default max_samples.
+
+Compute:
+
+count, mae_pct, bias_pct.
+
+recommended_iv_multiplier for that band = average mark_IV / rv_annualized (use mark IVs where available; fallback to ATM).
+
+If bands is absent, use the original single [min_dte, max_dte] logic.
+
+2.3 Buckets by DTE and |delta|
+
+If bucket_by_dte and/or bucket_by_abs_delta are provided:
+
+For each DTE bucket [dte_min, dte_max]:
+
+Compute mae_pct, bias_pct, count, avg_mark_iv, avg_synth_iv, recommended_iv_multiplier_bucket.
+
+For each absolute-delta bucket [delta_min, delta_max]:
+
+Same metrics as above.
+
+Use |delta|, computed from mark IV if available, otherwise from synthetic IV.
+
+Store results in something like:
+
+"buckets": [
+  {
+    "name": "dte_0_7_abs_delta_0.25_0.40",
+    "count": 27,
+    "mae_pct": ...,
+    "bias_pct": ...,
+    "avg_mark_iv": ...,
+    "avg_synth_iv": ...,
+    "recommended_iv_multiplier": ...
+  },
+  ...
+]
+
+
+and a more user-friendly residuals_summary:
+
+"residuals_summary": {
+  "p50_pct_error": ...,
+  "p90_pct_error": ...,
+  "pct_gt_10pct_error": ...,
+  "by_delta_bucket": {...},
+  "by_dte_bucket": {...},
+}
+
+2.4 Additional metrics (global)
+
+Compute:
+
+mae_vol_points = mean(|mark_iv − synth_iv|) in absolute vol points.
+
+vega_weighted_mae_pct = Σ(|pct_error| * vega) / Σ(vega) over all options with vega.
+
+Wrap in:
+
+"global_metrics": {
+  "mae_pct": ...,                # same as top-level; for backward compat
+  "bias_pct": ...,
+  "mae_vol_points": ...,
+  "vega_weighted_mae_pct": ...
+}
+
+2.5 Skew fitting (fit_skew = True)
+
+If fit_skew is True:
+
+Define skew anchor absolute-delta points: [0.15, 0.25, 0.35].
+
+For the main DTE band (or bands), and for options whose |delta| is near each anchor:
+
+Compute average mark IV at that |delta|.
+
+Define baseline IV as rv_annualized * iv_multiplier (or band-specific multiplier).
+
+For each anchor:
+
+anchor_ratio[delta] = avg_mark_iv_at_delta / baseline_iv
+
+
+Build:
+
+"recommended_skew": {
+  "anchor_ratios": {
+    "0.15": ...,
+    "0.25": ...,
+    "0.35": ...
+  },
+  "min_dte": <from skew config or DTE band>,
+  "max_dte": <from skew config or DTE band>
+}
+
+
+If a current skew template exists in settings, compute skew_misfit:
+
+"skew_misfit": {
+  "max_abs_diff": ...,
+  "anchor_diffs": {
+    "0.15": diff_15,
+    "0.25": diff_25,
+    "0.35": diff_35
+  }
+}
+
+2.6 Recommended vol_surface snippet
+
+If emit_recommended_vol_surface is True:
+
+Build a dict ready for the synthetic vol_surface:
+
+"recommended_vol_surface": {
+  "iv_mode": "rv_window",
+  "rv_window_days": rv_window_days,
+  "iv_multiplier": recommended_global_multiplier,
+  "dte_bands": [
+    {"name": "weekly", "min_dte": 3, "max_dte": 10, "iv_multiplier": 1.08},
+    {"name": "monthly", "min_dte": 20, "max_dte": 40, "iv_multiplier": 1.03}
+  ],
+  "skew": {
+    "enabled": skew_enabled,
+    "min_dte": skew_min_dte,
+    "max_dte": skew_max_dte,
+    "anchor_ratios": anchor_ratios   # recommended or existing
+  }
+}
+
+
+Also compute:
+
+"vol_surface_diff": {
+  "iv_multiplier_delta": recommended_global - current_global,
+  "anchor_ratios_delta": { "0.15": ..., "0.25": ..., "0.35": ... }
+}
+
+2.7 Snapshot sensors
+
+Using your existing sensor logic (VRP, chop, ADX, IV rank, skew, term-slope), compute:
+
+"snapshot_sensors": {
+  "vrp_30d": ...,
+  "vrp_7d": ...,
+  "chop_factor": ...,
+  "adx_14": ...,
+  "iv_rank_30d": ...,
+  "skew_25d": ...,
+  "term_slope": ...
+}
+
+
+Important: When source == "live", run_calibration behaves exactly as today plus additional fields in the result. Existing callers using only the old keys must continue to work.
+
+3) Extend the synthetic universe config & engine
+
+Goal: support regimes with IV/VRP/skew behavior and DTE-band-specific IV multipliers that can be filled from calibration outputs.
+
+3.1 Regime model extensions
+
+Locate the synthetic config schema for spot_path and vol_surface (YAML/JSON + Python models).
+
+Extend the regime model to include:
+
+iv_multiplier: Optional[float] = None
+vrp: Optional[float] = None
+skew_mode: Optional[Literal["put_heavy", "call_heavy", "neutral"]] = None
+skew_scale: Optional[float] = None
+sensor_means: Optional[Dict[str, float]] = None
+
+
+and add:
+
+regime_transitions: Optional[Dict[str, Dict[str, float]]] = None
+
+3.2 Vol surface DTE bands
+
+Extend vol_surface with optional DTE bands:
+
+dte_bands: Optional[List[DteBand]] = None
+# DteBand: name, min_dte, max_dte, iv_multiplier
+
+3.3 IV engine updates
+
+In get_synthetic_iv (or equivalent):
+
+Compute base RV from rv_window_days.
+
+Determine a working iv_multiplier:
+
+Priority:
+
+If option’s DTE falls into a vol_surface.dte_bands entry, use that band’s iv_multiplier.
+
+Else, use vol_surface.iv_multiplier.
+
+If active regime has iv_multiplier, override with that.
+
+If regime has vrp, add it as a vol-point offset (optional).
+
+Compute IV = RV * iv_multiplier (+ vrp offset).
+
+Pass that IV to compute_synthetic_iv_with_skew.
+
+3.4 Skew engine updates
+
+Support two conceptual skew templates:
+
+Default “put skew” template (current anchor_ratios).
+
+“Call premium” template (could come from calibration in FOMO regimes later).
+
+Based on regime.skew_mode:
+
+put_heavy: use put skew template.
+
+call_heavy: use call premium template.
+
+neutral: interpolate anchor_ratios toward 1.0 (flat skew).
+
+Always multiply anchor ratios by regime.skew_scale if set.
+
+3.5 Regime transitions
+
+Implement helper to step regimes across time:
+
+If regime_transitions is defined:
+
+Use it as a Markov chain over regime names.
+
+Else:
+
+Use a simple “stickiness” rule with weights from regimes[*].weight.
+
+Persist the current regime in the synthetic run so spot and IV follow a coherent regime path.
+
+Acceptance criteria:
+
+Old configs without any of these fields still behave as today.
+
+New fields can be added and are respected by IV + skew generation.
+
+4) Wire calibration → synthetic config
+
+Add a helper in the calibration module, for example:
+
+def build_vol_surface_from_calibration(calibration_result) -> dict:
+    ...
+
+
+It should:
+
+Read recommended_vol_surface from the calibration result.
+
+Optionally merge with the current synthetic config (not required, but nice).
+
+Produce a dict that matches the synthetic vol_surface schema exactly.
+
+Optionally, add a CLI / script:
+
+scripts/update_vol_surface_from_calibration.py
+
+Runs calibration with a given config.
+
+Writes out a YAML/JSON snippet for vol_surface or directly updates a config file.
+
+5) Calibration using harvested Parquet data (source: "live" | "harvested")
+
+Goal: Use the existing Deribit Parquet snapshots to perform calibration over many timestamps and environments, fitting:
+
+skew anchor_ratios,
+
+iv_multipliers per DTE band,
+
+and regime descriptors.
+
+5.1 Config extensions (already defined)
+
+Use the source and harvest fields defined in Section 1:
+
+source: harvested
+harvest:
+  data_root: data/live_deribit
+  underlying: BTC
+  start_time: 2025-01-01T00:00:00Z
+  end_time: 2025-01-31T23:59:59Z
+  snapshot_step: 6
+  max_snapshots: 500
+
+5.2 Modify run_calibration entry point
+
+Inside run_calibration:
+
+If config.source == "live":
+
+Execute the existing live path (Deribit HTTP APIs), plus new metrics as described above.
+
+If config.source == "harvested":
+
+Delegate to a new helper:
+
+return run_historical_calibration_from_harvest(config)
+
+
+Ensure the returned structure is consistent: global metrics, bucketed metrics, recommended vol_surface, etc. (some fields may be aggregates over many snapshots).
+
+5.3 Implement run_historical_calibration_from_harvest(config)
+
+Create a new function in the calibration module:
+
+def run_historical_calibration_from_harvest(config: CalibrationConfig) -> HistoricalCalibrationResult:
+    ...
+
+
+High-level steps:
+
+Load snapshots:
+
+Use config.harvest.data_root and config.harvest.underlying to find Parquet files under:
+
+<data_root>/<asset>/<YYYY>/<MM>/<DD>/*.parquet
+
+Filter by start_time <= harvest_time <= end_time.
+
+Sort snapshots by harvest_time.
+
+Subsample with snapshot_step and max_snapshots to cap work.
+
+Reconstruct underlying price series for RV:
+
+From all loaded snapshots, build a time series of underlying_price (per underlying).
+
+Use this series to compute RV_7d, RV_30d, etc. at each snapshot time.
+
+Per-snapshot calibration core:
+
+For each selected snapshot:
+
+Extract all options rows for that snapshot:
+
+instrument_name, expiry, strike, option_type, mark_price, mark_iv, underlying_price, greek_delta, greek_vega, etc.
+
+Compute DTE from expiry_timestamp - harvest_time.
+
+Apply:
+
+DTE filters (min_dte, max_dte or bands),
+
+Liquidity filters (min_mark_price, min_open_interest, min_vega).
+
+Compute RV from the underlying_price series using rv_window_days.
+
+For each option row:
+
+Compute synthetic IV using the same logic as in live calibration:
+
+IV_synth = RV * iv_multiplier (plus term-structure / regime adjustments if present).
+
+Apply skew via compute_synthetic_iv_with_skew.
+
+Price with Black–Scholes and compute price diff, pct diff, and IV diff.
+
+Collect per-snapshot metrics and per-option residuals (or at least aggregate).
+
+Aggregate across snapshots:
+
+Combine all per-snapshot residuals into global and bucketed metrics (same shapes as in Section 2).
+
+Compute:
+
+Global mae_pct, bias_pct, mae_vol_points, vega_weighted_mae_pct.
+
+Bucketed results by DTE and |delta|.
+
+bands metrics if configured.
+
+If fit_skew=True, fit anchor_ratios using all relevant snapshots (or stratified by environment, see next section).
+
+If requested, compute recommended_vol_surface over the whole historical sample (or per band).
+
+Return result:
+
+Structure should match the extended output schema:
+
+mae_pct, bias_pct, count, rv_annualized (could be median or mean RV across snapshots),
+
+snapshot_sensors can be either:
+
+a summary (e.g. mean sensors), or
+
+omitted in favor of new fields, see next section (environment-level outputs).
+
+plus global_metrics, residuals_summary, buckets, bands, recommended_skew, recommended_vol_surface, etc.
+
+Important: run_historical_calibration_from_harvest is about many timestamps, so think in terms of aggregates, not “single snapshot”.
+
+6) Build regimes from harvested sensor data & feed synthetic config
+
+Using the same harvested snapshots in run_historical_calibration_from_harvest (or in a companion function):
+
+Compute sensors per snapshot:
+
+For each snapshot time, compute a sensor vector:
+
+z_t = {
+  "vrp_30d": ...,
+  "vrp_7d": ...,
+  "chop_factor": ...,
+  "adx_14": ...,
+  "skew_25d": ...,
+  "term_slope": ...,
+  "iv_rank_30d": ...,
+}
+
+
+Use the reconstructed underlying_price history + mark_iv term-structure to get these.
+
+Cluster into regimes:
+
+Run k-means or Gaussian Mixture clustering (K ~ 6–10) on {z_t}.
+
+For each cluster k:
+
+Compute:
+
+mean / std of each sensor,
+
+average drift and realized vol of underlying (from price series),
+
+average VRP (IV−RV),
+
+average IV multipliers per DTE band (derived from calibration residuals),
+
+average skew anchor_ratios.
+
+Estimate regime transitions:
+
+Sorting snapshots by time, examine sequence of cluster labels.
+
+Build an empirical transition matrix P(i→j).
+
+Produce a synthetic config snippet:
+
+Generate a ready-to-paste YAML/JSON block for spot_path.regimes and vol_surface:
+
+For each cluster/regime:
+
+- name: cluster_k_name  # e.g. trending_up_high_vrp
+  weight: 0.2
+  drift: 0.35
+  vol: 0.8
+  vrp: 0.12
+  iv_multiplier: 1.08
+  skew_mode: put_heavy | call_heavy | neutral
+  skew_scale: 1.05
+  sensor_means:
+    vrp_30d: ...
+    chop_factor: ...
+    adx_14: ...
+    skew_25d: ...
+    term_slope: ...
+
+
+And a regime_transitions matrix consistent with P(i→j).
+
+Optionally, DTE-band multipliers for vol_surface.dte_bands derived from per-band averages per cluster.
+
+You can implement this as a new script, e.g.:
+
+scripts/build_regimes_from_harvest.py
+
+that reads harvest Parquets, computes regimes, and writes a YAML snippet for the synthetic config.
+
+7) Realism checker: synthetic vs harvester
+
+Add a new module / script, e.g. scripts/realism_check.py, that:
+
+Uses harvested data (same harvest config) to build:
+
+Distributions of key sensors: VRP_30d, VRP_7d, chop_factor, ADX, skew_25d, term_slope, iv_rank_30d.
+
+Cluster occupancy frequencies and transition matrix.
+
+Runs the synthetic universe for the same (or similar) duration with the current synthetic config:
+
+Build synthetic state series,
+
+Compute the same sensors.
+
+Compare distributions:
+
+For each metric, compute simple distances (e.g. KS distances or differences in moments).
+
+For cluster occupancy, compare frequencies and transition matrices.
+
+Produce a realism_score and diagnostics:
+
+realism_score: 0.83
+biggest mismatches:
+  - VRP_30d distribution too right-skewed (synthetic VRP often > 0.2)
+  - ADX too low in high-VRP regimes
+  - Skew variance too small vs real Deribit
+
+
+This doesn’t need to feed back automatically (yet); it’s a tool for you to judge how close your synthetic world is to Deribit.
+
+8) Tests and smoke checks
+
+Add tests for:
+
+Calibration in source="live" and source="harvested" modes (with small canned datasets).
+
+Bucketed metrics and skew fitting correctness.
+
+IV engine respecting:
+
+vol_surface.dte_bands,
+
+regime.iv_multiplier,
+
+regime.skew_mode and skew_scale.
+
+Add at least one smoke test for:
+
+Running run_historical_calibration_from_harvest on a tiny synthetic Parquet sample.
+
+Running the realism checker to ensure it does not crash and produces reasonable metrics.
+
+End of prompt.
+Please implement all of the above incrementally, ensuring backward compatibility for existing calibration configs and synthetic configs.

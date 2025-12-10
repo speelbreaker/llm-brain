@@ -50,6 +50,15 @@ The web dashboard provides a user-friendly interface with sections for "Live Age
   - `scripts/build_greg_regimes_from_harvester.py` to calibrate regimes from real Deribit data
   - Regime model saved to `data/greg_regimes.json` (per underlying, with transition matrix)
   - Backtest pricing module extended with `RegimeState` and regime-aware IV functions
+- **Extended Calibration System (v2)**:
+  - `src/calibration_config.py`: Pydantic models for CalibrationConfig, HarvestConfig, BandConfig, CalibrationFilters
+  - `src/calibration_extended.py`: Enhanced run_calibration_extended() with liquidity filtering, multi-DTE bands, bucket metrics, skew fitting, recommended vol_surface generation
+  - `src/synthetic/vol_surface.py`: VolSurfaceConfig with DTE-band-specific IV multipliers and skew templates
+  - `scripts/update_vol_surface_from_calibration.py`: CLI to run calibration and generate vol_surface config
+  - `scripts/realism_check.py`: Realism checker comparing synthetic vs harvested distributions
+  - Supports `source: "live" | "harvested"` for API or Parquet data
+  - Global metrics: mae_vol_points, vega_weighted_mae_pct, residuals_summary
+  - Skew fitting with anchor_ratios computation and misfit detection
 - **Auto IV Calibration Pipeline**: 
   - **calibration_history table**: Persists time series of auto-calculated IV multipliers keyed by underlying and DTE range.
   - **scripts/auto_calibrate_iv.py**: CLI script that loads harvester data, fits an IV multiplier minimizing MAE, and stores results in the database.

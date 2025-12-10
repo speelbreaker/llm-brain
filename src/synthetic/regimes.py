@@ -40,14 +40,27 @@ class RegimeParams:
     phi_iv: float = 0.9
     phi_skew: float = 0.85
     
+    iv_multiplier: Optional[float] = None
+    vrp: Optional[float] = None
+    skew_mode: Optional[str] = None
+    skew_scale: Optional[float] = None
+    sensor_means: Optional[Dict[str, float]] = None
+    drift: Optional[float] = None
+    vol: Optional[float] = None
+    weight: Optional[float] = None
+    
     def to_dict(self) -> Dict[str, Any]:
         """Convert to JSON-serializable dict."""
-        return asdict(self)
+        d = asdict(self)
+        d = {k: v for k, v in d.items() if v is not None or k in ["name", "mu_rv_30d", "mu_vrp_30d", "iv_level_sigma", "skew_template", "phi_iv", "phi_skew"]}
+        return d
     
     @classmethod
     def from_dict(cls, d: Dict[str, Any]) -> "RegimeParams":
         """Create from dict."""
-        return cls(**d)
+        valid_fields = {f.name for f in cls.__dataclass_fields__.values()}
+        filtered = {k: v for k, v in d.items() if k in valid_fields}
+        return cls(**filtered)
 
 
 @dataclass

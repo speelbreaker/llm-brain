@@ -18,3 +18,4 @@ requests
 psycopg2-binary
 sqlalchemy
 scikit-learn
+scipy
