@@ -1721,6 +1721,29 @@ def get_greg_selector() -> JSONResponse:
         return JSONResponse(content={"ok": False, "error": str(e)})
 
 
+@app.get("/api/greg/calibration")
+def get_greg_calibration() -> JSONResponse:
+    """
+    Return Greg spec version and calibration snapshot.
+    Used by the Bots tab UI to display current calibration values.
+    """
+    try:
+        from src.strategies.greg_selector import load_greg_spec
+        
+        spec = load_greg_spec()
+        meta = spec.get("meta", {})
+        calib = spec.get("global_constraints", {}).get("calibration", {})
+        
+        return JSONResponse(content={
+            "ok": True,
+            "version": meta.get("version", "unknown"),
+            "calibration_version": meta.get("calibration_version", "unknown"),
+            "calibration": calib,
+        })
+    except Exception as e:
+        return JSONResponse(content={"ok": False, "error": str(e)}, status_code=500)
+
+
 # =============================================================================
 # BOTS API ENDPOINTS
 # =============================================================================
@@ -3905,6 +3928,20 @@ def index() -> str:
         <div id="bots-expert-table" style="overflow-x: auto;">
           <p style="color: #666; font-style: italic;">Loading expert strategies...</p>
         </div>
+        
+        <!-- Greg Calibration Panel -->
+        <details id="greg-calibration-panel" style="margin-top: 1rem; background: white; padding: 1rem; border-radius: 6px; border: 1px solid #ddd;">
+          <summary style="cursor: pointer; font-weight: 500; color: #7c4dff;">Greg Calibration (v1)</summary>
+          <div style="margin-top: 0.75rem;">
+            <div id="greg-calibration-status" style="font-size: 0.9rem; color: #666; margin-bottom: 0.5rem;">Loading...</div>
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 0.5rem; font-size: 0.8rem;">
+              <div id="greg-calibration-values"></div>
+            </div>
+            <button onclick="refreshGregCalibration()" style="margin-top: 0.75rem; padding: 0.4rem 0.8rem; font-size: 0.8rem; background: #7c4dff; color: white; border: none; border-radius: 4px; cursor: pointer;">
+              Refresh Calibration
+            </button>
+          </div>
+        </details>
       </div>
       
       <p style="color: #888; font-size: 0.85rem; margin-top: 1rem;">
@@ -4586,6 +4623,57 @@ def index() -> str:
     function loadBotsTab() {{
       refreshBotsSensors();
       refreshBotsStrategies();
+      refreshGregCalibration();
+    }}
+    
+    async function refreshGregCalibration() {{
+      const statusEl = document.getElementById('greg-calibration-status');
+      const valuesEl = document.getElementById('greg-calibration-values');
+      
+      if (!statusEl || !valuesEl) return;
+      
+      statusEl.textContent = 'Loading...';
+      valuesEl.innerHTML = '';
+      
+      try {{
+        const res = await fetch('/api/greg/calibration');
+        const data = await res.json();
+        
+        if (data.ok) {{
+          const version = data.version || 'unknown';
+          const calibVersion = data.calibration_version || 'unknown';
+          statusEl.innerHTML = `<strong>Version:</strong> ${{version}} | <strong>Calibration:</strong> ${{calibVersion}}`;
+          
+          const calib = data.calibration || {{}};
+          const keyGroups = {{
+            'Core': ['skew_neutral_threshold', 'min_vrp_floor'],
+            'Safety': ['safety_adx_high', 'safety_chop_high'],
+            'Straddle': ['straddle_vrp_min', 'straddle_adx_max', 'straddle_chop_max'],
+            'Strangle': ['strangle_vrp_min', 'strangle_adx_max', 'strangle_chop_max'],
+            'Calendar': ['calendar_term_spread_min', 'calendar_front_rv_iv_ratio_max'],
+            'Iron Fly': ['iron_fly_iv_rank_min', 'iron_fly_vrp_min'],
+            'Directional': ['short_put_iv_rank_min', 'short_put_price_vs_ma200_min', 'bull_put_rsi_max', 'bear_call_rsi_min'],
+          }};
+          
+          let html = '<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 1rem;">';
+          for (const [group, keys] of Object.entries(keyGroups)) {{
+            html += `<div><strong style="color: #7c4dff; font-size: 0.85rem;">${{group}}</strong><ul style="margin: 0.25rem 0 0; padding-left: 1rem; font-size: 0.8rem;">`;
+            for (const k of keys) {{
+              const v = calib[k];
+              if (v !== undefined) {{
+                html += `<li style="color: #555;"><code>${{k.replace(/_/g, ' ')}}</code>: ${{v}}</li>`;
+              }}
+            }}
+            html += '</ul></div>';
+          }}
+          html += '</div>';
+          valuesEl.innerHTML = html;
+        }} else {{
+          statusEl.textContent = 'Error: ' + (data.error || 'Unknown error');
+        }}
+      }} catch (e) {{
+        statusEl.textContent = 'Error: ' + e.message;
+      }}
     }}
     
     // ==============================================

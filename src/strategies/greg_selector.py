@@ -97,6 +97,11 @@ def load_greg_spec() -> Dict[str, Any]:
         return json.load(f)
 
 
+def clear_greg_spec_cache() -> None:
+    """Clear the cached spec so it reloads on next call."""
+    load_greg_spec.cache_clear()
+
+
 def build_sensors_from_state(state: AgentState) -> GregSelectorSensors:
     """
     Map AgentState / market_context / vol_state into the Greg selector sensors.
