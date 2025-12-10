@@ -104,7 +104,16 @@ The web dashboard provides a user-friendly interface with sections for "Live Age
     - Reproducibility info: run time, underlying, harvest period, config hash, regime model version
     - "View Raw Metadata" button for detailed JSON inspection
 - **Bots System**: Provides a comprehensive view of expert trading bots, market sensors, and strategy evaluations, including debug mode for sensor computations.
-    - **Greg Mandolini VRP Harvester (GregBot) v6.0 "Diamond-Grade"**: A quantitative VRP strategy selector based on 11 volatility sensors and a decision tree. Currently advisory (read-only) with 8 evaluated strategies per underlying. Sensor mapping and calibration variables are defined.
+    - **Greg Mandolini VRP Harvester (GregBot) v6.0 "Diamond-Grade"**: A quantitative VRP strategy selector based on 11 volatility sensors and a decision tree. Currently advisory (read-only) with 8 evaluated strategies per underlying.
+    - **Greg v1 Calibration & Tests**:
+      - All decision tree thresholds moved to `global_constraints.calibration` block in `docs/greg_mandolini/GREG_SELECTOR_RULES_FINAL.json`
+      - 18 named calibration variables (skew_neutral_threshold, safety_adx_high, straddle_vrp_min, etc.)
+      - Decision tree conditions now reference calibration variable names instead of hardcoded numbers
+      - `src/strategies/greg_selector.py` loads calibration dynamically from JSON spec
+      - **Invariant Tests** (`tests/test_greg_selector_invariants.py`): Validates safety rules - no neutral short-vol with extreme skew, no calendars in realized trap, no short-vol with negative VRP, safety filter overrides everything
+      - **Scenario Tests** (`tests/test_greg_selector_scenarios.py`): Validates positive cases - high VRP calm → straddle, moderate drift → strangle, term structure → calendar, bullish fear → short put/bull put spread, overbought FOMO → bear call spread
+      - **API Endpoint**: `GET /api/greg/calibration` returns spec version and calibration snapshot
+      - **UI Panel**: Bots tab → "Greg Calibration (v1)" collapsible section shows version and grouped calibration values
 - **Strategy Layer**: A pluggable architecture allowing multiple trading strategies to run concurrently (`src/strategies/`). Strategies are built from settings via `build_default_registry()` and decisions include `strategy_id` for attribution.
 
 ## External Dependencies
