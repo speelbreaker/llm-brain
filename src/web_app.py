@@ -2722,38 +2722,38 @@ def index() -> str:
         Monitor the Deribit intraday data harvester. This shows how much data has been collected and whether the scraper is actively running.
       </p>
       
-      <div class="card" id="intraday-scraper-panel">
+      <div class="card" id="intraday-scraper-panel" style="background:#fff;">
         <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(180px, 1fr));gap:12px;margin-bottom:12px;">
-          <div style="background:#2a2a2a;padding:10px;border-radius:6px;">
-            <div style="color:#888;font-size:0.85rem;">Source</div>
-            <div id="scraper-source" style="font-weight:600;">Loading...</div>
+          <div style="background:#f5f5f5;padding:10px;border-radius:6px;">
+            <div style="color:#666;font-size:0.85rem;">Source</div>
+            <div id="scraper-source" style="font-weight:600;color:#333;">Loading...</div>
           </div>
-          <div style="background:#2a2a2a;padding:10px;border-radius:6px;">
-            <div style="color:#888;font-size:0.85rem;">Backend</div>
-            <div id="scraper-backend" style="font-weight:600;">Loading...</div>
+          <div style="background:#f5f5f5;padding:10px;border-radius:6px;">
+            <div style="color:#666;font-size:0.85rem;">Backend</div>
+            <div id="scraper-backend" style="font-weight:600;color:#333;">Loading...</div>
           </div>
-          <div style="background:#2a2a2a;padding:10px;border-radius:6px;">
-            <div style="color:#888;font-size:0.85rem;">Rows Total</div>
-            <div id="scraper-rows" style="font-weight:600;">Loading...</div>
+          <div style="background:#f5f5f5;padding:10px;border-radius:6px;">
+            <div style="color:#666;font-size:0.85rem;">Rows Total</div>
+            <div id="scraper-rows" style="font-weight:600;color:#333;">Loading...</div>
           </div>
-          <div style="background:#2a2a2a;padding:10px;border-radius:6px;">
-            <div style="color:#888;font-size:0.85rem;">Days Covered</div>
-            <div id="scraper-days" style="font-weight:600;">Loading...</div>
+          <div style="background:#f5f5f5;padding:10px;border-radius:6px;">
+            <div style="color:#666;font-size:0.85rem;">Days Covered</div>
+            <div id="scraper-days" style="font-weight:600;color:#333;">Loading...</div>
           </div>
-          <div style="background:#2a2a2a;padding:10px;border-radius:6px;">
-            <div style="color:#888;font-size:0.85rem;">First / Last Timestamp</div>
-            <div id="scraper-range" style="font-weight:600;font-size:0.9rem;">Loading...</div>
+          <div style="background:#f5f5f5;padding:10px;border-radius:6px;">
+            <div style="color:#666;font-size:0.85rem;">First / Last Timestamp</div>
+            <div id="scraper-range" style="font-weight:600;font-size:0.9rem;color:#333;">Loading...</div>
           </div>
-          <div style="background:#2a2a2a;padding:10px;border-radius:6px;">
-            <div style="color:#888;font-size:0.85rem;">Approx DB Size</div>
-            <div id="scraper-size" style="font-weight:600;">Loading...</div>
+          <div style="background:#f5f5f5;padding:10px;border-radius:6px;">
+            <div style="color:#666;font-size:0.85rem;">Approx DB Size</div>
+            <div id="scraper-size" style="font-weight:600;color:#333;">Loading...</div>
           </div>
-          <div style="background:#2a2a2a;padding:10px;border-radius:6px;">
-            <div style="color:#888;font-size:0.85rem;">Target Update Interval</div>
-            <div id="scraper-interval" style="font-weight:600;">Loading...</div>
+          <div style="background:#f5f5f5;padding:10px;border-radius:6px;">
+            <div style="color:#666;font-size:0.85rem;">Target Update Interval</div>
+            <div id="scraper-interval" style="font-weight:600;color:#333;">Loading...</div>
           </div>
-          <div style="background:#2a2a2a;padding:10px;border-radius:6px;">
-            <div style="color:#888;font-size:0.85rem;">Status</div>
+          <div style="background:#f5f5f5;padding:10px;border-radius:6px;">
+            <div style="color:#666;font-size:0.85rem;">Status</div>
             <div id="scraper-running" style="font-weight:600;">Unknown</div>
           </div>
         </div>
