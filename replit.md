@@ -23,6 +23,7 @@ The agent features a clear separation of concerns, with modules for configuratio
 - **Selector Heatmap**: 2D parameter sweep visualization showing trade frequency across two threshold metrics. Generates a color-coded heatmap (green = higher pass%) to help identify optimal parameter combinations. Configurable grid axes for metrics like VRP min, ADX max, IV Rank min, etc.
 - **Environment Heatmap**: Selector-free 2D occupancy heatmap showing where the market spends time in the synthetic universe. For any pair of raw metrics (VRP, ADX, RSI, IV Rank, etc.), shows the percentage of decision steps that fell into each bucket. No strategy or selector applied—pure environment analysis for opportunity scouting.
 - **Greg Environment Heatmaps CLI**: Batch script (`scripts/run_greg_environment_heatmaps.py`) that sweeps all metric pairs and finds "sweet spot" regions where the environment spends time AND Greg's selector likes a given strategy. Outputs environment occupancy CSVs, strategy sweet spots JSON, and human-readable Markdown report to `backtest/output/`.
+- **Greg Environment Sweet Spots Panel**: The Backtesting Lab includes a "Greg Environment Sweet Spots" UI panel that displays the latest sweet spots analysis. Shows regions where Greg's strategies pass AND the environment spends time, with occupancy %, pass %, and sweetness scores. Data is loaded from `backtest/output/greg_heatmap_sweetspots.json` via the `GET /api/greg_sweetspots` endpoint.
 - **Training Mode**: Allows for multi-profile data collection to generate diverse datasets for ML/RL, with aggressive policies and configurable per-expiry limits. Exports training data in chain-level and candidate-level formats.
 - **LLM Fine-Tuning Data**: Scripts transform candidate CSVs into chat-style JSONL corpora for LLM fine-tuning, supporting per-candidate classification and per-decision ranking tasks.
 - **Web Dashboard**: A FastAPI application offering "Live Agent" status, "Backtesting Lab" with interactive charts, "Backtest Runs" management, "Calibration" for price comparison, "System Health" with runtime controls, and a "Chat" interface for natural language interaction.
@@ -67,17 +68,19 @@ The "Bots" tab provides a comprehensive view of expert trading bots, their marke
 - `StrategyCriterion` - Single metric check with value, min/max thresholds, and pass/fail status
 - `StrategyEvaluation` - Complete strategy evaluation with bot_name, status, summary, and criteria list
 
-### Greg Mandolini VRP Harvester (GregBot)
+### Greg Mandolini VRP Harvester (GregBot) v6.0 "Diamond-Grade"
 A quantitative volatility risk premium (VRP) strategy selector based on market sensors.
 
 **Phase 1 (Current - Read-Only):**
-- Computes 8 volatility sensors for each underlying
-- Runs 9-rule decision tree to select optimal strategy
+- Computes 11 volatility sensors for each underlying
+- Runs decision tree with calibration variables to select optimal strategy
 - Displays recommendation with pass/blocked/no_data status per strategy
 - No orders placed - purely advisory
 
 **Sensor Mapping (computed from OHLC + real options chain data):**
 - `vrp_30d`: IV - RV spread (computed from ATM options mark_iv)
+- `vrp_7d`: Short-term IV - RV spread (7-day window)
+- `front_rv_iv_ratio`: RV_7d / IV_7d ratio for mean-reversion detection
 - `chop_factor_7d`: RV_7d / IV_30d ratio
 - `iv_rank_6m`: 6-month IV percentile rank (computed from historical IV range)
 - `term_structure_spread`: IV_7d - IV_30d (computed from term structure options)
@@ -85,6 +88,11 @@ A quantitative volatility risk premium (VRP) strategy selector based on market s
 - `adx_14d`: 14-day Average Directional Index (computed from OHLC)
 - `rsi_14d`: 14-day Relative Strength Index (computed from OHLC)
 - `price_vs_ma200`: % distance from 200-day moving average (computed from OHLC)
+- `predicted_funding_rate`: Perpetual funding rate (placeholder for future integration)
+
+**Calibration Variables:**
+- `skew_neutral_threshold`: Threshold for neutral skew detection (default: 0.5)
+- `min_vrp_floor`: Minimum VRP for any positive trade signal (default: 2.0)
 
 **Strategies Evaluated (8 per underlying):**
 1. STRATEGY_A_STRADDLE - ATM Straddle (High VRP, Calm)
