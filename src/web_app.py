@@ -2938,6 +2938,106 @@ def index() -> str:
         </div>
       </div>
     </div>
+    
+    <!-- ENVIRONMENT HEATMAP -->
+    <div class="section" style="margin-top:2rem;">
+      <h2>Environment Heatmap (Synthetic)</h2>
+      <p style="color:#666;margin-bottom:1rem;">
+        Explore where the market actually spends time in the synthetic universe, for any pair of metrics (no selector / strategy applied).
+        This counts opportunities in the environment, not trades or PnL.
+      </p>
+      
+      <div class="card" id="env-heatmap-panel">
+        <div class="form-row" style="flex-wrap:wrap;gap:12px;margin-bottom:12px;">
+          <div class="form-group">
+            <label>Underlying</label>
+            <select id="env-underlying-select">
+              <option value="BTC">BTC</option>
+              <option value="ETH">ETH</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Horizon (days)</label>
+            <input type="number" id="env-horizon-input" value="365" min="1" max="3650" style="width:80px;">
+          </div>
+          <div class="form-group">
+            <label>Decision interval (days)</label>
+            <input type="number" id="env-decision-interval-input" value="1" min="1" max="30" style="width:80px;">
+          </div>
+        </div>
+        
+        <details style="margin-bottom:12px;" open>
+          <summary style="cursor:pointer;font-weight:600;color:#4fc3f7;">Axes & Grids</summary>
+          <div class="form-row" style="flex-wrap:wrap;gap:12px;margin-top:8px;">
+            <div class="form-group">
+              <label>X Metric</label>
+              <select id="env-x-metric-select">
+                <option value="vrp_30d">VRP 30d</option>
+                <option value="adx_14d">ADX 14d</option>
+                <option value="chop_factor_7d">Chop Factor 7d</option>
+                <option value="iv_rank_6m">IV Rank 6m</option>
+                <option value="term_structure_spread">Term Spread</option>
+                <option value="skew_25d">Skew 25d</option>
+                <option value="rsi_14d">RSI 14d</option>
+                <option value="price_vs_ma200">Price vs MA200</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label>X Start</label>
+              <input type="number" id="env-x-start-input" value="0" step="1" style="width:60px;">
+            </div>
+            <div class="form-group">
+              <label>X Step</label>
+              <input type="number" id="env-x-step-input" value="5" step="1" style="width:60px;">
+            </div>
+            <div class="form-group">
+              <label>X Points</label>
+              <input type="number" id="env-x-points-input" value="5" min="2" max="20" style="width:60px;">
+            </div>
+          </div>
+          <div class="form-row" style="flex-wrap:wrap;gap:12px;margin-top:8px;">
+            <div class="form-group">
+              <label>Y Metric</label>
+              <select id="env-y-metric-select">
+                <option value="adx_14d">ADX 14d</option>
+                <option value="vrp_30d">VRP 30d</option>
+                <option value="chop_factor_7d">Chop Factor 7d</option>
+                <option value="iv_rank_6m">IV Rank 6m</option>
+                <option value="term_structure_spread">Term Spread</option>
+                <option value="skew_25d">Skew 25d</option>
+                <option value="rsi_14d">RSI 14d</option>
+                <option value="price_vs_ma200">Price vs MA200</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label>Y Start</label>
+              <input type="number" id="env-y-start-input" value="15" step="1" style="width:60px;">
+            </div>
+            <div class="form-group">
+              <label>Y Step</label>
+              <input type="number" id="env-y-step-input" value="5" step="1" style="width:60px;">
+            </div>
+            <div class="form-group">
+              <label>Y Points</label>
+              <input type="number" id="env-y-points-input" value="5" min="2" max="20" style="width:60px;">
+            </div>
+          </div>
+        </details>
+        
+        <button id="env-heatmap-run-btn" style="background:#00897b;color:#fff;border:none;padding:8px 16px;border-radius:4px;cursor:pointer;">Run Environment Heatmap</button>
+        <div id="env-heatmap-status" aria-live="polite" style="margin-top:8px;font-size:0.9rem;"></div>
+        
+        <div id="env-heatmap-container" style="margin-top:1rem;display:none;">
+          <table id="env-heatmap-table" class="steps-table">
+            <thead id="env-heatmap-thead"></thead>
+            <tbody id="env-heatmap-tbody"></tbody>
+          </table>
+          <p style="font-size:0.85rem;color:#888;margin-top:8px;">
+            Cell value = % of decision steps where environment fell into that bucket. All runs use the synthetic universe.
+          </p>
+        </div>
+      </div>
+    </div>
 
     <div class="loading" id="backtest-loading" style="display:none;">
       <div class="spinner"></div>
@@ -5762,6 +5862,83 @@ def index() -> str:
               const alpha = Math.min(val, 1);
               const bgColor = `rgba(76, 175, 80, ${{alpha.toFixed(2)}})`;
               tr.innerHTML += `<td style="background:${{bgColor}};text-align:center;font-weight:600;color:${{alpha > 0.5 ? '#fff' : '#333'}};">${{pct}}%</td>`;
+            }});
+            tbody.appendChild(tr);
+          }});
+          
+          container.style.display = 'block';
+        }} else {{
+          statusDiv.innerHTML = `<span style="color:#f44336;">Error: ${{data.error}}</span>`;
+        }}
+      }} catch (err) {{
+        statusDiv.innerHTML = `<span style="color:#f44336;">Error: ${{err.message}}</span>`;
+      }}
+    }}
+    
+    // Environment Heatmap
+    document.getElementById('env-heatmap-run-btn').addEventListener('click', runEnvHeatmap);
+    
+    async function runEnvHeatmap() {{
+      const statusDiv = document.getElementById('env-heatmap-status');
+      const container = document.getElementById('env-heatmap-container');
+      const thead = document.getElementById('env-heatmap-thead');
+      const tbody = document.getElementById('env-heatmap-tbody');
+      
+      statusDiv.innerHTML = '<span style="color:#26a69a;">Running environment heatmap...</span>';
+      container.style.display = 'none';
+      
+      const xMetric = document.getElementById('env-x-metric-select').value;
+      const yMetric = document.getElementById('env-y-metric-select').value;
+      const xStart = parseFloat(document.getElementById('env-x-start-input').value) || 0;
+      const xStep = parseFloat(document.getElementById('env-x-step-input').value) || 5;
+      const xPoints = parseInt(document.getElementById('env-x-points-input').value) || 5;
+      const yStart = parseFloat(document.getElementById('env-y-start-input').value) || 15;
+      const yStep = parseFloat(document.getElementById('env-y-step-input').value) || 5;
+      const yPoints = parseInt(document.getElementById('env-y-points-input').value) || 5;
+      
+      const payload = {{
+        underlying: document.getElementById('env-underlying-select').value,
+        horizon_days: parseInt(document.getElementById('env-horizon-input').value) || 365,
+        decision_interval_days: parseInt(document.getElementById('env-decision-interval-input').value) || 1,
+        x_metric: xMetric,
+        y_metric: yMetric,
+        x_start: xStart,
+        x_step: xStep,
+        x_points: xPoints,
+        y_start: yStart,
+        y_step: yStep,
+        y_points: yPoints,
+      }};
+      
+      try {{
+        const res = await fetch('/api/environment_heatmap', {{
+          method: 'POST',
+          headers: {{ 'Content-Type': 'application/json' }},
+          body: JSON.stringify(payload)
+        }});
+        const data = await res.json();
+        
+        if (data.ok) {{
+          statusDiv.innerHTML = '<span style="color:#4caf50;">Heatmap complete. Cell value = % of decision steps (occupancy).</span>';
+          
+          // Build header row
+          const headerRow = document.createElement('tr');
+          headerRow.innerHTML = `<th>${{yMetric}} \\ ${{xMetric}}</th>`;
+          data.x_labels.forEach(xVal => {{
+            headerRow.innerHTML += `<th>${{xVal}}</th>`;
+          }});
+          thead.innerHTML = '';
+          thead.appendChild(headerRow);
+          
+          // Build data rows
+          tbody.innerHTML = '';
+          data.grid.forEach((row, yIdx) => {{
+            const tr = document.createElement('tr');
+            tr.innerHTML = `<th>${{data.y_labels[yIdx]}}</th>`;
+            row.forEach(val => {{
+              const alpha = Math.min(val / 100, 1);
+              const bgColor = `rgba(76, 175, 80, ${{alpha.toFixed(2)}})`;
+              tr.innerHTML += `<td style="background:${{bgColor}};text-align:center;font-weight:600;color:${{alpha > 0.5 ? '#fff' : '#333'}};">${{val}}%</td>`;
             }});
             tbody.appendChild(tr);
           }});
