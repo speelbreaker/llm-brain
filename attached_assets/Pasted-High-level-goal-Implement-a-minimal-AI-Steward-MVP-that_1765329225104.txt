@@ -1,0 +1,395 @@
+High-level goal
+
+Implement a minimal “AI Steward” MVP that:
+
+Reads our project meta-docs (ROADMAP.md, ROADMAP_BACKLOG.md, UI_FEATURE_GAPS.md, HEALTHCHECK.md, replit.md).
+
+Optionally uses the existing OpenAI/Replit integration to summarize them and propose next actions.
+
+Exposes this via:
+
+New backend module src/system_steward.py.
+
+Two FastAPI endpoints: POST /api/steward/run, GET /api/steward/report.
+
+A new “AI Steward (Project Brain)” panel on the web dashboard so I can click a button and see the report.
+
+Never interacts with Deribit or trading; this is purely a project planning / QA helper.
+
+The operator is non-technical: they must be able to verify this from the web UI only.
+
+Task 1 – Backend module: src/system_steward.py
+
+Create a new module src/system_steward.py with:
+
+Imports:
+
+from __future__ import annotations
+
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Dict, List
+
+import json
+
+from pydantic import BaseModel, Field
+
+from src.config import settings
+from src.agent_brain_llm import _get_openai_client  # reuse existing OpenAI client helper
+
+
+Helper to load text snippets from the repo root:
+
+def _load_file_snippet(rel_path: str, max_chars: int = 4000) -> str:
+    """
+    Load up to max_chars from a text file relative to the project root.
+    Returns "" if the file does not exist or cannot be read.
+    """
+    try:
+        root = Path(__file__).resolve().parent.parent
+        path = root / rel_path
+        if not path.exists():
+            return ""
+        text = path.read_text(encoding="utf-8", errors="ignore")
+        return text[:max_chars]
+    except Exception:
+        return ""
+
+
+Pydantic models:
+
+class StewardItem(BaseModel):
+    id: str = Field(..., description="Short identifier, e.g. 'P1-ui-bots-status-badges'")
+    area: str = Field(..., description="Area of the project, e.g. 'UI / Bots', 'Backtesting', 'Healthcheck'")
+    priority: str = Field(..., description="Priority label like P0/P1/P2/info")
+    reason: str = Field(..., description="Why this item matters now")
+    suggested_change: str = Field(..., description="One-sentence description of the concrete change")
+
+class StewardReport(BaseModel):
+    ok: bool = True
+    generated_at: str
+    llm_used: bool = False
+    summary: str
+    top_items: List[StewardItem] = Field(default_factory=list)
+    builder_prompt: str = ""
+
+
+In-memory cache for the last report:
+
+_last_report: StewardReport | None = None
+
+def get_last_report() -> StewardReport | None:
+    return _last_report
+
+
+Main generator function:
+
+def generate_steward_report() -> StewardReport:
+    """
+    Build a StewardReport by reading project meta-docs and (if possible)
+    calling the OpenAI client with a strict JSON schema.
+
+    If LLM access is unavailable, returns a fallback report without raising.
+    """
+    global _last_report
+
+    now = datetime.now(timezone.utc).isoformat()
+
+    corpus: Dict[str, str] = {
+        "roadmap": _load_file_snippet("ROADMAP.md"),
+        "backlog": _load_file_snippet("ROADMAP_BACKLOG.md"),
+        "ui_gaps": _load_file_snippet("UI_FEATURE_GAPS.md"),
+        "healthcheck": _load_file_snippet("HEALTHCHECK.md"),
+        "replit": _load_file_snippet("replit.md"),
+    }
+
+    # Default fallback report
+    fallback = StewardReport(
+        ok=True,
+        generated_at=now,
+        llm_used=False,
+        summary=(
+            "AI Steward fallback report – LLM not configured or failed. "
+            "Docs were loaded, but no AI summary is available."
+        ),
+        top_items=[],
+        builder_prompt=(
+            "LLM not available inside the app. Configure Replit/OpenAI integrations "
+            "and re-run the steward to get AI-generated next steps."
+        ),
+    )
+
+    # Try to use the existing OpenAI integration
+    try:
+        client = _get_openai_client()
+
+        system_prompt = (
+            "You are an AI 'project steward' for an options-trading bot repo. "
+            "You see a subset of the ROADMAP, ROADMAP_BACKLOG, UI_FEATURE_GAPS, "
+            "HEALTHCHECK, and replit.md. "
+            "Your job is to:\n"
+            "1) Summarize the current state in 2-4 sentences.\n"
+            "2) Identify the next 3-5 concrete tasks that are both important and actionable.\n"
+            "3) Prepare a short builder prompt that the user can paste into another AI "
+            "   (the 'AI Builder') to implement those tasks.\n\n"
+            "Respond ONLY with JSON matching this schema:\n"
+            "{\n"
+            '  \"summary\": \"short paragraph\",\n'
+            '  \"top_items\": [\n'
+            "    {\n"
+            '      \"id\": \"short-id\",\n'
+            '      \"area\": \"area of the project\",\n'
+            '      \"priority\": \"P0|P1|P2|info\",\n'
+            '      \"reason\": \"why this matters now\",\n'
+            '      \"suggested_change\": \"one-sentence change description\"\n'
+            "    }\n"
+            "  ],\n"
+            '  \"builder_prompt\": \"prompt text for the AI builder\"\n'
+            "}\n"
+            "Do not add any extra fields."
+        )
+
+        user_payload = {
+            "settings": {
+                "mode": settings.mode,
+                "deribit_env": getattr(settings, "deribit_env", "testnet"),
+            },
+            "corpus": corpus,
+        }
+
+        response = client.chat.completions.create(
+            model=settings.llm_model_name,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": json.dumps(user_payload)},
+            ],
+            response_format={"type": "json_object"},
+            max_completion_tokens=1024,
+        )
+
+        content = response.choices[0].message.content or "{}"
+        raw = json.loads(content)
+
+        summary = raw.get("summary", fallback.summary)
+        items_raw = raw.get("top_items") or []
+        builder_prompt = raw.get("builder_prompt", fallback.builder_prompt)
+
+        items: List[StewardItem] = []
+        for item in items_raw:
+            try:
+                items.append(
+                    StewardItem(
+                        id=str(item.get("id", "")) or "unnamed",
+                        area=str(item.get("area", "unspecified")),
+                        priority=str(item.get("priority", "info")),
+                        reason=str(item.get("reason", "")),
+                        suggested_change=str(item.get("suggested_change", "")),
+                    )
+                )
+            except Exception:
+                continue
+
+        report = StewardReport(
+            ok=True,
+            generated_at=now,
+            llm_used=True,
+            summary=summary,
+            top_items=items,
+            builder_prompt=builder_prompt,
+        )
+    except Exception:
+        report = fallback
+
+    _last_report = report
+    return report
+
+Task 2 – API endpoints in src/web_app.py
+
+In src/web_app.py:
+
+Near the other Pydantic models / API request models, add:
+
+class StewardRunResponse(BaseModel):
+    ok: bool
+    generated_at: str
+    llm_used: bool
+    summary: str
+    top_items: List[Dict[str, Any]]
+    builder_prompt: str
+
+
+(Or just use plain dicts; tests will validate fields.)
+
+Import the steward helpers:
+
+from src.system_steward import generate_steward_report, get_last_report
+
+
+Add two endpoints under the “System Controls & Health” API section (near /api/agent_healthcheck):
+
+@app.post("/api/steward/run")
+def run_steward() -> JSONResponse:
+    """
+    Run the AI Steward once and return a fresh report.
+    Never touches Deribit or executes trades.
+    """
+    try:
+        report = generate_steward_report()
+        return JSONResponse(content=report.model_dump())
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={"ok": False, "error": f"steward_failed: {e}"},
+        )
+
+@app.get("/api/steward/report")
+def get_steward_report() -> JSONResponse:
+    """
+    Return the last steward report, or a stub if it has not been run yet.
+    """
+    try:
+        report = get_last_report()
+        if report is None:
+            return JSONResponse(
+                content={
+                    "ok": True,
+                    "generated_at": None,
+                    "llm_used": False,
+                    "summary": "Steward has not been run yet.",
+                    "top_items": [],
+                    "builder_prompt": "",
+                }
+            )
+        return JSONResponse(content=report.model_dump())
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={"ok": False, "error": f"steward_failed: {e}"},
+        )
+
+Task 3 – UI: “AI Steward (Project Brain)” panel
+
+In the HTML returned by index() in src/web_app.py:
+
+Under the “## System Controls & Health” section, after the Agent Healthcheck block, add a new subsection (keep styling consistent with existing markup):
+
+### AI Steward (Project Brain)
+
+Use the AI Steward to scan ROADMAP, BACKLOG, UI gaps, and healthcheck docs, and suggest the next tasks.
+
+<div id="steward-panel">
+  <p><strong>Last run:</strong> <span id="steward-last-run">Never</span></p>
+
+  <button id="steward-run-btn">Run Steward Check</button>
+
+  <div id="steward-status" aria-live="polite"></div>
+
+  <h4>Summary</h4>
+  <p id="steward-summary">No report yet.</p>
+
+  <h4>Top Suggestions</h4>
+  <ol id="steward-top-items"></ol>
+
+  <h4>Builder Prompt (copy & paste)</h4>
+  <textarea id="steward-builder-prompt" rows="8" style="width: 100%;"></textarea>
+</div>
+
+
+Do not remove existing System Controls elements.
+
+In the existing <script> block at the bottom of index() (where other dashboard JS lives), extend it with vanilla JS:
+
+document.addEventListener("DOMContentLoaded", () => {
+  const lastRunEl = document.getElementById("steward-last-run");
+  const statusEl = document.getElementById("steward-status");
+  const summaryEl = document.getElementById("steward-summary");
+  const listEl = document.getElementById("steward-top-items");
+  const promptEl = document.getElementById("steward-builder-prompt");
+  const runBtn = document.getElementById("steward-run-btn");
+
+  if (!runBtn) {
+    return;
+  }
+
+  function renderReport(data) {
+    if (!data || data.ok === false) {
+      statusEl.textContent = data && data.error
+        ? `Error: ${data.error}`
+        : "Error: failed to load Steward report.";
+      statusEl.style.color = "red";
+      return;
+    }
+
+    statusEl.textContent = data.llm_used
+      ? "Steward report generated (LLM used)."
+      : "Steward report generated (fallback, no LLM).";
+    statusEl.style.color = "";
+
+    lastRunEl.textContent = data.generated_at || "Never";
+    summaryEl.textContent = data.summary || "";
+
+    listEl.innerHTML = "";
+    (data.top_items || []).forEach((item) => {
+      const li = document.createElement("li");
+      li.textContent = `[${item.priority}] ${item.area} – ${item.suggested_change}`;
+      listEl.appendChild(li);
+    });
+
+    promptEl.value = data.builder_prompt || "";
+  }
+
+  // Initial load
+  fetch("/api/steward/report")
+    .then((r) => r.json())
+    .then(renderReport)
+    .catch(() => {
+      // Silent fail on first load
+    });
+
+  runBtn.addEventListener("click", () => {
+    statusEl.textContent = "Running Steward check...";
+    statusEl.style.color = "";
+
+    fetch("/api/steward/run", { method: "POST" })
+      .then((r) => r.json())
+      .then(renderReport)
+      .catch((err) => {
+        statusEl.textContent = `Error running Steward: ${err}`;
+        statusEl.style.color = "red";
+      });
+  });
+});
+
+
+This gives the operator a visible, interactive panel: they click “Run Steward Check” and immediately see a summary, top items, and a pre-built AI-builder prompt they can copy.
+
+Task 4 – Tests
+
+Create tests/test_steward_api.py with lightweight tests:
+
+from fastapi.testclient import TestClient
+from src.web_app import app
+
+client = TestClient(app)
+
+
+def test_steward_run_endpoint():
+    resp = client.post("/api/steward/run")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "ok" in data
+    assert "summary" in data
+    assert "top_items" in data
+    assert "builder_prompt" in data
+
+
+def test_steward_report_endpoint_after_run():
+    client.post("/api/steward/run")
+    resp = client.get("/api/steward/report")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "summary" in data
+    assert "top_items" in data
+
+
+No external APIs or Deribit calls should be triggered in these tests. The steward must degrade gracefully to the fallback report if LLM configuration is missing.

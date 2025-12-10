@@ -1488,6 +1488,50 @@ def run_healthcheck_endpoint() -> JSONResponse:
         return JSONResponse(content={"ok": False, "error": str(e)})
 
 
+@app.post("/api/steward/run")
+def run_steward() -> JSONResponse:
+    """
+    Run the AI Steward once and return a fresh report.
+    Never touches Deribit or executes trades.
+    """
+    try:
+        from src.system_steward import generate_steward_report
+        report = generate_steward_report()
+        return JSONResponse(content=report.model_dump())
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={"ok": False, "error": f"steward_failed: {e}"},
+        )
+
+
+@app.get("/api/steward/report")
+def get_steward_report() -> JSONResponse:
+    """
+    Return the last steward report, or a stub if it has not been run yet.
+    """
+    try:
+        from src.system_steward import get_last_report
+        report = get_last_report()
+        if report is None:
+            return JSONResponse(
+                content={
+                    "ok": True,
+                    "generated_at": None,
+                    "llm_used": False,
+                    "summary": "Steward has not been run yet.",
+                    "top_items": [],
+                    "builder_prompt": "",
+                }
+            )
+        return JSONResponse(content=report.model_dump())
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={"ok": False, "error": f"steward_failed: {e}"},
+        )
+
+
 class RuntimeConfigUpdate(BaseModel):
     """Request model for updating runtime configuration."""
     kill_switch_enabled: Optional[bool] = None
@@ -3135,6 +3179,38 @@ def index() -> str:
         
       </div>
       
+      <!-- AI Steward (Project Brain) Section -->
+      <div style="margin-top: 2rem;">
+        <h2 style="margin-bottom: 0.5rem;">AI Steward (Project Brain)</h2>
+        <p style="color: #666; margin-bottom: 1.5rem;">Use the AI Steward to scan ROADMAP, BACKLOG, UI gaps, and healthcheck docs, and suggest the next tasks.</p>
+        
+        <div id="steward-panel" style="background: #e8f5e9; padding: 1.5rem; border-radius: 8px; border-left: 4px solid #43a047;">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+            <div>
+              <strong>Last run:</strong> <span id="steward-last-run" style="color: #666;">Never</span>
+            </div>
+            <button id="steward-run-btn" onclick="runStewardCheck()" style="padding: 0.5rem 1rem;">Run Steward Check</button>
+          </div>
+          
+          <div id="steward-status" aria-live="polite" style="font-size: 0.85rem; min-height: 1.5rem; margin-bottom: 1rem;"></div>
+          
+          <div style="background: white; padding: 1rem; border-radius: 6px; margin-bottom: 1rem;">
+            <h4 style="margin: 0 0 0.5rem 0; color: #333;">Summary</h4>
+            <p id="steward-summary" style="margin: 0; color: #666; font-size: 0.9rem;">No report yet.</p>
+          </div>
+          
+          <div style="background: white; padding: 1rem; border-radius: 6px; margin-bottom: 1rem;">
+            <h4 style="margin: 0 0 0.5rem 0; color: #333;">Top Suggestions</h4>
+            <ol id="steward-top-items" style="margin: 0; padding-left: 1.5rem; color: #666; font-size: 0.9rem;"></ol>
+          </div>
+          
+          <div style="background: white; padding: 1rem; border-radius: 6px;">
+            <h4 style="margin: 0 0 0.5rem 0; color: #333;">Builder Prompt (copy & paste)</h4>
+            <textarea id="steward-builder-prompt" rows="6" style="width: 100%; font-size: 0.85rem; font-family: monospace; border: 1px solid #ddd; border-radius: 4px; padding: 0.5rem; resize: vertical;"></textarea>
+          </div>
+        </div>
+      </div>
+      
       <!-- Runtime Controls Section -->
       <div style="margin-top: 2rem;">
         <h2 style="margin-bottom: 0.5rem;">Runtime Controls</h2>
@@ -4287,6 +4363,68 @@ def index() -> str:
       }} catch (e) {{
         el.innerHTML = `<span style="color: #c62828;">❌ Request error: ${{e.message}}</span>`;
         statusEl.textContent = 'Last check: ERROR';
+      }}
+    }}
+    
+    function renderStewardReport(data) {{
+      const lastRunEl = document.getElementById('steward-last-run');
+      const statusEl = document.getElementById('steward-status');
+      const summaryEl = document.getElementById('steward-summary');
+      const listEl = document.getElementById('steward-top-items');
+      const promptEl = document.getElementById('steward-builder-prompt');
+      
+      if (!data || data.ok === false) {{
+        statusEl.textContent = data && data.error ? `Error: ${{data.error}}` : 'Error: failed to load Steward report.';
+        statusEl.style.color = '#c62828';
+        return;
+      }}
+      
+      statusEl.textContent = data.llm_used ? 'Steward report generated (LLM used).' : 'Steward report generated (fallback, no LLM).';
+      statusEl.style.color = data.llm_used ? '#2e7d32' : '#ff9800';
+      
+      lastRunEl.textContent = data.generated_at || 'Never';
+      summaryEl.textContent = data.summary || '';
+      
+      listEl.innerHTML = '';
+      (data.top_items || []).forEach((item) => {{
+        const li = document.createElement('li');
+        li.innerHTML = `<strong>[${{item.priority}}]</strong> <span style="color: #1565c0;">${{item.area}}</span> – ${{item.suggested_change}}`;
+        li.style.marginBottom = '0.5rem';
+        listEl.appendChild(li);
+      }});
+      
+      if ((data.top_items || []).length === 0) {{
+        const li = document.createElement('li');
+        li.textContent = 'No suggestions available.';
+        li.style.color = '#999';
+        listEl.appendChild(li);
+      }}
+      
+      promptEl.value = data.builder_prompt || '';
+    }}
+    
+    async function runStewardCheck() {{
+      const statusEl = document.getElementById('steward-status');
+      statusEl.textContent = 'Running Steward check...';
+      statusEl.style.color = '#666';
+      
+      try {{
+        const res = await fetch('/api/steward/run', {{ method: 'POST' }});
+        const data = await res.json();
+        renderStewardReport(data);
+      }} catch (err) {{
+        statusEl.textContent = `Error running Steward: ${{err.message}}`;
+        statusEl.style.color = '#c62828';
+      }}
+    }}
+    
+    async function loadStewardReport() {{
+      try {{
+        const res = await fetch('/api/steward/report');
+        const data = await res.json();
+        renderStewardReport(data);
+      }} catch (err) {{
+        // Silent fail on initial load
       }}
     }}
     
@@ -5622,6 +5760,7 @@ def index() -> str:
     fetchStatus();
     fetchDecisions();
     refreshBacktestStatus();
+    loadStewardReport();
     setInterval(fetchStatus, 5000);
     setInterval(fetchDecisions, 10000);
     setInterval(refreshBacktestStatus, 3000);
