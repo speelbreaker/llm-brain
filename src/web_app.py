@@ -775,6 +775,101 @@ def delete_backtest_run(run_id: str) -> JSONResponse:
 
 
 # =============================================================================
+# SELECTOR SCAN & HEATMAP ENDPOINTS (BACKTESTING)
+# =============================================================================
+
+class SelectorScanRequest(BaseModel):
+    """Request model for selector frequency scan."""
+    selector_id: str = "greg"
+    underlyings: List[str] = Field(default=["BTC", "ETH"])
+    num_paths: int = 1
+    horizon_days: int = 365
+    decision_interval_days: float = 1.0
+    threshold_overrides: Dict[str, float] = Field(default_factory=dict)
+
+
+@app.post("/api/backtest/selector_scan")
+def selector_scan(req: SelectorScanRequest) -> JSONResponse:
+    """
+    Run a selector frequency scan in the synthetic universe and return summary.
+    Backtest-only; no orders, no Deribit calls.
+    """
+    from src.backtest.selector_scan import SelectorScanConfig, run_selector_scan
+    
+    try:
+        config = SelectorScanConfig(
+            selector_id=req.selector_id,
+            underlyings=req.underlyings,
+            num_paths=req.num_paths,
+            horizon_days=req.horizon_days,
+            decision_interval_days=req.decision_interval_days,
+            threshold_overrides=req.threshold_overrides,
+        )
+        result = run_selector_scan(config)
+        return JSONResponse(
+            content={
+                "ok": True,
+                "summary": result.summary,
+                "total_steps": result.total_steps,
+            }
+        )
+    except Exception as e:
+        return JSONResponse(content={"ok": False, "error": str(e)})
+
+
+class SelectorHeatmapRequest(BaseModel):
+    """Request model for selector heatmap scan."""
+    selector_id: str = "greg"
+    underlying: str = "BTC"
+    strategy_key: str = "STRATEGY_A_STRADDLE"
+    metric_x: str = "vrp_30d_min"
+    metric_y: str = "adx_14d_max"
+    grid_x: List[float] = Field(default_factory=list)
+    grid_y: List[float] = Field(default_factory=list)
+    horizon_days: int = 365
+    decision_interval_days: float = 1.0
+    num_paths: int = 1
+    base_threshold_overrides: Dict[str, float] = Field(default_factory=dict)
+
+
+@app.post("/api/backtest/selector_heatmap")
+def selector_heatmap(req: SelectorHeatmapRequest) -> JSONResponse:
+    """
+    Run a selector heatmap in the synthetic universe.
+    Backtest-only; no orders or Deribit API calls.
+    """
+    from src.backtest.selector_scan import SelectorHeatmapConfig, run_selector_heatmap
+    
+    try:
+        cfg = SelectorHeatmapConfig(
+            selector_id=req.selector_id,
+            underlying=req.underlying,
+            strategy_key=req.strategy_key,
+            metric_x=req.metric_x,
+            metric_y=req.metric_y,
+            grid_x=req.grid_x,
+            grid_y=req.grid_y,
+            horizon_days=req.horizon_days,
+            decision_interval_days=req.decision_interval_days,
+            num_paths=req.num_paths,
+            base_threshold_overrides=req.base_threshold_overrides,
+        )
+        result = run_selector_heatmap(cfg)
+        return JSONResponse(
+            content={
+                "ok": True,
+                "metric_x": result.metric_x,
+                "metric_y": result.metric_y,
+                "grid_x": result.grid_x,
+                "grid_y": result.grid_y,
+                "values": result.values,
+            }
+        )
+    except Exception as e:
+        return JSONResponse(content={"ok": False, "error": str(e)})
+
+
+# =============================================================================
 # SYSTEM CONTROLS & HEALTH API ENDPOINTS
 # =============================================================================
 
@@ -2507,6 +2602,202 @@ def index() -> str:
         <button class="secondary" onclick="getInsights()">Get AI Insights</button>
       </div>
       <div class="insights-box" id="insights-box" style="display:none;"></div>
+    </div>
+    
+    <!-- SELECTOR FREQUENCY SCAN -->
+    <div class="section" style="margin-top:2rem;">
+      <h2>Selector Frequency Scan (Synthetic)</h2>
+      <p style="color:#666;margin-bottom:1rem;">
+        Analyze how often a selector's rules (e.g. GregBot Phase 1) would allow trading in a synthetic universe.
+        Threshold overrides are backtest-only and do not affect the live bot.
+      </p>
+      
+      <div class="card" id="selector-scan-panel">
+        <div class="form-row" style="flex-wrap:wrap;gap:12px;margin-bottom:12px;">
+          <div class="form-group">
+            <label>Selector</label>
+            <select id="selector-id-select">
+              <option value="greg">GregBot – VRP Harvester</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Underlyings</label>
+            <div style="display:flex;gap:12px;">
+              <label style="font-weight:normal;"><input type="checkbox" id="selector-underlying-btc" checked> BTC</label>
+              <label style="font-weight:normal;"><input type="checkbox" id="selector-underlying-eth" checked> ETH</label>
+            </div>
+          </div>
+          <div class="form-group">
+            <label>Horizon (days)</label>
+            <input type="number" id="selector-horizon-input" value="365" style="width:80px;">
+          </div>
+          <div class="form-group">
+            <label>Decision interval (days)</label>
+            <input type="number" id="selector-interval-input" value="1" step="0.25" style="width:80px;">
+          </div>
+        </div>
+        
+        <details style="margin-bottom:12px;">
+          <summary style="cursor:pointer;font-weight:600;color:#4fc3f7;">Threshold Overrides (optional)</summary>
+          <p style="color:#888;font-size:0.9rem;margin:8px 0;">Overrides apply only to this scan; they do not affect live trading.</p>
+          <div class="form-row" style="flex-wrap:wrap;gap:12px;">
+            <div class="form-group">
+              <label>Min VRP 30d</label>
+              <input type="number" id="selector-vrp-min-input" step="0.5" placeholder="default" style="width:80px;">
+            </div>
+            <div class="form-group">
+              <label>Max Chop Factor 7d</label>
+              <input type="number" id="selector-chop-max-input" step="0.05" placeholder="default" style="width:80px;">
+            </div>
+            <div class="form-group">
+              <label>Max ADX 14d</label>
+              <input type="number" id="selector-adx-max-input" step="1" placeholder="default" style="width:80px;">
+            </div>
+            <div class="form-group">
+              <label>Min RSI 14d</label>
+              <input type="number" id="selector-rsi-min-input" step="1" placeholder="default" style="width:80px;">
+            </div>
+            <div class="form-group">
+              <label>Max RSI 14d</label>
+              <input type="number" id="selector-rsi-max-input" step="1" placeholder="default" style="width:80px;">
+            </div>
+            <div class="form-group">
+              <label>Min IV Rank 6m</label>
+              <input type="number" id="selector-ivrank-min-input" step="0.05" placeholder="default" style="width:80px;">
+            </div>
+          </div>
+        </details>
+        
+        <button id="selector-scan-run-btn" style="background:#2196f3;color:#fff;border:none;padding:8px 16px;border-radius:4px;cursor:pointer;">Run Selector Scan</button>
+        <div id="selector-scan-status" aria-live="polite" style="margin-top:8px;font-size:0.9rem;"></div>
+        
+        <table id="selector-scan-results-table" class="steps-table" style="margin-top:1rem;display:none;">
+          <thead>
+            <tr>
+              <th>Strategy</th>
+              <th>Underlying</th>
+              <th>Pass Count</th>
+              <th>Total Steps</th>
+              <th>Pass %</th>
+            </tr>
+          </thead>
+          <tbody id="selector-scan-results-body"></tbody>
+        </table>
+      </div>
+    </div>
+    
+    <!-- SELECTOR HEATMAP -->
+    <div class="section" style="margin-top:2rem;">
+      <h2>Selector Heatmap (Synthetic)</h2>
+      <p style="color:#666;margin-bottom:1rem;">
+        Explore how strictness of two threshold metrics affects trade frequency in the synthetic universe.
+        Choose a strategy, two metrics to sweep, and generate a 2D pass% heatmap.
+      </p>
+      
+      <div class="card" id="selector-heatmap-panel">
+        <div class="form-row" style="flex-wrap:wrap;gap:12px;margin-bottom:12px;">
+          <div class="form-group">
+            <label>Selector</label>
+            <select id="heatmap-selector-id-select">
+              <option value="greg">GregBot – VRP Harvester</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Underlying</label>
+            <select id="heatmap-underlying-select">
+              <option value="BTC">BTC</option>
+              <option value="ETH">ETH</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Strategy</label>
+            <select id="heatmap-strategy-select">
+              <option value="STRATEGY_A_STRADDLE">ATM Straddle</option>
+              <option value="STRATEGY_A_STRANGLE">OTM Strangle</option>
+              <option value="STRATEGY_B_CALENDAR">Calendar Spread</option>
+              <option value="STRATEGY_C_SHORT_PUT">Short Put</option>
+              <option value="STRATEGY_D_IRON_BUTTERFLY">Iron Butterfly</option>
+              <option value="STRATEGY_F_BULL_PUT_SPREAD">Bull Put Spread</option>
+              <option value="STRATEGY_F_BEAR_CALL_SPREAD">Bear Call Spread</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Horizon (days)</label>
+            <input type="number" id="heatmap-horizon-input" value="180" style="width:80px;">
+          </div>
+          <div class="form-group">
+            <label>Decision interval</label>
+            <input type="number" id="heatmap-interval-input" value="1" step="0.25" style="width:80px;">
+          </div>
+        </div>
+        
+        <details style="margin-bottom:12px;" open>
+          <summary style="cursor:pointer;font-weight:600;color:#4fc3f7;">Axes & Grids</summary>
+          <div class="form-row" style="flex-wrap:wrap;gap:12px;margin-top:8px;">
+            <div class="form-group">
+              <label>X Metric</label>
+              <select id="heatmap-metric-x-select">
+                <option value="vrp_30d_min">Min VRP 30d</option>
+                <option value="adx_14d_max">Max ADX 14d</option>
+                <option value="chop_factor_7d_max">Max Chop Factor 7d</option>
+                <option value="rsi_14d_min">Min RSI 14d</option>
+                <option value="rsi_14d_max">Max RSI 14d</option>
+                <option value="iv_rank_6m_min">Min IV Rank 6m</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label>X Start</label>
+              <input type="number" id="heatmap-x-start-input" value="5" step="1" style="width:60px;">
+            </div>
+            <div class="form-group">
+              <label>X Step</label>
+              <input type="number" id="heatmap-x-step-input" value="5" step="1" style="width:60px;">
+            </div>
+            <div class="form-group">
+              <label>X Points</label>
+              <input type="number" id="heatmap-x-count-input" value="5" style="width:60px;">
+            </div>
+          </div>
+          <div class="form-row" style="flex-wrap:wrap;gap:12px;margin-top:8px;">
+            <div class="form-group">
+              <label>Y Metric</label>
+              <select id="heatmap-metric-y-select">
+                <option value="adx_14d_max">Max ADX 14d</option>
+                <option value="vrp_30d_min">Min VRP 30d</option>
+                <option value="chop_factor_7d_max">Max Chop Factor 7d</option>
+                <option value="rsi_14d_min">Min RSI 14d</option>
+                <option value="rsi_14d_max">Max RSI 14d</option>
+                <option value="iv_rank_6m_min">Min IV Rank 6m</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label>Y Start</label>
+              <input type="number" id="heatmap-y-start-input" value="15" step="1" style="width:60px;">
+            </div>
+            <div class="form-group">
+              <label>Y Step</label>
+              <input type="number" id="heatmap-y-step-input" value="5" step="1" style="width:60px;">
+            </div>
+            <div class="form-group">
+              <label>Y Points</label>
+              <input type="number" id="heatmap-y-count-input" value="5" style="width:60px;">
+            </div>
+          </div>
+        </details>
+        
+        <button id="selector-heatmap-run-btn" style="background:#9c27b0;color:#fff;border:none;padding:8px 16px;border-radius:4px;cursor:pointer;">Run Heatmap</button>
+        <div id="selector-heatmap-status" aria-live="polite" style="margin-top:8px;font-size:0.9rem;"></div>
+        
+        <div id="selector-heatmap-container" style="margin-top:1rem;display:none;">
+          <table id="selector-heatmap-table" class="steps-table">
+            <thead id="selector-heatmap-thead"></thead>
+            <tbody id="selector-heatmap-tbody"></tbody>
+          </table>
+          <p style="font-size:0.85rem;color:#888;margin-top:8px;">
+            Cell color reflects pass% (darker green = more frequent). All runs use the synthetic universe (backtest-only).
+          </p>
+        </div>
+      </div>
     </div>
 
     <div class="loading" id="backtest-loading" style="display:none;">
@@ -5025,6 +5316,160 @@ def index() -> str:
         
       }} catch (err) {{
         box.innerText = 'Error generating insights: ' + err.message;
+      }}
+    }}
+    
+    // Selector Frequency Scan
+    document.getElementById('selector-scan-run-btn').addEventListener('click', runSelectorScan);
+    
+    async function runSelectorScan() {{
+      const statusDiv = document.getElementById('selector-scan-status');
+      const tableDiv = document.getElementById('selector-scan-results-table');
+      const tbody = document.getElementById('selector-scan-results-body');
+      
+      statusDiv.innerHTML = '<span style="color:#4fc3f7;">Running scan...</span>';
+      tableDiv.style.display = 'none';
+      
+      const underlyings = [];
+      if (document.getElementById('selector-underlying-btc').checked) underlyings.push('BTC');
+      if (document.getElementById('selector-underlying-eth').checked) underlyings.push('ETH');
+      
+      const thresholdOverrides = {{}};
+      const vrpMin = document.getElementById('selector-vrp-min-input').value;
+      const chopMax = document.getElementById('selector-chop-max-input').value;
+      const adxMax = document.getElementById('selector-adx-max-input').value;
+      const rsiMin = document.getElementById('selector-rsi-min-input').value;
+      const rsiMax = document.getElementById('selector-rsi-max-input').value;
+      const ivrankMin = document.getElementById('selector-ivrank-min-input').value;
+      
+      if (vrpMin !== '') thresholdOverrides['vrp_30d_min'] = parseFloat(vrpMin);
+      if (chopMax !== '') thresholdOverrides['chop_factor_7d_max'] = parseFloat(chopMax);
+      if (adxMax !== '') thresholdOverrides['adx_14d_max'] = parseFloat(adxMax);
+      if (rsiMin !== '') thresholdOverrides['rsi_14d_min'] = parseFloat(rsiMin);
+      if (rsiMax !== '') thresholdOverrides['rsi_14d_max'] = parseFloat(rsiMax);
+      if (ivrankMin !== '') thresholdOverrides['iv_rank_6m_min'] = parseFloat(ivrankMin);
+      
+      const payload = {{
+        selector_id: document.getElementById('selector-id-select').value,
+        underlyings: underlyings,
+        horizon_days: parseInt(document.getElementById('selector-horizon-input').value) || 365,
+        decision_interval_days: parseFloat(document.getElementById('selector-interval-input').value) || 1.0,
+        threshold_overrides: thresholdOverrides,
+      }};
+      
+      try {{
+        const res = await fetch('/api/backtest/selector_scan', {{
+          method: 'POST',
+          headers: {{ 'Content-Type': 'application/json' }},
+          body: JSON.stringify(payload)
+        }});
+        const data = await res.json();
+        
+        if (data.ok) {{
+          statusDiv.innerHTML = '<span style="color:#4caf50;">Scan complete</span>';
+          
+          tbody.innerHTML = '';
+          for (const [underlying, strategies] of Object.entries(data.summary)) {{
+            for (const [strategyKey, stats] of Object.entries(strategies)) {{
+              const row = document.createElement('tr');
+              const passPct = (stats.pass_pct * 100).toFixed(1);
+              row.innerHTML = `
+                <td>${{strategyKey}}</td>
+                <td>${{underlying}}</td>
+                <td>${{Math.round(stats.pass_count)}}</td>
+                <td>${{Math.round(stats.total_steps)}}</td>
+                <td style="color:${{stats.pass_pct > 0.5 ? '#4caf50' : '#ff9800'}};">${{passPct}}%</td>
+              `;
+              tbody.appendChild(row);
+            }}
+          }}
+          tableDiv.style.display = 'table';
+        }} else {{
+          statusDiv.innerHTML = `<span style="color:#f44336;">Error: ${{data.error}}</span>`;
+        }}
+      }} catch (err) {{
+        statusDiv.innerHTML = `<span style="color:#f44336;">Error: ${{err.message}}</span>`;
+      }}
+    }}
+    
+    // Selector Heatmap
+    document.getElementById('selector-heatmap-run-btn').addEventListener('click', runSelectorHeatmap);
+    
+    async function runSelectorHeatmap() {{
+      const statusDiv = document.getElementById('selector-heatmap-status');
+      const container = document.getElementById('selector-heatmap-container');
+      const thead = document.getElementById('selector-heatmap-thead');
+      const tbody = document.getElementById('selector-heatmap-tbody');
+      
+      statusDiv.innerHTML = '<span style="color:#ce93d8;">Running heatmap scan...</span>';
+      container.style.display = 'none';
+      
+      const metricX = document.getElementById('heatmap-metric-x-select').value;
+      const metricY = document.getElementById('heatmap-metric-y-select').value;
+      const xStart = parseFloat(document.getElementById('heatmap-x-start-input').value) || 5;
+      const xStep = parseFloat(document.getElementById('heatmap-x-step-input').value) || 5;
+      const xCount = parseInt(document.getElementById('heatmap-x-count-input').value) || 5;
+      const yStart = parseFloat(document.getElementById('heatmap-y-start-input').value) || 15;
+      const yStep = parseFloat(document.getElementById('heatmap-y-step-input').value) || 5;
+      const yCount = parseInt(document.getElementById('heatmap-y-count-input').value) || 5;
+      
+      const gridX = [];
+      for (let i = 0; i < xCount; i++) gridX.push(xStart + i * xStep);
+      const gridY = [];
+      for (let i = 0; i < yCount; i++) gridY.push(yStart + i * yStep);
+      
+      const payload = {{
+        selector_id: document.getElementById('heatmap-selector-id-select').value,
+        underlying: document.getElementById('heatmap-underlying-select').value,
+        strategy_key: document.getElementById('heatmap-strategy-select').value,
+        metric_x: metricX,
+        metric_y: metricY,
+        grid_x: gridX,
+        grid_y: gridY,
+        horizon_days: parseInt(document.getElementById('heatmap-horizon-input').value) || 180,
+        decision_interval_days: parseFloat(document.getElementById('heatmap-interval-input').value) || 1.0,
+      }};
+      
+      try {{
+        const res = await fetch('/api/backtest/selector_heatmap', {{
+          method: 'POST',
+          headers: {{ 'Content-Type': 'application/json' }},
+          body: JSON.stringify(payload)
+        }});
+        const data = await res.json();
+        
+        if (data.ok) {{
+          statusDiv.innerHTML = '<span style="color:#4caf50;">Heatmap complete</span>';
+          
+          // Build header row
+          const headerRow = document.createElement('tr');
+          headerRow.innerHTML = `<th>${{metricY}} \\ ${{metricX}}</th>`;
+          data.grid_x.forEach(xVal => {{
+            headerRow.innerHTML += `<th>${{xVal}}</th>`;
+          }});
+          thead.innerHTML = '';
+          thead.appendChild(headerRow);
+          
+          // Build data rows
+          tbody.innerHTML = '';
+          data.values.forEach((row, yIdx) => {{
+            const tr = document.createElement('tr');
+            tr.innerHTML = `<th>${{data.grid_y[yIdx]}}</th>`;
+            row.forEach(val => {{
+              const pct = (val * 100).toFixed(0);
+              const alpha = Math.min(val, 1);
+              const bgColor = `rgba(76, 175, 80, ${{alpha.toFixed(2)}})`;
+              tr.innerHTML += `<td style="background:${{bgColor}};text-align:center;font-weight:600;color:${{alpha > 0.5 ? '#fff' : '#333'}};">${{pct}}%</td>`;
+            }});
+            tbody.appendChild(tr);
+          }});
+          
+          container.style.display = 'block';
+        }} else {{
+          statusDiv.innerHTML = `<span style="color:#f44336;">Error: ${{data.error}}</span>`;
+        }}
+      }} catch (err) {{
+        statusDiv.innerHTML = `<span style="color:#f44336;">Error: ${{err.message}}</span>`;
       }}
     }}
 

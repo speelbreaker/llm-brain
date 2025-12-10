@@ -1,0 +1,500 @@
+You are an AI pair-programmer working on my “Options Trading Agent” repo.
+
+Repo: https://github.com/speelbreaker/llm-brain
+
+We’ll do two small but important features:
+
+Add a score-based selector for Greg’s strategies (on top of PASS/BLOCKED/NO DATA).
+
+Add a Deribit intraday scraper status widget to the Backtesting Lab tab, so I can see that the data harvesting is working and growing.
+
+I’m a non-coder, so both features must be visible in the web UI and easy to verify.
+
+Please follow the repo structure as it exists now (do not rename files) and keep all existing behaviour backwards compatible.
+
+Part 1 – Selector scoring for GregBot
+1A. Find the Greg selector + strategy match types
+
+In src/, locate the module(s) that implement:
+
+Greg’s “Phase 1: The Master Selector (Pre-Trade Scan)” logic.
+
+The types / dataclasses / Pydantic models used for:
+
+“Strategy Matches (All Bots)” table.
+
+“Expert Bots → GregBot” table.
+
+You can search for things like:
+
+GregBot
+
+StrategyMatch
+
+Strategy Matches (All Bots)
+
+ATM Straddle (High VRP, Calm), OTM Strangle (Moderate VRP, Ranging), etc.
+
+This is the same logic that drives the current Bots tab output:
+
+Status values: PASS, BLOCKED, NO DATA.
+
+Details strings like vrp_30d X; chop_factor_7d OK; rsi_14d OK.
+
+Identify the core “match” type. If it doesn’t exist explicitly as a dataclass / Pydantic model, create one (or a light wrapper) such as:
+
+class StrategyMatch(BaseModel):
+    bot: str
+    underlying: str
+    strategy_name: str
+    status: Literal["PASS", "BLOCKED", "NO_DATA"]
+    details: str
+    # NEW:
+    score: float  # 0.0–100.0, how well the environment fits this strategy
+
+
+Use whatever base type (dataclass / Pydantic) matches the existing code style.
+
+1B. Implement a simple score function (0–100)
+
+We want a small extension, not a big rewrite.
+
+Create a helper function in the Greg selector module, e.g.:
+
+def compute_strategy_score(sensor_results: dict[str, str]) -> float:
+    """
+    Compute a simple 0–100 score for a strategy given its sensor checks.
+
+    sensor_results maps sensor name -> "OK" / "X" / "?" or similar codes
+    already used in the `details` string.
+    """
+
+
+Scoring logic can be simple and generic:
+
+Let total_checks = number of sensors considered.
+
+Count:
+
+ok_count = number of checks marked “OK”.
+
+You can treat “?” (no data) as neutral (neither good nor bad).
+
+“X” is a fail.
+
+Define:
+
+if total_checks == 0:
+    return 0.0
+raw = ok_count / total_checks  # 0.0–1.0
+score = round(raw * 100.0, 1)
+
+
+This gives:
+
+100.0 if all relevant checks are OK.
+
+0.0 if none are OK.
+
+Something in between for mixed cases.
+
+For now we do not need per-sensor weights; we just want a “how good is this pond” measure relative to the number of rules that pass.
+
+Wherever you build each StrategyMatch (for both BTC and ETH, all Greg strategies), do:
+
+Gather a structured sensor_results dict (the same information you already use to build the details string).
+
+Call compute_strategy_score(sensor_results) and set match.score.
+
+Do not change the existing PASS/BLOCKED/NO DATA rules:
+
+Keep the gating logic as it is.
+
+The score is extra information layered on top.
+
+1C. Expose score in the Bots API
+
+Find the FastAPI endpoint(s) that power the Bots tab and the GregBot tables in src/web_app.py, for example:
+
+Something like /api/bots/strategies, /api/bots/summary, /api/greg/strategies, etc.
+
+These endpoints currently return JSON that feeds the Bots UI tables.
+
+Extend the returned JSON for each strategy match to include the score field, e.g.:
+
+{
+  "bot": "GregBot",
+  "underlying": "BTC",
+  "strategy": "ATM Straddle (High VRP, Calm)",
+  "status": "BLOCKED",
+  "details": "vrp_30d X; chop_factor_7d OK; rsi_14d OK",
+  "score": 66.7
+}
+
+
+Make sure this is done consistently for:
+
+“Strategy Matches (All Bots)” rows.
+
+“Expert Bots → GregBot” rows.
+
+1D. UI changes – show the score in the Bots tab
+
+In src/web_app.py, inside the HTML returned by index():
+
+Locate the Bots tab markup:
+
+The section that renders:
+
+Live Market Sensors
+
+Strategy Matches (All Bots) table
+
+Expert Bots / GregBot table.
+
+Update the tables:
+
+a) Strategy Matches (All Bots)
+
+Add a new Score column:
+
+Header: Score
+
+Each row cell: show the numeric score (e.g. 72.5).
+
+Optional: wrap this in a small <span> with a CSS class that can mildly color-code (e.g. greenish for ≥ 70, yellowish 40–70, reddish < 40). If you don’t have CSS, you can just use inline style and basic color thresholds.
+
+b) Expert Bots → GregBot table
+
+Add the same Score column after Status and before Details:
+
+Columns: Strategy | Underlying | Status | Score | Details.
+
+Score populated from the score field in the JSON.
+
+JavaScript wiring:
+
+Find the existing JS code that fetches and renders the Bots / Greg tables (the same code that currently fills Status and Details).
+
+Extend it to read row.score from the API response and insert it into the appropriate <td>.
+
+Keep behaviour for existing columns unchanged.
+
+UX requirement:
+
+After this change, when I open the Bots tab, I should see:
+
+PASS/BLOCKED/NO DATA as before.
+
+A numeric Score for each row, so I can visually see:
+
+Which strategies are “best fit” for today’s environment, even if some are blocked.
+
+Part 2 – Deribit Intraday Scraper Status (Backtesting Lab)
+
+We are already harvesting intraday OHLC/IV data from Deribit into our own database (CSV/SQLite/whatever you currently use). I want a simple status widget in the app that shows:
+
+Is the scraper “healthy” (data still updating)?
+
+How many rows we have accumulated.
+
+How many calendar days of data are covered.
+
+First and last timestamps.
+
+Approximate DB size in MB.
+
+The intended update interval (e.g. every 5 minutes).
+
+2A. Backend helper – get_intraday_data_status
+
+Create a new module, e.g. src/data_status.py, with something like:
+
+from dataclasses import dataclass
+from datetime import datetime
+from typing import Optional
+
+@dataclass
+class IntradayDataStatus:
+    ok: bool
+    source: str  # e.g. "Deribit intraday OHLC/IV"
+    backend: str  # e.g. "sqlite", "csv", "parquet"
+    rows_total: int
+    days_covered: int
+    first_timestamp: Optional[datetime]
+    last_timestamp: Optional[datetime]
+    approx_size_mb: float
+    target_interval_sec: int
+    is_running: bool  # heuristic based on recency of last_timestamp
+    error: Optional[str] = None
+
+
+Implement a function:
+
+def get_intraday_data_status(settings: Settings) -> IntradayDataStatus:
+    """
+    Inspect the current intraday data store (whatever backend is in use)
+    and return high-level stats for the Backtesting Lab UI.
+    """
+
+
+Inside this function:
+
+Locate the existing Deribit intraday data:
+
+If you already have a dedicated module or script (e.g. scripts/deribit_ohlc_logger.py, backtest/data_ingest_deribit.py, or similar), reuse that knowledge.
+
+If you’re writing to a SQLite DB, count rows and min/max timestamps from the relevant table(s).
+
+If you’re writing to CSV or parquet files in data/, you can:
+
+Sum file sizes in the directory (to get approx_size_mb).
+
+Optionally look at a metadata file or just inspect one file to get earliest/latest timestamp.
+
+Compute:
+
+rows_total = total number of intraday rows (approx is OK; exact is better if cheap).
+
+first_timestamp / last_timestamp.
+
+days_covered = (last_timestamp.date() - first_timestamp.date()).days + 1 if both exist.
+
+approx_size_mb = total bytes / (1024 * 1024), rounded to maybe 1 decimal.
+
+target_interval_sec:
+
+If you have a dedicated scrape interval in Settings (e.g. intraday_scrape_interval_sec), use that.
+
+Otherwise, you can reuse settings.loop_interval_sec as the “expected” interval.
+
+is_running:
+
+Heuristic: if last_timestamp is within, say, 2 * target_interval_sec of now, then is_running=True, else False.
+
+If any error occurs (e.g. no data yet, DB not found), set ok=False and fill error with a human-readable message, but still return an IntradayDataStatus object (just with zeros / None for the metrics).
+
+Keep this logic pure and internal; do not perform any scraping here, just read the database / files.
+
+2B. API endpoint: /api/data_status/intraday
+
+In src/web_app.py, under the existing API section:
+
+Add:
+
+from src.data_status import get_intraday_data_status
+
+
+(Adjust import path based on how src is structured in this file.)
+
+Define a new GET endpoint:
+
+@app.get("/api/data_status/intraday")
+def get_intraday_scraper_status() -> JSONResponse:
+    """
+    Return high-level status for the Deribit intraday data scraper / data store.
+    Read-only; does not modify anything.
+    """
+    try:
+        status = get_intraday_data_status(settings)
+        return JSONResponse(
+            content={
+                "ok": status.ok,
+                "source": status.source,
+                "backend": status.backend,
+                "rows_total": status.rows_total,
+                "days_covered": status.days_covered,
+                "first_timestamp": status.first_timestamp.isoformat() if status.first_timestamp else None,
+                "last_timestamp": status.last_timestamp.isoformat() if status.last_timestamp else None,
+                "approx_size_mb": status.approx_size_mb,
+                "target_interval_sec": status.target_interval_sec,
+                "is_running": status.is_running,
+                "error": status.error,
+            }
+        )
+    except Exception as e:
+        return JSONResponse(
+            content={"ok": False, "error": str(e)},
+            status_code=500,
+        )
+
+2C. UI – Backtesting Lab “Intraday Data & Scraper Status”
+
+In src/web_app.py, in the HTML returned by index():
+
+Locate the Backtesting Lab section (the tab or section where we configure and run backtests).
+
+Under that section, add a new subsection:
+
+### Intraday Data & Scraper Status (Deribit)
+
+<div id="intraday-scraper-panel">
+  <p><strong>Source:</strong> <span id="scraper-source">Loading...</span></p>
+  <p><strong>Backend:</strong> <span id="scraper-backend">Loading...</span></p>
+  <p><strong>Rows total:</strong> <span id="scraper-rows">Loading...</span></p>
+  <p><strong>Days covered:</strong> <span id="scraper-days">Loading...</span></p>
+  <p><strong>First / Last timestamp:</strong> <span id="scraper-range">Loading...</span></p>
+  <p><strong>Approx DB size:</strong> <span id="scraper-size">Loading...</span></p>
+  <p><strong>Target update interval:</strong> <span id="scraper-interval">Loading...</span></p>
+  <p>
+    <strong>Status:</strong>
+    <span id="scraper-running" class="status-pill">Unknown</span>
+  </p>
+
+  <button id="refresh-scraper-status-btn">Refresh Scraper Status</button>
+  <div id="scraper-status-message" aria-live="polite"></div>
+</div>
+
+
+JS wiring (in the existing <script> block at the bottom of the HTML):
+
+Add a helper:
+
+async function fetchIntradayScraperStatus() {
+  const panel = document.getElementById("intraday-scraper-panel");
+  if (!panel) return;
+
+  const statusMsg = document.getElementById("scraper-status-message");
+  if (statusMsg) {
+    statusMsg.textContent = "Loading scraper status...";
+  }
+
+  try {
+    const resp = await fetch("/api/data_status/intraday");
+    const data = await resp.json();
+
+    if (!data.ok) {
+      if (statusMsg) {
+        statusMsg.textContent = "Error: " + (data.error || "unknown error");
+        statusMsg.style.color = "red";
+      }
+      return;
+    }
+
+    document.getElementById("scraper-source").textContent = data.source || "Deribit intraday";
+    document.getElementById("scraper-backend").textContent = data.backend || "unknown";
+    document.getElementById("scraper-rows").textContent = data.rows_total?.toLocaleString?.() ?? data.rows_total;
+    document.getElementById("scraper-days").textContent = data.days_covered ?? "0";
+
+    const rangeEl = document.getElementById("scraper-range");
+    if (rangeEl) {
+      const first = data.first_timestamp || "n/a";
+      const last = data.last_timestamp || "n/a";
+      rangeEl.textContent = first + " → " + last;
+    }
+
+    document.getElementById("scraper-size").textContent =
+      (data.approx_size_mb != null ? data.approx_size_mb.toFixed(1) + " MB" : "n/a");
+
+    document.getElementById("scraper-interval").textContent =
+      (data.target_interval_sec != null ? data.target_interval_sec + " sec" : "n/a");
+
+    const runningEl = document.getElementById("scraper-running");
+    if (runningEl) {
+      if (data.is_running) {
+        runningEl.textContent = "RUNNING";
+        runningEl.style.color = "green";
+      } else {
+        runningEl.textContent = "STALE / STOPPED";
+        runningEl.style.color = "red";
+      }
+    }
+
+    if (statusMsg) {
+      statusMsg.textContent = "Scraper status updated.";
+      statusMsg.style.color = "green";
+    }
+  } catch (err) {
+    if (statusMsg) {
+      statusMsg.textContent = "Error fetching scraper status: " + err;
+      statusMsg.style.color = "red";
+    }
+  }
+}
+
+
+Wire it into DOMContentLoaded:
+
+document.addEventListener("DOMContentLoaded", () => {
+  // existing initializers …
+
+  // Intraday scraper status:
+  fetchIntradayScraperStatus();
+  const refreshBtn = document.getElementById("refresh-scraper-status-btn");
+  if (refreshBtn) {
+    refreshBtn.addEventListener("click", fetchIntradayScraperStatus);
+  }
+});
+
+
+UX requirement:
+
+When I open the Backtesting Lab tab, I should see:
+
+Source, backend, rows, days, date range, DB size, and status.
+
+A clear “RUNNING” / “STALE / STOPPED” indicator in color.
+
+A “Refresh Scraper Status” button that reloads the numbers.
+
+Part 3 – Docs & Tests
+
+Docs
+
+Update UI_FEATURE_GAPS.md:
+
+Note that:
+
+Greg selector now includes a score per strategy.
+
+Bots tab shows the score column for matches and GregBot strategies.
+
+Backtesting Lab has a new “Intraday Data & Scraper Status (Deribit)” panel.
+
+Update replit.md:
+
+Add a short subsection under Backtesting / Data describing:
+
+Where to see the scraper status.
+
+What each metric means.
+
+That the scraper status is read-only and does not trigger scraping itself.
+
+Tests
+
+Add a small test module, e.g. tests/test_greg_selector_scoring.py:
+
+Test that computing a StrategyMatch with all OK sensors yields a score close to 100.
+
+Test that all X sensors yields a score near 0.
+
+Test that mixed OK/X yields a mid-range score.
+
+Add a small test module, e.g. tests/test_data_status_endpoint.py:
+
+Use FastAPI TestClient to call GET /api/data_status/intraday.
+
+Assert that the JSON has ok, rows_total, days_covered, approx_size_mb, and is_running keys.
+
+You can stub or adapt the get_intraday_data_status logic if necessary to make the test deterministic (e.g. by using a temporary in-memory DB or a small test dataset).
+
+Make sure that:
+
+The app still starts normally.
+
+All existing tests pass.
+
+New tests pass.
+
+Bots tab visibly shows the Score column.
+
+Backtesting Lab shows the intraday scraper status panel with live data.
+
+That’s the full prompt.
+
+Once the builder finishes, you’ll be able to:
+
+See how “good” each Greg strategy is for today (via the score).
+
+See that your Deribit intraday archive is actually growing and roughly how big / how old it is.

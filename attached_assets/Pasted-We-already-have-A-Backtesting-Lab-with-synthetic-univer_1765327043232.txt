@@ -1,0 +1,436 @@
+We already have:
+
+A Backtesting Lab with synthetic universe support for covered calls.
+
+A Bots tab with:
+
+GregBot
+
+Live Market Sensors (VRP, chop, ADX, RSI, IV rank, term structure, skew, etc.)
+
+A Greg selector implementation (Phase 1: which strategy is suitable under current sensors).
+
+Goal of this batch:
+
+Add a Selector Frequency Scan tool to the Backtesting Lab, using the synthetic universe (no real-history data required).
+
+Let me override Greg’s Phase 1 thresholds from the UI (VRP, chop, ADX, RSI band, etc.) for the scan, so I can see how strict/loose rules affect how often strategies are tradable.
+
+Keep everything read-only and backtest-only:
+
+No trades, no Deribit calls, no DB writes required (unless you want to log results).
+
+Overrides are not persisted to live GregBot; they’re only for backtest runs.
+
+Task 1 – Backtest: generic Selector Frequency Scan (synthetic universe)
+
+Create a new module in src/backtest/:
+
+src/backtest/selector_scan.py
+
+
+This module should:
+
+Define a config model for a selector scan:
+
+from typing import Dict, List, Literal, Optional
+from pydantic import BaseModel
+
+class SelectorScanConfig(BaseModel):
+    selector_id: Literal["greg"] = "greg"
+    underlyings: List[Literal["BTC", "ETH"]] = ["BTC", "ETH"]
+    num_paths: int = 1
+    horizon_days: int = 365
+    decision_interval_days: float = 1.0
+
+    # Optional overrides for selector thresholds (purely for the scan)
+    threshold_overrides: Dict[str, float] = {}
+
+
+Examples of keys we’ll use in threshold_overrides for Greg:
+
+vrp_30d_min
+
+chop_factor_7d_max
+
+adx_14d_max
+
+rsi_14d_min
+
+rsi_14d_max
+
+iv_rank_6m_min
+
+term_structure_spread_min
+
+term_structure_spread_max
+
+skew_25d_min
+
+skew_25d_max
+
+You don’t have to implement them all at once, but wire enough to be useful (VRP, chop, ADX, RSI, IV rank at least).
+
+Define a result model:
+
+class SelectorScanResult(BaseModel):
+    # Per underlying, per strategy key
+    # e.g. {"BTC": {"ATM_STRADDLE": {"pass_count": 120, "total_steps": 2000, "pass_pct": 0.06}, ...}}
+    summary: Dict[str, Dict[str, Dict[str, float]]]
+    total_steps: Dict[str, int]  # per underlying total decision points
+
+
+Implement a function:
+
+def run_selector_scan(config: SelectorScanConfig) -> SelectorScanResult:
+    """
+    Run a selector frequency scan on the synthetic universe.
+
+    For each synthetic path and each decision timestamp, build the usual state
+    (market_context, vol_state, etc.), run the selector (Greg for now),
+    and count how often each strategy is PASS/BLOCKED/etc.
+
+    Only PASS counts for "tradable" frequency; NO_DATA and BLOCKED are not.
+    """
+
+
+Inside this function:
+
+Re-use the existing synthetic backtest machinery already used in your Backtesting Lab.
+
+If there is a helper like generate_synthetic_paths or a BacktestEnv that you already use for covered calls, call that instead of inventing a new wheel.
+
+For each underlying in config.underlyings, and for each synthetic path:
+
+Step forward in increments of decision_interval_days.
+
+At each step:
+
+Build the same AgentState / market_context / vol_state that Greg’s selector expects (you can re-use the same “sensors from state” helper used by the Bots tab).
+
+Apply threshold overrides:
+
+Clone the default Greg selector config (or sensor thresholds),
+
+Apply overrides from config.threshold_overrides by key (e.g. vrp_30d_min replaces the default VRP threshold for the scan).
+
+Do not mutate global/live config – only the local copy for this run.
+
+Call the same selector that powers GregBot today (Phase 1), so we get statuses like PASS, BLOCKED, NO_DATA, NO_TRADE.
+
+For each concrete strategy (ATM Straddle, OTM Strangle, Bull Put Spread, etc.), count how many times its status is PASS.
+
+Also count total decision points per underlying.
+
+At the end, compute pass_pct = pass_count / total_steps for each strategy+underlying, and return in SelectorScanResult.summary.
+
+For now, you can ignore PnL; this is strictly a setup frequency scan.
+
+Task 2 – FastAPI endpoint for selector scans
+
+In src/web_app.py, add:
+
+Pydantic request/response types (or import from selector_scan.py):
+
+class SelectorScanRequest(BaseModel):
+    selector_id: Literal["greg"] = "greg"
+    underlyings: List[Literal["BTC", "ETH"]] = ["BTC", "ETH"]
+    num_paths: int = 1
+    horizon_days: int = 365
+    decision_interval_days: float = 1.0
+    threshold_overrides: Dict[str, float] = {}
+
+class SelectorScanResponse(BaseModel):
+    ok: bool
+    summary: Dict[str, Dict[str, Dict[str, float]]]
+    total_steps: Dict[str, int]
+
+
+Add an endpoint:
+
+@app.post("/api/backtest/selector_scan")
+def selector_scan(req: SelectorScanRequest) -> JSONResponse:
+    """
+    Run a selector frequency scan in the synthetic universe and return summary.
+    Backtest-only; no orders, no Deribit calls.
+    """
+    from src.backtest.selector_scan import SelectorScanConfig, run_selector_scan
+
+    try:
+        config = SelectorScanConfig(
+            selector_id=req.selector_id,
+            underlyings=req.underlyings,
+            num_paths=req.num_paths,
+            horizon_days=req.horizon_days,
+            decision_interval_days=req.decision_interval_days,
+            threshold_overrides=req.threshold_overrides,
+        )
+        result = run_selector_scan(config)
+        return JSONResponse(
+            content={
+                "ok": True,
+                "summary": result.summary,
+                "total_steps": result.total_steps,
+            }
+        )
+    except Exception as e:
+        return JSONResponse(content={"ok": False, "error": str(e)})
+
+
+This endpoint is backtest-only, in-memory, and has no side effects beyond CPU time.
+
+Task 3 – Backtesting Lab UI: “Selector Frequency Scan (Synthetic)”
+
+In the web dashboard HTML (the same index() in web_app.py that renders the Backtesting Lab section), add a new panel, e.g. under Backtesting Lab:
+
+## Backtesting Lab – Selector Scan (Synthetic)
+
+Use this tool to see how often a selector's rules (e.g. GregBot Phase 1)
+would allow trading in our synthetic universe.
+
+<div id="selector-scan-panel">
+  <label>
+    Selector:
+    <select id="selector-id-select">
+      <option value="greg">GregBot – VRP Harvester</option>
+      <!-- later we can add more selectors here -->
+    </select>
+  </label>
+
+  <label>
+    Underlyings:
+    <label><input type="checkbox" id="selector-underlying-btc" checked> BTC</label>
+    <label><input type="checkbox" id="selector-underlying-eth" checked> ETH</label>
+  </label>
+
+  <label>
+    Horizon (days):
+    <input type="number" id="selector-horizon-input" value="365">
+  </label>
+
+  <label>
+    Decision interval (days):
+    <input type="number" id="selector-interval-input" value="1" step="0.25">
+  </label>
+
+  <details>
+    <summary>Threshold overrides (optional)</summary>
+    <p>These overrides are backtest-only and do not affect the live bot.</p>
+
+    <label>
+      Min VRP 30d:
+      <input type="number" id="selector-vrp-min-input" step="0.1" placeholder="default">
+    </label>
+    <label>
+      Max Chop Factor 7d:
+      <input type="number" id="selector-chop-max-input" step="0.01" placeholder="default">
+    </label>
+    <label>
+      Max ADX 14d:
+      <input type="number" id="selector-adx-max-input" step="0.1" placeholder="default">
+    </label>
+    <label>
+      Min RSI 14d:
+      <input type="number" id="selector-rsi-min-input" step="0.1" placeholder="default">
+    </label>
+    <label>
+      Max RSI 14d:
+      <input type="number" id="selector-rsi-max-input" step="0.1" placeholder="default">
+    </label>
+    <label>
+      Min IV Rank 6m:
+      <input type="number" id="selector-ivrank-min-input" step="0.01" placeholder="default">
+    </label>
+  </details>
+
+  <button id="selector-scan-run-btn">Run Selector Scan</button>
+  <div id="selector-scan-status" aria-live="polite"></div>
+
+  <table id="selector-scan-results-table" class="simple-table" style="margin-top: 1rem; display: none;">
+    <thead>
+      <tr>
+        <th>Strategy</th>
+        <th>Underlying</th>
+        <th>Pass Count</th>
+        <th>Total Steps</th>
+        <th>Pass %</th>
+      </tr>
+    </thead>
+    <tbody></tbody>
+  </table>
+</div>
+
+JS wiring
+
+In the existing <script>:
+
+Add a helper to build threshold_overrides from the UI:
+
+function buildSelectorThresholdOverrides() {
+  const overrides = {};
+
+  const vrpMin = parseFloat(document.getElementById("selector-vrp-min-input").value);
+  if (!isNaN(vrpMin)) overrides["vrp_30d_min"] = vrpMin;
+
+  const chopMax = parseFloat(document.getElementById("selector-chop-max-input").value);
+  if (!isNaN(chopMax)) overrides["chop_factor_7d_max"] = chopMax;
+
+  const adxMax = parseFloat(document.getElementById("selector-adx-max-input").value);
+  if (!isNaN(adxMax)) overrides["adx_14d_max"] = adxMax;
+
+  const rsiMin = parseFloat(document.getElementById("selector-rsi-min-input").value);
+  if (!isNaN(rsiMin)) overrides["rsi_14d_min"] = rsiMin;
+
+  const rsiMax = parseFloat(document.getElementById("selector-rsi-max-input").value);
+  if (!isNaN(rsiMax)) overrides["rsi_14d_max"] = rsiMax;
+
+  const ivRankMin = parseFloat(document.getElementById("selector-ivrank-min-input").value);
+  if (!isNaN(ivRankMin)) overrides["iv_rank_6m_min"] = ivRankMin;
+
+  return overrides;
+}
+
+
+Add an event listener for the Run Selector Scan button:
+
+document.getElementById("selector-scan-run-btn").addEventListener("click", async () => {
+  const statusEl = document.getElementById("selector-scan-status");
+  const table = document.getElementById("selector-scan-results-table");
+  const tbody = table.querySelector("tbody");
+  tbody.innerHTML = "";
+  table.style.display = "none";
+
+  statusEl.textContent = "Running selector scan...";
+  statusEl.style.color = "";
+
+  const selectorId = document.getElementById("selector-id-select").value;
+
+  const underlyings = [];
+  if (document.getElementById("selector-underlying-btc").checked) underlyings.push("BTC");
+  if (document.getElementById("selector-underlying-eth").checked) underlyings.push("ETH");
+  if (underlyings.length === 0) {
+    statusEl.textContent = "Please select at least one underlying.";
+    statusEl.style.color = "red";
+    return;
+  }
+
+  const horizon = parseInt(document.getElementById("selector-horizon-input").value, 10) || 365;
+  const interval = parseFloat(document.getElementById("selector-interval-input").value) || 1.0;
+
+  const thresholdOverrides = buildSelectorThresholdOverrides();
+
+  const payload = {
+    selector_id: selectorId,
+    underlyings,
+    num_paths: 1,
+    horizon_days: horizon,
+    decision_interval_days: interval,
+    threshold_overrides: thresholdOverrides,
+  };
+
+  try {
+    const resp = await fetch("/api/backtest/selector_scan", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify(payload),
+    });
+    const data = await resp.json();
+    if (!data.ok) {
+      statusEl.textContent = "Error: " + (data.error || "unknown error");
+      statusEl.style.color = "red";
+      return;
+    }
+
+    // Render results
+    const summary = data.summary || {};
+    const totalSteps = data.total_steps || {};
+    const rows = [];
+
+    for (const [underlying, stratMap] of Object.entries(summary)) {
+      const steps = totalSteps[underlying] || 0;
+      for (const [strategyKey, stats] of Object.entries(stratMap)) {
+        const passCount = stats.pass_count ?? 0;
+        const passPct = stats.pass_pct ?? (steps > 0 ? passCount / steps : 0);
+        const tr = document.createElement("tr");
+
+        const tdStrat = document.createElement("td");
+        tdStrat.textContent = strategyKey;
+        tr.appendChild(tdStrat);
+
+        const tdUnd = document.createElement("td");
+        tdUnd.textContent = underlying;
+        tr.appendChild(tdUnd);
+
+        const tdPass = document.createElement("td");
+        tdPass.textContent = passCount.toString();
+        tr.appendChild(tdPass);
+
+        const tdTotal = document.createElement("td");
+        tdTotal.textContent = steps.toString();
+        tr.appendChild(tdTotal);
+
+        const tdPct = document.createElement("td");
+        tdPct.textContent = (passPct * 100).toFixed(2) + "%";
+        tr.appendChild(tdPct);
+
+        tbody.appendChild(tr);
+      }
+    }
+
+    table.style.display = "table";
+    statusEl.textContent = "Selector scan complete (synthetic universe, backtest-only).";
+    statusEl.style.color = "green";
+  } catch (err) {
+    console.error(err);
+    statusEl.textContent = "Error running selector scan.";
+    statusEl.style.color = "red";
+  }
+});
+
+
+UX:
+From the Backtesting Lab, I can now:
+
+Select GregBot, choose BTC/ETH, horizon, decision interval.
+
+Optionally tweak VRP / chop / ADX / RSI / IV Rank thresholds.
+
+Click Run Selector Scan.
+
+See a table of Pass Count / Total / Pass % per strategy & underlying.
+
+This tells me how often, in the synthetic universe, my rules allow trading – and lets me relax or tighten thresholds directly from the UI.
+
+Task 4 – Tests (lightweight)
+
+Add a small test module, e.g. tests/test_selector_scan.py:
+
+Mock or stub the synthetic universe so that:
+
+The selector sees a few known states where:
+
+VRP and ADX meet or fail thresholds.
+
+Verify that:
+
+run_selector_scan returns non-empty summary and total_steps.
+
+threshold_overrides actually change which states count as PASS (e.g., with a high vrp_30d_min you get fewer passes than with a low one).
+
+No real Deribit or external calls; keep tests deterministic.
+
+Success criteria
+
+App still starts; existing tests pass; new tests pass.
+
+In the Backtesting Lab, I see a Selector Scan (Synthetic) panel.
+
+I can:
+
+Run the scan with default Greg thresholds,
+
+Then run again with softer VRP/ADX/RSI thresholds,
+
+And immediately see Pass % go up/down in the results table.
+
+All of this is backtest-only – it does not change live GregBot behaviour or real trading.

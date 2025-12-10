@@ -1,0 +1,587 @@
+Prompt for AI Builder – Selector Heatmap (Single Metric Pair)
+
+You are an AI pair-programmer working on my “Options Trading Agent” repo.
+
+Repo: https://github.com/speelbreaker/llm-brain
+You’re working on the Replit project that mirrors this repo.
+
+We already (from previous tasks) either have or are adding:
+
+A Backtesting Lab with synthetic universe support.
+
+A selector scan facility (SelectorScanConfig + run_selector_scan in src/backtest/selector_scan.py) and a POST /api/backtest/selector_scan endpoint that:
+
+Takes selector_id, underlyings, horizon_days, decision_interval_days, and threshold_overrides.
+
+Returns pass frequency per strategy & underlying in the synthetic universe.
+
+If any of that is missing, create it as needed following the spirit of the previous batch: backtest-only, no orders, no Deribit calls.
+
+High-level goal for this batch
+
+Add a Selector Heatmap feature to the Backtesting Lab that:
+
+Lets me choose one strategy + one underlying and two threshold metrics (e.g. vrp_30d_min vs adx_14d_max).
+
+Defines a grid of values for those two metrics.
+
+For each grid point, runs a selector scan (synthetic universe) with those overrides.
+
+Displays a 2D heatmap table where:
+
+X axis = values of metric X,
+
+Y axis = values of metric Y,
+
+Cell color & text = pass% (how often that strategy passes under these thresholds).
+
+This is backtest-only. It does not modify live GregBot or live strategies; it just explores how strict/loose thresholds affect trade frequency in the synthetic universe.
+
+Task 1 – Backend: generic selector heatmap endpoint
+1A. Extend / reuse selector_scan logic
+
+We should have:
+
+src/backtest/selector_scan.py with:
+
+SelectorScanConfig
+
+run_selector_scan(config: SelectorScanConfig) -> SelectorScanResult
+
+If missing, create it as in the previous prompt (synthetic universe, counts PASS statuses per strategy & underlying).
+
+We’re now going to add a heatmap helper on top of that.
+
+In src/backtest/selector_scan.py add:
+
+from typing import Dict, List, Tuple
+from pydantic import BaseModel
+
+# existing SelectorScanConfig / SelectorScanResult remain
+
+class SelectorHeatmapConfig(BaseModel):
+    selector_id: str  # e.g. "greg"
+    underlying: str   # e.g. "BTC" or "ETH"
+    strategy_key: str # e.g. "ATM_STRADDLE" or whatever key you use internally
+
+    metric_x: str     # threshold key, e.g. "vrp_30d_min"
+    metric_y: str     # threshold key, e.g. "adx_14d_max"
+
+    grid_x: List[float]  # values to sweep for metric_x
+    grid_y: List[float]  # values to sweep for metric_y
+
+    horizon_days: int = 365
+    decision_interval_days: float = 1.0
+    num_paths: int = 1
+
+    # Optional base overrides applied to all grid points (e.g. RSI band, etc.)
+    base_threshold_overrides: Dict[str, float] = {}
+
+
+Then add a result model:
+
+class SelectorHeatmapResult(BaseModel):
+    metric_x: str
+    metric_y: str
+    grid_x: List[float]
+    grid_y: List[float]
+    # values[y_index][x_index] = pass_pct (0–1) for the chosen strategy
+    values: List[List[float]]
+
+
+Now implement:
+
+def run_selector_heatmap(config: SelectorHeatmapConfig) -> SelectorHeatmapResult:
+    """
+    For a given selector, underlying and strategy, sweep two threshold metrics over a grid
+    and compute the pass% for that strategy at each grid point in the synthetic universe.
+    """
+    from .selector_scan import SelectorScanConfig, run_selector_scan  # reuse existing code
+
+    values: List[List[float]] = []
+
+    for y_val in config.grid_y:
+        row: List[float] = []
+        for x_val in config.grid_x:
+            # Build threshold overrides for this grid point
+            overrides = dict(config.base_threshold_overrides or {})
+            overrides[config.metric_x] = x_val
+            overrides[config.metric_y] = y_val
+
+            scan_cfg = SelectorScanConfig(
+                selector_id=config.selector_id,
+                underlyings=[config.underlying],
+                num_paths=config.num_paths,
+                horizon_days=config.horizon_days,
+                decision_interval_days=config.decision_interval_days,
+                threshold_overrides=overrides,
+            )
+            scan_result = run_selector_scan(scan_cfg)
+
+            # Extract pass% for the chosen strategy_key + underlying
+            underlying_summary = scan_result.summary.get(config.underlying, {})
+            strat_stats = underlying_summary.get(config.strategy_key, {})
+            pass_pct = float(strat_stats.get("pass_pct", 0.0))
+
+            row.append(pass_pct)
+        values.append(row)
+
+    return SelectorHeatmapResult(
+        metric_x=config.metric_x,
+        metric_y=config.metric_y,
+        grid_x=config.grid_x,
+        grid_y=config.grid_y,
+        values=values,
+    )
+
+
+Assumptions:
+
+SelectorScanResult.summary has structure like:
+
+{"BTC": {"ATM_STRADDLE": {"pass_count": ..., "pass_pct": ...}, ...}}
+
+If the strategy is missing, treat pass_pct = 0.
+
+1B. FastAPI endpoint: /api/backtest/selector_heatmap
+
+In src/web_app.py:
+
+Add request/response Pydantic models (can import from selector_scan, or redefine lightweight types here):
+
+from typing import Dict, List
+from pydantic import BaseModel
+
+class SelectorHeatmapRequest(BaseModel):
+    selector_id: str = "greg"
+    underlying: str  # "BTC" or "ETH"
+    strategy_key: str
+
+    metric_x: str
+    metric_y: str
+
+    grid_x: List[float]
+    grid_y: List[float]
+
+    horizon_days: int = 365
+    decision_interval_days: float = 1
+    num_paths: int = 1
+    base_threshold_overrides: Dict[str, float] = {}
+
+
+Add endpoint:
+
+@app.post("/api/backtest/selector_heatmap")
+def selector_heatmap(req: SelectorHeatmapRequest) -> JSONResponse:
+    """
+    Run a selector heatmap in the synthetic universe.
+    Backtest-only; no orders or Deribit API calls.
+    """
+    from src.backtest.selector_scan import SelectorHeatmapConfig, run_selector_heatmap
+
+    try:
+        cfg = SelectorHeatmapConfig(
+            selector_id=req.selector_id,
+            underlying=req.underlying,
+            strategy_key=req.strategy_key,
+            metric_x=req.metric_x,
+            metric_y=req.metric_y,
+            grid_x=req.grid_x,
+            grid_y=req.grid_y,
+            horizon_days=req.horizon_days,
+            decision_interval_days=req.decision_interval_days,
+            num_paths=req.num_paths,
+            base_threshold_overrides=req.base_threshold_overrides,
+        )
+        result = run_selector_heatmap(cfg)
+        return JSONResponse(
+            content={
+                "ok": True,
+                "metric_x": result.metric_x,
+                "metric_y": result.metric_y,
+                "grid_x": result.grid_x,
+                "grid_y": result.grid_y,
+                "values": result.values,
+            }
+        )
+    except Exception as e:
+        return JSONResponse(content={"ok": False, "error": str(e)})
+
+
+This endpoint is purely backtest, runtime-only, and does not affect live trading.
+
+Task 2 – Backtesting Lab UI: Selector Heatmap Panel
+
+In the HTML returned by index() in src/web_app.py:
+
+2A. Add a “Selector Heatmap (Synthetic)” section
+
+Under the Backtesting Lab section (below the Selector Scan panel if present), add:
+
+### Selector Heatmap (Synthetic)
+
+Explore how strictness of two threshold metrics affects how often a selector
+finds tradable setups in the synthetic universe.
+
+<div id="selector-heatmap-panel">
+  <p>
+    This tool runs a grid of selector scans in the synthetic universe and shows the
+    % of steps where a given strategy passes, for different threshold combinations.
+  </p>
+
+  <label>
+    Selector:
+    <select id="heatmap-selector-id-select">
+      <option value="greg">GregBot – VRP Harvester</option>
+      <!-- later we can add more -->
+    </select>
+  </label>
+
+  <label>
+    Underlying:
+    <select id="heatmap-underlying-select">
+      <option value="BTC">BTC</option>
+      <option value="ETH">ETH</option>
+    </select>
+  </label>
+
+  <label>
+    Strategy:
+    <select id="heatmap-strategy-select">
+      <!-- For now, you can hardcode Greg strategies; later we can populate dynamically -->
+      <option value="ATM_STRADDLE">ATM Straddle</option>
+      <option value="OTM_STRANGLE">OTM Strangle</option>
+      <option value="BULL_PUT_SPREAD">Bull Put Spread</option>
+      <option value="BEAR_CALL_SPREAD">Bear Call Spread</option>
+      <option value="NO_TRADE">No Trade (Fallback)</option>
+    </select>
+  </label>
+
+  <label>
+    Horizon (days):
+    <input type="number" id="heatmap-horizon-input" value="365">
+  </label>
+
+  <label>
+    Decision interval (days):
+    <input type="number" id="heatmap-interval-input" value="1" step="0.25">
+  </label>
+
+  <details>
+    <summary>Axes & grids</summary>
+    <p>Choose which threshold metrics to sweep on each axis, and the grid ranges.</p>
+
+    <label>
+      X metric:
+      <select id="heatmap-metric-x-select">
+        <option value="vrp_30d_min">Min VRP 30d</option>
+        <option value="adx_14d_max">Max ADX 14d</option>
+        <option value="chop_factor_7d_max">Max Chop Factor 7d</option>
+        <option value="rsi_14d_min">Min RSI 14d</option>
+        <option value="rsi_14d_max">Max RSI 14d</option>
+        <option value="iv_rank_6m_min">Min IV Rank 6m</option>
+      </select>
+    </label>
+
+    <label>
+      X start:
+      <input type="number" id="heatmap-x-start-input" value="5" step="0.5">
+    </label>
+    <label>
+      X step:
+      <input type="number" id="heatmap-x-step-input" value="5" step="0.5">
+    </label>
+    <label>
+      X points:
+      <input type="number" id="heatmap-x-count-input" value="5">
+    </label>
+
+    <label>
+      Y metric:
+      <select id="heatmap-metric-y-select">
+        <option value="adx_14d_max">Max ADX 14d</option>
+        <option value="vrp_30d_min">Min VRP 30d</option>
+        <option value="chop_factor_7d_max">Max Chop Factor 7d</option>
+        <option value="rsi_14d_min">Min RSI 14d</option>
+        <option value="rsi_14d_max">Max RSI 14d</option>
+        <option value="iv_rank_6m_min">Min IV Rank 6m</option>
+      </select>
+    </label>
+
+    <label>
+      Y start:
+      <input type="number" id="heatmap-y-start-input" value="10" step="0.5">
+    </label>
+    <label>
+      Y step:
+      <input type="number" id="heatmap-y-step-input" value="5" step="0.5">
+    </label>
+    <label>
+      Y points:
+      <input type="number" id="heatmap-y-count-input" value="5">
+    </label>
+  </details>
+
+  <details>
+    <summary>Base threshold overrides (optional)</summary>
+    <p>These apply to all grid points (e.g. fix RSI band while sweeping VRP vs ADX).</p>
+
+    <label>
+      Min RSI 14d (base):
+      <input type="number" id="heatmap-base-rsi-min-input" step="0.1" placeholder="default">
+    </label>
+    <label>
+      Max RSI 14d (base):
+      <input type="number" id="heatmap-base-rsi-max-input" step="0.1" placeholder="default">
+    </label>
+    <label>
+      Min IV Rank 6m (base):
+      <input type="number" id="heatmap-base-ivrank-min-input" step="0.01" placeholder="default">
+    </label>
+    <!-- you can add more base override fields as needed -->
+  </details>
+
+  <button id="selector-heatmap-run-btn">Run Heatmap</button>
+  <div id="selector-heatmap-status" aria-live="polite"></div>
+
+  <div id="selector-heatmap-container" style="margin-top: 1rem; display: none;">
+    <table id="selector-heatmap-table" class="simple-table">
+      <thead id="selector-heatmap-thead"></thead>
+      <tbody id="selector-heatmap-tbody"></tbody>
+    </table>
+    <p style="font-size: 0.9em; color: #666;">
+      Cell color reflects pass% for the chosen strategy (darker/greener = more frequent).
+      All runs are in the synthetic universe (backtest-only).
+    </p>
+  </div>
+</div>
+
+2B. JavaScript wiring for the heatmap
+
+In the <script> block (at the bottom of the same HTML), add:
+
+Helper to build grid arrays:
+
+function buildGrid(start, step, count) {
+  const values = [];
+  let v = start;
+  for (let i = 0; i < count; i++) {
+    values.push(v);
+    v += step;
+  }
+  return values;
+}
+
+
+Helper to build base threshold overrides:
+
+function buildHeatmapBaseOverrides() {
+  const overrides = {};
+  const rsiMin = parseFloat(document.getElementById("heatmap-base-rsi-min-input").value);
+  if (!isNaN(rsiMin)) overrides["rsi_14d_min"] = rsiMin;
+
+  const rsiMax = parseFloat(document.getElementById("heatmap-base-rsi-max-input").value);
+  if (!isNaN(rsiMax)) overrides["rsi_14d_max"] = rsiMax;
+
+  const ivRankMin = parseFloat(document.getElementById("heatmap-base-ivrank-min-input").value);
+  if (!isNaN(ivRankMin)) overrides["iv_rank_6m_min"] = ivRankMin;
+
+  return overrides;
+}
+
+
+Event listener for Run Heatmap:
+
+document.getElementById("selector-heatmap-run-btn").addEventListener("click", async () => {
+  const statusEl = document.getElementById("selector-heatmap-status");
+  const container = document.getElementById("selector-heatmap-container");
+  const thead = document.getElementById("selector-heatmap-thead");
+  const tbody = document.getElementById("selector-heatmap-tbody");
+
+  container.style.display = "none";
+  thead.innerHTML = "";
+  tbody.innerHTML = "";
+
+  statusEl.textContent = "Running selector heatmap...";
+  statusEl.style.color = "";
+
+  const selectorId = document.getElementById("heatmap-selector-id-select").value;
+  const underlying = document.getElementById("heatmap-underlying-select").value;
+  const strategyKey = document.getElementById("heatmap-strategy-select").value;
+
+  const horizon = parseInt(document.getElementById("heatmap-horizon-input").value, 10) || 365;
+  const interval = parseFloat(document.getElementById("heatmap-interval-input").value) || 1.0;
+
+  const metricX = document.getElementById("heatmap-metric-x-select").value;
+  const metricY = document.getElementById("heatmap-metric-y-select").value;
+
+  const xStart = parseFloat(document.getElementById("heatmap-x-start-input").value);
+  const xStep = parseFloat(document.getElementById("heatmap-x-step-input").value);
+  const xCount = parseInt(document.getElementById("heatmap-x-count-input").value, 10);
+
+  const yStart = parseFloat(document.getElementById("heatmap-y-start-input").value);
+  const yStep = parseFloat(document.getElementById("heatmap-y-step-input").value);
+  const yCount = parseInt(document.getElementById("heatmap-y-count-input").value, 10);
+
+  if (!metricX || !metricY) {
+    statusEl.textContent = "Please select both X and Y metrics.";
+    statusEl.style.color = "red";
+    return;
+  }
+
+  if (!isFinite(xStart) || !isFinite(xStep) || !xCount || xCount <= 0) {
+    statusEl.textContent = "Invalid X grid settings.";
+    statusEl.style.color = "red";
+    return;
+  }
+  if (!isFinite(yStart) || !isFinite(yStep) || !yCount || yCount <= 0) {
+    statusEl.textContent = "Invalid Y grid settings.";
+    statusEl.style.color = "red";
+    return;
+  }
+
+  const gridX = buildGrid(xStart, xStep, xCount);
+  const gridY = buildGrid(yStart, yStep, yCount);
+
+  const baseOverrides = buildHeatmapBaseOverrides();
+
+  const payload = {
+    selector_id: selectorId,
+    underlying,
+    strategy_key: strategyKey,
+    metric_x: metricX,
+    metric_y: metricY,
+    grid_x: gridX,
+    grid_y: gridY,
+    horizon_days: horizon,
+    decision_interval_days: interval,
+    num_paths: 1,
+    base_threshold_overrides: baseOverrides,
+  };
+
+  try {
+    const resp = await fetch("/api/backtest/selector_heatmap", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify(payload),
+    });
+    const data = await resp.json();
+    if (!data.ok) {
+      statusEl.textContent = "Error: " + (data.error || "unknown error");
+      statusEl.style.color = "red";
+      return;
+    }
+
+    const gx = data.grid_x || [];
+    const gy = data.grid_y || [];
+    const values = data.values || [];
+
+    // Build header: first cell empty, then X values
+    const headerRow = document.createElement("tr");
+    const cornerTh = document.createElement("th");
+    cornerTh.textContent = `${data.metric_y} \\ ${data.metric_x}`;
+    headerRow.appendChild(cornerTh);
+    gx.forEach(v => {
+      const th = document.createElement("th");
+      th.textContent = v.toString();
+      headerRow.appendChild(th);
+    });
+    thead.appendChild(headerRow);
+
+    // Determine min/max pass% for coloring
+    let minVal = Infinity;
+    let maxVal = -Infinity;
+    values.forEach(row => {
+      row.forEach(p => {
+        if (p < minVal) minVal = p;
+        if (p > maxVal) maxVal = p;
+      });
+    });
+    if (!isFinite(minVal)) minVal = 0;
+    if (!isFinite(maxVal)) maxVal = 0;
+    const range = maxVal - minVal || 1.0;
+
+    // Build body
+    gy.forEach((yVal, yi) => {
+      const tr = document.createElement("tr");
+      const rowLabel = document.createElement("th");
+      rowLabel.textContent = yVal.toString();
+      tr.appendChild(rowLabel);
+
+      const rowVals = values[yi] || [];
+      gx.forEach((_, xi) => {
+        const td = document.createElement("td");
+        const p = rowVals[xi] ?? 0;
+        const pctStr = (p * 100).toFixed(2) + "%";
+        td.textContent = pctStr;
+
+        // Simple green-scale based on p
+        const t = (p - minVal) / range; // normalize 0..1
+        const light = 240 - Math.round(140 * t); // 240 -> 100
+        const green = 255 - Math.round(80 * (1 - t)); // softer adjustment
+        td.style.backgroundColor = `rgb(${light}, ${green}, ${light})`;
+
+        tr.appendChild(td);
+      });
+
+      tbody.appendChild(tr);
+    });
+
+    container.style.display = "block";
+    statusEl.textContent = "Selector heatmap complete (synthetic universe, backtest-only).";
+    statusEl.style.color = "green";
+  } catch (err) {
+    console.error(err);
+    statusEl.textContent = "Error running selector heatmap.";
+    statusEl.style.color = "red";
+  }
+});
+
+
+UX: I, as a non-coder, can:
+
+Select Greg, BTC, ATM Straddle.
+
+Choose X metric = vrp_30d_min, Y metric = adx_14d_max, plus ranges.
+
+Click Run Heatmap, then see a colored grid with % pass per combo.
+
+Repeat with other metric pairs (e.g. VRP vs IV Rank, ADX vs RSI) just by changing dropdowns and ranges.
+
+Task 3 – Tests (lightweight)
+
+Add a new test module, e.g. tests/test_selector_heatmap.py:
+
+Use a minimal synthetic stub or small horizon (e.g. 10 days) to keep it fast.
+
+Confirm that:
+
+run_selector_heatmap returns values matching len(grid_y) x len(grid_x).
+
+Changing one grid axis (e.g. more lenient vrp_30d_min) yields non-increasing or non-decreasing pass% in the expected direction (basic sanity).
+
+No external API calls; keep everything deterministic.
+
+Task 4 – Docs Touchup
+
+In ROADMAP_BACKLOG.md or UI_FEATURE_GAPS.md, add a short note:
+
+Under Backtesting / Research:
+
+“Selector Scan + Heatmap: implemented synthetic-universe selector frequency scan and 2D threshold heatmap for Greg selector.”
+
+Success criteria (what I will verify)
+
+App still starts; all existing tests + new tests pass.
+
+In the Backtesting Lab, I see a Selector Heatmap (Synthetic) panel.
+
+I can:
+
+Pick Greg, BTC, ATM Straddle,
+
+Choose VRP vs ADX metrics and grid ranges,
+
+Click Run Heatmap and get a colored table.
+
+Cells show % pass for that strategy, and darker/greener cells match higher pass% values.
