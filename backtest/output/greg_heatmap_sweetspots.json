@@ -1,0 +1,290 @@
+[
+  {
+    "underlying": "BTC",
+    "strategy": "Strategy A: ATM Straddle",
+    "strategy_key": "STRATEGY_A_STRADDLE",
+    "x_metric": "vrp_30d",
+    "y_metric": "adx_14d",
+    "sweet_spots": [
+      {
+        "x_low": 19.2561,
+        "x_high": 25.6776,
+        "y_low": 8.0998,
+        "y_high": 12.2802,
+        "occupancy_frac": 0.066667,
+        "strategy_pass_frac": 0.5,
+        "sweetness": 0.033334
+      },
+      {
+        "x_low": 38.5207,
+        "x_high": 44.9423,
+        "y_low": 8.0998,
+        "y_high": 12.2802,
+        "occupancy_frac": 0.022222,
+        "strategy_pass_frac": 1.0,
+        "sweetness": 0.022222
+      },
+      {
+        "x_low": 25.6776,
+        "x_high": 32.0992,
+        "y_low": 8.0998,
+        "y_high": 12.2802,
+        "occupancy_frac": 0.022222,
+        "strategy_pass_frac": 0.5,
+        "sweetness": 0.011111
+      }
+    ]
+  },
+  {
+    "underlying": "BTC",
+    "strategy": "Strategy B: OTM Strangle",
+    "strategy_key": "STRATEGY_A_STRANGLE",
+    "x_metric": "vrp_30d",
+    "y_metric": "adx_14d",
+    "sweet_spots": [
+      {
+        "x_low": 19.2561,
+        "x_high": 25.6776,
+        "y_low": 8.0998,
+        "y_high": 12.2802,
+        "occupancy_frac": 0.066667,
+        "strategy_pass_frac": 1.0,
+        "sweetness": 0.066667
+      },
+      {
+        "x_low": 12.8345,
+        "x_high": 19.2561,
+        "y_low": 16.4606,
+        "y_high": 20.641,
+        "occupancy_frac": 0.077778,
+        "strategy_pass_frac": 0.571429,
+        "sweetness": 0.044445
+      },
+      {
+        "x_low": 19.2561,
+        "x_high": 25.6776,
+        "y_low": 24.8214,
+        "y_high": 29.0019,
+        "occupancy_frac": 0.044444,
+        "strategy_pass_frac": 1.0,
+        "sweetness": 0.044444
+      },
+      {
+        "x_low": 19.2561,
+        "x_high": 25.6776,
+        "y_low": 12.2802,
+        "y_high": 16.4606,
+        "occupancy_frac": 0.033333,
+        "strategy_pass_frac": 1.0,
+        "sweetness": 0.033333
+      },
+      {
+        "x_low": 25.6776,
+        "x_high": 32.0992,
+        "y_low": 12.2802,
+        "y_high": 16.4606,
+        "occupancy_frac": 0.033333,
+        "strategy_pass_frac": 1.0,
+        "sweetness": 0.033333
+      }
+    ]
+  },
+  {
+    "underlying": "BTC",
+    "strategy": "Strategy A: ATM Straddle",
+    "strategy_key": "STRATEGY_A_STRADDLE",
+    "x_metric": "vrp_30d",
+    "y_metric": "iv_rank_6m",
+    "sweet_spots": [
+      {
+        "x_low": 19.2561,
+        "x_high": 25.6776,
+        "y_low": 0.2681,
+        "y_high": 0.3312,
+        "occupancy_frac": 0.033333,
+        "strategy_pass_frac": 0.666667,
+        "sweetness": 0.022222
+      },
+      {
+        "x_low": 19.2561,
+        "x_high": 25.6776,
+        "y_low": 0.3312,
+        "y_high": 0.3943,
+        "occupancy_frac": 0.055556,
+        "strategy_pass_frac": 0.4,
+        "sweetness": 0.022222
+      },
+      {
+        "x_low": 38.5207,
+        "x_high": 44.9423,
+        "y_low": 0.5205,
+        "y_high": 0.5837,
+        "occupancy_frac": 0.022222,
+        "strategy_pass_frac": 1.0,
+        "sweetness": 0.022222
+      },
+      {
+        "x_low": 25.6776,
+        "x_high": 32.0992,
+        "y_low": 0.3943,
+        "y_high": 0.4574,
+        "occupancy_frac": 0.022222,
+        "strategy_pass_frac": 0.5,
+        "sweetness": 0.011111
+      }
+    ]
+  },
+  {
+    "underlying": "BTC",
+    "strategy": "Strategy B: OTM Strangle",
+    "strategy_key": "STRATEGY_A_STRANGLE",
+    "x_metric": "vrp_30d",
+    "y_metric": "iv_rank_6m",
+    "sweet_spots": [
+      {
+        "x_low": 12.8345,
+        "x_high": 19.2561,
+        "y_low": 0.3312,
+        "y_high": 0.3943,
+        "occupancy_frac": 0.088889,
+        "strategy_pass_frac": 0.75,
+        "sweetness": 0.066667
+      },
+      {
+        "x_low": 12.8345,
+        "x_high": 19.2561,
+        "y_low": 0.2681,
+        "y_high": 0.3312,
+        "occupancy_frac": 0.066667,
+        "strategy_pass_frac": 0.833333,
+        "sweetness": 0.055556
+      },
+      {
+        "x_low": 19.2561,
+        "x_high": 25.6776,
+        "y_low": 0.3312,
+        "y_high": 0.3943,
+        "occupancy_frac": 0.055556,
+        "strategy_pass_frac": 1.0,
+        "sweetness": 0.055556
+      },
+      {
+        "x_low": 19.2561,
+        "x_high": 25.6776,
+        "y_low": 0.2681,
+        "y_high": 0.3312,
+        "occupancy_frac": 0.033333,
+        "strategy_pass_frac": 1.0,
+        "sweetness": 0.033333
+      },
+      {
+        "x_low": 19.2561,
+        "x_high": 25.6776,
+        "y_low": 0.4574,
+        "y_high": 0.5205,
+        "occupancy_frac": 0.033333,
+        "strategy_pass_frac": 1.0,
+        "sweetness": 0.033333
+      }
+    ]
+  },
+  {
+    "underlying": "BTC",
+    "strategy": "Strategy A: ATM Straddle",
+    "strategy_key": "STRATEGY_A_STRADDLE",
+    "x_metric": "adx_14d",
+    "y_metric": "iv_rank_6m",
+    "sweet_spots": [
+      {
+        "x_low": 8.0998,
+        "x_high": 12.2802,
+        "y_low": 0.2681,
+        "y_high": 0.3312,
+        "occupancy_frac": 0.033333,
+        "strategy_pass_frac": 0.666667,
+        "sweetness": 0.022222
+      },
+      {
+        "x_low": 8.0998,
+        "x_high": 12.2802,
+        "y_low": 0.5205,
+        "y_high": 0.5837,
+        "occupancy_frac": 0.022222,
+        "strategy_pass_frac": 1.0,
+        "sweetness": 0.022222
+      },
+      {
+        "x_low": 12.2802,
+        "x_high": 16.4606,
+        "y_low": 0.3312,
+        "y_high": 0.3943,
+        "occupancy_frac": 0.022222,
+        "strategy_pass_frac": 0.5,
+        "sweetness": 0.011111
+      },
+      {
+        "x_low": 8.0998,
+        "x_high": 12.2802,
+        "y_low": 0.3943,
+        "y_high": 0.4574,
+        "occupancy_frac": 0.022222,
+        "strategy_pass_frac": 0.5,
+        "sweetness": 0.011111
+      }
+    ]
+  },
+  {
+    "underlying": "BTC",
+    "strategy": "Strategy B: OTM Strangle",
+    "strategy_key": "STRATEGY_A_STRANGLE",
+    "x_metric": "adx_14d",
+    "y_metric": "iv_rank_6m",
+    "sweet_spots": [
+      {
+        "x_low": 8.0998,
+        "x_high": 12.2802,
+        "y_low": 0.3312,
+        "y_high": 0.3943,
+        "occupancy_frac": 0.044444,
+        "strategy_pass_frac": 1.0,
+        "sweetness": 0.044444
+      },
+      {
+        "x_low": 16.4606,
+        "x_high": 20.641,
+        "y_low": 0.2681,
+        "y_high": 0.3312,
+        "occupancy_frac": 0.066667,
+        "strategy_pass_frac": 0.5,
+        "sweetness": 0.033334
+      },
+      {
+        "x_low": 8.0998,
+        "x_high": 12.2802,
+        "y_low": 0.2681,
+        "y_high": 0.3312,
+        "occupancy_frac": 0.033333,
+        "strategy_pass_frac": 1.0,
+        "sweetness": 0.033333
+      },
+      {
+        "x_low": 20.641,
+        "x_high": 24.8214,
+        "y_low": 0.2681,
+        "y_high": 0.3312,
+        "occupancy_frac": 0.033333,
+        "strategy_pass_frac": 0.666667,
+        "sweetness": 0.022222
+      },
+      {
+        "x_low": 12.2802,
+        "x_high": 16.4606,
+        "y_low": 0.3312,
+        "y_high": 0.3943,
+        "occupancy_frac": 0.022222,
+        "strategy_pass_frac": 1.0,
+        "sweetness": 0.022222
+      }
+    ]
+  }
+]
