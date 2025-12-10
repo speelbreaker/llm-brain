@@ -430,12 +430,17 @@ class SensorBundle:
         self.rv_30d: Optional[float] = None
         self.rv_7d: Optional[float] = None
         self.ma200: Optional[float] = None
+        self.vrp_7d: Optional[float] = None
+        self.front_rv_iv_ratio: Optional[float] = None
+        self.predicted_funding_rate: Optional[float] = None
         self._missing: List[str] = []
     
     def to_dict(self) -> Dict[str, Optional[float]]:
-        """Return sensor values as dictionary."""
+        """Return sensor values as dictionary (v6.0 compatible)."""
         return {
             "vrp_30d": self.vrp_30d,
+            "vrp_7d": self.vrp_7d,
+            "front_rv_iv_ratio": self.front_rv_iv_ratio,
             "chop_factor_7d": self.chop_factor_7d,
             "iv_rank_6m": self.iv_rank_6m,
             "term_structure_spread": self.term_structure_spread,
@@ -443,6 +448,7 @@ class SensorBundle:
             "adx_14d": self.adx_14d,
             "rsi_14d": self.rsi_14d,
             "price_vs_ma200": self.price_vs_ma200,
+            "predicted_funding_rate": self.predicted_funding_rate,
         }
     
     def to_debug_dict(self) -> Dict[str, Any]:
@@ -618,6 +624,16 @@ def compute_sensors_for_underlying(
         bundle.chop_factor_7d = bundle.rv_7d / iv_30d
     else:
         bundle._missing.append("chop_factor_7d")
+    
+    if iv_7d is not None and bundle.rv_7d is not None:
+        bundle.vrp_7d = iv_7d - bundle.rv_7d
+    else:
+        bundle._missing.append("vrp_7d")
+    
+    if bundle.rv_7d is not None and iv_7d is not None and iv_7d > 0:
+        bundle.front_rv_iv_ratio = bundle.rv_7d / iv_7d
+    else:
+        bundle._missing.append("front_rv_iv_ratio")
     
     if term_spread_live is not None:
         bundle.term_structure_spread = term_spread_live

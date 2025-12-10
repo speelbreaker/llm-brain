@@ -1,0 +1,441 @@
+We already have:
+
+A Bots tab with Live Market Sensors, Strategy Matches (All Bots) and Expert Bots → GregBot.
+
+A Greg selector that reads a JSON spec and decides which Greg strategy (Straddle, Strangle, Calendar, Bull Put Spread, Bear Call Spread, Iron Fly, NO_TRADE) is active.
+
+A Backtesting Lab section in the main dashboard.
+
+(From previous tasks) a Greg heatmap script that writes sweet-spot summaries to backtest/output/greg_heatmap_sweetspots.json (see below for exact expected shape).
+
+Your task in this batch:
+
+Update the Greg strategy spec to v6.0 “Diamond-Grade”.
+
+Ensure the selector engine + sensors are consistent with this spec.
+
+Add a small “Greg Environment Sweet Spots” panel to the Backtesting Lab that reads the JSON and shows the top regions in the UI.
+
+Please keep all changes backwards-compatible and non-destructive.
+
+STEP 1 – Replace Greg rules JSON with v6.0 spec
+
+Locate the current Greg rules file, something like:
+
+docs/greg_mandolini/GREG_SELECTOR_RULES.json
+or any Greg-specific JSON under docs/ or config/.
+
+Replace its contents with the new v6.0 spec (I will have provided it as a file – look for "version": "6.0-Diamond-Grade" in the "meta" block to confirm you’re using the right one).
+
+Keep the same file name and path so existing loaders keep working.
+
+Preserve the same JSON/JSONC style (if comments are currently allowed, keep that style).
+
+Sanity check: confirm that the JSON is syntactically valid given how we parse it (if we use a strict JSON parser, strip/avoid comments; if we already use a JSON-with-comments loader, keep comments compatible).
+
+Key elements in the new spec to support:
+
+global_constraints.allowed_entry_dte
+
+global_constraints.risk_limits.execution_protocol.standard / black_swan_override
+
+global_constraints.calibration.skew_neutral_threshold
+
+global_constraints.calibration.min_vrp_floor
+
+Sensors:
+
+vrp_30d, vrp_7d
+
+front_rv_iv_ratio
+
+chop_factor_7d
+
+iv_rank_6m
+
+term_structure_spread
+
+skew_25d (note: Put – Call sign convention)
+
+adx_14d, rsi_14d, price_vs_ma200
+
+predicted_funding_rate
+
+Decision logic nodes with conditions using:
+
+ABS(skew_25d) < skew_neutral_threshold
+
+skew_25d > skew_neutral_threshold
+
+skew_25d < (skew_neutral_threshold * -1)
+
+vrp_30d > min_vrp_floor
+
+Strategy definitions for:
+
+STRATEGY_A_STRADDLE
+
+STRATEGY_A_STRANGLE
+
+STRATEGY_B_CALENDAR
+
+STRATEGY_C_SHORT_PUT
+
+STRATEGY_D_IRON_BUTTERFLY
+
+STRATEGY_F_BULL_PUT_SPREAD
+
+STRATEGY_F_BEAR_CALL_SPREAD
+
+NO_TRADE
+
+black_swan_protocol block.
+
+STEP 2 – Make selector engine + sensors consistent with v6.0
+
+Locate the Greg selector engine, e.g.:
+
+src/greg_selector.py
+
+src/bots/greg_mandolini.py
+
+Or any module that:
+
+Loads the Greg JSON.
+
+Evaluates the decision_tree conditions.
+
+Produces strategy/status rows for the GregBot table in the UI.
+
+2A. Sensor computation
+
+Make sure the metric pipeline that powers the Bots tab computes the v6.0 sensors:
+
+vrp_30d and vrp_7d
+
+vrp_30d = Implied_Vol_30d - Realized_Vol_30d
+
+vrp_7d = Implied_Vol_7d - Realized_Vol_7d
+
+front_rv_iv_ratio (NEW)
+
+front_rv_iv_ratio = Realized_Vol_7d / Implied_Vol_7d
+
+If Implied_Vol_7d <= 0 or missing, set front_rv_iv_ratio = null to avoid division by zero.
+
+Use the same IV/RV sources as you currently do for vrp_7d.
+
+chop_factor_7d
+
+Already present: Realized_Vol_7d / Implied_Vol_30d.
+
+Keep this as-is; it’s still used in the decision tree.
+
+iv_rank_6m, term_structure_spread, skew_25d
+
+Ensure:
+
+term_structure_spread = Implied_Vol_7d - Implied_Vol_30d.
+
+skew_25d = Implied_Vol_25d_Put - Implied_Vol_25d_Call (note: Put – Call; if code currently uses Call – Put, flip the sign to match the spec).
+
+trend metrics
+
+adx_14d, rsi_14d should already be computed (from OHLC).
+
+price_vs_ma200 should match the spec:
+
+Either use price – MA200 or a documented alternative (e.g. % distance) consistently.
+
+If current implementation uses % distance, document that mapping clearly in comments so the selector logic’s thresholds still make sense.
+
+predicted_funding_rate
+
+If already available, map it correctly into the metrics dict for Greg (e.g. from perps funding API).
+
+If not yet implemented, it is OK to leave it as null in live mode, but the selector must handle null gracefully (see below).
+
+2B. Expression evaluator updates
+
+The decision_tree conditions in v6.0 refer to calibration variables:
+
+skew_neutral_threshold
+
+min_vrp_floor
+
+Make sure the expression evaluator:
+
+Loads global_constraints.calibration from the JSON (e.g. skew_neutral_threshold = 4.0, min_vrp_floor = 0.0).
+
+Makes these values available to the expression context so strings like:
+
+ABS(skew_25d) < skew_neutral_threshold
+
+vrp_30d > min_vrp_floor
+
+skew_25d < (skew_neutral_threshold * -1)
+
+can be evaluated without errors.
+
+Already-supported functions/ops should include ABS, comparison ops, logical AND/OR. If something is missing, add it minimally and safely.
+
+If any sensor used in a condition is null, the condition should simply evaluate to False, not crash:
+
+e.g., if front_rv_iv_ratio is null, the Calendar node’s condition should not be true; we then fall through to other nodes.
+
+STEP 3 – Keep execution / Funding Trap semantics in sync
+
+In the code paths that interpret strategy definitions (e.g. backtest or execution simulators), make sure they still align with the updated v6.0 strategy_definitions:
+
+Especially:
+
+STRATEGY_C_SHORT_PUT.management.expiry_rule which now clearly branches on:
+
+Want_Ownership
+
+Predicted_Funding >= 0 → buy perp (synthetic)
+
+Predicted_Funding < 0 → buy spot to avoid funding bleed.
+
+You don’t have to implement full live trading logic yet, but comments and any simulation logic should not contradict the JSON text.
+
+Ensure the Black Swan behaviour in code respects:
+
+"execution_protocol": {
+  "standard": "LIMIT_ORDERS_ONLY",
+  "black_swan_override": "MARKET_ORDERS_ALLOWED"
+}
+
+
+Normal entries and routine management → use limit orders.
+
+Black Swan triggers (market cap / BTC crash) → allow market orders for forced exits.
+
+STEP 4 – Backtesting Lab: “Greg Environment Sweet Spots” panel
+
+Assume we have (or will have) an offline script that writes a summary file:
+
+Path: backtest/output/greg_heatmap_sweetspots.json
+
+Shape:
+
+[
+  {
+    "underlying": "BTC",
+    "strategy": "Strategy A: ATM Straddle",
+    "x_metric": "vrp_30d",
+    "y_metric": "adx_14d",
+    "sweet_spots": [
+      {
+        "x_low": 10.0,
+        "x_high": 20.0,
+        "y_low": 15.0,
+        "y_high": 30.0,
+        "occupancy_frac": 0.093,
+        "strategy_pass_frac": 0.647,
+        "sweetness": 0.060
+      }
+    ]
+  },
+  ...
+]
+
+
+If the file doesn’t exist yet, the panel should just say “No sweet spot data found yet.”
+
+4A. FastAPI endpoint
+
+In src/web_app.py, add a new read-only API:
+
+from pathlib import Path
+import json
+
+@app.get("/api/greg_sweetspots")
+def get_greg_sweetspots() -> JSONResponse:
+    """
+    Return the latest Greg environment sweet spots, if available.
+
+    Reads backtest/output/greg_heatmap_sweetspots.json and wraps it in {ok, data}.
+    """
+    try:
+        base_dir = Path(__file__).resolve().parent.parent  # adjust if you already have BASE_DIR
+        json_path = base_dir / "backtest" / "output" / "greg_heatmap_sweetspots.json"
+
+        if not json_path.exists():
+            return JSONResponse(
+                content={"ok": False, "error": "No sweet spots file found. Run the Greg heatmap script in Backtesting Lab."},
+                status_code=200,
+            )
+
+        raw = json_path.read_text(encoding="utf-8")
+        data = json.loads(raw)
+
+        return JSONResponse(content={"ok": True, "data": data})
+    except Exception as e:
+        return JSONResponse(content={"ok": False, "error": str(e)}, status_code=500)
+
+
+Re-use any existing BASE_DIR constant if you have one instead of recomputing it.
+
+4B. Backtesting Lab HTML block
+
+In index() in src/web_app.py, under the Backtesting Lab section (ideally below any existing heatmap tools), add a small panel:
+
+### Greg Environment Sweet Spots
+
+This section shows the latest “sweet spots” where Greg’s strategies both **like the environment** and the environment spends **non-trivial time**.  
+To refresh, run the offline script that generates `backtest/output/greg_heatmap_sweetspots.json`.
+
+<div id="greg-sweetspots-panel">
+  <button id="greg-sweetspots-refresh-btn">Refresh Sweet Spots</button>
+  <div id="greg-sweetspots-status" aria-live="polite"></div>
+  <div id="greg-sweetspots-content"></div>
+</div>
+
+
+Keep styling consistent with the rest of the page; no external CSS needed.
+
+4C. JavaScript wiring
+
+In the existing <script> block in index() (where other UI sections are wired), add:
+
+document.addEventListener("DOMContentLoaded", () => {
+  // ... existing init code ...
+
+  const sweetPanel = document.getElementById("greg-sweetspots-panel");
+  if (sweetPanel) {
+    const btn = document.getElementById("greg-sweetspots-refresh-btn");
+    const statusEl = document.getElementById("greg-sweetspots-status");
+    const contentEl = document.getElementById("greg-sweetspots-content");
+
+    function renderSweetSpots(payload) {
+      if (!payload.ok) {
+        statusEl.textContent = payload.error || "No sweet spot data.";
+        statusEl.style.color = "red";
+        contentEl.innerHTML = "";
+        return;
+      }
+
+      const data = payload.data || [];
+      if (!Array.isArray(data) || data.length === 0) {
+        statusEl.textContent = "No sweet spot entries found in JSON.";
+        statusEl.style.color = "orange";
+        contentEl.innerHTML = "";
+        return;
+      }
+
+      statusEl.textContent = "Loaded sweet spots from latest run.";
+      statusEl.style.color = "green";
+
+      // Group by underlying and strategy
+      const groups = {};
+      data.forEach((entry) => {
+        const key = entry.underlying + " :: " + entry.strategy;
+        if (!groups[key]) groups[key] = [];
+        const spots = entry.sweet_spots || [];
+        // Only keep top 3 spots per (underlying, strategy) for UI
+        groups[key] = groups[key].concat(spots.slice(0, 3));
+      });
+
+      let html = "";
+      Object.keys(groups).forEach((key) => {
+        html += "<h4>" + key + "</h4><ul>";
+        groups[key].forEach((spot, idx) => {
+          const occ = (spot.occupancy_frac * 100).toFixed(1);
+          const pass = (spot.strategy_pass_frac * 100).toFixed(1);
+          const sweet = spot.sweetness != null ? spot.sweetness.toFixed(4) : "";
+
+          html += "<li>";
+          html += "Region " + (idx + 1) + ": ";
+          html += spot.x_low + " ≤ " + "X" + " < " + spot.x_high + ", ";
+          html += spot.y_low + " ≤ " + "Y" + " < " + spot.y_high;
+          html += " — occupancy ~ " + occ + "%, pass ~ " + pass + "%";
+          if (sweet) {
+            html += ", score ~ " + sweet;
+          }
+          html += "</li>";
+        });
+        html += "</ul>";
+      });
+
+      contentEl.innerHTML = html;
+    }
+
+    function fetchSweetSpots() {
+      statusEl.textContent = "Loading sweet spots...";
+      statusEl.style.color = "";
+      contentEl.innerHTML = "";
+
+      fetch("/api/greg_sweetspots")
+        .then((r) => r.json())
+        .then(renderSweetSpots)
+        .catch((err) => {
+          statusEl.textContent = "Error loading sweet spots: " + err;
+          statusEl.style.color = "red";
+          contentEl.innerHTML = "";
+        });
+    }
+
+    if (btn) {
+      btn.addEventListener("click", fetchSweetSpots);
+    }
+
+    // Auto-load once on page load
+    fetchSweetSpots();
+  }
+});
+
+
+Notes:
+
+We deliberately keep this read-only: it just reads the JSON produced by the offline backtest script and displays a short list.
+
+For simplicity, we label axes as “X/Y” in text; the user can infer metrics from the x_metric / y_metric fields in the JSON or we can enhance later to show metric names too (optional future enhancement).
+
+STEP 5 – Tests and docs
+
+Add/update tests for Greg selector:
+
+Ensure that:
+
+skew_neutral_threshold and min_vrp_floor are read from the JSON and interpreted correctly.
+
+The Calendar node uses front_rv_iv_ratio and vrp_7d as per spec.
+
+Directional strategies do not fire when vrp_30d <= min_vrp_floor.
+
+Add a small test for the new endpoint:
+
+tests/test_greg_sweetspots_api.py:
+
+If the JSON file is missing, /api/greg_sweetspots returns ok=False with a helpful error.
+
+If a small dummy JSON exists, it returns ok=True and the data structure as expected.
+
+Update replit.md (or the main README for the web UI) with:
+
+A short section on “Greg v6.0 Diamond-Grade rules” (where the spec lives).
+
+How to run the Greg environment heatmap / sweet spot script.
+
+How to view results in the Backtesting Lab → Greg Environment Sweet Spots panel.
+
+Success criteria (for the operator)
+
+GregBot in the Bots tab is now driven by the v6.0 “Diamond-Grade” rules: you can confirm via the JSON and by observing strategy statuses under different environments.
+
+The selector uses:
+
+Skew neutral vs directional bands via skew_neutral_threshold.
+
+VRP floor via min_vrp_floor across directional shorts.
+
+front_rv_iv_ratio in the Calendar branch.
+
+In the Backtesting Lab, a small panel appears:
+
+Greg Environment Sweet Spots
+
+with a Refresh button and a list of regions (or a clear message if no JSON is present).
+
+The app still starts normally and all existing tests pass (plus the new ones).

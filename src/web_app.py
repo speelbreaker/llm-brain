@@ -1550,6 +1550,33 @@ def get_steward_report() -> JSONResponse:
         )
 
 
+@app.get("/api/greg_sweetspots")
+def get_greg_sweetspots() -> JSONResponse:
+    """
+    Return the latest Greg environment sweet spots, if available.
+    Reads backtest/output/greg_heatmap_sweetspots.json and wraps it in {ok, data}.
+    """
+    try:
+        import json as json_lib
+        base_dir = Path(__file__).resolve().parent.parent
+        json_path = base_dir / "backtest" / "output" / "greg_heatmap_sweetspots.json"
+        
+        if not json_path.exists():
+            return JSONResponse(
+                content={
+                    "ok": False,
+                    "error": "No sweet spots file found. Run the Greg heatmap script: python scripts/run_greg_environment_heatmaps.py"
+                },
+            )
+        
+        raw = json_path.read_text(encoding="utf-8")
+        data = json_lib.loads(raw)
+        
+        return JSONResponse(content={"ok": True, "data": data})
+    except Exception as e:
+        return JSONResponse(content={"ok": False, "error": str(e)}, status_code=500)
+
+
 class RuntimeConfigUpdate(BaseModel):
     """Request model for updating runtime configuration."""
     kill_switch_enabled: Optional[bool] = None
@@ -3036,6 +3063,17 @@ def index() -> str:
             Cell value = % of decision steps where environment fell into that bucket. All runs use the synthetic universe.
           </p>
         </div>
+      </div>
+      
+      <div class="card" id="greg-sweetspots-panel">
+        <h3 style="margin-top:0;">Greg Environment Sweet Spots</h3>
+        <p style="color:#666;font-size:0.9rem;margin-bottom:12px;">
+          Shows regions where Greg's strategies pass AND the environment spends time.
+          Run <code>python scripts/run_greg_environment_heatmaps.py</code> to generate data.
+        </p>
+        <button id="greg-sweetspots-refresh-btn" style="background:#ff9800;color:#fff;border:none;padding:8px 16px;border-radius:4px;cursor:pointer;">Refresh Sweet Spots</button>
+        <div id="greg-sweetspots-status" aria-live="polite" style="margin-top:8px;font-size:0.9rem;"></div>
+        <div id="greg-sweetspots-content" style="margin-top:1rem;"></div>
       </div>
     </div>
 
@@ -5950,6 +5988,81 @@ def index() -> str:
       }} catch (err) {{
         statusDiv.innerHTML = `<span style="color:#f44336;">Error: ${{err.message}}</span>`;
       }}
+    }}
+
+    // Greg Environment Sweet Spots panel
+    const sweetPanel = document.getElementById('greg-sweetspots-panel');
+    if (sweetPanel) {{
+      const sweetBtn = document.getElementById('greg-sweetspots-refresh-btn');
+      const sweetStatus = document.getElementById('greg-sweetspots-status');
+      const sweetContent = document.getElementById('greg-sweetspots-content');
+      
+      function renderSweetSpots(payload) {{
+        if (!payload.ok) {{
+          sweetStatus.textContent = payload.error || 'No sweet spot data.';
+          sweetStatus.style.color = '#f44336';
+          sweetContent.innerHTML = '';
+          return;
+        }}
+        
+        const data = payload.data || [];
+        if (!Array.isArray(data) || data.length === 0) {{
+          sweetStatus.textContent = 'No sweet spot entries found in JSON.';
+          sweetStatus.style.color = '#ff9800';
+          sweetContent.innerHTML = '';
+          return;
+        }}
+        
+        sweetStatus.textContent = 'Loaded sweet spots from latest run.';
+        sweetStatus.style.color = '#4caf50';
+        
+        const groups = {{}};
+        data.forEach((entry) => {{
+          const key = entry.underlying + ' / ' + entry.strategy;
+          if (!groups[key]) groups[key] = [];
+          const spots = entry.sweet_spots || [];
+          spots.slice(0, 3).forEach(spot => {{
+            groups[key].push({{...spot, x_metric: entry.x_metric, y_metric: entry.y_metric}});
+          }});
+        }});
+        
+        let html = '';
+        Object.keys(groups).slice(0, 10).forEach((key) => {{
+          html += '<div style="margin-bottom:12px;"><strong>' + key + '</strong><ul style="margin:4px 0 0 16px;padding:0;">';
+          groups[key].slice(0, 5).forEach((spot, idx) => {{
+            const occ = (spot.occupancy_frac * 100).toFixed(1);
+            const pass = (spot.strategy_pass_frac * 100).toFixed(1);
+            const sweet = spot.sweetness != null ? spot.sweetness.toFixed(4) : '';
+            html += '<li style="font-size:0.9rem;color:#333;">';
+            html += spot.x_metric + ' \\u2208 [' + spot.x_low.toFixed(1) + ', ' + spot.x_high.toFixed(1) + '], ';
+            html += spot.y_metric + ' \\u2208 [' + spot.y_low.toFixed(1) + ', ' + spot.y_high.toFixed(1) + ']';
+            html += ' &mdash; occ: ' + occ + '%, pass: ' + pass + '%';
+            if (sweet) html += ', score: ' + sweet;
+            html += '</li>';
+          }});
+          html += '</ul></div>';
+        }});
+        
+        sweetContent.innerHTML = html || '<p style="color:#888;">No sweet spots to display.</p>';
+      }}
+      
+      function fetchSweetSpots() {{
+        sweetStatus.textContent = 'Loading sweet spots...';
+        sweetStatus.style.color = '';
+        sweetContent.innerHTML = '';
+        
+        fetch('/api/greg_sweetspots')
+          .then(r => r.json())
+          .then(renderSweetSpots)
+          .catch(err => {{
+            sweetStatus.textContent = 'Error loading sweet spots: ' + err;
+            sweetStatus.style.color = '#f44336';
+            sweetContent.innerHTML = '';
+          }});
+      }}
+      
+      if (sweetBtn) sweetBtn.addEventListener('click', fetchSweetSpots);
+      fetchSweetSpots();
     }}
 
     fetchStatus();

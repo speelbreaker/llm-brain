@@ -18,10 +18,18 @@ from src.models import AgentState
 
 
 class GregSelectorSensors(BaseModel):
-    """Sensor values used by the Greg selector decision tree."""
+    """Sensor values used by the Greg selector decision tree (v6.0)."""
     vrp_30d: Optional[float] = Field(
         default=None,
         description="Volatility Risk Premium (IV_30d - RV_30d)"
+    )
+    vrp_7d: Optional[float] = Field(
+        default=None,
+        description="7-day VRP (IV_7d - RV_7d)"
+    )
+    front_rv_iv_ratio: Optional[float] = Field(
+        default=None,
+        description="Front RV/IV ratio (RV_7d / IV_7d)"
     )
     chop_factor_7d: Optional[float] = Field(
         default=None,
@@ -50,6 +58,10 @@ class GregSelectorSensors(BaseModel):
     price_vs_ma200: Optional[float] = Field(
         default=None,
         description="Current price minus 200-day MA"
+    )
+    predicted_funding_rate: Optional[float] = Field(
+        default=None,
+        description="Predicted perpetual funding rate"
     )
 
 
@@ -161,15 +173,26 @@ def _safe_check(value: Optional[float], op: str, threshold: float) -> bool:
     return False
 
 
+def _get_calibration_context(spec: Dict[str, Any]) -> Dict[str, float]:
+    """Extract calibration variables from the spec for expression evaluation."""
+    calibration = spec.get("global_constraints", {}).get("calibration", {})
+    return {
+        "skew_neutral_threshold": calibration.get("skew_neutral_threshold", 4.0),
+        "min_vrp_floor": calibration.get("min_vrp_floor", 0.0),
+    }
+
+
 def evaluate_greg_selector(sensors: GregSelectorSensors) -> GregSelectorDecision:
     """
     Walk the decision tree from the JSON spec in order; first match wins.
     Implements each condition explicitly in Python (no eval).
     None values are treated as "condition not satisfied".
+    Supports v6.0 calibration variables and ABS() function.
     """
     spec = load_greg_spec()
     meta = spec.get("meta", {})
     decision_tree = spec.get("decision_tree", [])
+    calibration_ctx = _get_calibration_context(spec)
     
     for idx, rule in enumerate(decision_tree):
         condition = rule.get("condition", "")
@@ -185,7 +208,7 @@ def evaluate_greg_selector(sensors: GregSelectorSensors) -> GregSelectorDecision
                 meta=meta,
             )
         
-        if _matches_condition(condition, sensors):
+        if _matches_condition(condition, sensors, calibration_ctx):
             return GregSelectorDecision(
                 selected_strategy=selected_strategy,
                 reasoning=reasoning,
@@ -203,40 +226,98 @@ def evaluate_greg_selector(sensors: GregSelectorSensors) -> GregSelectorDecision
     )
 
 
-def _matches_condition(condition: str, sensors: GregSelectorSensors) -> bool:
+def _matches_condition(
+    condition: str,
+    sensors: GregSelectorSensors,
+    calibration_ctx: Optional[Dict[str, float]] = None,
+) -> bool:
     """
     Parse and evaluate a condition string against sensor values.
-    Supports AND/OR operators and basic comparisons.
+    Supports AND/OR operators, basic comparisons, ABS(), and calibration variables.
     """
+    calibration_ctx = calibration_ctx or {}
+    
     if " OR " in condition:
         parts = condition.split(" OR ")
-        return any(_evaluate_simple_condition(p.strip(), sensors) for p in parts)
+        return any(_evaluate_simple_condition(p.strip(), sensors, calibration_ctx) for p in parts)
     
     if " AND " in condition:
         parts = condition.split(" AND ")
-        return all(_evaluate_simple_condition(p.strip(), sensors) for p in parts)
+        return all(_evaluate_simple_condition(p.strip(), sensors, calibration_ctx) for p in parts)
     
-    return _evaluate_simple_condition(condition.strip(), sensors)
+    return _evaluate_simple_condition(condition.strip(), sensors, calibration_ctx)
 
 
-def _evaluate_simple_condition(cond: str, sensors: GregSelectorSensors) -> bool:
+def _resolve_value(
+    expr: str,
+    sensors: GregSelectorSensors,
+    calibration_ctx: Dict[str, float],
+) -> Optional[float]:
     """
-    Evaluate a simple condition like 'adx_14d > 35' or 'vrp_30d >= 10.0'.
-    Returns False if the sensor value is None.
+    Resolve an expression to a float value.
+    Supports:
+    - Sensor names: vrp_30d, skew_25d, etc.
+    - Calibration variables: skew_neutral_threshold, min_vrp_floor
+    - ABS(sensor_name): absolute value of a sensor
+    - Numeric literals: 15.0, 0.8, etc.
+    - Expressions: (skew_neutral_threshold * -1)
+    """
+    expr = expr.strip()
+    
+    if expr.startswith("ABS(") and expr.endswith(")"):
+        inner = expr[4:-1].strip()
+        inner_val = _resolve_value(inner, sensors, calibration_ctx)
+        if inner_val is None:
+            return None
+        return abs(inner_val)
+    
+    if expr.startswith("(") and expr.endswith(")"):
+        inner = expr[1:-1].strip()
+        if " * " in inner:
+            parts = inner.split(" * ")
+            if len(parts) == 2:
+                left = _resolve_value(parts[0].strip(), sensors, calibration_ctx)
+                right = _resolve_value(parts[1].strip(), sensors, calibration_ctx)
+                if left is not None and right is not None:
+                    return left * right
+        return _resolve_value(inner, sensors, calibration_ctx)
+    
+    if expr in calibration_ctx:
+        return calibration_ctx[expr]
+    
+    sensor_val = getattr(sensors, expr, None)
+    if sensor_val is not None:
+        return sensor_val
+    
+    try:
+        return float(expr)
+    except ValueError:
+        return None
+
+
+def _evaluate_simple_condition(
+    cond: str,
+    sensors: GregSelectorSensors,
+    calibration_ctx: Dict[str, float],
+) -> bool:
+    """
+    Evaluate a simple condition like 'adx_14d > 35' or 'ABS(skew_25d) < skew_neutral_threshold'.
+    Returns False if any sensor value is None.
     """
     operators = [">=", "<=", ">", "<", "=="]
     
     for op in operators:
         if op in cond:
-            parts = cond.split(op)
-            if len(parts) == 2:
-                sensor_name = parts[0].strip()
-                try:
-                    threshold = float(parts[1].strip())
-                except ValueError:
-                    return False
-                
-                sensor_value = getattr(sensors, sensor_name, None)
-                return _safe_check(sensor_value, op, threshold)
+            idx = cond.find(op)
+            left_expr = cond[:idx].strip()
+            right_expr = cond[idx + len(op):].strip()
+            
+            left_val = _resolve_value(left_expr, sensors, calibration_ctx)
+            right_val = _resolve_value(right_expr, sensors, calibration_ctx)
+            
+            if left_val is None or right_val is None:
+                return False
+            
+            return _safe_check(left_val, op, right_val)
     
     return False

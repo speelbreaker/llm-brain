@@ -273,6 +273,8 @@ def get_gregbot_evaluations_for_underlying(underlying: str) -> Dict[str, Any]:
     
     greg_sensors = GregSelectorSensors(
         vrp_30d=sensors.get("vrp_30d"),
+        vrp_7d=sensors.get("vrp_7d"),
+        front_rv_iv_ratio=sensors.get("front_rv_iv_ratio"),
         chop_factor_7d=sensors.get("chop_factor_7d"),
         iv_rank_6m=sensors.get("iv_rank_6m"),
         term_structure_spread=sensors.get("term_structure_spread"),
@@ -280,6 +282,7 @@ def get_gregbot_evaluations_for_underlying(underlying: str) -> Dict[str, Any]:
         adx_14d=sensors.get("adx_14d"),
         rsi_14d=sensors.get("rsi_14d"),
         price_vs_ma200=sensors.get("price_vs_ma200"),
+        predicted_funding_rate=sensors.get("predicted_funding_rate"),
     )
     
     decision = evaluate_greg_selector(greg_sensors)
