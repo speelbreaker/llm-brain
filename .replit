@@ -19,6 +19,10 @@ author = "agent"
 task = "workflow.run"
 args = "Options Trading Agent"
 
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "Deribit Data Harvester"
+
 [[workflows.workflow]]
 name = "Options Trading Agent"
 author = "agent"
@@ -30,6 +34,17 @@ outputType = "webview"
 task = "shell.exec"
 args = "uvicorn src.web_app:app --host 0.0.0.0 --port 5000"
 waitForPort = 5000
+
+[[workflows.workflow]]
+name = "Deribit Data Harvester"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "python -m scripts.data_harvester"
+
+[workflows.workflow.metadata]
+outputType = "console"
 
 [deployment]
 deploymentTarget = "autoscale"
@@ -49,10 +64,6 @@ localPort = 34333
 externalPort = 3002
 
 [[ports]]
-localPort = 40193
-externalPort = 3003
-
-[[ports]]
 localPort = 44449
 externalPort = 3001
 
@@ -66,3 +77,4 @@ MAX_EXPIRY_EXPOSURE = "0.1"
 SAVE_TRAINING_DATA = "true"
 TRAINING_MODE = "true"
 SYNTHETIC_IV_MULTIPLIER = "0.62"
+HARVESTER_INTERVAL_MINUTES = "5"
