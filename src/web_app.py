@@ -3547,6 +3547,83 @@ def index() -> str:
         </div>
       </div>
       
+      <!-- Data Health & Reproducibility Panel -->
+      <div class="card" style="margin-top:1rem;border-left:4px solid #00bcd4;">
+        <h3 style="margin-top:0;color:#00bcd4;">Data Health & Reproducibility</h3>
+        
+        <div style="background:#e0f7fa;padding:12px;border-radius:6px;margin-bottom:16px;font-size:0.9rem;color:#555;">
+          Historical calibrations use harvested Deribit data from the specified time window.
+          For each run, we record the dataset path, time period, configuration, and data-quality checks so that the results are reproducible and you can see whether they are based on reliable data.
+        </div>
+        
+        <!-- Data Health Summary -->
+        <div style="margin-bottom:16px;">
+          <h4 style="margin:0 0 8px 0;color:#0097a7;">Harvested Data Health</h4>
+          <div id="data-health-status" style="display:flex;align-items:center;gap:12px;margin-bottom:12px;">
+            <span id="data-health-badge" style="background:#c8e6c9;color:#2e7d32;padding:6px 14px;border-radius:16px;font-weight:600;font-size:0.9rem;">OK</span>
+            <span id="data-health-summary" style="font-size:0.9rem;color:#333;">No calibration run yet</span>
+          </div>
+          
+          <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(140px, 1fr));gap:12px;margin-bottom:12px;">
+            <div style="background:#f5f5f5;padding:10px;border-radius:6px;text-align:center;">
+              <div style="font-size:0.75rem;color:#666;margin-bottom:4px;">Snapshots</div>
+              <div id="dh-num-snapshots" style="font-size:1.1rem;font-weight:600;color:#333;">-</div>
+            </div>
+            <div style="background:#f5f5f5;padding:10px;border-radius:6px;text-align:center;">
+              <div style="font-size:0.75rem;color:#666;margin-bottom:4px;">Schema Issues</div>
+              <div id="dh-schema-issues" style="font-size:1.1rem;font-weight:600;color:#333;">-</div>
+            </div>
+            <div style="background:#f5f5f5;padding:10px;border-radius:6px;text-align:center;">
+              <div style="font-size:0.75rem;color:#666;margin-bottom:4px;">Low-Quality</div>
+              <div id="dh-low-quality" style="font-size:1.1rem;font-weight:600;color:#333;">-</div>
+            </div>
+            <div style="background:#f5f5f5;padding:10px;border-radius:6px;text-align:center;">
+              <div style="font-size:0.75rem;color:#666;margin-bottom:4px;">Core Completeness</div>
+              <div id="dh-completeness" style="font-size:1.1rem;font-weight:600;color:#333;">-</div>
+            </div>
+          </div>
+          
+          <div id="dh-issues-list" style="display:none;background:#fff3e0;padding:10px;border-radius:6px;margin-bottom:12px;">
+            <h5 style="margin:0 0 6px 0;color:#e65100;font-size:0.85rem;">Issues Detected:</h5>
+            <ul id="dh-issues-ul" style="margin:0;padding-left:20px;font-size:0.85rem;color:#bf360c;"></ul>
+          </div>
+        </div>
+        
+        <!-- Reproducibility Info -->
+        <div id="repro-section" style="display:none;">
+          <h4 style="margin:0 0 8px 0;color:#0097a7;">Last Historical Calibration</h4>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px;">
+            <div style="background:#e0f2f1;padding:10px;border-radius:6px;">
+              <div style="font-size:0.75rem;color:#666;margin-bottom:4px;">Run Time</div>
+              <div id="repro-timestamp" style="font-size:0.9rem;color:#333;">-</div>
+            </div>
+            <div style="background:#e0f2f1;padding:10px;border-radius:6px;">
+              <div style="font-size:0.75rem;color:#666;margin-bottom:4px;">Underlying</div>
+              <div id="repro-underlying" style="font-size:0.9rem;color:#333;">-</div>
+            </div>
+          </div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px;">
+            <div style="background:#e0f2f1;padding:10px;border-radius:6px;">
+              <div style="font-size:0.75rem;color:#666;margin-bottom:4px;">Harvest Period</div>
+              <div id="repro-period" style="font-size:0.9rem;color:#333;">-</div>
+            </div>
+            <div style="background:#e0f2f1;padding:10px;border-radius:6px;">
+              <div style="font-size:0.75rem;color:#666;margin-bottom:4px;">Config Hash</div>
+              <div id="repro-config-hash" style="font-size:0.9rem;color:#333;font-family:monospace;">-</div>
+            </div>
+          </div>
+          <div style="background:#e0f2f1;padding:10px;border-radius:6px;margin-bottom:12px;">
+            <div style="font-size:0.75rem;color:#666;margin-bottom:4px;">Regime Model</div>
+            <div id="repro-regimes" style="font-size:0.9rem;color:#333;">-</div>
+          </div>
+          
+          <button id="view-raw-metadata-btn" onclick="toggleRawMetadata()" style="background:#00acc1;color:#fff;border:none;padding:6px 12px;border-radius:4px;cursor:pointer;font-size:0.85rem;">
+            View Raw Metadata
+          </button>
+          <div id="raw-metadata-container" style="display:none;margin-top:12px;background:#263238;color:#b2ebf2;padding:12px;border-radius:6px;font-family:monospace;font-size:0.75rem;max-height:200px;overflow:auto;white-space:pre-wrap;"></div>
+        </div>
+      </div>
+      
       <!-- Update Policy Panel -->
       <div class="card" style="margin-top:1rem;border-left:4px solid #4caf50;">
         <h3 style="margin-top:0;color:#4caf50;">IV Calibration Update Policy</h3>
@@ -5725,6 +5802,120 @@ def index() -> str:
       }}
     }}
     
+    function updateDataHealthPanel(data) {{
+      // Get data_quality from the response
+      const dq = data.data_quality;
+      
+      if (!dq) {{
+        // No data quality info available
+        document.getElementById('data-health-summary').textContent = 'No data quality info (live calibration)';
+        return;
+      }}
+      
+      // Update status badge
+      const badge = document.getElementById('data-health-badge');
+      const status = (dq.status || 'ok').toLowerCase();
+      
+      if (status === 'ok') {{
+        badge.style.background = '#c8e6c9';
+        badge.style.color = '#2e7d32';
+        badge.textContent = 'OK';
+      }} else if (status === 'degraded') {{
+        badge.style.background = '#ffe0b2';
+        badge.style.color = '#e65100';
+        badge.textContent = 'DEGRADED';
+      }} else {{
+        badge.style.background = '#ffcdd2';
+        badge.style.color = '#c62828';
+        badge.textContent = 'FAILED';
+      }}
+      
+      // Update summary text
+      const completeness = ((dq.overall_non_null_core_fraction || 0) * 100).toFixed(0);
+      const summaryText = `${{dq.num_snapshots || 0}} snapshots checked, ${{completeness}}% core-field completeness`;
+      document.getElementById('data-health-summary').textContent = summaryText;
+      
+      // Update metrics
+      document.getElementById('dh-num-snapshots').textContent = dq.num_snapshots || 0;
+      document.getElementById('dh-schema-issues').textContent = dq.num_schema_failures || 0;
+      document.getElementById('dh-low-quality').textContent = dq.num_low_quality_snapshots || 0;
+      document.getElementById('dh-completeness').textContent = `${{completeness}}%`;
+      
+      // Update issues list
+      const issuesList = document.getElementById('dh-issues-list');
+      const issuesUl = document.getElementById('dh-issues-ul');
+      
+      if (dq.issues && dq.issues.length > 0) {{
+        issuesList.style.display = 'block';
+        issuesUl.innerHTML = dq.issues.map(issue => `<li>${{issue}}</li>`).join('');
+      }} else {{
+        issuesList.style.display = 'none';
+      }}
+    }}
+    
+    let lastReproducibilityMetadata = null;
+    
+    function updateReproducibilityPanel(data) {{
+      const repro = data.reproducibility;
+      const reproSection = document.getElementById('repro-section');
+      
+      if (!repro) {{
+        reproSection.style.display = 'none';
+        return;
+      }}
+      
+      reproSection.style.display = 'block';
+      lastReproducibilityMetadata = repro;
+      
+      // Update timestamp
+      const timestamp = data.timestamp || data.time_range_end;
+      if (timestamp) {{
+        const dt = new Date(timestamp);
+        document.getElementById('repro-timestamp').textContent = dt.toLocaleString();
+      }} else {{
+        document.getElementById('repro-timestamp').textContent = '-';
+      }}
+      
+      // Update underlying
+      document.getElementById('repro-underlying').textContent = data.underlying || '-';
+      
+      // Update harvest period
+      const hc = repro.harvest_config;
+      if (hc) {{
+        const startStr = hc.start_time ? new Date(hc.start_time).toLocaleDateString() : 'start';
+        const endStr = hc.end_time ? new Date(hc.end_time).toLocaleDateString() : 'end';
+        document.getElementById('repro-period').textContent = `${{startStr}} to ${{endStr}}`;
+      }} else {{
+        document.getElementById('repro-period').textContent = '-';
+      }}
+      
+      // Update config hash
+      document.getElementById('repro-config-hash').textContent = repro.calibration_config_hash || '-';
+      
+      // Update regimes info
+      const rv = repro.greg_regimes_version;
+      if (rv) {{
+        const lastMod = rv.last_modified ? new Date(rv.last_modified).toLocaleDateString() : 'unknown';
+        document.getElementById('repro-regimes').textContent = `greg_regimes.json (modified ${{lastMod}}, hash: ${{rv.hash || 'n/a'}})`;
+      }} else {{
+        document.getElementById('repro-regimes').textContent = 'Not available';
+      }}
+      
+      // Hide raw metadata container on new data
+      document.getElementById('raw-metadata-container').style.display = 'none';
+    }}
+    
+    function toggleRawMetadata() {{
+      const container = document.getElementById('raw-metadata-container');
+      
+      if (container.style.display === 'none') {{
+        container.style.display = 'block';
+        container.textContent = JSON.stringify(lastReproducibilityMetadata, null, 2);
+      }} else {{
+        container.style.display = 'none';
+      }}
+    }}
+    
     async function runCalibration() {{
       const btn = document.getElementById('calib-run-btn');
       const underlying = document.getElementById('calib-underlying').value || 'BTC';
@@ -5806,6 +5997,10 @@ def index() -> str:
         
         // Update Calibration Coverage panels
         updateCalibrationCoverage(data);
+        
+        // Update Data Health & Reproducibility panels
+        updateDataHealthPanel(data);
+        updateReproducibilityPanel(data);
       }} catch (err) {{
         console.error('Calibration error:', err);
         summaryEl.textContent = 'Calibration failed. Check console/logs.';

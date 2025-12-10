@@ -35,6 +35,14 @@ from src.synthetic.regimes import (
     RegimeModel,
     GREG_SENSOR_COLUMNS,
 )
+from src.harvester.health import (
+    validate_snapshot_schema,
+    assess_snapshot_quality,
+    aggregate_quality_reports,
+    format_quality_summary_for_display,
+    SnapshotQualityReport,
+    DataQualityStatus,
+)
 
 
 SENSOR_COLUMNS = [
@@ -52,31 +60,43 @@ def load_harvested_sensors(
     data_root: str,
     underlying: str,
     lookback_days: int = 90,
-) -> pd.DataFrame:
+    validate_quality: bool = True,
+) -> Tuple[pd.DataFrame, Optional[Any]]:
     """
-    Load harvested data and compute sensors.
+    Load harvested data and compute sensors with quality validation.
+    
+    Returns:
+        Tuple of (DataFrame, quality_summary or None)
     """
     root = Path(data_root)
     asset_dir = root / underlying.upper()
+    quality_reports: List[SnapshotQualityReport] = []
     
     if not asset_dir.exists():
         print(f"No harvested data found at {asset_dir}")
-        return pd.DataFrame()
+        return pd.DataFrame(), None
     
     parquet_files = sorted(asset_dir.rglob("*.parquet"))
     if not parquet_files:
-        return pd.DataFrame()
+        return pd.DataFrame(), None
     
     dfs = []
     for pf in parquet_files:
         try:
             df = pd.read_parquet(pf)
+            
+            if validate_quality:
+                report = assess_snapshot_quality(df, filename=pf.name)
+                quality_reports.append(report)
+            
             dfs.append(df)
         except Exception:
             continue
     
+    quality_summary = aggregate_quality_reports(quality_reports) if validate_quality else None
+    
     if not dfs:
-        return pd.DataFrame()
+        return pd.DataFrame(), quality_summary
     
     combined = pd.concat(dfs, ignore_index=True)
     
@@ -86,7 +106,7 @@ def load_harvested_sensors(
         combined = combined[combined["harvest_time"] >= cutoff]
     
     if combined.empty:
-        return pd.DataFrame()
+        return pd.DataFrame(), quality_summary
     
     daily = combined.groupby(combined["harvest_time"].dt.date).agg({
         "underlying_price": "first",
@@ -96,7 +116,7 @@ def load_harvested_sensors(
     daily = daily.sort_values("date")
     
     if len(daily) < 10:
-        return pd.DataFrame()
+        return pd.DataFrame(), quality_summary
     
     daily["log_ret"] = np.log(daily["spot"] / daily["spot"].shift(1))
     daily["rv_7d"] = daily["log_ret"].rolling(7, min_periods=5).std() * np.sqrt(365) * 100
@@ -113,7 +133,7 @@ def load_harvested_sensors(
     daily["skew_25d"] = 0.05
     daily["term_slope"] = 0.0
     
-    return daily
+    return daily, quality_summary
 
 
 def generate_synthetic_sensors(
@@ -396,11 +416,23 @@ def main() -> int:
     print(f"=" * 50)
     
     print(f"\n1. Loading harvested data from {args.data_root}...")
-    real_data = load_harvested_sensors(
+    real_data, quality_summary = load_harvested_sensors(
         data_root=args.data_root,
         underlying=args.underlying,
         lookback_days=args.days,
+        validate_quality=True,
     )
+    
+    data_quality_warning = False
+    if quality_summary:
+        if quality_summary.status == DataQualityStatus.FAILED:
+            print(f"  ERROR: Data quality check failed!")
+            print(f"    {'; '.join(quality_summary.issues)}")
+            data_quality_warning = True
+        elif quality_summary.status == DataQualityStatus.DEGRADED:
+            print(f"  WARNING: Data quality is degraded.")
+            print(f"    {'; '.join(quality_summary.issues)}")
+            data_quality_warning = True
     
     if real_data.empty:
         print("  WARNING: No harvested data available. Using defaults.")
@@ -450,6 +482,10 @@ def main() -> int:
         for regime_id, freq in regime_dist.items():
             print(f"  Regime {regime_id}: {freq:.1%}")
     
+    if quality_summary:
+        print(f"\n7. Data Health:")
+        print(format_quality_summary_for_display(quality_summary))
+    
     results = {
         "underlying": args.underlying,
         "realism_score": realism_score,
@@ -457,6 +493,7 @@ def main() -> int:
         "synthetic_days": len(synth_data),
         "moment_diffs": moment_diffs,
         "biggest_mismatches": mismatches,
+        "data_health": quality_summary.to_dict() if quality_summary else None,
     }
     
     if args.output:
@@ -465,6 +502,12 @@ def main() -> int:
         print(f"\nResults written to: {args.output}")
     
     print(f"\n{'=' * 50}")
+    
+    if data_quality_warning:
+        adjusted_score = max(0, realism_score - 0.1)
+        print(f"NOTE: Data quality issues detected. Realism score adjusted from {realism_score:.2f} to {adjusted_score:.2f}")
+        realism_score = adjusted_score
+    
     if realism_score >= 0.8:
         print("GOOD: Synthetic universe closely matches real Deribit data!")
     elif realism_score >= 0.6:

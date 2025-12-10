@@ -86,6 +86,23 @@ The web dashboard provides a user-friendly interface with sections for "Live Age
     - `POST /api/calibration/force_apply`: Force-apply calibration bypassing thresholds.
     - `POST /api/calibration/run_with_policy`: Run calibration respecting policy thresholds.
   - **UI Panel**: "IV Calibration Update Policy" section in Calibration tab showing current multipliers, latest run status, policy explanation, and "Force-Apply" button.
+- **Harvester Data Quality & Reproducibility**:
+  - `src/harvester/health.py`: Schema validation and quality assessment for harvested Parquet snapshots
+  - `REQUIRED_COLUMNS`: Canonical schema definition with expected column types
+  - `validate_snapshot_schema()`: Returns list of schema issues (missing columns, wrong types)
+  - `assess_snapshot_quality()`: Returns SnapshotQualityReport with row counts and core-field completeness
+  - `aggregate_quality_reports()`: Aggregates multiple reports into DataQualitySummary with overall status
+  - **DataQualityStatus**: OK / DEGRADED / FAILED status based on schema and quality thresholds
+  - **Historical Calibration Integration**: `run_historical_calibration_from_harvest()` now includes:
+    - `data_quality` block with snapshot counts, schema issues, low-quality counts, and completeness
+    - `reproducibility` metadata with harvest_config, calibration_config_hash, greg_regimes_version
+  - **Realism Checker Integration**: `realism_check.py` now prints Data Health summary and adjusts score for quality issues
+  - **UI Panel**: "Data Health & Reproducibility" section in Calibration tab showing:
+    - Status badge (OK/DEGRADED/FAILED with color coding)
+    - Metrics: snapshots, schema issues, low-quality count, core completeness
+    - Issues list when problems detected
+    - Reproducibility info: run time, underlying, harvest period, config hash, regime model version
+    - "View Raw Metadata" button for detailed JSON inspection
 - **Bots System**: Provides a comprehensive view of expert trading bots, market sensors, and strategy evaluations, including debug mode for sensor computations.
     - **Greg Mandolini VRP Harvester (GregBot) v6.0 "Diamond-Grade"**: A quantitative VRP strategy selector based on 11 volatility sensors and a decision tree. Currently advisory (read-only) with 8 evaluated strategies per underlying. Sensor mapping and calibration variables are defined.
 - **Strategy Layer**: A pluggable architecture allowing multiple trading strategies to run concurrently (`src/strategies/`). Strategies are built from settings via `build_default_registry()` and decisions include `strategy_id` for attribution.

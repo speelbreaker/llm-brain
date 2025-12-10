@@ -1,0 +1,401 @@
+AI BUILDER PROMPT – Harvester Data Quality & Reproducibility + UI
+
+You are working inside my Options Trading Agent project.
+
+We already have:
+
+A Deribit intraday harvester (scripts/data_harvester.py) that:
+
+Polls public/get_book_summary_by_currency.
+
+Writes Parquet snapshots under data_root/<asset>/<YYYY>/<MM>/<DD>/<ASSET>_<YYYY-MM-DD>_<HHMM>.parquet.
+
+Normalizes to a canonical schema including (at least):
+harvest_time, instrument_name, underlying, expiry, expiry_timestamp, option_type, strike,
+underlying_price, mark_price, best_bid_price, best_ask_price, bid_iv, ask_iv, mark_iv,
+open_interest, volume, greek_delta, greek_gamma, greek_theta, greek_vega.
+
+A historical calibration path (run_historical_calibration_from_harvest() in src/calibration_extended.py) that:
+
+Reads harvest Parquets,
+
+Runs extended calibration over many timestamps.
+
+A realism checker (realism_check.py) that:
+
+Uses RegimeModel + synthetic paths to compare synthetic vs real distributions.
+
+A calibration history / update policy (from Prompt 1) that:
+
+Stores calibration runs as JSON files under something like data/calibration_runs/.
+
+Decides whether or not to apply new IV multipliers.
+
+Do not change the core harvester logic, calibration math, or regime model.
+
+Your tasks now are:
+
+Add data-quality / schema validation for harvested Parquet snapshots.
+
+Integrate these checks into historical calibration and realism_check.
+
+Make historical calibration runs reproducible by writing rich run metadata.
+
+Expose data health & reproducibility status in the UI in a way a non-coder can understand.
+
+1) Harvester data-quality & schema validation
+
+Create a small, reusable module for data health checks, e.g.:
+
+src/harvester/health.py
+
+1.1 Reference schema and required fields
+
+In src/harvester/health.py, define:
+
+A canonical expected schema (names + minimal type expectations) for harvester Parquet snapshots, e.g.:
+
+REQUIRED_COLUMNS = {
+    "harvest_time": "datetime64[ns]",
+    "instrument_name": "string",
+    "underlying": "string",
+    "expiry": "string",              # or datetime, depending on current implementation
+    "expiry_timestamp": "int64",
+    "option_type": "string",         # "C" / "P"
+    "strike": "float64",
+    "underlying_price": "float64",
+    "mark_price": "float64",
+    "best_bid_price": "float64",
+    "best_ask_price": "float64",
+    "mark_iv": "float64",
+    "open_interest": "float64",
+    "volume": "float64",
+    "greek_delta": "float64",
+    "greek_vega": "float64"
+}
+
+
+You do not need to enforce exact pandas dtypes; it’s enough to:
+
+Check that required column names exist.
+
+Check that they are numeric / datetime / string where appropriate (e.g., using np.issubdtype).
+
+Implement:
+
+def validate_snapshot_schema(df: pd.DataFrame) -> List[str]:
+    """
+    Returns a list of problems. Empty list means schema is OK.
+    Problems may include missing columns, wrong dtypes, etc.
+    """
+
+1.2 Snapshot-level data quality checks
+
+Still in src/harvester/health.py, implement:
+
+@dataclass
+class SnapshotQualityReport:
+    total_rows: int
+    non_null_core_fraction: float     # fraction of rows with non-null core fields
+    issues: List[str]                 # human-readable messages
+
+
+Add a function:
+
+def assess_snapshot_quality(df: pd.DataFrame) -> SnapshotQualityReport:
+    """
+    Checks for:
+      - Non-zero row count
+      - Fraction of rows where core fields (underlying_price, mark_price, mark_iv, expiry_timestamp, option_type)
+        are non-null.
+    Populates `issues` with clear messages when thresholds are not met.
+    """
+
+
+Use reasonable defaults, e.g.:
+
+If total_rows == 0: issue “Snapshot contains zero rows”.
+
+If non_null_core_fraction < 0.9: issue “More than 10% of rows are missing core fields”.
+
+You can hard-code thresholds for now or expose them as constants in this module.
+
+2) Integrate data checks into historical calibration & realism_check
+2.1 Historical calibration (run_historical_calibration_from_harvest)
+
+Modify run_historical_calibration_from_harvest(config) so that:
+
+After loading Parquet snapshots from data_root:
+
+For each snapshot file loaded, call:
+
+validate_snapshot_schema(df) and assess_snapshot_quality(df).
+
+Aggregate issues:
+
+Count how many snapshots fail schema.
+
+Count how many have low non_null_core_fraction.
+
+If any snapshot fails schema validation:
+
+Abort calibration with a clear logged error and an exception that includes:
+
+The filename,
+
+The missing/wrong columns,
+
+A short message: e.g.
+"Snapshot schema mismatch for BTC_2025-12-01_1200.parquet: missing columns ['mark_iv', 'greek_delta']".
+
+If quality is poor (e.g., too many low-quality snapshots, or fraction of usable rows < threshold):
+
+Either:
+
+Abort with a clear message, or
+
+Continue but mark the calibration run as degraded.
+
+In both cases, return a data_quality section in the calibration result, e.g.:
+
+"data_quality": {
+  "num_snapshots": 120,
+  "num_schema_failures": 0,
+  "num_low_quality_snapshots": 5,
+  "overall_non_null_core_fraction": 0.94,
+  "status": "ok" | "degraded" | "failed",
+  "issues": [
+    "5 snapshots had more than 10% missing core fields",
+    ...
+  ]
+}
+
+
+Ensure this data_quality block is serialized into the calibration history JSON (from Prompt 1) so it’s preserved for reproducibility.
+
+2.2 Realism checker
+
+Update realism_check.py so that:
+
+Before doing any heavy computations:
+
+It loads the same harvested snapshots (or at least a representative subset).
+
+It calls the same validate_snapshot_schema and assess_snapshot_quality helpers.
+
+If data quality is bad, it:
+
+Prints a clear warning to stdout / logs,
+
+Optionally downgrades the realism_score or flag the results as unreliable.
+
+At the end of realism_check output, include a small data quality summary, e.g.:
+
+Data health:
+  - Snapshots checked: 120
+  - Schema issues: 0
+  - Low-quality snapshots: 3
+  - Overall core-field completeness: 95%
+  - Status: OK
+
+
+Don’t break existing CLI usage; just enhance the output.
+
+3) Reproducibility metadata for historical calibrations
+
+We already store calibration history files (data/calibration_runs/...) per Prompt 1.
+
+Extend this so that for source="harvested" we capture enough metadata to fully reproduce the run.
+
+3.1 Run metadata fields
+
+For each calibration history entry where source=="harvested", ensure the JSON includes:
+
+underlying
+
+source ("harvested")
+
+timestamp (ISO)
+
+Harvest config snapshot, e.g.:
+
+"harvest_config": {
+  "data_root": "data/live_deribit",
+  "underlying": "BTC",
+  "start_time": "2025-11-01T00:00:00Z",
+  "end_time": "2025-11-30T23:59:59Z",
+  "snapshot_step": 6,
+  "max_snapshots": 500
+}
+
+
+calibration_config_hash or full config snapshot:
+
+e.g. a SHA-256 hash of the CalibrationConfig dict, and optionally the dict itself in a calibration_config field.
+
+greg_regimes_version:
+
+Either:
+
+A hash of data/greg_regimes.json, or
+
+A simple last_modified timestamp + file size.
+
+data_quality block from Section 2.1.
+
+sample_size and vega_sum used for calibration.
+
+applied / applied_reason (from Prompt 1’s update policy).
+
+3.2 Helper for reproducibility info
+
+In the calibration history module (where you already write history files):
+
+Add a small helper function like:
+
+def build_reproducibility_metadata(config: CalibrationConfig, harvest_info, regimes_info, data_quality, sample_stats) -> dict:
+    ...
+
+
+So the logic for assembling this metadata is in one place and can be reused by:
+
+run_historical_calibration_from_harvest,
+
+the CLI that triggers calibration and updates the vol surface.
+
+4) UI: Data Health & Reproducibility Panel
+
+I am not a code person. I need a screen where I can see:
+
+Is my data good enough?
+
+Are calibrations based on solid data?
+
+What period & settings a given calibration run used.
+
+Extend the web UI with a simple “Data Health & Reproducibility” section.
+This can be either:
+
+a new tab/section,
+
+or a panel under the existing Calibration page.
+
+4.1 Data health summary (for harvested data)
+
+Add a card or section titled “Harvested Data Health” that shows:
+
+data_root and underlying(s) currently used.
+
+Over a recent period (e.g. last 30 days):
+
+Number of snapshots.
+
+Number of schema issues.
+
+Number of low-quality snapshots.
+
+Overall non-null core-field fraction.
+
+A simple status indicator, e.g.:
+
+Green “OK” if status is "ok".
+
+Orange “Degraded” if "degraded".
+
+Red “Failed” if "failed".
+
+Use the same data_quality structure that run_historical_calibration_from_harvest now returns.
+
+Show plain-language summary text like:
+
+“Data OK: 120 snapshots checked, schema clean, 95% core-field completeness.”
+
+or
+
+“Warning: 15% of snapshots have missing marks/greeks. Calibration results may be noisy.”
+
+4.2 Reproducibility details for last historical calibration
+
+On the Calibration panel (or Data Health panel), add a “Last Historical Calibration (Harvested)” detail block:
+
+For the most recent source=="harvested" run in calibration history, show:
+
+Time of run.
+
+Underlying.
+
+Harvest period (start_time – end_time).
+
+Snapshot_step / max_snapshots.
+
+A short note about regimes, e.g.:
+
+“Regime model: greg_regimes.json (last modified 2025-11-30).”
+
+A link/button “View raw metadata” that:
+
+Either:
+
+Displays the stored JSON metadata in a collapsible section, or
+
+Opens a modal showing the JSON.
+
+This is so I can inspect what the calibration actually used, without digging into files.
+
+4.3 Simple explanation text
+
+On the Data Health & Reproducibility section, add a short explanatory paragraph:
+
+“Historical calibrations use harvested Deribit data from the specified time window.
+For each run, we record the dataset path, time period, configuration, and data-quality checks so that the results are reproducible and you can see whether they are based on reliable data.”
+
+Keep it high-level and non-technical.
+
+5) Tests & Safety Checks
+5.1 Unit tests
+
+Add tests for:
+
+validate_snapshot_schema:
+
+Passing when all required columns exist.
+
+Reporting missing columns and wrong types.
+
+assess_snapshot_quality:
+
+Correctly counting rows and non_null_core_fraction.
+
+Emitting issues when the fraction is too low.
+
+Add tests for run_historical_calibration_from_harvest that:
+
+When a snapshot has missing required columns, the function:
+
+Raises a clear exception or returns a data_quality.status == "failed".
+
+When data is partially missing, data_quality.status gets set to "degraded" and issues include a human-readable warning.
+
+5.2 Realism checker smoke test
+
+Add or update a small test (or manual check) to ensure:
+
+realism_check.py prints a Data health section.
+
+It does not crash when:
+
+A few snapshots are low quality,
+
+Or when a small subset of required fields is missing (but not enough to abort completely, depending on thresholds).
+
+Key constraints:
+
+Do not change core calibration/regime/harvester behavior beyond adding checks and metadata.
+
+Keep all existing CLI and API entry points working as they are; just make them fail fast with clear messages when data is bad.
+
+Make the new UI panels:
+
+Plain-language, with green/orange/red statuses,
+
+Understandable by a non-coder (no internal field names or stack traces shown directly).

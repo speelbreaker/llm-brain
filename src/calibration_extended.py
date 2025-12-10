@@ -47,6 +47,16 @@ from src.calibration_config import (
     SnapshotSensors,
     OptionTypeMetrics,
     DEFAULT_TERM_BANDS,
+    DataQualityBlock,
+    ReproducibilityMetadata,
+)
+from src.harvester.health import (
+    validate_snapshot_schema,
+    assess_snapshot_quality,
+    aggregate_quality_reports,
+    SnapshotQualityReport,
+    DataQualitySummary,
+    DataQualityStatus,
 )
 from src.backtest.pricing import (
     compute_realized_volatility,
@@ -633,6 +643,41 @@ def run_calibration_extended(
     )
 
 
+import hashlib
+import os
+
+
+def _compute_config_hash(config: CalibrationConfig) -> str:
+    """Compute SHA-256 hash of calibration config for reproducibility."""
+    try:
+        config_json = config.model_dump_json(exclude={"return_rows"})
+        return hashlib.sha256(config_json.encode()).hexdigest()[:16]
+    except Exception:
+        return "unknown"
+
+
+def _get_greg_regimes_version() -> Optional[Dict[str, Any]]:
+    """Get version info for greg_regimes.json."""
+    regimes_path = Path("data/greg_regimes.json")
+    if not regimes_path.exists():
+        return None
+    
+    try:
+        stat = regimes_path.stat()
+        with open(regimes_path, "rb") as f:
+            content = f.read()
+            file_hash = hashlib.sha256(content).hexdigest()[:16]
+        
+        return {
+            "path": str(regimes_path),
+            "last_modified": datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat(),
+            "size_bytes": stat.st_size,
+            "hash": file_hash,
+        }
+    except Exception:
+        return None
+
+
 def load_harvest_snapshots(
     data_root: str,
     underlying: str,
@@ -692,8 +737,89 @@ def load_harvest_snapshots(
     return combined
 
 
+def load_harvest_snapshots_with_quality(
+    data_root: str,
+    underlying: str,
+    start_time: Optional[datetime],
+    end_time: Optional[datetime],
+    snapshot_step: int = 1,
+    max_snapshots: Optional[int] = None,
+    validate_quality: bool = True,
+) -> Tuple[pd.DataFrame, DataQualitySummary]:
+    """
+    Load harvested Parquet snapshots with data quality validation.
+    
+    Returns:
+        Tuple of (combined DataFrame, DataQualitySummary)
+        
+    Raises:
+        ValueError: If schema validation fails for any snapshot
+    """
+    root = Path(data_root)
+    asset_dir = root / underlying.upper()
+    
+    quality_reports: List[SnapshotQualityReport] = []
+    
+    if not asset_dir.exists():
+        return pd.DataFrame(), DataQualitySummary()
+    
+    parquet_files = sorted(asset_dir.rglob("*.parquet"))
+    
+    if not parquet_files:
+        return pd.DataFrame(), DataQualitySummary()
+    
+    dfs = []
+    for pf in parquet_files:
+        try:
+            df = pd.read_parquet(pf)
+            
+            if validate_quality:
+                report = assess_snapshot_quality(df, filename=pf.name)
+                quality_reports.append(report)
+                
+                if not report.is_schema_valid:
+                    raise ValueError(
+                        f"Snapshot schema mismatch for {pf.name}: {'; '.join(report.schema_issues)}"
+                    )
+            
+            dfs.append(df)
+        except ValueError:
+            raise
+        except Exception:
+            continue
+    
+    if not dfs:
+        return pd.DataFrame(), aggregate_quality_reports(quality_reports)
+    
+    combined = pd.concat(dfs, ignore_index=True)
+    
+    if "harvest_time" in combined.columns:
+        combined["harvest_time"] = pd.to_datetime(combined["harvest_time"], utc=True)
+        
+        if start_time:
+            combined = combined[combined["harvest_time"] >= start_time]
+        if end_time:
+            combined = combined[combined["harvest_time"] <= end_time]
+    
+    if snapshot_step > 1 and "harvest_time" in combined.columns:
+        unique_times = combined["harvest_time"].drop_duplicates().sort_values()
+        selected_times = unique_times[::snapshot_step]
+        combined = combined[combined["harvest_time"].isin(selected_times)]
+    
+    if max_snapshots and "harvest_time" in combined.columns:
+        unique_times = combined["harvest_time"].drop_duplicates().sort_values()
+        if len(unique_times) > max_snapshots:
+            selected_times = unique_times[:max_snapshots]
+            combined = combined[combined["harvest_time"].isin(selected_times)]
+    
+    summary = aggregate_quality_reports(quality_reports)
+    
+    return combined, summary
+
+
 def run_historical_calibration_from_harvest(
     config: CalibrationConfig,
+    validate_quality: bool = True,
 ) -> HistoricalCalibrationResult:
     """
     Run calibration using harvested Parquet data over many timestamps.
@@ -703,6 +829,18 @@ def run_historical_calibration_from_harvest(
     - Bucket metrics
     - Recommended vol_surface
     - Regime distribution (if clustering is enabled)
+    - Data quality summary
+    - Reproducibility metadata
+    
+    Args:
+        config: CalibrationConfig with harvest settings
+        validate_quality: Whether to validate data quality (default True)
+        
+    Returns:
+        HistoricalCalibrationResult with data_quality and reproducibility fields
+        
+    Raises:
+        ValueError: If schema validation fails for any snapshot
     """
     now = datetime.now(timezone.utc)
     
@@ -724,13 +862,48 @@ def run_historical_calibration_from_harvest(
     
     underlying = (harvest.underlying or config.underlying).upper()
     
-    df = load_harvest_snapshots(
-        data_root=harvest.data_root,
-        underlying=underlying,
-        start_time=harvest.start_time,
-        end_time=harvest.end_time,
-        snapshot_step=harvest.snapshot_step,
-        max_snapshots=harvest.max_snapshots,
+    if validate_quality:
+        df, quality_summary = load_harvest_snapshots_with_quality(
+            data_root=harvest.data_root,
+            underlying=underlying,
+            start_time=harvest.start_time,
+            end_time=harvest.end_time,
+            snapshot_step=harvest.snapshot_step,
+            max_snapshots=harvest.max_snapshots,
+            validate_quality=True,
+        )
+    else:
+        df = load_harvest_snapshots(
+            data_root=harvest.data_root,
+            underlying=underlying,
+            start_time=harvest.start_time,
+            end_time=harvest.end_time,
+            snapshot_step=harvest.snapshot_step,
+            max_snapshots=harvest.max_snapshots,
+        )
+        quality_summary = DataQualitySummary()
+    
+    data_quality_block = DataQualityBlock(
+        num_snapshots=quality_summary.num_snapshots,
+        num_schema_failures=quality_summary.num_schema_failures,
+        num_low_quality_snapshots=quality_summary.num_low_quality_snapshots,
+        overall_non_null_core_fraction=quality_summary.overall_non_null_core_fraction,
+        total_rows=quality_summary.total_rows,
+        status=quality_summary.status.value,
+        issues=quality_summary.issues,
+    )
+    
+    reproducibility = ReproducibilityMetadata(
+        harvest_config={
+            "data_root": harvest.data_root,
+            "underlying": underlying,
+            "start_time": harvest.start_time.isoformat() if harvest.start_time else None,
+            "end_time": harvest.end_time.isoformat() if harvest.end_time else None,
+            "snapshot_step": harvest.snapshot_step,
+            "max_snapshots": harvest.max_snapshots,
+        },
+        calibration_config_hash=_compute_config_hash(config),
+        greg_regimes_version=_get_greg_regimes_version(),
     )
     
     if df.empty:
@@ -746,6 +919,8 @@ def run_historical_calibration_from_harvest(
             bias_pct=0.0,
             timestamp=now,
             snapshot_count=0,
+            data_quality=data_quality_block,
+            reproducibility=reproducibility,
         )
     
     if "dte_days" not in df.columns and "expiry_timestamp" in df.columns and "harvest_time" in df.columns:
@@ -986,6 +1161,8 @@ def run_historical_calibration_from_harvest(
         time_range_start=time_range_start,
         time_range_end=time_range_end,
         rv_median=rv_median,
+        data_quality=data_quality_block,
+        reproducibility=reproducibility,
     )
 
 

@@ -240,6 +240,24 @@ class ExtendedCalibrationResult(BaseModel):
         extra = "allow"
 
 
+class DataQualityBlock(BaseModel):
+    """Data quality summary block for calibration results."""
+    num_snapshots: int = 0
+    num_schema_failures: int = 0
+    num_low_quality_snapshots: int = 0
+    overall_non_null_core_fraction: float = 0.0
+    total_rows: int = 0
+    status: str = "ok"
+    issues: List[str] = Field(default_factory=list)
+
+
+class ReproducibilityMetadata(BaseModel):
+    """Metadata for reproducing a calibration run."""
+    harvest_config: Optional[Dict[str, Any]] = Field(default=None, description="Harvest configuration used")
+    calibration_config_hash: Optional[str] = Field(default=None, description="SHA-256 hash of calibration config")
+    greg_regimes_version: Optional[Dict[str, Any]] = Field(default=None, description="Version info for greg_regimes.json")
+
+
 class HistoricalCalibrationResult(ExtendedCalibrationResult):
     """
     Result from historical calibration using harvested data.
@@ -252,3 +270,6 @@ class HistoricalCalibrationResult(ExtendedCalibrationResult):
     rv_median: Optional[float] = None
     sensor_means: Optional[Dict[str, float]] = None
     regime_distribution: Optional[Dict[str, float]] = None
+    
+    data_quality: Optional[DataQualityBlock] = Field(default=None, description="Data quality summary")
+    reproducibility: Optional[ReproducibilityMetadata] = Field(default=None, description="Reproducibility metadata")
