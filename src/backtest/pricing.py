@@ -3,14 +3,41 @@ Black-Scholes pricing helpers for synthetic option pricing mode.
 
 Provides self-consistent option pricing for historical backtests without
 requiring actual historical option data from exchanges.
+
+Supports regime-aware IV dynamics using Greg-sensor cluster regimes.
 """
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from math import log, sqrt, exp, erf
-from typing import List, Optional, Tuple
+from typing import List, Optional, Tuple, Dict, TYPE_CHECKING
+
+import numpy as np
 
 from .types import CallSimulationConfig
+
+if TYPE_CHECKING:
+    from src.synthetic.regimes import RegimeParams, RegimeModel
+
+
+@dataclass
+class RegimeState:
+    """
+    Tracks the current state of the regime-aware IV dynamics.
+    
+    Used to maintain continuity between simulation steps.
+    """
+    regime_id: int = 0
+    regime: Optional["RegimeParams"] = None
+    iv_atm: float = 50.0
+    skew_state: float = 0.0
+    rv_30d: float = 50.0
+    rng: Optional[np.random.Generator] = field(default=None, repr=False)
+    
+    def __post_init__(self):
+        if self.rng is None:
+            self.rng = np.random.default_rng()
 
 
 def _norm_cdf(x: float) -> float:
@@ -123,7 +150,8 @@ def compute_realized_volatility(
 def get_synthetic_iv(
     config: CallSimulationConfig,
     spot_history: List[Tuple[datetime, float]],
-    as_of: datetime
+    as_of: datetime,
+    regime_state: Optional["RegimeState"] = None,
 ) -> float:
     """
     Get the implied volatility to use for synthetic pricing.
@@ -132,6 +160,7 @@ def get_synthetic_iv(
         config: Simulation configuration
         spot_history: List of (datetime, price) tuples
         as_of: Current decision time
+        regime_state: Optional regime state for AR(1) dynamics
     
     Returns:
         Implied volatility to use for Black-Scholes pricing
@@ -144,6 +173,10 @@ def get_synthetic_iv(
         as_of,
         config.synthetic_rv_window_days
     )
+    
+    if regime_state is not None and regime_state.regime is not None:
+        return regime_state.iv_atm / 100.0
+    
     return rv * config.synthetic_iv_multiplier
 
 
@@ -222,3 +255,143 @@ def compute_synthetic_iv_with_skew(
     )
     
     return max(1e-6, base_iv * skew_factor)
+
+
+def create_regime_state(
+    underlying: str,
+    initial_rv: float = 50.0,
+    seed: Optional[int] = None,
+) -> RegimeState:
+    """
+    Create a new RegimeState with loaded regime model.
+    
+    Args:
+        underlying: Asset symbol (BTC, ETH)
+        initial_rv: Initial realized volatility (percentage)
+        seed: Random seed for reproducibility
+        
+    Returns:
+        Initialized RegimeState
+    """
+    from src.synthetic.regimes import (
+        load_regime_model,
+        get_default_regimes,
+        get_default_transition_matrix,
+    )
+    
+    rng = np.random.default_rng(seed)
+    
+    model = load_regime_model(underlying)
+    
+    if model is not None:
+        regimes = model.regimes
+        start_regime = rng.choice(list(regimes.keys()))
+        regime = regimes[start_regime]
+    else:
+        regimes = get_default_regimes()
+        start_regime = 0
+        regime = regimes[start_regime]
+    
+    initial_iv = initial_rv * (1 + regime.mu_vrp_30d)
+    
+    return RegimeState(
+        regime_id=start_regime,
+        regime=regime,
+        iv_atm=initial_iv,
+        skew_state=0.0,
+        rv_30d=initial_rv,
+        rng=rng,
+    )
+
+
+def step_regime_state(
+    state: RegimeState,
+    rv_30d: float,
+    underlying: str,
+) -> RegimeState:
+    """
+    Advance the regime state by one time step.
+    
+    Uses AR(1) IV dynamics and optionally samples regime transitions.
+    
+    Args:
+        state: Current regime state
+        rv_30d: Current realized volatility (percentage)
+        underlying: Asset symbol for loading transition matrix
+        
+    Returns:
+        Updated RegimeState
+    """
+    from src.synthetic.regimes import (
+        load_regime_model,
+        get_default_regimes,
+        get_default_transition_matrix,
+        evolve_iv_and_skew,
+        sample_regime_path,
+    )
+    
+    model = load_regime_model(underlying)
+    
+    if model is not None:
+        regimes = model.regimes
+        transition_matrix = model.transition_matrix
+    else:
+        regimes = get_default_regimes()
+        transition_matrix = get_default_transition_matrix(len(regimes))
+    
+    if state.rng is None:
+        state.rng = np.random.default_rng()
+    
+    n_regimes = len(regimes)
+    probs = transition_matrix[state.regime_id]
+    probs = probs / probs.sum()
+    new_regime_id = state.rng.choice(n_regimes, p=probs)
+    new_regime = regimes.get(new_regime_id, state.regime)
+    
+    if new_regime is None:
+        new_regime = regimes.get(0)
+    
+    iv_atm, skew_state = evolve_iv_and_skew(
+        iv_atm_prev=state.iv_atm,
+        rv_30d_t=rv_30d,
+        regime=new_regime,
+        rng=state.rng,
+    )
+    
+    return RegimeState(
+        regime_id=new_regime_id,
+        regime=new_regime,
+        iv_atm=iv_atm,
+        skew_state=skew_state,
+        rv_30d=rv_30d,
+        rng=state.rng,
+    )
+
+
+def get_regime_aware_iv_for_delta(
+    state: RegimeState,
+    delta: float,
+) -> float:
+    """
+    Get IV for a specific delta using regime skew template.
+    
+    Args:
+        state: Current regime state
+        delta: Option delta (0 to 1 for calls)
+        
+    Returns:
+        IV as decimal (e.g., 0.50 for 50%)
+    """
+    from src.synthetic.regimes import iv_for_delta
+    
+    if state.regime is None:
+        return state.iv_atm / 100.0
+    
+    iv_pct = iv_for_delta(
+        iv_atm_t=state.iv_atm,
+        regime=state.regime,
+        skew_state_t=state.skew_state,
+        delta=delta,
+    )
+    
+    return iv_pct / 100.0

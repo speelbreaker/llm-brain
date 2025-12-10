@@ -43,6 +43,13 @@ The web dashboard provides a user-friendly interface with sections for "Live Age
 - **State-Aware Chat Assistant**: A multi-turn assistant that understands current trading state, answers questions, and provides project information.
 - **Position Reconciliation**: Compares local position tracker against exchange positions, with configurable actions.
 - **Calibration vs Deribit**: Compares synthetic Black-Scholes prices against live Deribit marks.
+- **Synthetic Universe v2 (Greg-sensor cluster regimes)**:
+  - `src/synthetic/regimes.py` with `RegimeParams`, KMeans clustering, and AR(1) IV dynamics
+  - Uses Greg-sensor clusters (VRP, ADX, chop, IV rank, term slope, skew) to infer volatility regimes
+  - AR(1) IV dynamics with VRP target + skew template for realistic IV evolution
+  - `scripts/build_greg_regimes_from_harvester.py` to calibrate regimes from real Deribit data
+  - Regime model saved to `data/greg_regimes.json` (per underlying, with transition matrix)
+  - Backtest pricing module extended with `RegimeState` and regime-aware IV functions
 - **Auto IV Calibration Pipeline**: 
   - **calibration_history table**: Persists time series of auto-calculated IV multipliers keyed by underlying and DTE range.
   - **scripts/auto_calibrate_iv.py**: CLI script that loads harvester data, fits an IV multiplier minimizing MAE, and stores results in the database.

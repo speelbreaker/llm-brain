@@ -35,6 +35,13 @@ These are **implemented** and here only as reference so we don't re-plan them:
 - **Synthetic universe & backtesting**:
   - `CoveredCallSimulator` with scoring and training export.
   - Training data export to CSV/JSONL and LLM training script.
+- **Synthetic Universe v2 (Greg-sensor cluster regimes)**:
+  - `src/synthetic/regimes.py` with `RegimeParams`, clustering, and AR(1) IV dynamics
+  - Uses Greg-sensor clusters (VRP, ADX, chop, IV rank, term slope, skew) to infer volatility regimes
+  - AR(1) IV dynamics with VRP target + skew template for realistic IV evolution
+  - `scripts/build_greg_regimes_from_harvester.py` to calibrate regimes from real Deribit data
+  - Regime model saved to `data/greg_regimes.json` (per underlying, with transition matrix)
+  - Backtest pricing module (`src/backtest/pricing.py`) extended with `RegimeState` and regime-aware IV
 - **Live vs synthetic data sources**:
   - Fixed REAL_SCRAPER data source to correctly return calls & puts with proper `option_type`.
   - Implemented `LiveDeribitDataSource` in `src/backtest/live_deribit_data_source.py`:
@@ -422,6 +429,33 @@ When optimizing strategies, we must guard against "curve-fitting" parameters tha
 - Occam's razor: simpler models generalize better.
 
 This section directly supports the Phase 2–3 tuning and optimization work (see [I1] Strategy Factory below).
+
+---
+
+### [E4] Advanced Quant / Research (Phase 3)  
+**Priority:** P2 (Phase 3)  
+**Status:** Deferred – pending Phase 2 validation  
+
+The following items are explicitly deferred to Phase 3 "heavy quant" research:
+
+**IV Dynamics Upgrades:**
+- Upgrade from simple AR(1)+template to multi-factor term-structure models (e.g. PCA factor model).
+- Experiment with GARCH / Heston-style models for spot and volatility dynamics.
+- Consider richer term-structure factor modeling across many tenors after validating the simpler model.
+
+**Volatility Surface Modeling:**
+- Full SABR or SVI-style volatility surface interpolation.
+- Term-structure-aware skew modeling (not just single-maturity template).
+- Dynamic skew calibration from live options chain.
+
+**Data Requirements:**
+- High-quality historical options data (Tardis or similar) for validation.
+- Intraday tick data for microstructure analysis.
+
+**Research Agenda:**
+- Compare AR(1)+VRP model vs GARCH(1,1) for RV forecasting.
+- Evaluate regime detection quality: clustering vs HMM vs threshold rules.
+- Measure synthetic universe "realism" by comparing backtest-vs-live metrics.
 
 ---
 

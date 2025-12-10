@@ -1,0 +1,185 @@
+ou are working in my existing LLMAgentBrain repo (options trading agent for Deribit).
+
+Your tasks in this round:
+
+1) Refactor synthetic universe to use Greg-sensor clusters for regimes
+
+Goal: Move from hand-picked “trending / ranging” regimes to regimes inferred from Greg sensors computed on real data, then use those regimes to drive our synthetic RV/IV paths.
+
+1.1 New regime module
+
+Create a new module:
+
+src/synthetic/regimes.py
+
+Add:
+
+@dataclass
+class RegimeParams:
+    name: str
+    mu_rv_30d: float
+    mu_vrp_30d: float        # IV = RV * (1 + mu_vrp_30d)
+    iv_level_sigma: float    # noise for IV AR(1)
+    skew_template: dict      # e.g. {"delta_0.1": 0.30, "delta_0.25": 0.10, ...}
+    phi_iv: float            # AR(1) persistence for ATM IV
+    phi_skew: float          # AR(1) persistence for skew factor(s)
+
+
+Functions to implement:
+
+def cluster_greg_sensors_from_real_data(
+    df_sensors: pd.DataFrame,
+    n_clusters: int = 6,
+) -> tuple[pd.DataFrame, KMeans]:
+    """
+    df_sensors has columns like:
+      ['vrp_30d','vrp_7d','adx_14d','chop_factor','iv_rank_6m','term_slope','skew_25d', ...]
+    Returns df with an added 'regime_id' column + fitted KMeans model.
+    """
+
+def fit_regime_params_from_clusters(
+    df_sensors_with_regime: pd.DataFrame,
+) -> dict[int, RegimeParams]:
+    """Aggregate per-cluster stats (mu_rv_30d, mu_vrp_30d, skew_template, etc.)."""
+
+def sample_regime_path(
+    T: int,
+    transition_matrix: np.ndarray,
+    start_regime: int = 0,
+) -> np.ndarray:
+    """Sample a sequence of regime_ids of length T from a Markov chain."""
+
+
+Use scikit-learn KMeans (add scikit-learn to pyproject.toml if not already present).
+
+Use existing Greg-sensor columns from our “Greg Environment Sweet Spots / scanner” output (wherever those CSVs/frames already live) as the input to cluster_greg_sensors_from_real_data.
+
+1.2 Hook regimes into synthetic universe
+
+Find the current synthetic options generator (whatever module currently builds synthetic OHLC + IV/RV paths for backtests – likely under src/backtest/ or a synthetic_* module).
+
+Refactor it so that instead of hard-coded regimes it:
+
+Loads a small JSON/YAML of RegimeParams (see section 3).
+
+Samples a regime path for the simulation horizon.
+
+For each day t:
+
+Uses the regime’s mu_rv_30d and mu_vrp_30d to set the RV/IV relationship.
+
+Evolves ATM IV and skew via AR(1) (see next section).
+
+Builds the IV surface for that day from ATM IV + skew template.
+
+Keep the public interface of the synthetic generator the same if possible, so existing backtests keep working.
+
+2) Implement AR(1) IV dynamics with VRP target + skew template
+
+In the synthetic generator (or a helper in src/synthetic/regimes.py), implement:
+
+def evolve_iv_and_skew(
+    iv_atm_prev: float,
+    rv_30d_t: float,
+    regime: RegimeParams,
+    rng: np.random.Generator,
+) -> tuple[float, dict]:
+    """
+    Returns (iv_atm_t, skew_state_t)
+
+    iv_target_t = rv_30d_t * (1 + regime.mu_vrp_30d)
+    iv_atm_t = iv_target_t + regime.phi_iv * (iv_atm_prev - iv_target_t) + eps_iv
+    eps_iv ~ N(0, regime.iv_level_sigma**2)
+
+    For now, treat skew_state_t as a simple scalar factor that mean-reverts toward 0
+    using regime.phi_skew, then apply it as a multiplier to regime.skew_template.
+    """
+
+
+Then expose a function that gives IV for a given delta (we only need a few canonical deltas, e.g. 0.1 / 0.25 / 0.5 / 0.75 / 0.9):
+
+def iv_for_delta(
+    iv_atm_t: float,
+    regime: RegimeParams,
+    skew_state_t: float,
+    delta: float,
+) -> float:
+    """
+    Use regime.skew_template (e.g. skew at 0.10, 0.25, 0.5, etc.) and interpolate
+    to get a skew multiplier, then:
+        iv = iv_atm_t * (1 + effective_skew_multiplier)
+    """
+
+
+You don’t need full term-structure modeling; keep it single-maturity for now (use our existing logic for DTE scaling).
+
+3) Small script to build regimes from harvested data
+
+Create a script:
+
+scripts/build_greg_regimes_from_harvester.py
+
+Responsibilities:
+
+Load harvested data and/or Greg-sensor CSVs (use the existing harvester output + Greg environment code).
+
+Compute or load daily Greg sensors per underlying (BTC, ETH) into a DataFrame.
+
+Run cluster_greg_sensors_from_real_data(...).
+
+Run fit_regime_params_from_clusters(...).
+
+Estimate a simple Markov transition matrix between regimes from the time series of regime_id.
+
+Save the result to:
+
+data/greg_regimes.json (RegimeParams and transition matrix, per underlying)
+
+Make this script runnable from the shell:
+
+python scripts/build_greg_regimes_from_harvester.py --underlying BTC
+
+
+and document usage briefly at the top of the script.
+
+The synthetic generator should then be able to load data/greg_regimes.json and use those parameters if available; if not, fall back to existing hard-coded defaults.
+
+4) Update ROADMAP_BACKLOG.md (Phase 3 “heavy quant”)
+
+Open ROADMAP_BACKLOG.md and:
+
+Under the “Phase 2” section, add a short bullet that synthetic universe v2 will:
+
+use Greg-sensor clusters,
+
+AR(1) IV dynamics with VRP target + skew template,
+
+calibrated to Deribit harvester data.
+
+Under the “Phase 3” or “Advanced Quant / Research” section, explicitly add deferred items:
+
+“Upgrade IV dynamics from simple AR(1)+template to multi-factor term-structure models (e.g. PCA factor model).”
+
+“Optionally experiment with GARCH / Heston-style models for spot and volatility.”
+
+“Consider richer term-structure factor modeling across many tenors after validating the simpler model.”
+
+Make sure the backlog clearly shows:
+
+Phase 2: pragmatic, Greg-cluster + AR(1) synthetic universe.
+
+Phase 3: heavy-duty research (PCA, GARCH/Heston, full surface factor models).
+
+5) Sanity checks
+
+Run existing synthetic backtest smoke tests (or add a small one) to ensure the new regime/AR(1) logic doesn’t break current flows.
+
+Keep function and class docstrings clear so it’s easy for me to inspect the new modules.
+
+When you’re done, briefly summarize:
+
+Where the new regime JSON lives,
+
+How to run the regime builder script,
+
+How the synthetic generator now picks regimes and IV paths.
