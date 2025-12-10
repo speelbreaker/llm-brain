@@ -1,0 +1,345 @@
+Use the existing code that powers:
+
+Greg’s sensors (vrp_30d, chop_factor_7d, term_structure_spread, iv_rank_6m, skew_25d, adx_14d, rsi_14d, price_vs_ma200, etc.)
+
+Greg’s Master Selector / Bots tab logic (GregBot strategies & statuses).
+
+Do not remove or rename existing files. You may add new modules under backtest/ and new scripts under scripts/.
+
+Goal
+
+Implement an Environment Occupancy Heatmap engine and a Greg heatmap sweep script that:
+
+Computes strategy-agnostic environment occupancy for pairs of metrics.
+
+Computes strategy-conditional pass statistics for Greg strategies on the same metric pairs.
+
+Automatically finds “sweet spot” regions where:
+
+The environment actually spends non-trivial time, and
+
+Greg’s selector likes a given strategy.
+
+This is an offline backtest / analysis tool, not part of the live trading loop.
+
+Task 1 – Backtest core: Environment Occupancy module
+
+Create a new module:
+
+backtest/environment_heatmap.py
+
+In this module, implement:
+
+A small data class for a single heatmap cell:
+
+from dataclasses import dataclass
+
+@dataclass
+class HeatmapCell:
+    x_low: float
+    x_high: float
+    y_low: float
+    y_high: float
+    count: int
+    occupancy_frac: float  # count / total_samples
+
+
+A pure function to compute a 2D histogram for any metric pair, independent of any strategy:
+
+from typing import Callable, Dict, Iterable, List, Tuple
+
+MetricSample = Dict[str, float]  # e.g. {"vrp_30d": 12.3, "adx_14d": 27.0, ...}
+
+def compute_environment_heatmap(
+    samples: Iterable[MetricSample],
+    x_metric: str,
+    y_metric: str,
+    x_bins: int = 20,
+    y_bins: int = 20,
+    x_range: Tuple[float, float] | None = None,
+    y_range: Tuple[float, float] | None = None,
+) -> List[HeatmapCell]:
+    """
+    Build a 2D occupancy histogram for (x_metric, y_metric).
+
+    - samples: iterable of metric dicts, all from a single underlying.
+    - x_metric, y_metric: names like "vrp_30d", "adx_14d", etc.
+    - x_bins, y_bins: number of buckets per axis.
+    - x_range, y_range: optional overrides; if None, infer from data.
+
+    Returns a flat list of HeatmapCell with count and occupancy_frac.
+    """
+    ...
+
+
+Requirements:
+
+samples should come from the same metric pipeline you already use for the Bots tab (Greg sensors). Don’t build a separate data path; reuse the existing way you compute vrp_30d, chop_factor_7d, etc.
+
+If a sample is missing either x_metric or y_metric, skip that sample.
+
+If x_range / y_range is None, infer min/max from actual data and extend by a small margin (e.g. 5–10%) so edge values aren’t crushed.
+
+A helper to serialize the result to CSV:
+
+import csv
+from pathlib import Path
+
+def save_heatmap_csv(
+    cells: List[HeatmapCell],
+    output_path: Path,
+    x_metric: str,
+    y_metric: str,
+    underlying: str,
+) -> None:
+    """
+    Save a heatmap grid to CSV with headers:
+    underlying, x_metric, y_metric, x_low, x_high, y_low, y_high, count, occupancy_frac
+    """
+    ...
+
+
+A loader that gives you an iterable of metric samples for a given underlying and time range, reusing whatever you already use for Greg sensors. For example:
+
+def load_metric_samples_for_underlying(
+    underlying: str,
+    lookback_days: int | None = None,
+) -> Iterable[MetricSample]:
+    """
+    Yield historical metric snapshots for the given underlying (e.g. "BTC", "ETH").
+
+    Use the same data that drives the Bots tab / Greg sensors.
+    For now, it is OK if this is backed by your synthetic universe or your intraday DB.
+    """
+    ...
+
+
+If there is already a function that computes / stores time series of the Greg sensors, factor it out and reuse it here instead of duplicating logic.
+
+Task 2 – Greg strategy-conditional statistics
+
+In backtest/environment_heatmap.py (or a nearby module such as backtest/greg_heatmap.py), add logic to compute per-strategy stats on the same grid.
+
+Define a structure to hold Greg strategy stats per cell:
+
+@dataclass
+class StrategyHeatmapCell(HeatmapCell):
+    total_samples_in_cell: int
+    strategy_selected_count: int
+    strategy_pass_frac: float  # strategy_selected_count / total_samples_in_cell if > 0 else 0.0
+    # Optional: average score if you have a score instead of pure pass/fail:
+    avg_score: float | None = None
+
+
+Reuse the existing Greg selector:
+
+Locate the code that currently:
+
+Takes the metric snapshot (vrp, chop, skew, etc.)
+
+Applies the Greg JSON spec
+
+Produces a “selected strategy” or “blocked / pass / no trade” status in the Bots tab.
+
+Factor that core logic into a callable you can reuse, for example:
+
+from typing import Any
+
+def evaluate_greg_strategy_for_sample(
+    metrics: MetricSample,
+    underlying: str,
+) -> Any:
+    """
+    Given a single metric snapshot, return whatever structure is already used
+    to populate the GregBot strategy table (e.g., selected strategy name,
+    status, and/or scores).
+
+    Reuse the *existing* implementation; do not duplicate the JSON spec parsing.
+    """
+    ...
+
+
+Implement a function that, for a given strategy name and metric pair, computes strategy stats per cell:
+
+def compute_strategy_heatmap_for_pair(
+    samples: Iterable[MetricSample],
+    x_metric: str,
+    y_metric: str,
+    strategy_name: str,
+    underlying: str,
+    x_bins: int = 20,
+    y_bins: int = 20,
+    x_range: Tuple[float, float] | None = None,
+    y_range: Tuple[float, float] | None = None,
+) -> List[StrategyHeatmapCell]:
+    """
+    For the given strategy_name (e.g. 'Strategy A: ATM Straddle'),
+    compute:
+
+    - occupancy_frac (environment only)
+    - strategy_pass_frac (how often Greg selects / passes this strategy in each cell)
+    """
+    ...
+
+
+Implementation:
+
+Internally, you can start from the environment heatmap logic (binning).
+
+For each sample:
+
+Compute (bin_x, bin_y) and increment the cell’s count and total_samples_in_cell.
+
+Call evaluate_greg_strategy_for_sample(...) to determine which strategy is “active / selected” at that sample.
+
+If the selected strategy matches strategy_name (based on the labels you use in the GregBot UI), increment strategy_selected_count for that cell.
+
+At the end, compute:
+
+occupancy_frac = count / total_samples
+
+strategy_pass_frac = strategy_selected_count / total_samples_in_cell (if > 0).
+
+Task 3 – Batch script: sweep metric pairs and find “sweet spots”
+
+Create a new script:
+
+scripts/run_greg_environment_heatmaps.py
+
+This should be a CLI script (no UI) that you can run like:
+
+python scripts/run_greg_environment_heatmaps.py \
+  --underlying BTC \
+  --metrics vrp_30d adx_14d iv_rank_6m skew_25d rsi_14d price_vs_ma200 \
+  --strategies "Strategy A: ATM Straddle" "Strategy B: OTM Strangle" \
+  --x-bins 20 \
+  --y-bins 20 \
+  --min-env-frac 0.005 \
+  --min-pass-frac 0.4
+
+
+Requirements:
+
+Arguments (use argparse):
+
+--underlying (repeatable, e.g. BTC, ETH).
+
+--metrics list of metric names to consider.
+
+--strategies list of Greg strategy labels (exact strings used in the GregBot table).
+
+--x-bins, --y-bins (default 20).
+
+--min-env-frac (default 0.005 = 0.5% occupancy).
+
+--min-pass-frac (default 0.4 = 40% strategy pass rate).
+
+Optional: --lookback-days.
+
+Loop over all metric pairs:
+
+For each underlying U.
+
+For each unordered pair of distinct metrics (X, Y) from metrics.
+
+Compute environment occupancy heatmap via compute_environment_heatmap(...) and save CSV to:
+
+backtest/output/env_heatmap_{U}_{x_metric}_vs_{y_metric}.csv
+
+
+Strategy sweep:
+
+For each strategy in strategies and each pair (X, Y):
+
+Compute StrategyHeatmapCell list via compute_strategy_heatmap_for_pair(...).
+
+For each cell, compute a simple sweetness score:
+
+sweetness = cell.occupancy_frac * cell.strategy_pass_frac
+
+
+Filter cells with:
+
+cell.occupancy_frac >= min_env_frac
+
+cell.strategy_pass_frac >= min_pass_frac
+
+Sort by sweetness descending and keep the top K (e.g. K = 5, hard-coded is fine).
+
+For each (underlying, strategy, metric pair), create a small summary record:
+
+{
+  "underlying": "BTC",
+  "strategy": "Strategy A: ATM Straddle",
+  "x_metric": "vrp_30d",
+  "y_metric": "adx_14d",
+  "sweet_spots": [
+    {
+      "x_low": ...,
+      "x_high": ...,
+      "y_low": ...,
+      "y_high": ...,
+      "occupancy_frac": ...,
+      "strategy_pass_frac": ...,
+      "sweetness": ...
+    },
+    ...
+  ]
+}
+
+
+Output summary files:
+
+JSON:
+
+backtest/output/greg_heatmap_sweetspots.json with all summary records.
+
+Markdown (human-readable):
+
+backtest/output/greg_heatmap_sweetspots.md with sections like:
+
+# Greg Environment Sweet Spots – BTC
+
+## Strategy A: ATM Straddle – (vrp_30d, adx_14d)
+
+Top sweet spots (min_env_frac = 0.5%, min_pass_frac = 40%):
+
+1. vrp_30d ∈ [12, 25], adx_14d ∈ [15, 30]
+   - occupancy ≈ 9.3%
+   - strategy pass rate ≈ 64.7%
+   - score (occupancy * pass) ≈ 0.060
+
+2. ...
+
+
+Make sure paths under backtest/output/ are created if they don’t exist.
+
+No new heavy dependencies:
+
+Do not add matplotlib, seaborn, etc. This script only writes CSV/JSON/Markdown.
+
+Reuse existing config & logging helpers where convenient.
+
+Docs
+
+Update replit.md (or the relevant doc section) with a short subsection:
+
+“Greg Environment Heatmaps”
+
+How to run the script (example command).
+
+What the outputs are (CSV/JSON/Markdown).
+
+A note that this is research only, and uses whatever data source you currently have (synthetic universe or intraday DB).
+
+Success Criteria
+
+python scripts/run_greg_environment_heatmaps.py --underlying BTC --metrics vrp_30d adx_14d ... runs without crashing.
+
+CSV files appear in backtest/output/ with occupancy grids.
+
+greg_heatmap_sweetspots.json and .md contain sensible candidate sweet spots for each (strategy, metric pair).
+
+No changes to the live agent loop or Bots UI behaviour.
+
+No new external plotting dependencies.
