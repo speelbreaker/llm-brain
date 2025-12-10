@@ -59,6 +59,9 @@ The web dashboard provides a user-friendly interface with sections for "Live Age
   - Supports `source: "live" | "harvested"` for API or Parquet data
   - Global metrics: mae_vol_points, vega_weighted_mae_pct, residuals_summary
   - Skew fitting with anchor_ratios computation and misfit detection
+  - RegimeParams extended with `calibrated_iv_multiplier` and `calibrated_skew_scale` fields
+  - RegimeModel extended with `predict_cluster()` and `get_regime_occupancy()` methods
+  - realism_check.py uses RegimeModel for regime assignment and transition matrix comparison
 - **Auto IV Calibration Pipeline**: 
   - **calibration_history table**: Persists time series of auto-calculated IV multipliers keyed by underlying and DTE range.
   - **scripts/auto_calibrate_iv.py**: CLI script that loads harvester data, fits an IV multiplier minimizing MAE, and stores results in the database.

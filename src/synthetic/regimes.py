@@ -49,6 +49,9 @@ class RegimeParams:
     vol: Optional[float] = None
     weight: Optional[float] = None
     
+    calibrated_iv_multiplier: Optional[float] = None
+    calibrated_skew_scale: Optional[float] = None
+    
     def to_dict(self) -> Dict[str, Any]:
         """Convert to JSON-serializable dict."""
         d = asdict(self)
@@ -93,6 +96,54 @@ class RegimeModel:
             regimes=regimes,
             transition_matrix=np.array(d["transition_matrix"]),
         )
+    
+    def predict_cluster(self, sensor_vector: np.ndarray) -> int:
+        """
+        Assign a sensor vector to the closest regime cluster.
+        
+        Uses Euclidean distance to regime centroids (sensor_means).
+        
+        Args:
+            sensor_vector: Array of sensor values matching GREG_SENSOR_COLUMNS order
+            
+        Returns:
+            Cluster ID (regime index)
+        """
+        if not self.regimes:
+            return 0
+        
+        best_cluster = 0
+        best_dist = float("inf")
+        
+        for cluster_id, regime in self.regimes.items():
+            if regime.sensor_means is None:
+                continue
+            
+            centroid = np.array([
+                regime.sensor_means.get(col, 0.0) 
+                for col in GREG_SENSOR_COLUMNS[:len(sensor_vector)]
+            ])
+            
+            dist = np.linalg.norm(sensor_vector - centroid[:len(sensor_vector)])
+            if dist < best_dist:
+                best_dist = dist
+                best_cluster = cluster_id
+        
+        return best_cluster
+    
+    def get_regime_occupancy(self, regime_path: np.ndarray) -> Dict[int, float]:
+        """
+        Compute regime occupancy frequencies from a path.
+        
+        Args:
+            regime_path: Array of regime IDs over time
+            
+        Returns:
+            Dict mapping regime_id to occupancy fraction
+        """
+        counts = np.bincount(regime_path.astype(int), minlength=self.n_clusters)
+        total = len(regime_path)
+        return {i: float(counts[i]) / total for i in range(self.n_clusters)}
 
 
 GREG_SENSOR_COLUMNS = [

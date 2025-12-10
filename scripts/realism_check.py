@@ -32,6 +32,8 @@ from src.synthetic.regimes import (
     get_default_regimes,
     get_default_transition_matrix,
     RegimeParams,
+    RegimeModel,
+    GREG_SENSOR_COLUMNS,
 )
 
 
@@ -244,6 +246,87 @@ def compute_regime_distribution(
     total = len(regime_path)
     
     return {i: round(float(counts[i]) / total, 4) for i in range(n_regimes)}
+
+
+def assign_regimes_using_model(
+    data: pd.DataFrame,
+    model: RegimeModel,
+    sensor_columns: List[str],
+) -> np.ndarray:
+    """
+    Assign regime IDs to each row of data using RegimeModel.predict_cluster().
+    
+    Args:
+        data: DataFrame with sensor columns
+        model: RegimeModel with predict_cluster() method
+        sensor_columns: List of sensor column names to use
+        
+    Returns:
+        Array of regime IDs
+    """
+    regime_ids = []
+    
+    for _, row in data.iterrows():
+        sensor_values = []
+        for col in sensor_columns:
+            if col in row and not pd.isna(row[col]):
+                sensor_values.append(float(row[col]))
+            else:
+                sensor_values.append(0.0)
+        
+        sensor_vector = np.array(sensor_values)
+        regime_id = model.predict_cluster(sensor_vector)
+        regime_ids.append(regime_id)
+    
+    return np.array(regime_ids)
+
+
+def compute_transition_matrix_from_path(
+    regime_path: np.ndarray,
+    n_regimes: int,
+) -> np.ndarray:
+    """
+    Compute empirical transition matrix from a regime path.
+    
+    Args:
+        regime_path: Array of regime IDs over time
+        n_regimes: Number of regimes
+        
+    Returns:
+        Transition matrix (n_regimes x n_regimes)
+    """
+    trans_matrix = np.zeros((n_regimes, n_regimes))
+    
+    for i in range(len(regime_path) - 1):
+        from_regime = int(regime_path[i])
+        to_regime = int(regime_path[i + 1])
+        if from_regime < n_regimes and to_regime < n_regimes:
+            trans_matrix[from_regime, to_regime] += 1
+    
+    row_sums = trans_matrix.sum(axis=1, keepdims=True)
+    row_sums = np.where(row_sums == 0, 1, row_sums)
+    trans_matrix = trans_matrix / row_sums
+    
+    return trans_matrix
+
+
+def compare_transition_matrices(
+    real_matrix: np.ndarray,
+    model_matrix: np.ndarray,
+) -> Dict[str, float]:
+    """
+    Compare two transition matrices.
+    
+    Returns:
+        Dict with comparison metrics
+    """
+    diff = np.abs(real_matrix - model_matrix)
+    
+    return {
+        "max_abs_diff": float(np.max(diff)),
+        "mean_abs_diff": float(np.mean(diff)),
+        "frobenius_norm": float(np.linalg.norm(diff, 'fro')),
+    }
 
 
 def compute_realism_score(
