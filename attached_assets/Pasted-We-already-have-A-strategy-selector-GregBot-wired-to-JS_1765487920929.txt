@@ -1,0 +1,532 @@
+We already have:
+
+A strategy selector (“GregBot”) wired to:
+
+JSON spec: docs/greg_mandolini/GREG_SELECTOR_RULES_FINAL.json
+
+Live market sensors and strategy passes in the Bots → GregBot section of the web UI.
+
+A Strategy abstraction layer:
+
+Strategy base class with strategy_id + propose_actions(state: AgentState).
+
+CandidateAction, StrategyDecision, StrategyRegistry.
+
+A clean state layer:
+
+AgentState, PortfolioState, OptionPosition, VolState, MarketContext, etc.
+
+A web UI in src/web_app.py with:
+
+A “Bots” tab.
+
+“Live Market Sensors”, “Strategy Matches”, “Expert Bots → GregBot” tables.
+
+Now we want to add position management logic and a UI panel for Greg’s strategies.
+
+High-Level Goal
+
+Implement Greg Position Management v1 as advice-only:
+
+For each open Greg position, evaluate:
+
+Delta hedge triggers
+
+Profit targets
+
+Stop-loss / roll / assignment rules
+
+“Days to expiration” rules
+
+Produce structured “Management Suggestions” (not hard orders).
+
+Show them in the Bots → GregBot panel so I can see:
+
+When Greg would:
+
+Hedge via perps
+
+Take profit
+
+Roll out/out+up
+
+Assign (synthetic or spot)
+
+Kill the trade
+
+Do NOT send any real orders.
+For now, this is a research & guidance layer only.
+
+1. Management Rules Spec (Greg Position Rules JSON)
+
+Create a new JSON spec:
+
+File: docs/greg_mandolini/GREG_POSITION_RULES_V1.json
+
+Structure (example; feel free to refine, but keep fields readable & calibrated):
+
+{
+  "meta": {
+    "module": "POSITION_ENGINE",
+    "version": "1.0-Greg-Management",
+    "description": "Management rules for open Greg strategies (advice-only)."
+  },
+
+  "calibration": {
+    "straddle_delta_threshold": 0.15,
+    "strangle_delta_threshold": 0.20,
+    "straddle_profit_take_pct": 0.50,
+    "straddle_stop_loss_multiple": 2.0,
+    "straddle_close_at_dte": 21,
+
+    "calendar_price_move_stop_pct": 0.05,
+
+    "short_put_profit_take_pct": 0.70,
+    "short_put_stop_delta_abs": 0.80,
+
+    "iron_fly_profit_take_pct": 0.30,
+
+    "spread_profit_take_pct": 0.60
+  },
+
+  "strategies": {
+    "STRATEGY_A_STRADDLE": {
+      "type": "short_straddle",
+      "hedge": {
+        "mode": "delta_hedge_perp",
+        "delta_abs_threshold": 0.15
+      },
+      "profit_target": {
+        "type": "credit_pct",
+        "threshold": 0.50
+      },
+      "stop_loss": {
+        "type": "loss_multiple_of_credit",
+        "multiple": 2.0
+      },
+      "expiry_rule": {
+        "close_at_dte": 21
+      }
+    },
+
+    "STRATEGY_A_STRANGLE": {
+      "type": "short_strangle",
+      "hedge": {
+        "mode": "delta_hedge_perp",
+        "delta_abs_threshold": 0.20
+      },
+      "profit_target": {
+        "type": "credit_pct",
+        "threshold": 0.50
+      },
+      "stop_loss": {
+        "type": "loss_multiple_of_credit",
+        "multiple": 2.0
+      },
+      "expiry_rule": {
+        "close_at_dte": 21
+      }
+    },
+
+    "STRATEGY_B_CALENDAR": {
+      "type": "calendar_spread",
+      "profit_target": {
+        "type": "front_vs_back_iv",
+        "comment": "Close when front IV collapses vs back IV (event premium crushed)."
+      },
+      "stop_loss": {
+        "type": "price_move_pct",
+        "threshold": 0.05
+      },
+      "expiry_rule": {
+        "close_front_leg_hours_before_expiry": 24
+      }
+    },
+
+    "STRATEGY_C_SHORT_PUT": {
+      "type": "short_put_accumulation",
+      "profit_target": {
+        "type": "credit_pct",
+        "threshold": 0.70
+      },
+      "stop_loss": {
+        "type": "delta_abs",
+        "threshold": 0.80
+      },
+      "assignment": {
+        "funding_preference": "if funding >= 0 use perp, else use spot",
+        "comment": "Synthetic assignment vs spot depending on funding"
+      }
+    },
+
+    "STRATEGY_D_IRON_BUTTERFLY": {
+      "type": "iron_fly",
+      "profit_target": {
+        "type": "max_profit_pct",
+        "threshold": 0.30
+      },
+      "stop_loss": {
+        "type": "touch_wing",
+        "comment": "If underlying price touches either long wing, close the structure."
+      }
+    },
+
+    "STRATEGY_F_BULL_PUT_SPREAD": {
+      "type": "credit_spread_bull_put",
+      "profit_target": {
+        "type": "max_profit_pct",
+        "threshold": 0.60
+      },
+      "stop_loss": {
+        "type": "touch_short_strike"
+      }
+    },
+
+    "STRATEGY_F_BEAR_CALL_SPREAD": {
+      "type": "credit_spread_bear_call",
+      "profit_target": {
+        "type": "max_profit_pct",
+        "threshold": 0.60
+      },
+      "stop_loss": {
+        "type": "touch_short_strike"
+      }
+    }
+  }
+}
+
+
+Notes:
+
+These numbers are our “Greg-aligned v1” thresholds based on prior heatmaps + Greg feedback.
+
+Please keep all numeric thresholds in the calibration block so we can later sweep them or expose them via UI.
+
+2. Core Engine: Greg Position Management Evaluator
+
+Create a new module for management logic:
+
+File: src/greg_position_manager.py (or use an existing Greg-specific module if present; pick the one that already imports GREG_SELECTOR_RULES_FINAL.json and keep things cohesive).
+
+Responsibilities:
+
+Load position rules JSON
+
+Load GREG_POSITION_RULES_V1.json once at startup (similar to how the selector spec is loaded).
+
+Provide a helper: get_greg_position_rules() returning a typed config object.
+
+Define a typed suggestion model
+
+In a shared models module (e.g. src/models.py or a small new src/greg_models.py), add:
+
+@dataclass
+class GregManagementSuggestion:
+    bot_name: str  # "GregBot"
+    strategy_code: str  # e.g. "STRATEGY_A_STRADDLE"
+    underlying: str  # "BTC" / "ETH"
+    position_id: str  # internal position identifier
+    summary: str      # short human-readable line
+    action: Literal["HEDGE", "TAKE_PROFIT", "ROLL", "ASSIGN", "CLOSE", "HOLD"]
+    reason: str       # detailed explanation, including thresholds vs actuals
+    metrics: dict     # e.g. {"net_delta": ..., "target_delta": 0.15, "dte": 27, "profit_pct": 0.42}
+
+
+Implement evaluation logic
+
+Add pure functions in greg_position_manager.py:
+
+def evaluate_straddle_or_strangle(
+    position: OptionPosition,
+    portfolio: PortfolioState,
+    market: MarketContext,
+    rules: GregPositionRules
+) -> Optional[GregManagementSuggestion]:
+    ...
+
+
+And similar helpers for:
+
+evaluate_calendar_spread(...)
+
+evaluate_short_put(...)
+
+evaluate_iron_fly(...)
+
+evaluate_credit_spread(...)
+
+Use the textual rules:
+
+Straddle/Strangle (Strategy A)
+
+Hedge:
+
+If net_delta_abs > threshold (0.15 straddle / 0.20 strangle) → action = "HEDGE"
+
+Compute recommended perp size (e.g. hedge_size = -net_delta * notional / spot), but do not send any trade.
+
+Include in reason something like:
+
+"Net delta 0.22 > threshold 0.15 → recommend hedge via perp."
+
+Profit target:
+
+Compute unrealized profit % vs initial credit.
+
+If profit_pct >= 0.5 → action = "TAKE_PROFIT".
+
+Stop + Expiry:
+
+If loss >= 2x initial credit → action = "CLOSE".
+
+If DTE <= 21 and position still open → action = "CLOSE" (or "ROLL" suggestion, with note: “roll out and recenter if VRP thesis still valid”).
+
+Calendar (Strategy B)
+
+Use price move% from strike:
+
+If |price - strike| / strike >= 0.05 → action = "CLOSE" (“tent breach”).
+
+Profit target:
+
+For now, simple rule: if front-term IV dropped significantly vs entry / back-term IV → action = "TAKE_PROFIT".
+
+Expiry:
+
+If front_leg_dte <= 1 → suggest closing both legs (action = "CLOSE").
+
+Short Put Accumulation (Strategy C)
+
+If profit_pct >= 0.70 → action = "TAKE_PROFIT".
+
+If option delta_abs >= 0.80 → action = "ASSIGN" with reason describing:
+
+If funding >= 0 → synthetic assignment via perp.
+
+If funding < 0 → spot assignment.
+
+This is still advice only.
+
+Where we would “roll down and out”, we can for now suggest action = "ROLL" with a note (no automatic roll implementation yet).
+
+Iron Fly (Strategy D)
+
+If profit_pct >= 0.30 → action = "TAKE_PROFIT".
+
+If underlying price touches or crosses either wing strike → action = "CLOSE" (“wings breached”).
+
+Credit Spreads (Strategy F – Bull Put / Bear Call)
+
+If profit_pct >= 0.60 → action = "TAKE_PROFIT".
+
+If price touches short strike → action = "CLOSE" (touch rule).
+
+Optionally also include loss_multiple_of_credit as an emergency guard in reason.
+
+Top-level evaluator
+
+Add a function:
+
+def evaluate_greg_positions(state: AgentState) -> list[GregManagementSuggestion]:
+    """
+    For all open positions tagged as Greg strategies, return a list
+    of management suggestions.
+    """
+
+
+Use state.portfolio / state.positions to find Greg-tagged positions (by strategy_id, tags, or naming convention already used by GregBot).
+
+For each position, map strategy_id → JSON strategies key (e.g. "STRATEGY_A_STRADDLE").
+
+Use per-strategy helper to compute a suggestion or return None.
+
+Return a list of suggestions.
+
+3. Wire into Agent Loop (Advice-Only)
+
+Find the module that runs the main agent loop (likely src/agent_loop.py or similar – the same place where GregBot selectors are evaluated and decisions are logged).
+
+After building AgentState and before any actual order placement:
+
+Call evaluate_greg_positions(state) and:
+
+Store the result into a status store or a dedicated field so the web API can read it.
+
+Log to the JSONL / flight recorder, e.g. as "greg_management_suggestions": [...].
+
+Important safety constraint:
+
+Do NOT trigger any real execution from position management yet.
+
+No new Deribit order calls.
+This pass is for visibility & research only.
+
+4. API + UI – “Greg Position Management” Panel
+
+Update src/web_app.py to expose the suggestions and surface them in the UI.
+
+4A. API endpoint
+
+Add a FastAPI endpoint:
+
+from fastapi.responses import JSONResponse
+
+@app.get("/api/bots/greg/management")
+def get_greg_management() -> JSONResponse:
+    """
+    Return the latest Greg position management suggestions
+    from the in-memory status store / AgentState snapshot.
+    """
+    # Pull from the same place where evaluate_greg_positions stored the data.
+    ...
+
+
+Shape of the JSON:
+
+{
+  "ok": true,
+  "suggestions": [
+    {
+      "bot_name": "GregBot",
+      "strategy_code": "STRATEGY_A_STRADDLE",
+      "underlying": "BTC",
+      "position_id": "deribit:BTC-30JAN25-STRADDLE-42000",
+      "summary": "HEDGE: Net delta 0.22 > 0.15 threshold",
+      "action": "HEDGE",
+      "reason": "Net delta 0.22 exceeds straddle hedge threshold 0.15. Recommend short 0.22 BTC perp.",
+      "metrics": {
+        "net_delta": 0.22,
+        "target_delta_abs": 0.15,
+        "dte": 28,
+        "profit_pct": 0.18
+      }
+    }
+  ]
+}
+
+4B. UI: New Management Table under GregBot
+
+In the Bots tab HTML in index() (inside src/web_app.py), under the existing “Expert Bots → GregBot” section:
+
+Add a new sub-section:
+
+#### GregBot – Position Management (Advice Only)
+
+<div id="greg-management-panel">
+  <p><em>This section shows Greg-style management suggestions for any open positions. Advice-only – no real orders are sent.</em></p>
+  <table id="greg-management-table">
+    <thead>
+      <tr>
+        <th>Underlying</th>
+        <th>Strategy</th>
+        <th>Position</th>
+        <th>Suggested Action</th>
+        <th>Key Metrics</th>
+      </tr>
+    </thead>
+    <tbody>
+      <!-- Filled by JS -->
+    </tbody>
+  </table>
+
+  <button id="refresh-greg-management">Refresh Management Suggestions</button>
+  <div id="greg-management-status" aria-live="polite"></div>
+</div>
+
+
+JS wiring (vanilla JS at bottom of the page):
+
+On page load and on click of #refresh-greg-management:
+
+GET /api/bots/greg/management
+
+Populate the table:
+
+Strategy: human label (e.g. “ATM Straddle (Strategy A)”).
+
+Position: short identifier.
+
+Suggested Action: colored badge:
+
+Green for TAKE_PROFIT, Orange for HEDGE or ROLL, Red for CLOSE or ASSIGN, Grey for HOLD.
+
+Key Metrics: e.g.
+"Δ=0.22 vs 0.15; DTE=28; PnL=+18% of credit"
+
+Status div:
+
+On success: “Loaded X management suggestion(s).”
+
+On error: show error message in red.
+
+This panel is my visual confirmation that the management rules are wired correctly.
+
+5. Tests
+
+Add a new test module:
+
+File: tests/test_greg_position_management.py
+
+Use TestClient and/or direct function calls to validate:
+
+Rule evaluation
+
+Build minimal AgentState + PortfolioState + OptionPosition mocks for:
+
+One STRADDLE with net_delta = 0.2 and moderate profit.
+
+One SHORT PUT with delta = -0.85.
+
+Assert that:
+
+Straddle → action == "HEDGE" and metrics["net_delta"] and metrics["target_delta_abs"] match calibration.
+
+Short Put → action == "ASSIGN" and reason mentions funding logic.
+
+Expiry rule
+
+For a STRADDLE at DTE=19 days → suggestion is CLOSE or ROLL.
+
+API & UI plumbing
+
+Use TestClient to:
+
+Call GET /api/bots/greg/management with a fake suggestion injected into the status store.
+
+Assert ok == True and returned shape matches the expected schema.
+
+Keep tests deterministic and not dependent on Deribit or live data.
+
+6. Safety & Non-Goals (Important)
+
+Do NOT add any new Deribit order-sending logic.
+
+No calls that actually place perps or options through position management.
+
+All management logic is pure evaluation + JSON suggestions + UI.
+
+We can later add:
+
+A DRY_RUN toggle that, when disabled, converts suggestions → real CandidateActions, but not in this task.
+
+Success Criteria
+
+App still starts normally; all existing tests pass.
+
+New tests in tests/test_greg_position_management.py pass.
+
+A new file docs/greg_mandolini/GREG_POSITION_RULES_V1.json exists with calibration + strategy blocks.
+
+evaluate_greg_positions(state) returns reasonable suggestions in unit tests.
+
+/api/bots/greg/management returns the live suggestions.
+
+In the Bots → GregBot panel:
+
+I see a “GregBot – Position Management (Advice Only)” table.
+
+For any synthetic/open Greg positions, I see clear suggested actions with explanations.
+
+No actual Deribit trades are fired; this is purely advisory.
+
+Use this spec to implement Greg Position Management v1 as a clean, test-backed, UI-visible advisory module.

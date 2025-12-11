@@ -1,0 +1,164 @@
+{
+  "meta": {
+    "module": "POSITION_ENGINE",
+    "version": "1.0-Greg-Management",
+    "description": "Management rules for open Greg strategies (advice-only). These rules evaluate open positions and suggest hedge, profit-taking, stop-loss, roll, or assignment actions."
+  },
+
+  "calibration": {
+    "straddle_delta_threshold": 0.15,
+    "strangle_delta_threshold": 0.20,
+    "straddle_profit_take_pct": 0.50,
+    "strangle_profit_take_pct": 0.50,
+    "straddle_stop_loss_multiple": 2.0,
+    "strangle_stop_loss_multiple": 2.0,
+    "straddle_close_at_dte": 21,
+    "strangle_close_at_dte": 21,
+
+    "calendar_price_move_stop_pct": 0.05,
+    "calendar_close_front_leg_hours": 24,
+
+    "short_put_profit_take_pct": 0.70,
+    "short_put_stop_delta_abs": 0.80,
+
+    "iron_fly_profit_take_pct": 0.30,
+
+    "spread_profit_take_pct": 0.60
+  },
+
+  "strategies": {
+    "STRATEGY_A_STRADDLE": {
+      "type": "short_straddle",
+      "display_name": "ATM Straddle (Strategy A)",
+      "hedge": {
+        "mode": "delta_hedge_perp",
+        "delta_abs_threshold": 0.15
+      },
+      "profit_target": {
+        "type": "credit_pct",
+        "threshold": 0.50,
+        "description": "Close when 50% of credit received is profit"
+      },
+      "stop_loss": {
+        "type": "loss_multiple_of_credit",
+        "multiple": 2.0,
+        "description": "Close if loss exceeds 2x the initial credit"
+      },
+      "expiry_rule": {
+        "close_at_dte": 21,
+        "description": "Close or roll when DTE drops below 21 days"
+      }
+    },
+
+    "STRATEGY_A_STRANGLE": {
+      "type": "short_strangle",
+      "display_name": "ATM Strangle (Strategy A)",
+      "hedge": {
+        "mode": "delta_hedge_perp",
+        "delta_abs_threshold": 0.20
+      },
+      "profit_target": {
+        "type": "credit_pct",
+        "threshold": 0.50,
+        "description": "Close when 50% of credit received is profit"
+      },
+      "stop_loss": {
+        "type": "loss_multiple_of_credit",
+        "multiple": 2.0,
+        "description": "Close if loss exceeds 2x the initial credit"
+      },
+      "expiry_rule": {
+        "close_at_dte": 21,
+        "description": "Close or roll when DTE drops below 21 days"
+      }
+    },
+
+    "STRATEGY_B_CALENDAR": {
+      "type": "calendar_spread",
+      "display_name": "Calendar Spread (Strategy B)",
+      "hedge": null,
+      "profit_target": {
+        "type": "front_vs_back_iv",
+        "description": "Close when front IV collapses vs back IV (event premium crushed)"
+      },
+      "stop_loss": {
+        "type": "price_move_pct",
+        "threshold": 0.05,
+        "description": "Close if price moves more than 5% away from strike (tent breach)"
+      },
+      "expiry_rule": {
+        "close_front_leg_hours_before_expiry": 24,
+        "description": "Close both legs when front leg is within 24 hours of expiry"
+      }
+    },
+
+    "STRATEGY_C_SHORT_PUT": {
+      "type": "short_put_accumulation",
+      "display_name": "Short Put Accumulation (Strategy C)",
+      "hedge": null,
+      "profit_target": {
+        "type": "credit_pct",
+        "threshold": 0.70,
+        "description": "Close when 70% of credit received is profit"
+      },
+      "stop_loss": {
+        "type": "delta_abs",
+        "threshold": 0.80,
+        "description": "Consider assignment or roll when delta exceeds 0.80"
+      },
+      "assignment": {
+        "mode": "funding_conditional",
+        "description": "If funding >= 0 use perp (synthetic assignment), else use spot"
+      },
+      "expiry_rule": null
+    },
+
+    "STRATEGY_D_IRON_BUTTERFLY": {
+      "type": "iron_fly",
+      "display_name": "Iron Butterfly (Strategy D)",
+      "hedge": null,
+      "profit_target": {
+        "type": "max_profit_pct",
+        "threshold": 0.30,
+        "description": "Close when 30% of max profit is realized"
+      },
+      "stop_loss": {
+        "type": "touch_wing",
+        "description": "Close if underlying price touches either long wing strike"
+      },
+      "expiry_rule": null
+    },
+
+    "STRATEGY_F_BULL_PUT_SPREAD": {
+      "type": "credit_spread_bull_put",
+      "display_name": "Bull Put Spread (Strategy F)",
+      "hedge": null,
+      "profit_target": {
+        "type": "max_profit_pct",
+        "threshold": 0.60,
+        "description": "Close when 60% of max profit is realized"
+      },
+      "stop_loss": {
+        "type": "touch_short_strike",
+        "description": "Close if underlying price touches the short strike"
+      },
+      "expiry_rule": null
+    },
+
+    "STRATEGY_F_BEAR_CALL_SPREAD": {
+      "type": "credit_spread_bear_call",
+      "display_name": "Bear Call Spread (Strategy F)",
+      "hedge": null,
+      "profit_target": {
+        "type": "max_profit_pct",
+        "threshold": 0.60,
+        "description": "Close when 60% of max profit is realized"
+      },
+      "stop_loss": {
+        "type": "touch_short_strike",
+        "description": "Close if underlying price touches the short strike"
+      },
+      "expiry_rule": null
+    }
+  }
+}
