@@ -554,6 +554,8 @@ def use_latest_calibration(request: dict) -> JSONResponse:
     """
     Apply the latest calibration multiplier from history as a runtime override.
     
+    Also updates the "Current Applied Multipliers" panel via set_applied_multiplier.
+    
     Body: {"underlying": "BTC", "dte_min": 3, "dte_max": 10}
     """
     underlying = request.get("underlying", "BTC")
@@ -568,7 +570,7 @@ def use_latest_calibration(request: dict) -> JSONResponse:
     
     try:
         from src.db.models_calibration import get_latest_calibration
-        from src.calibration_store import set_iv_multiplier_override
+        from src.calibration_store import set_iv_multiplier_override, set_applied_multiplier
         
         entry = get_latest_calibration(
             underlying=underlying,
@@ -587,6 +589,14 @@ def use_latest_calibration(request: dict) -> JSONResponse:
             )
         
         set_iv_multiplier_override(underlying, entry.multiplier, dte_min, dte_max)
+        
+        set_applied_multiplier(
+            underlying=underlying,
+            global_multiplier=entry.multiplier,
+            band_multipliers=None,
+            source=entry.source or "harvested",
+            applied_reason=f"User force-applied from {dte_min}-{dte_max} DTE band",
+        )
         
         return JSONResponse(content={
             "status": "ok",
@@ -707,20 +717,18 @@ def get_calibration_policy() -> JSONResponse:
 @app.get("/api/calibration/current_multipliers")
 def get_current_multipliers(underlying: str = "BTC") -> JSONResponse:
     """
-    Get the currently applied IV multipliers from the vol surface config.
+    Get the currently applied IV multipliers.
+    
+    This reads from the calibration store, which is updated when:
+    - A live calibration is applied via policy
+    - User clicks "Force-Apply Latest"
     """
     try:
-        from src.calibration_update_policy import get_current_applied_multipliers, load_recent_calibration_history
-        from src.synthetic.vol_surface import get_vol_surface_config
+        from src.calibration_update_policy import get_current_applied_multipliers
         
-        current = get_current_applied_multipliers()
-        history = load_recent_calibration_history(underlying, limit=10)
+        current = get_current_applied_multipliers(underlying)
         
-        last_applied = None
-        for rec in history:
-            if rec.applied:
-                last_applied = rec.timestamp.isoformat() if rec.timestamp else None
-                break
+        last_applied = current.last_updated.isoformat() if current.last_updated else None
         
         bands_list = None
         if current.band_multipliers:

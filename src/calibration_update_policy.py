@@ -404,9 +404,40 @@ def set_policy(policy: CalibrationUpdatePolicy) -> None:
     _runtime_policy = policy
 
 
-def get_current_applied_multipliers() -> CurrentAppliedMultipliers:
-    """Get the currently applied multipliers from vol surface config."""
+def get_current_applied_multipliers(underlying: str = "BTC") -> CurrentAppliedMultipliers:
+    """
+    Get the currently applied multipliers from the calibration store.
+    
+    This is the source of truth for the "Current Applied Multipliers" UI panel.
+    The store is updated when:
+    - A live calibration is applied via policy
+    - User clicks "Force-Apply Latest"
+    
+    Falls back to vol surface config if no explicit applied state exists.
+    """
+    from src.calibration_store import get_applied_multiplier
     from src.synthetic.vol_surface import get_vol_surface_config
+    
+    applied_state = get_applied_multiplier(underlying)
+    
+    if applied_state.last_updated is not None:
+        band_multipliers = None
+        if applied_state.band_multipliers:
+            band_multipliers = [
+                BandMultiplier(
+                    name=name,
+                    min_dte=0,
+                    max_dte=365,
+                    iv_multiplier=mult,
+                )
+                for name, mult in applied_state.band_multipliers.items()
+            ]
+        
+        return CurrentAppliedMultipliers(
+            global_multiplier=applied_state.global_multiplier,
+            band_multipliers=band_multipliers,
+            last_updated=applied_state.last_updated,
+        )
     
     config = get_vol_surface_config()
     
@@ -422,15 +453,10 @@ def get_current_applied_multipliers() -> CurrentAppliedMultipliers:
             for b in config.dte_bands
         ]
     
-    history = load_recent_calibration_history("BTC", limit=1)
-    last_updated = None
-    if history and history[0].applied:
-        last_updated = history[0].timestamp
-    
     return CurrentAppliedMultipliers(
         global_multiplier=config.iv_multiplier,
         band_multipliers=band_multipliers,
-        last_updated=last_updated,
+        last_updated=None,
     )
 
 
@@ -525,9 +551,12 @@ def run_calibration_with_policy(
         )
     
     if decision.should_apply:
+        from src.calibration_store import set_applied_multiplier
+        
         current_config = get_vol_surface_config()
         
         dte_bands = None
+        band_multipliers_dict: Dict[str, float] = {}
         if smoothed_bands:
             dte_bands = [
                 DteBand(
@@ -538,6 +567,7 @@ def run_calibration_with_policy(
                 )
                 for b in smoothed_bands
             ]
+            band_multipliers_dict = {b.name: b.iv_multiplier for b in smoothed_bands}
         
         new_config = VolSurfaceConfig(
             iv_mode=current_config.iv_mode,
@@ -549,6 +579,14 @@ def run_calibration_with_policy(
             vrp_offset_enabled=current_config.vrp_offset_enabled,
         )
         set_vol_surface_config(new_config)
+        
+        set_applied_multiplier(
+            underlying=underlying,
+            global_multiplier=smoothed_global,
+            band_multipliers=band_multipliers_dict if band_multipliers_dict else None,
+            source=source,
+            applied_reason=decision.reason,
+        )
     
     global_metrics_dict = {}
     if result.global_metrics:
