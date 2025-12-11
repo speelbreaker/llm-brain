@@ -1,0 +1,291 @@
+You are working on a Python/FastAPI project for an options-trading lab + bot on Deribit.
+We already have:
+
+An ENTRY_ENGINE that selects a strategy (Greg’s selector) based on environment and returns values like NO_TRADE, STRATEGY_A_STRADDLE, STRATEGY_A_STRANGLE, STRATEGY_B_CALENDAR, STRATEGY_C_SHORT_PUT, etc.
+
+Greg’s strategy rules in Markdown/JSON files named like:
+
+GREG_SELECTOR_RULES_FINAL.md
+
+greg_position_rules.json
+
+Execution code that can already place options trades and run in DRY_RUN mode (testnet / paper).
+
+Your task: implement a delta-hedging engine for Greg’s neutral short-vol strategies and integrate it into the main agent loop, plus add a simple force-test mode so we can see hedges work without waiting for real market conditions.
+
+1) Understand the existing Greg rules
+
+Locate the Greg rules files (names approximate, but search for these):
+
+GREG_SELECTOR_RULES_FINAL
+
+greg_position_rules.json
+
+Confirm the following structure (adjust to actual file layout):
+
+Strategy definitions in the selector file should have fields like:
+
+"STRATEGY_A_STRADDLE": {
+  "structure": "...",
+  "management": {
+    "hedge_mode": "DYNAMIC_DELTA",
+    "hedge_trigger": "Net_Delta > |0.10|",
+    ...
+  }
+}
+
+
+greg_position_rules.json should have:
+
+{
+  "global_definitions": {
+    "net_delta_calculation": "Sum(Option_Deltas) + Sum(Future_Deltas)",
+    ...
+  },
+  "strategies": {
+    "STRATEGY_A": {
+      "hedge_rules": {
+        "mode": "DYNAMIC",
+        "check_frequency": "Hourly OR on Price_Move > 1.0%",
+        "straddle_trigger": "ABS(Net_Delta) > 0.15",
+        "strangle_trigger": "ABS(Net_Delta) > 0.20",
+        "action": "Open Perp Position to restore Net_Delta to 0.0"
+      },
+      ...
+    },
+    "STRATEGY_B_CALENDAR": { ... },
+    ...
+  }
+}
+
+
+If hedge_instrument is not defined yet in global_definitions, add:
+
+"hedge_instrument": {
+  "BTC": "BTC-PERPETUAL",
+  "ETH": "ETH-PERPETUAL"
+}
+
+
+This tells the hedger to use Deribit perps for hedging.
+
+2) Implement a HedgeEngine
+
+Create a new module, for example:
+
+src/hedging/hedge_engine.py (or similar in the existing structure).
+
+Implement a HedgeEngine class with something like:
+
+class HedgeEngine:
+    def __init__(self, config, greg_rules, deribit_client, logger):
+        """
+        config: global settings, including DRY_RUN and test flags
+        greg_rules: parsed greg_position_rules.json (and optionally selector strategy defs)
+        deribit_client: abstraction for placing orders (already exists in repo)
+        """
+        ...
+
+    def compute_net_delta(self, position_state) -> float:
+        """
+        position_state includes:
+          - options legs with current greeks (delta per leg)
+          - existing hedge perps/futures for that strategy
+        Returns net_delta = sum(option_deltas) + sum(perp_deltas).
+        """
+
+    def get_hedge_rules(self, strategy_type: str) -> HedgeRules:
+        """
+        Reads greg_position_rules.json and returns the hedge config
+        for the given strategy_type (e.g. STRATEGY_A_STRADDLE or STRATEGY_A_STRANGLE, STRATEGY_B_CALENDAR).
+        """
+
+    def build_hedge_order(self, underlying: str, net_delta: float, hedge_rules: HedgeRules) -> Optional[OrderRequest]:
+        """
+        For DYNAMIC/LIGHT hedging:
+          - If abs(net_delta) <= trigger threshold: return None (no hedge)
+          - Else:
+              - target_delta = 0
+              - hedge_delta_needed = -net_delta
+              - For perps, delta_per_contract ≈ 1, so size ≈ hedge_delta_needed
+              - Use hedge_instrument[underlying] to choose the perp symbol
+        """
+
+    def apply_hedge(self, strategy_position_id: str, order_request: OrderRequest):
+        """
+        If DRY_RUN:
+          - Log the action (underlying, net_delta_before, size, direction).
+        Else:
+          - Send the order via deribit_client
+          - Tag the resulting hedge position with the parent strategy_position_id so that
+            closing the strategy will also close the hedge.
+        """
+
+    def step(self, position_state):
+        """
+        Main entry point:
+          - Determine strategy_type and underlying for this position
+          - Load hedge rules
+          - Compute net_delta
+          - Possibly construct and send hedge order
+        """
+
+
+Key points:
+
+position_state represents a single open “Greg strategy position” (e.g. one BTC straddle position) and should already exist in your project. Reuse your existing abstraction for open trades.
+
+Delta for options should come from your existing greeks engine; delta for perps is ≈ 1 per contract (or use your existing method).
+
+3) Integrate HedgeEngine into the main loop
+
+Find the main agent loop / scheduler where:
+
+ENTRY_ENGINE (selector) is called,
+
+Options strategies are opened and tracked,
+
+Periodic tasks run (sensors, scans, etc).
+
+Typical places:
+
+src/agent/loop.py
+
+src/agent/position_manager.py
+
+src/web_app.py if you have a “live agent” route.
+
+Add:
+
+A global HedgeEngine instance:
+
+hedge_engine = HedgeEngine(config=settings, greg_rules=greg_rules, deribit_client=deribit_client, logger=logger)
+
+
+A periodic hedge step, e.g.:
+
+Run every N seconds (configurable, e.g. 60s), and
+
+Also trigger on “price move > 1%” events if you already have a market ticker system.
+
+Pseudocode:
+
+def hedge_all_open_positions():
+    for pos in position_manager.get_open_positions():
+        if not pos.is_greg_strategy:
+            continue
+        hedge_engine.step(pos)
+
+
+Wire this into your scheduler / FastAPI startup background task.
+
+Ensure that when a strategy is closed (TP, SL, time exit, or roll), the position manager:
+
+Closes all options legs,
+
+Closes any associated hedge perps tagged with that strategy_position_id.
+
+4) Add hedging rules for calendars and other strategies
+
+In greg_position_rules.json, add explicit hedge rules for calendars and any other hedged strategies:
+
+Example for calendars:
+
+"STRATEGY_B_CALENDAR": {
+  "hedge_rules": {
+    "mode": "LIGHT",
+    "check_frequency": "Hourly",
+    "trigger": "ABS(Net_Delta) > 0.20",
+    "action": "Open Perp Position to nudge Net_Delta toward 0"
+  },
+  "management": {
+    "close_profit": "...",
+    "close_stop": "...",
+    "expiry_rule": "Close short leg 24h before expiry"
+  }
+}
+
+
+For strategies with "hedge_mode": "NONE" (short puts, credit spreads, etc.), either:
+
+Omit hedge_rules, or
+
+Set mode: "NONE" and have HedgeEngine skip them.
+
+5) Implement a FORCE_TEST_STRATEGY mode
+
+Add a config option (environment variable) such as:
+
+GREG_FORCE_TEST_STRATEGY
+
+GREG_FORCE_TEST_UNDERLYING
+
+GREG_FORCE_TEST_SIZE
+
+Behavior:
+
+If GREG_FORCE_TEST_STRATEGY is set (e.g. STRATEGY_A_STRADDLE), then during the main agent loop:
+
+Skip ENTRY_ENGINE environment checks for that underlying.
+
+Directly create one test position using that strategy with small size (e.g. 0.01 BTC equivalent).
+
+Run everything in DRY_RUN or Deribit testnet, not mainnet.
+
+Add a small script, e.g. scripts/smoke_hedging.py, that:
+
+Starts the agent in DRY_RUN,
+
+Forces a test straddle on BTC,
+
+Subscribes to price stream or simulates price moves,
+
+Prints/logs hedging actions.
+
+Acceptance criteria for this script:
+
+After a price move, logs show something like:
+
+[HEDGE] strategy=STRATEGY_A_STRADDLE underlying=BTC
+        net_delta_before=+0.42, hedge_size=-0.42 BTC-PERP,
+        net_delta_after≈0.00
+
+6) Tests & verification
+
+Add at least:
+
+Unit tests for HedgeEngine.compute_net_delta and build_hedge_order:
+
+Given a BTC straddle with:
+
+short call delta +0.70,
+
+short put delta –0.30,
+
+no existing hedge,
+
+expected net_delta = +0.40,
+
+With straddle trigger set to 0.15:
+
+build_hedge_order should propose a sell 0.40 BTC-PERP order.
+
+Integration test / script:
+
+In DRY_RUN, open a synthetic STRATEGY_A_STRADDLE position.
+
+Simulate price up 3–5%.
+
+Confirm hedge_engine logs an action and adjusts net delta.
+
+Make sure all new code is type-checked and passes existing tests.
+
+End of prompt for AI Builder
+
+If you paste that into your builder and let it run, you should end up with:
+
+A proper HedgeEngine wired to your Greg strategies,
+
+Clean use of BTC/ETH perps for delta-neutralizing,
+
+A force-test mode so you can see the hedges fire today, not “whenever the market finally gives us VRP 20 + ADX 15”.

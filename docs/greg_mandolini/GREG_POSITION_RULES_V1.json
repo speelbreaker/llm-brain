@@ -1,13 +1,26 @@
 {
   "meta": {
     "module": "POSITION_ENGINE",
-    "version": "1.0-Greg-Management",
-    "description": "Management rules for open Greg strategies (advice-only). These rules evaluate open positions and suggest hedge, profit-taking, stop-loss, roll, or assignment actions."
+    "version": "1.1-Greg-Management-with-Hedging",
+    "description": "Management rules for open Greg strategies including delta hedging. These rules evaluate open positions and suggest hedge, profit-taking, stop-loss, roll, or assignment actions."
+  },
+
+  "global_definitions": {
+    "net_delta_calculation": "Sum(Option_Deltas) + Sum(Perp_Deltas)",
+    "hedge_instrument": {
+      "BTC": "BTC-PERPETUAL",
+      "ETH": "ETH-PERPETUAL"
+    },
+    "perp_delta_per_contract": 1.0,
+    "hedge_check_frequency_seconds": 60,
+    "hedge_on_price_move_pct": 0.01
   },
 
   "calibration": {
     "straddle_delta_threshold": 0.15,
     "strangle_delta_threshold": 0.20,
+    "calendar_delta_threshold": 0.20,
+    "iron_fly_delta_threshold": 0.25,
     "straddle_profit_take_pct": 0.50,
     "strangle_profit_take_pct": 0.50,
     "straddle_stop_loss_multiple": 2.0,
@@ -31,8 +44,11 @@
       "type": "short_straddle",
       "display_name": "ATM Straddle (Strategy A)",
       "hedge": {
-        "mode": "delta_hedge_perp",
-        "delta_abs_threshold": 0.15
+        "mode": "DYNAMIC_DELTA",
+        "delta_abs_threshold": 0.15,
+        "check_frequency": "60s or price_move > 1%",
+        "target_delta": 0.0,
+        "action": "Open Perp Position to restore Net_Delta to 0.0"
       },
       "profit_target": {
         "type": "credit_pct",
@@ -54,8 +70,11 @@
       "type": "short_strangle",
       "display_name": "ATM Strangle (Strategy A)",
       "hedge": {
-        "mode": "delta_hedge_perp",
-        "delta_abs_threshold": 0.20
+        "mode": "DYNAMIC_DELTA",
+        "delta_abs_threshold": 0.20,
+        "check_frequency": "60s or price_move > 1%",
+        "target_delta": 0.0,
+        "action": "Open Perp Position to restore Net_Delta to 0.0"
       },
       "profit_target": {
         "type": "credit_pct",
@@ -76,7 +95,13 @@
     "STRATEGY_B_CALENDAR": {
       "type": "calendar_spread",
       "display_name": "Calendar Spread (Strategy B)",
-      "hedge": null,
+      "hedge": {
+        "mode": "LIGHT_DELTA",
+        "delta_abs_threshold": 0.20,
+        "check_frequency": "Hourly",
+        "target_delta": 0.0,
+        "action": "Open Perp Position to nudge Net_Delta toward 0"
+      },
       "profit_target": {
         "type": "front_vs_back_iv",
         "description": "Close when front IV collapses vs back IV (event premium crushed)"
@@ -95,7 +120,10 @@
     "STRATEGY_C_SHORT_PUT": {
       "type": "short_put_accumulation",
       "display_name": "Short Put Accumulation (Strategy C)",
-      "hedge": null,
+      "hedge": {
+        "mode": "NONE",
+        "description": "No delta hedging - accumulation strategy accepts directional exposure"
+      },
       "profit_target": {
         "type": "credit_pct",
         "threshold": 0.70,
@@ -116,7 +144,13 @@
     "STRATEGY_D_IRON_BUTTERFLY": {
       "type": "iron_fly",
       "display_name": "Iron Butterfly (Strategy D)",
-      "hedge": null,
+      "hedge": {
+        "mode": "LOOSE_DELTA",
+        "delta_abs_threshold": 0.25,
+        "check_frequency": "Hourly",
+        "target_delta": 0.0,
+        "action": "Light hedge only when delta exceeds 0.25"
+      },
       "profit_target": {
         "type": "max_profit_pct",
         "threshold": 0.30,
@@ -132,7 +166,10 @@
     "STRATEGY_F_BULL_PUT_SPREAD": {
       "type": "credit_spread_bull_put",
       "display_name": "Bull Put Spread (Strategy F)",
-      "hedge": null,
+      "hedge": {
+        "mode": "NONE",
+        "description": "No hedging - directional strategy"
+      },
       "profit_target": {
         "type": "max_profit_pct",
         "threshold": 0.60,
@@ -148,7 +185,10 @@
     "STRATEGY_F_BEAR_CALL_SPREAD": {
       "type": "credit_spread_bear_call",
       "display_name": "Bear Call Spread (Strategy F)",
-      "hedge": null,
+      "hedge": {
+        "mode": "NONE",
+        "description": "No hedging - directional strategy"
+      },
       "profit_target": {
         "type": "max_profit_pct",
         "threshold": 0.60,
