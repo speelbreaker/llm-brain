@@ -1,5 +1,5 @@
 """
-Greg Selector Scenario Tests - Positive "Greg would do this" cases.
+Greg Selector Scenario Tests - ENTRY_ENGINE v8.0 Positive Cases.
 
 These tests validate that the selector makes the right choice in canonical
 market environments that Greg Mandolini's strategy targets.
@@ -11,6 +11,7 @@ from src.strategies.greg_selector import (
     GregSelectorSensors,
     evaluate_greg_selector,
     load_greg_spec,
+    get_calibration_spec,
 )
 
 
@@ -59,8 +60,7 @@ class TestHighVRPCalmNeutralSkew:
 
     def test_straddle_conditions_met_exactly(self):
         """Conditions at exact thresholds for straddle."""
-        spec = load_greg_spec()
-        cal = spec["global_constraints"]["calibration"]
+        cal = get_calibration_spec()
         
         sensors = base_metrics(
             vrp_30d=cal["straddle_vrp_min"] + 0.1,
@@ -98,8 +98,7 @@ class TestModerateVRPDriftingMarket:
 
     def test_strangle_selected_when_vrp_below_straddle_threshold(self):
         """VRP is good but below straddle min - should fall through to strangle."""
-        spec = load_greg_spec()
-        cal = spec["global_constraints"]["calibration"]
+        cal = get_calibration_spec()
         
         sensors = base_metrics(
             vrp_30d=cal["straddle_vrp_min"] - 1.0,
@@ -143,12 +142,11 @@ class TestBullishAccumulation:
     """
 
     def test_short_put_bullish_fear_skew(self):
-        """Above MA200, put skew, high IV rank, positive VRP - Short Put."""
+        """Above MA200, put skew, positive VRP - Short Put."""
         sensors = base_metrics(
             vrp_30d=10.0,
             price_vs_ma200=500.0,
             skew_25d=+6.0,
-            iv_rank_6m=0.55,
             rsi_14d=45.0,
             adx_14d=18.0,
             chop_factor_7d=0.5,
@@ -160,18 +158,23 @@ class TestBullishAccumulation:
         )
 
     def test_bull_put_spread_oversold_fear(self):
-        """Oversold (low RSI) + fear skew + positive VRP - Bull Put Spread."""
+        """Oversold (low RSI) + fear skew + positive VRP - Bull Put Spread.
+        
+        Note: Short Put (step 6) requires price > MA200. By setting price_vs_ma200
+        to a negative value, we force the selector to skip Short Put and match
+        Bull Put Spread at step 7 instead.
+        """
         sensors = base_metrics(
             vrp_30d=10.0,
             skew_25d=+6.0,
             rsi_14d=25.0,
-            iv_rank_6m=0.40,
             adx_14d=20.0,
             chop_factor_7d=0.6,
+            price_vs_ma200=-500.0,
         )
         decision = evaluate_greg_selector(sensors)
         assert decision.selected_strategy == "STRATEGY_F_BULL_PUT_SPREAD", (
-            f"Oversold + fear skew should select Bull Put Spread. "
+            f"Oversold + fear skew (price below MA200) should select Bull Put Spread. "
             f"Got: {decision.selected_strategy}"
         )
 
@@ -220,6 +223,34 @@ class TestIronButterflyExtremeIV:
         )
 
 
+class TestSafetyFilters:
+    """
+    Safety filters should block trades when market is too trending or choppy.
+    """
+    
+    def test_adx_safety_filter(self):
+        """ADX > 35 should trigger NO_TRADE."""
+        sensors = base_metrics(
+            adx_14d=40.0,
+            vrp_30d=20.0,
+            chop_factor_7d=0.5,
+        )
+        decision = evaluate_greg_selector(sensors)
+        assert decision.selected_strategy == "NO_TRADE"
+        assert decision.step_name == "SAFETY_FILTER"
+    
+    def test_chop_safety_filter(self):
+        """Chop > 0.85 should trigger NO_TRADE."""
+        sensors = base_metrics(
+            chop_factor_7d=0.9,
+            vrp_30d=20.0,
+            adx_14d=15.0,
+        )
+        decision = evaluate_greg_selector(sensors)
+        assert decision.selected_strategy == "NO_TRADE"
+        assert decision.step_name == "SAFETY_FILTER"
+
+
 class TestDefaultFallback:
     """
     When no conditions match, selector should return NO_TRADE.
@@ -247,7 +278,7 @@ class TestDefaultFallback:
 
 class TestDecisionTreeOrder:
     """
-    Verify the decision tree waterfall order is correct.
+    Verify the decision waterfall order is correct.
     Earlier rules should take precedence.
     """
 
@@ -277,10 +308,76 @@ class TestDecisionTreeOrder:
             skew_25d=0.0,
             term_structure_spread=6.0,
             front_rv_iv_ratio=0.6,
-            vrp_7d=5.0,
+            vrp_7d=6.0,
         )
         decision = evaluate_greg_selector(sensors)
         assert decision.selected_strategy == "STRATEGY_B_CALENDAR", (
             "Calendar should win over Straddle when term structure is favorable. "
+            f"Got: {decision.selected_strategy}"
+        )
+
+    def test_iron_fly_before_straddle(self):
+        """Iron Butterfly (extreme IV) should be checked before Straddle."""
+        sensors = base_metrics(
+            vrp_30d=20.0,
+            iv_rank_6m=0.85,
+            adx_14d=15.0,
+            chop_factor_7d=0.5,
+            skew_25d=0.0,
+        )
+        decision = evaluate_greg_selector(sensors)
+        assert decision.selected_strategy == "STRATEGY_D_IRON_BUTTERFLY", (
+            "Iron Butterfly should win when IV rank is extreme. "
+            f"Got: {decision.selected_strategy}"
+        )
+
+
+class TestV8DirectionalVRPFloor:
+    """
+    v8.0 introduced min_vrp_directional (2.0) for directional spreads.
+    """
+
+    def test_bull_put_requires_vrp_above_directional_floor(self):
+        """Bull Put Spread should require VRP > min_vrp_directional."""
+        sensors = base_metrics(
+            vrp_30d=1.5,
+            skew_25d=6.0,
+            rsi_14d=25.0,
+            adx_14d=20.0,
+            chop_factor_7d=0.5,
+        )
+        decision = evaluate_greg_selector(sensors)
+        assert decision.selected_strategy != "STRATEGY_F_BULL_PUT_SPREAD", (
+            "Bull Put Spread should not trigger with VRP below directional floor. "
+            f"Got: {decision.selected_strategy}"
+        )
+
+    def test_bear_call_requires_vrp_above_directional_floor(self):
+        """Bear Call Spread should require VRP > min_vrp_directional."""
+        sensors = base_metrics(
+            vrp_30d=1.5,
+            skew_25d=-6.0,
+            rsi_14d=75.0,
+            adx_14d=20.0,
+            chop_factor_7d=0.5,
+        )
+        decision = evaluate_greg_selector(sensors)
+        assert decision.selected_strategy != "STRATEGY_F_BEAR_CALL_SPREAD", (
+            "Bear Call Spread should not trigger with VRP below directional floor. "
+            f"Got: {decision.selected_strategy}"
+        )
+
+    def test_short_put_requires_vrp_above_directional_floor(self):
+        """Short Put should require VRP > min_vrp_directional."""
+        sensors = base_metrics(
+            vrp_30d=1.5,
+            skew_25d=6.0,
+            price_vs_ma200=500.0,
+            adx_14d=20.0,
+            chop_factor_7d=0.5,
+        )
+        decision = evaluate_greg_selector(sensors)
+        assert decision.selected_strategy != "STRATEGY_C_SHORT_PUT", (
+            "Short Put should not trigger with VRP below directional floor. "
             f"Got: {decision.selected_strategy}"
         )

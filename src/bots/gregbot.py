@@ -1,5 +1,5 @@
 """
-GregBot - Greg Mandolini VRP Harvester implementation.
+GregBot - Greg Mandolini VRP Harvester implementation (ENTRY_ENGINE v8.0).
 
 Produces StrategyEvaluation objects for each strategy based on current sensors.
 Based on the JSON spec in docs/greg_mandolini/GREG_SELECTOR_RULES_FINAL.json
@@ -14,83 +14,139 @@ from src.strategies.greg_selector import (
     GregSelectorSensors,
     load_greg_spec,
     evaluate_greg_selector,
+    get_calibration_spec,
 )
 
 
-GREG_STRATEGIES = [
-    {
-        "key": "STRATEGY_A_STRADDLE",
-        "label": "Strategy A: ATM Straddle",
-        "description": "High VRP, Low Movement",
-        "criteria_defs": [
-            {"metric": "vrp_30d", "min": 15.0, "description": "VRP > 15"},
-            {"metric": "chop_factor_7d", "max": 0.6, "description": "Chop < 0.6"},
-            {"metric": "adx_14d", "max": 20, "description": "ADX < 20"},
-        ],
-    },
-    {
-        "key": "STRATEGY_A_STRANGLE",
-        "label": "Strategy A: OTM Strangle",
-        "description": "Good VRP, Market Drifting",
-        "criteria_defs": [
-            {"metric": "vrp_30d", "min": 10.0, "description": "VRP >= 10"},
-            {"metric": "chop_factor_7d", "max": 0.8, "description": "Chop < 0.8"},
-            {"metric": "adx_14d", "max": 30, "description": "ADX < 30"},
-        ],
-    },
-    {
-        "key": "STRATEGY_B_CALENDAR",
-        "label": "Strategy B: Calendar Spread",
-        "description": "Term Structure Play",
-        "criteria_defs": [
-            {"metric": "term_structure_spread", "min": 5.0, "description": "Term spread > 5"},
-            {"metric": "iv_rank_6m", "max": 0.80, "description": "IV Rank <= 80%"},
-        ],
-    },
-    {
-        "key": "STRATEGY_C_SHORT_PUT",
-        "label": "Strategy C: Short Put",
-        "description": "Bullish Accumulation",
-        "criteria_defs": [
-            {"metric": "skew_25d", "min": 5.0, "description": "Skew > 5"},
-            {"metric": "price_vs_ma200", "min": 0, "description": "Price > MA200"},
-            {"metric": "iv_rank_6m", "min": 0.50, "description": "IV Rank > 50%"},
-        ],
-    },
-    {
-        "key": "STRATEGY_D_IRON_BUTTERFLY",
-        "label": "Strategy D: Iron Butterfly",
-        "description": "Defined Risk, High Vol",
-        "criteria_defs": [
-            {"metric": "iv_rank_6m", "min": 0.80, "description": "IV Rank > 80%"},
-            {"metric": "vrp_30d", "min": 10, "description": "VRP > 10"},
-        ],
-    },
-    {
-        "key": "STRATEGY_F_BULL_PUT_SPREAD",
-        "label": "Strategy F: Bull Put Spread",
-        "description": "Oversold + Fear Skew",
-        "criteria_defs": [
-            {"metric": "skew_25d", "min": 5.0, "description": "Skew > 5 (puts expensive)"},
-            {"metric": "rsi_14d", "max": 30, "description": "RSI < 30 (oversold)"},
-        ],
-    },
-    {
-        "key": "STRATEGY_F_BEAR_CALL_SPREAD",
-        "label": "Strategy F: Bear Call Spread",
-        "description": "Overbought + FOMO Skew",
-        "criteria_defs": [
-            {"metric": "skew_25d", "max": -5.0, "description": "Skew < -5 (calls expensive)"},
-            {"metric": "rsi_14d", "min": 70, "description": "RSI > 70 (overbought)"},
-        ],
-    },
-    {
-        "key": "NO_TRADE",
-        "label": "No Trade",
-        "description": "Conditions Unfavorable",
-        "criteria_defs": [],
-    },
-]
+def _get_calibration_value(key: str, default: float) -> float:
+    """Get a calibration value from the Greg spec, with a fallback default."""
+    cal = get_calibration_spec()
+    if "." in key:
+        parts = key.split(".")
+        val = cal
+        for part in parts:
+            if isinstance(val, dict):
+                val = val.get(part)
+            else:
+                return default
+        return float(val) if isinstance(val, (int, float)) else default
+    return float(cal.get(key, default))
+
+
+def _build_greg_strategies() -> List[Dict[str, Any]]:
+    """
+    Build strategy definitions dynamically from the calibration spec.
+    Thresholds are pulled from the JSON rather than hardcoded.
+    """
+    skew_thresh = _get_calibration_value("skew_neutral_threshold", 4.0)
+    vrp_min = _get_calibration_value("min_vrp_floor", 0.0)
+    vrp_directional = _get_calibration_value("min_vrp_directional", 2.0)
+    rsi_lower = _get_calibration_value("rsi_thresholds.lower", 30.0)
+    rsi_upper = _get_calibration_value("rsi_thresholds.upper", 70.0)
+    
+    straddle_vrp = _get_calibration_value("straddle_vrp_min", 15.0)
+    straddle_adx = _get_calibration_value("straddle_adx_max", 20.0)
+    straddle_chop = _get_calibration_value("straddle_chop_max", 0.6)
+    
+    strangle_vrp = _get_calibration_value("strangle_vrp_min", 10.0)
+    strangle_adx = _get_calibration_value("strangle_adx_max", 30.0)
+    strangle_chop = _get_calibration_value("strangle_chop_max", 0.8)
+    
+    calendar_term = _get_calibration_value("calendar_term_spread_min", 5.0)
+    calendar_rv_iv = _get_calibration_value("calendar_front_rv_iv_ratio_max", 0.8)
+    calendar_vrp = _get_calibration_value("calendar_vrp_7d_min", 5.0)
+    
+    iron_fly_iv_rank = _get_calibration_value("iron_fly_iv_rank_min", 0.80)
+    iron_fly_vrp = _get_calibration_value("iron_fly_vrp_min", 10.0)
+    
+    safety_adx = _get_calibration_value("safety_adx_high", 35.0)
+    safety_chop = _get_calibration_value("safety_chop_high", 0.85)
+    
+    return [
+        {
+            "key": "STRATEGY_A_STRADDLE",
+            "label": "Strategy A: ATM Straddle",
+            "description": "High VRP, Low Movement, Neutral Skew",
+            "criteria_defs": [
+                {"metric": "vrp_30d", "min": straddle_vrp, "description": f"VRP > {straddle_vrp}"},
+                {"metric": "chop_factor_7d", "max": straddle_chop, "description": f"Chop < {straddle_chop}"},
+                {"metric": "adx_14d", "max": straddle_adx, "description": f"ADX < {straddle_adx}"},
+                {"metric": "skew_25d", "abs_max": skew_thresh, "description": f"|Skew| < {skew_thresh}"},
+            ],
+        },
+        {
+            "key": "STRATEGY_A_STRANGLE",
+            "label": "Strategy A: OTM Strangle",
+            "description": "Good VRP, Market Drifting, Neutral Skew",
+            "criteria_defs": [
+                {"metric": "vrp_30d", "min": strangle_vrp, "description": f"VRP >= {strangle_vrp}"},
+                {"metric": "chop_factor_7d", "max": strangle_chop, "description": f"Chop < {strangle_chop}"},
+                {"metric": "adx_14d", "max": strangle_adx, "description": f"ADX < {strangle_adx}"},
+                {"metric": "skew_25d", "abs_max": skew_thresh, "description": f"|Skew| < {skew_thresh}"},
+            ],
+        },
+        {
+            "key": "STRATEGY_B_CALENDAR",
+            "label": "Strategy B: Calendar Spread",
+            "description": "Term Structure Play",
+            "criteria_defs": [
+                {"metric": "term_structure_spread", "min": calendar_term, "description": f"Term spread > {calendar_term}"},
+                {"metric": "front_rv_iv_ratio", "max": calendar_rv_iv, "description": f"Front RV/IV < {calendar_rv_iv}"},
+                {"metric": "vrp_7d", "min": calendar_vrp, "description": f"VRP 7d > {calendar_vrp}"},
+            ],
+        },
+        {
+            "key": "STRATEGY_C_SHORT_PUT",
+            "label": "Strategy C: Short Put",
+            "description": "Bullish Accumulation",
+            "criteria_defs": [
+                {"metric": "skew_25d", "min": skew_thresh, "description": f"Skew > {skew_thresh} (puts expensive)"},
+                {"metric": "price_vs_ma200", "min": 0, "description": "Price > MA200"},
+                {"metric": "vrp_30d", "min": vrp_directional, "description": f"VRP > {vrp_directional}"},
+            ],
+        },
+        {
+            "key": "STRATEGY_D_IRON_BUTTERFLY",
+            "label": "Strategy D: Iron Butterfly",
+            "description": "Defined Risk, High Vol",
+            "criteria_defs": [
+                {"metric": "iv_rank_6m", "min": iron_fly_iv_rank, "description": f"IV Rank > {iron_fly_iv_rank*100:.0f}%"},
+                {"metric": "vrp_30d", "min": iron_fly_vrp, "description": f"VRP > {iron_fly_vrp}"},
+            ],
+        },
+        {
+            "key": "STRATEGY_F_BULL_PUT_SPREAD",
+            "label": "Strategy F: Bull Put Spread",
+            "description": "Oversold + Fear Skew",
+            "criteria_defs": [
+                {"metric": "skew_25d", "min": skew_thresh, "description": f"Skew > {skew_thresh} (puts expensive)"},
+                {"metric": "rsi_14d", "max": rsi_lower, "description": f"RSI < {rsi_lower} (oversold)"},
+                {"metric": "vrp_30d", "min": vrp_directional, "description": f"VRP > {vrp_directional}"},
+            ],
+        },
+        {
+            "key": "STRATEGY_F_BEAR_CALL_SPREAD",
+            "label": "Strategy F: Bear Call Spread",
+            "description": "Overbought + FOMO Skew",
+            "criteria_defs": [
+                {"metric": "skew_25d", "max": -skew_thresh, "description": f"Skew < -{skew_thresh} (calls expensive)"},
+                {"metric": "rsi_14d", "min": rsi_upper, "description": f"RSI > {rsi_upper} (overbought)"},
+                {"metric": "vrp_30d", "min": vrp_directional, "description": f"VRP > {vrp_directional}"},
+            ],
+        },
+        {
+            "key": "NO_TRADE",
+            "label": "No Trade",
+            "description": "Conditions Unfavorable or Safety Filter Triggered",
+            "criteria_defs": [
+                {"metric": "adx_14d", "max": safety_adx, "description": f"ADX <= {safety_adx} (safety)"},
+                {"metric": "chop_factor_7d", "max": safety_chop, "description": f"Chop <= {safety_chop} (safety)"},
+            ],
+        },
+    ]
+
+
+GREG_STRATEGIES = _build_greg_strategies()
 
 
 def _evaluate_criterion(
@@ -98,6 +154,7 @@ def _evaluate_criterion(
     value: Optional[float],
     min_val: Optional[float],
     max_val: Optional[float],
+    abs_max: Optional[float] = None,
 ) -> StrategyCriterion:
     """Evaluate a single criterion and return a StrategyCriterion object."""
     note = None
@@ -108,7 +165,13 @@ def _evaluate_criterion(
         ok = False
     else:
         ok = True
-        if min_val is not None and value < min_val:
+        if abs_max is not None:
+            if abs(value) > abs_max:
+                note = f"above_abs_max (|{value:.2f}| > {abs_max})"
+                ok = False
+            else:
+                note = "ok"
+        elif min_val is not None and value < min_val:
             note = f"below_min ({value:.2f} < {min_val})"
             ok = False
         elif max_val is not None and value > max_val:
@@ -143,8 +206,9 @@ def _build_strategy_evaluation(
         value = sensors.get(metric)
         min_val = cdef.get("min")
         max_val = cdef.get("max")
+        abs_max = cdef.get("abs_max")
         
-        criterion = _evaluate_criterion(metric, value, min_val, max_val)
+        criterion = _evaluate_criterion(metric, value, min_val, max_val, abs_max)
         criteria.append(criterion)
         
         if not criterion.ok:
@@ -288,8 +352,10 @@ def get_gregbot_evaluations_for_underlying(underlying: str) -> Dict[str, Any]:
     decision = evaluate_greg_selector(greg_sensors)
     selected_strategy = decision.selected_strategy
     
+    strategies_list = _build_greg_strategies()
+    
     evaluations: List[StrategyEvaluation] = []
-    for strat_def in GREG_STRATEGIES:
+    for strat_def in strategies_list:
         eval_obj = _build_strategy_evaluation(
             strat_def, sensors, underlying.upper(), selected_strategy
         )
@@ -301,4 +367,5 @@ def get_gregbot_evaluations_for_underlying(underlying: str) -> Dict[str, Any]:
         "strategies": evaluations,
         "selected_strategy": selected_strategy,
         "decision_reasoning": decision.reasoning,
+        "step_name": decision.step_name,
     }

@@ -11,6 +11,7 @@ from src.strategies.greg_selector import (
     GregSelectorSensors,
     evaluate_greg_selector,
     load_greg_spec,
+    get_calibration_spec,
 )
 
 
@@ -178,8 +179,8 @@ class TestSafetyFilterOverridesEverything:
 
     def test_safety_at_exact_boundary_adx(self):
         """ADX exactly at safety threshold - should trigger NO_TRADE."""
-        spec = load_greg_spec()
-        safety_adx = spec["global_constraints"]["calibration"]["safety_adx_high"]
+        cal = get_calibration_spec()
+        safety_adx = cal["safety_adx_high"]
         
         sensors = base_metrics(
             vrp_30d=25.0,
@@ -199,12 +200,12 @@ class TestCalibrationLoadsCorrectly:
 
     def test_calibration_has_required_keys(self):
         """All calibration keys should be present in the spec."""
-        spec = load_greg_spec()
-        calibration = spec.get("global_constraints", {}).get("calibration", {})
+        cal = get_calibration_spec()
         
         required_keys = [
             "skew_neutral_threshold",
             "min_vrp_floor",
+            "min_vrp_directional",
             "safety_adx_high",
             "safety_chop_high",
             "straddle_vrp_min",
@@ -217,21 +218,27 @@ class TestCalibrationLoadsCorrectly:
             "calendar_front_rv_iv_ratio_max",
             "iron_fly_iv_rank_min",
             "iron_fly_vrp_min",
-            "short_put_iv_rank_min",
-            "short_put_price_vs_ma200_min",
-            "bull_put_rsi_max",
-            "bear_call_rsi_min",
         ]
         
         for key in required_keys:
-            assert key in calibration, f"Missing calibration key: {key}"
-            assert isinstance(calibration[key], (int, float)), (
-                f"Calibration key {key} should be numeric, got {type(calibration[key])}"
+            assert key in cal, f"Missing calibration key: {key}"
+            assert isinstance(cal[key], (int, float)), (
+                f"Calibration key {key} should be numeric, got {type(cal[key])}"
             )
 
-    def test_calibration_version_in_meta(self):
-        """Meta should contain calibration_version."""
+    def test_calibration_has_rsi_thresholds(self):
+        """RSI thresholds should be present as nested dict."""
+        cal = get_calibration_spec()
+        assert "rsi_thresholds" in cal, "Missing rsi_thresholds"
+        assert "lower" in cal["rsi_thresholds"]
+        assert "upper" in cal["rsi_thresholds"]
+        assert cal["rsi_thresholds"]["lower"] == 30
+        assert cal["rsi_thresholds"]["upper"] == 70
+
+    def test_spec_meta_has_version(self):
+        """Meta should contain version info."""
         spec = load_greg_spec()
         meta = spec.get("meta", {})
-        assert "calibration_version" in meta, "meta.calibration_version missing"
-        assert meta["calibration_version"] == "Greg-aligned-v1"
+        assert "version" in meta, "meta.version missing"
+        assert "8.0" in meta["version"]
+        assert meta["module"] == "ENTRY_ENGINE"
