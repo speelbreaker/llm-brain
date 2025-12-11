@@ -574,6 +574,7 @@ def use_latest_calibration(request: dict) -> JSONResponse:
             underlying=underlying,
             dte_min=dte_min,
             dte_max=dte_max,
+            skip_failed=True,
         )
         
         if entry is None:
@@ -581,19 +582,7 @@ def use_latest_calibration(request: dict) -> JSONResponse:
                 status_code=400,
                 content={
                     "error": "no_calibration_found",
-                    "message": f"No calibration history for {underlying} in {dte_min}-{dte_max} DTE range. Run auto_calibrate_iv.py first.",
-                },
-            )
-        
-        if entry.status == "failed":
-            return JSONResponse(
-                status_code=400,
-                content={
-                    "error": "calibration_failed_guardrails",
-                    "message": f"Cannot apply failed calibration (multiplier={entry.multiplier:.4f}). Reason: {entry.reason}. The calibration violates guardrail bounds (0.7-1.6) or data quality checks.",
-                    "multiplier": entry.multiplier,
-                    "status": entry.status,
-                    "reason": entry.reason,
+                    "message": f"No valid calibration found for {underlying} in {dte_min}-{dte_max} DTE range. All calibrations may have failed guardrails. Run a new calibration.",
                 },
             )
         
@@ -608,6 +597,59 @@ def use_latest_calibration(request: dict) -> JSONResponse:
             "mae_pct": entry.mae_pct,
             "num_samples": entry.num_samples,
             "created_at": entry.created_at.isoformat() if entry.created_at else None,
+        })
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={"error": "failed_to_apply_calibration", "message": str(e)},
+        )
+
+
+@app.post("/api/calibration/apply_direct")
+def apply_calibration_direct(request: dict) -> JSONResponse:
+    """
+    Apply a calibration multiplier directly from the frontend (from "Run Calibration" result).
+    
+    Body: {"underlying": "BTC", "dte_min": 3, "dte_max": 10, "multiplier": 1.106, "mae_pct": 19.75, "num_samples": 36}
+    """
+    from src.db.models_calibration import MIN_REASONABLE_MULT, MAX_REASONABLE_MULT
+    from src.calibration_store import set_iv_multiplier_override
+    
+    underlying = request.get("underlying", "BTC")
+    dte_min = request.get("dte_min", 3)
+    dte_max = request.get("dte_max", 10)
+    multiplier = request.get("multiplier")
+    
+    if underlying not in ("BTC", "ETH"):
+        return JSONResponse(
+            status_code=400,
+            content={"error": "underlying must be BTC or ETH"},
+        )
+    
+    if multiplier is None:
+        return JSONResponse(
+            status_code=400,
+            content={"error": "multiplier is required"},
+        )
+    
+    if multiplier < MIN_REASONABLE_MULT or multiplier > MAX_REASONABLE_MULT:
+        return JSONResponse(
+            status_code=400,
+            content={
+                "error": "calibration_out_of_bounds",
+                "message": f"Multiplier {multiplier:.4f} is outside guardrail bounds ({MIN_REASONABLE_MULT}-{MAX_REASONABLE_MULT}).",
+            },
+        )
+    
+    try:
+        set_iv_multiplier_override(underlying, multiplier, dte_min, dte_max)
+        
+        return JSONResponse(content={
+            "status": "ok",
+            "underlying": underlying,
+            "dte_min": dte_min,
+            "dte_max": dte_max,
+            "multiplier": multiplier,
         })
     except Exception as e:
         return JSONResponse(
@@ -6152,6 +6194,7 @@ def index() -> str:
     }}
     
     let lastReproducibilityMetadata = null;
+    let lastCalibrationResult = null;
     
     function updateReproducibilityPanel(data) {{
       const repro = data.reproducibility;
@@ -6299,10 +6342,25 @@ def index() -> str:
         // Update Data Health & Reproducibility panels
         updateDataHealthPanel(data);
         updateReproducibilityPanel(data);
+        
+        // Store the calibration result for "Use Latest Recommended" button
+        if (recMult && recMult > 0) {{
+          lastCalibrationResult = {{
+            underlying: underlying,
+            dte_min: minDte,
+            dte_max: maxDte,
+            multiplier: recMult,
+            mae_pct: parseFloat(mae),
+            num_samples: count
+          }};
+        }} else {{
+          lastCalibrationResult = null;
+        }}
       }} catch (err) {{
         console.error('Calibration error:', err);
         summaryEl.textContent = 'Calibration failed. Check console/logs.';
         tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:#c00;">Error</td></tr>';
+        lastCalibrationResult = null;
       }} finally {{
         btn.disabled = false;
       }}
@@ -6359,6 +6417,46 @@ def index() -> str:
       const dteMax = parseInt(document.getElementById('calib-max-dte').value || '10');
       const overrideStatus = document.getElementById('calib-override-status');
       
+      // First try to use the result from the last "Run Calibration" 
+      if (lastCalibrationResult && lastCalibrationResult.underlying === underlying 
+          && lastCalibrationResult.dte_min === dteMin && lastCalibrationResult.dte_max === dteMax) {{
+        // Apply the current calibration result directly
+        btn.disabled = true;
+        btn.innerText = 'Applying...';
+        
+        try {{
+          const res = await fetch('/api/calibration/apply_direct', {{
+            method: 'POST',
+            headers: {{ 'Content-Type': 'application/json' }},
+            body: JSON.stringify(lastCalibrationResult)
+          }});
+          
+          const data = await res.json();
+          
+          if (!res.ok) {{
+            alert(data.message || data.error || 'Failed to apply calibration');
+            overrideStatus.style.display = 'none';
+            return;
+          }}
+          
+          const msg = `Applied ${{underlying}} calibration: multiplier=${{lastCalibrationResult.multiplier.toFixed(4)}} (from current run)`;
+          overrideStatus.textContent = msg;
+          overrideStatus.style.display = 'block';
+          overrideStatus.style.color = '#4caf50';
+          
+          document.getElementById('calib-iv-mult').value = lastCalibrationResult.multiplier.toFixed(4);
+        }} catch (err) {{
+          console.error('Failed to apply calibration:', err);
+          alert('Error applying calibration: ' + err.message);
+          overrideStatus.style.display = 'none';
+        }} finally {{
+          btn.disabled = false;
+          btn.innerText = 'Use Latest Recommended';
+        }}
+        return;
+      }}
+      
+      // Fallback: fetch from history (skip failed entries)
       btn.disabled = true;
       btn.innerText = 'Applying...';
       
@@ -6372,7 +6470,7 @@ def index() -> str:
         const data = await res.json();
         
         if (!res.ok) {{
-          alert(data.message || data.error || 'Failed to apply calibration');
+          alert(data.message || data.error || 'Failed to apply calibration. Run a new calibration first.');
           overrideStatus.style.display = 'none';
           return;
         }}

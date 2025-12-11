@@ -170,24 +170,34 @@ def get_latest_calibration(
     underlying: str,
     dte_min: int,
     dte_max: int,
+    skip_failed: bool = False,
 ) -> Optional[CalibrationHistoryEntry]:
     """
     Get the most recent calibration for the given underlying and DTE range.
+    
+    Args:
+        underlying: BTC or ETH
+        dte_min: Minimum DTE for calibration range
+        dte_max: Maximum DTE for calibration range
+        skip_failed: If True, skip entries with status='failed' and return the latest OK/degraded entry
     
     Returns:
         CalibrationHistoryEntry or None if not found.
     """
     with get_db_session() as db:
-        row = (
+        query = (
             db.query(CalibrationHistory)
             .filter(
                 CalibrationHistory.underlying == underlying.upper(),
                 CalibrationHistory.dte_min == dte_min,
                 CalibrationHistory.dte_max == dte_max,
             )
-            .order_by(CalibrationHistory.created_at.desc())
-            .first()
         )
+        
+        if skip_failed:
+            query = query.filter(CalibrationHistory.status != "failed")
+        
+        row = query.order_by(CalibrationHistory.created_at.desc()).first()
         
         if row is None:
             return None
