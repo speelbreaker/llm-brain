@@ -1,0 +1,74 @@
+{
+  "timestamp": "2025-12-11T18:48:03.690288Z",
+  "underlying": "BTC",
+  "source": "live",
+  "config_hash": null,
+  "global_metrics": {
+    "mae_pct": 24.346135777305246,
+    "bias_pct": -10.392801982176662,
+    "mae_vol_points": 10.822714045937923,
+    "vega_weighted_mae_pct": 9.888480306063974
+  },
+  "bands": [
+    {
+      "name": "weekly",
+      "min_dte": 3.0,
+      "max_dte": 10.0,
+      "count": 36,
+      "mae_pct": 17.669628556209418,
+      "bias_pct": 7.312308594506722,
+      "recommended_iv_multiplier": 1.1592,
+      "avg_mark_iv": 45.71138888888889,
+      "avg_synth_iv": null,
+      "option_type": null,
+      "vega_weighted_mae_pct": 11.34539759546443
+    },
+    {
+      "name": "monthly",
+      "min_dte": 20.0,
+      "max_dte": 40.0,
+      "count": 15,
+      "mae_pct": 6.93912089408729,
+      "bias_pct": 4.746999610890705,
+      "recommended_iv_multiplier": 1.092,
+      "avg_mark_iv": 43.06000000000001,
+      "avg_synth_iv": null,
+      "option_type": null,
+      "vega_weighted_mae_pct": 6.465757714003924
+    }
+  ],
+  "recommended_iv_multiplier": 1.0506,
+  "recommended_band_multipliers": [
+    {
+      "name": "weekly",
+      "min_dte": 3.0,
+      "max_dte": 10.0,
+      "iv_multiplier": 1.1592
+    },
+    {
+      "name": "monthly",
+      "min_dte": 20.0,
+      "max_dte": 40.0,
+      "iv_multiplier": 1.092
+    }
+  ],
+  "sample_size": 93,
+  "vega_sum": 930.0,
+  "smoothed_global_multiplier": 1.0828,
+  "smoothed_band_multipliers": [
+    {
+      "name": "weekly",
+      "min_dte": 3.0,
+      "max_dte": 10.0,
+      "iv_multiplier": 1.1972
+    },
+    {
+      "name": "monthly",
+      "min_dte": 20.0,
+      "max_dte": 40.0,
+      "iv_multiplier": 1.0956
+    }
+  ],
+  "applied": true,
+  "applied_reason": "global \u0394=0.0828; sample=93; vega=930"
+}

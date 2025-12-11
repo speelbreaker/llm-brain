@@ -61,7 +61,7 @@ class CalibrationConfig(BaseModel):
     underlying: str = Field(..., description="Underlying asset (BTC or ETH)")
     min_dte: float = Field(default=3.0, ge=0, description="Minimum DTE")
     max_dte: float = Field(default=30.0, description="Maximum DTE")
-    iv_multiplier: float = Field(default=1.0, ge=0.1, le=3.0, description="IV multiplier for synthetic pricing")
+    iv_multiplier: float = Field(default=1.0, ge=0.1, le=10.0, description="IV multiplier for synthetic pricing")
     default_iv: float = Field(default=0.6, ge=0.01, le=3.0, description="Default IV when RV unavailable")
     rv_window_days: int = Field(default=7, ge=1, le=365, description="Window for realized volatility computation")
     risk_free_rate: float = Field(default=0.0, description="Risk-free rate for Black-Scholes")
