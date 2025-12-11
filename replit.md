@@ -78,6 +78,11 @@ The web dashboard provides a user-friendly interface with sections for "Live Age
         - UI panel in Bots tab with hedging rules table, proposed hedges display, and hedge history
         - 30 unit tests covering delta calculations, order building, and execution paths
 - **Strategy Layer**: A pluggable architecture allowing multiple trading strategies to run concurrently, with `strategy_id` for attribution.
+- **Smoke Test Harness**: `scripts/smoke_greg_strategies.py` provides comprehensive testing:
+    - Environment Matrix Tests: Verifies Greg selector picks expected strategies for synthetic market regimes
+    - Strategy Smoke Tests: Runs all 7 Greg strategies in DRY_RUN mode with simulated price moves (+/-3%, +/-5%)
+    - Tests position management logic (TP/SL/exits) and hedge engine integration
+    - Usage: `python scripts/smoke_greg_strategies.py --underlying BTC --dry-run`
 
 ## External Dependencies
 - **Deribit API**: Used for real-time market data (testnet) and historical data (mainnet public API for backtesting and data harvesting).

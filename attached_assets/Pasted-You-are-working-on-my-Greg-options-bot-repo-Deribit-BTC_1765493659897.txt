@@ -1,0 +1,168 @@
+You are working on my “Greg” options bot repo (Deribit BTC/ETH, FastAPI app, Greg selector + strategy rules).
+
+I want a small smoke-test harness that:
+
+Runs all Greg strategies in DRY_RUN / testnet mode, and
+
+Includes a tiny environment test matrix to verify the selector picks the expected strategy for synthetic regimes.
+
+Please do the following:
+
+Find the core pieces
+
+Locate:
+
+The Greg selector / ENTRY_ENGINE (the code that reads GREG_SELECTOR_RULES_FINAL and returns things like STRATEGY_A_STRADDLE, STRATEGY_B_CALENDAR, STRATEGY_C_SHORT_PUT, etc.).
+
+The Position / Execution manager that can open a strategy from a strategy_type (same code the live agent uses to open a straddle/calendar/etc).
+
+The HedgeEngine / delta hedging module we defined earlier (net delta = options + perps, etc).
+
+Reuse existing app config / DRY_RUN settings and logging.
+
+Create scripts/smoke_greg_strategies.py
+
+New script at scripts/smoke_greg_strategies.py.
+
+It should be runnable via:
+
+python scripts/smoke_greg_strategies.py --underlying BTC --dry-run
+
+
+Behavior:
+
+Parse CLI args (--underlying in {BTC, ETH}, --dry-run flag).
+
+Initialize:
+
+Settings/config (with DRY_RUN enabled if flag is set),
+
+Deribit client (testnet or simulated for DRY_RUN),
+
+Greg selector / ENTRY_ENGINE,
+
+Position manager,
+
+HedgeEngine.
+
+Define a list of Greg strategy types to test, e.g.:
+
+TEST_STRATEGIES = [
+    "STRATEGY_A_STRADDLE",
+    "STRATEGY_A_STRANGLE",
+    "STRATEGY_B_CALENDAR",
+    "STRATEGY_C_SHORT_PUT",
+    "STRATEGY_D_IRON_BUTTERFLY",
+    "STRATEGY_F_BULL_PUT_SPREAD",
+    "STRATEGY_F_BEAR_CALL_SPREAD",
+]
+
+
+For each strategy in TEST_STRATEGIES:
+
+Log a header line: === Testing {strategy_type} on {underlying} ===
+
+Call the same internal helper you use in the main agent to open that strategy with a very small size (e.g. 0.01 BTC equivalent), regardless of environment conditions.
+
+Use DRY_RUN / testnet only.
+
+Tag the position with a test_run_id so it’s easy to filter.
+
+Simulate a couple of price moves for the underlying (e.g. +3%, –3%) by:
+
+Either using a simple in-memory price override, or
+
+Pulling live price once and then feeding synthetic prices to the state builder.
+
+For each simulated step:
+
+Rebuild the position state,
+
+Call the HedgeEngine step for that position,
+
+Call any management logic (TP/SL/time exits) that already exists.
+
+Log what happens:
+
+net_delta_before, hedge order size/direction, and whether any exits triggered.
+
+At the end, print a short summary per strategy:
+
+Opened OK?
+
+Any hedges placed?
+
+Any exits triggered?
+
+Add a tiny env test matrix for the selector
+
+In the same script (or a small helper module), define a hard-coded test matrix of synthetic environments:
+
+ENV_TESTS = [
+    {
+        "name": "Straddle regime",
+        "env": { "vrp_30d": 18.0, "chop_factor_7d": 0.5, "adx_14d": 15.0, "term_structure_spread": 0.0, "skew_25d": 0.0 },
+        "expected_strategy": "STRATEGY_A_STRADDLE",
+    },
+    {
+        "name": "Calendar regime",
+        "env": { "vrp_30d": 5.0, "chop_factor_7d": 0.7, "adx_14d": 20.0, "term_structure_spread": 7.0, "skew_25d": 0.0 },
+        "expected_strategy": "STRATEGY_B_CALENDAR",
+    },
+    {
+        "name": "Accumulation put regime",
+        "env": { "vrp_30d": 8.0, "chop_factor_7d": 0.7, "adx_14d": 25.0, "term_structure_spread": 0.0, "skew_25d": 6.0 },
+        "expected_strategy": "STRATEGY_C_SHORT_PUT",
+    },
+    {
+        "name": "Bull put spread regime",
+        "env": { "vrp_30d": 6.0, "chop_factor_7d": 0.8, "adx_14d": 25.0, "term_structure_spread": 0.0, "skew_25d": 6.0, "rsi_14d": 28.0 },
+        "expected_strategy": "STRATEGY_F_BULL_PUT_SPREAD",
+    },
+]
+
+
+Implement a helper in the script:
+
+def run_env_matrix_tests(selector, underlying: str):
+    for test in ENV_TESTS:
+        state = build_synthetic_agent_state(underlying, test["env"])
+        result = selector.select_strategy(state)
+        print(f"[ENV TEST] {test['name']}: expected={test['expected_strategy']}, got={result.strategy_type}")
+
+
+build_synthetic_agent_state should:
+
+Create an AgentState / whatever struct your selector expects,
+
+Inject these env metrics instead of live sensors.
+
+The script should run run_env_matrix_tests() before the per-strategy smoke tests, so we can see whether the selector routes to the expected strategy types.
+
+Keep everything DRY_RUN-safe
+
+The script must never place real mainnet orders.
+
+Use existing DRY_RUN / testnet config in the repo.
+
+If no Deribit client is configured, gracefully log a message and skip actual order placement, but still show the intended hedging actions in logs.
+
+Quality
+
+Follow existing logging style (logger, not print, except for a short CLI summary).
+
+Add minimal type hints.
+
+The script should exit cleanly and non-fatally even if some strategies fail to open (log the error, continue with the rest).
+
+End of AI Builder prompt
+
+With that, the builder should give you:
+
+A scripts/smoke_greg_strategies.py you can run any time to:
+
+Check selector → expected strategy on synthetic envs.
+
+Open a tiny DRY_RUN position per Greg strategy.
+
+Watch the management + hedging logic run without waiting for real market regimes.
