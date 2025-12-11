@@ -1,0 +1,366 @@
+PROMPT FOR AI BUILDER – Calibration Polish & Auto-Calibrate Realism
+
+You are working in my Options Trading Agent repo.
+
+Focus area:
+
+The calibration pipeline (src/calibration.py, /api/calibration in src/web_app.py, the Calibration UI tab)
+
+The auto-calibration script & history (scripts/auto_calibrate_iv.py, calibration history UI)
+
+We already have:
+
+A calibration endpoint /api/calibration and UI tab that:
+
+Takes underlying, DTE range, IV multiplier.
+
+Uses Deribit public data.
+
+Prices options with our synthetic IV + skew.
+
+Reports MAE%, bias%, etc.
+
+An extended calibration engine and history:
+
+Live runs + harvested runs.
+
+Term buckets (weekly, monthly, quarterly).
+
+Skew fit analysis.
+
+Update policy + current applied multipliers.
+
+Auto-calibrate history with status and reason.
+
+Your task is to polish and harden the calibration & auto-calibrate behavior with the following changes:
+
+1) Fix calibration sampling logic
+
+File(s): src/calibration.py (or wherever sampling is done)
+
+Current behavior (per earlier review):
+
+When there are more than max_samples quotes, we compute:
+
+step = len(quotes) // max_samples
+sampled = quotes[::step]
+
+
+If len(quotes) is just slightly above max_samples, step can be 1, and we end up taking all quotes instead of capping at max_samples.
+
+Change:
+
+Update sampling logic so that:
+
+If len(quotes) <= max_samples: keep all.
+
+If len(quotes) > max_samples:
+
+Either:
+
+Use step = math.ceil(len(quotes) / max_samples) and take quotes[::step], or
+
+Simply slice the sorted list: quotes[:max_samples].
+
+Use a deterministic selection (no randomness is required right now). It’s fine if we slightly bias toward nearer expiries/strikes as long as we keep complexity bounded.
+
+Acceptance:
+
+For len(quotes) = 81, max_samples = 80 → final sample size ≤ 80.
+
+For large chains (thousands of quotes), we never keep more than max_samples.
+
+2) Make ATM IV recommendation more robust
+
+File(s): src/calibration.py
+
+Current behavior:
+
+ATM IV detection is based on quotes that have both mark_iv and delta.
+
+If Deribit omits deltas (delta is None), atm_iv ends up None, so:
+
+No “Recommended iv_multiplier” is shown,
+
+Even when there are more than enough prices & mark IVs.
+
+Change:
+
+Keep the existing delta-based ATM logic as the primary method.
+
+Add a fallback ATM heuristic when delta-based ATM can’t be computed:
+
+If no usable deltas but we do have mark_iv and strikes:
+
+Select the call whose strike is closest to spot for the relevant DTE band.
+
+Use that option’s mark_iv as the fallback atm_iv.
+
+Add an ATM source flag to the calibration result, something like:
+
+"atm_iv": 0.446,
+"atm_source": "delta" | "nearest_strike" | "none"
+
+
+Make sure this is returned by /api/calibration and visible in the JSON the UI is using.
+
+UI:
+
+Show a small label near the “Recommended iv_multiplier” text indicating the ATM source:
+
+e.g. “ATM IV (delta-based)” vs “ATM IV (nearest strike)”.
+
+If atm_source = "none", hide the recommended multiplier or show a note like:
+
+“ATM IV not available (no deltas/strikes).”
+
+3) Surface RV provenance (deribit_history vs default_iv) and warn on fallback
+
+File(s): src/calibration.py, src/web_app.py, Calibration UI
+
+Current behavior:
+
+We try to compute realized volatility from public/get_tradingview_chart_data.
+
+If the payload is empty or malformed, we silently fall back to default_iv.
+
+The UI has no idea whether rv_annualized came from real history or from a default.
+
+Change:
+
+In src/calibration.py:
+
+When RV is successfully computed from Deribit history:
+
+rv_source = "deribit_history"
+
+
+When RV computation fails and we fall back to default_iv:
+
+rv_source = "default_iv"
+# Also: log a warning in the Python logger.
+
+
+Include rv_source in the calibration result returned by /api/calibration, e.g.:
+
+"rv_annualized": 0.398,
+"rv_source": "deribit_history",
+...
+
+
+In the Calibration UI:
+
+Display rv_source alongside RV_7d:
+
+Example: RV_7d = 39.0% (source: Deribit history)
+or RV_7d = 60.0% (source: default_iv).
+
+If rv_source = "default_iv", show a subtle warning banner on the card, e.g.:
+
+“Realized volatility could not be computed from Deribit history.
+Using default IV; calibration may be less reliable.”
+
+4) Improve front-end error messaging for calibration endpoint
+
+File(s): src/web_app.py, front-end calibration tab components
+
+Current behavior:
+
+When the calibration endpoint fails, the UI collapses everything into a generic “Calibration failed” with a red Error row.
+
+Users cannot see whether it’s:
+
+a validation error (e.g., multiplier out of bounds),
+
+a Deribit API/network issue, or
+
+an internal exception.
+
+Change:
+
+In the FastAPI endpoint, ensure that:
+
+Validation / user input errors return an HTTP 4xx with a concise message.
+
+Deribit/timeouts return an HTTP 502/504 where appropriate, with a message like “Deribit API timeout”.
+
+Internal exceptions return 500 with a generic but still slightly descriptive text.
+
+In the front-end:
+
+Parse the error response from /api/calibration.
+
+Show a more informative message in the calibration card, such as:
+
+“Calibration failed: iv_multiplier 4.97 > max 3.0 (validation error)”
+
+“Calibration failed: Deribit API timeout, please retry.”
+
+Optionally log the full error details to the browser console for debugging.
+
+Ensure the generic “Calibration failed” message is replaced or augmented with this more specific reason.
+
+5) Tighten auto-calibrate realism status (my extra suggestion)
+
+File(s): scripts/auto_calibrate_iv.py, whatever module/class is used to write auto-calibration history; Calibration History (Auto-Calibrate) UI.
+
+Current state:
+
+Auto-calibrate runs appear in “Calibration History (Auto-Calibrate)” with:
+
+status = ok/degraded/failed,
+
+multiplier,
+
+MAE %,
+
+vMAE % sometimes missing,
+
+reason.
+
+We’ve seen some clearly broken runs:
+
+multiplier = 0.5000, MAE ≈ 4,668,684.92%, status = ok.
+
+multiplier = 4.9737, MAE ≈ **54.45%, status = failed` due to data quality.
+
+We want the classification to depend on both:
+
+data_quality.status (ok / degraded / failed), and
+
+realism of the calibration (reasonable multiplier and error magnitudes).
+
+Change:
+
+In scripts/auto_calibrate_iv.py (or a helper it calls), implement a realism assessment function:
+
+MIN_MULT = 0.7
+MAX_MULT = 1.6
+MAX_MAE = 400.0         # percent
+MAX_VEGA_MAE = 200.0    # percent
+
+def assess_calibration_realism(multiplier, mae_pct, vega_weighted_mae_pct, data_quality_status):
+    # returns (status, reason)
+
+
+Proposed logic:
+
+If data_quality_status == "failed":
+
+status = "failed"
+
+reason = "Data quality failed (schema/coverage issues)"
+
+Else if:
+
+multiplier < MIN_MULT or multiplier > MAX_MULT, or
+
+(mae_pct is not None and mae_pct > MAX_MAE), or
+
+(vega_weighted_mae_pct is not None and vega_weighted_mae_pct > MAX_VEGA_MAE)
+
+Then:
+
+status = "failed"
+
+reason = "Unrealistic auto-calibration: multiplier or MAE outside sane range"
+
+Else if data_quality_status == "degraded":
+
+status = "degraded"
+
+reason = "Data quality degraded; use with caution"
+
+Else:
+
+status = "ok"
+
+reason = "Calibration within thresholds"
+
+Make sure auto-calibrate runs (from scripts/auto_calibrate_iv.py) actually compute and store vega_weighted_mae_pct in the history entry (not just mae_pct).
+
+Use the (status, reason) from assess_calibration_realism when writing the history row:
+
+status field: "ok", "degraded", or "failed".
+
+reason: user-readable text, e.g.,
+
+“Unrealistic auto-calibration: multiplier 0.5 and MAE 4,668,684.9%”
+
+“Data quality failed (missing mark_iv in older snapshots)”.
+
+Do not let auto-calibrate history feed directly into “Current Applied Multipliers”.
+
+That logic is already correctly driven by the live calibration + policy.
+
+Just make sure history is labeled honestly.
+
+In the Calibration History (Auto-Calibrate) UI:
+
+Ensure the Status column visually distinguishes ok vs degraded vs failed (e.g., green/orange/red badge).
+
+Show the reason text.
+
+For future runs like 0.5000 with ridiculous MAE, they should appear as:
+
+status = failed,
+
+reason clearly indicating unrealistic multiplier/MAE.
+
+6) Tests & sanity checks
+
+Please add/update tests and do a smoke test:
+
+Sampling logic:
+
+Unit test that for len(quotes) > max_samples, the final sample size ≤ max_samples.
+
+ATM IV + source:
+
+Test delta-based ATM when deltas are present.
+
+Test fallback-to-nearest-strike ATM when deltas are missing but strikes exist.
+
+Test atm_source values "delta", "nearest_strike", "none".
+
+RV provenance:
+
+Test rv_source = "deribit_history" when TradingView data is available.
+
+Test rv_source = "default_iv" + logged warning when it’s not.
+
+Error messaging:
+
+Simulate a validation error from /api/calibration and ensure front-end shows a specific message.
+
+Simulate a Deribit timeout and ensure the message is clear.
+
+Auto-calibrate realism:
+
+Create test cases for assess_calibration_realism:
+
+Reasonable multiplier + low MAE → status = ok.
+
+multiplier=0.5, MAE large → status = failed.
+
+data_quality failed → status = failed.
+
+data_quality degraded but metrics ok → status = degraded.
+
+Manual smoke:
+
+Run (from the project root):
+
+python scripts/auto_calibrate_iv.py --underlying BTC
+python scripts/auto_calibrate_iv.py --underlying ETH
+
+
+Then open the Calibration UI:
+
+Confirm Current Applied Multipliers are still sane (~1.0–1.3).
+
+Confirm new auto-calibrate runs are labeled ok/degraded/failed appropriately.
+
+Confirm that obviously insane runs (like 0.5 or 4.97) show as failed in history with a clear reason.
+
+Please implement all of the above in a backwards-compatible way (add fields, don’t break existing structures). When done, leave a short summary in comments or docs of what was changed so I can see the improvements from the UI side.
