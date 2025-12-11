@@ -2078,6 +2078,172 @@ def mock_greg_management() -> JSONResponse:
         return JSONResponse(content={"ok": False, "error": str(e)})
 
 
+@app.get("/api/bots/greg/hedging")
+def get_greg_hedging_status() -> JSONResponse:
+    """
+    Return the current hedging status including:
+    - Engine configuration (dry_run mode)
+    - Recent hedge history
+    - Hedging rules overview
+    """
+    try:
+        from src.hedging import get_hedge_engine, load_greg_hedge_rules
+        
+        engine = get_hedge_engine(dry_run=True)
+        history = engine.get_hedge_history(limit=20)
+        rules = load_greg_hedge_rules()
+        
+        global_defs = rules.get("global_definitions", {})
+        hedge_instruments = global_defs.get("hedge_instrument", {})
+        
+        strategies_summary = []
+        for strat_key, strat_config in rules.get("strategies", {}).items():
+            hedge_cfg = strat_config.get("hedge", {})
+            strategies_summary.append({
+                "strategy": strat_key,
+                "display_name": strat_config.get("display_name", strat_key),
+                "hedge_mode": hedge_cfg.get("mode", "NONE"),
+                "delta_threshold": hedge_cfg.get("delta_abs_threshold"),
+            })
+        
+        return JSONResponse(content={
+            "ok": True,
+            "dry_run": engine.dry_run,
+            "hedge_instruments": hedge_instruments,
+            "strategies": strategies_summary,
+            "history": history,
+            "history_count": len(history),
+        })
+    except Exception as e:
+        return JSONResponse(content={"ok": False, "error": str(e)})
+
+
+@app.post("/api/bots/greg/hedging/evaluate")
+def evaluate_greg_hedging() -> JSONResponse:
+    """
+    Evaluate hedging needs for Greg positions (demo/mock for Phase 1).
+    
+    Returns proposed hedge orders without executing them.
+    Currently uses mock positions for demonstration - real position
+    integration planned for Phase 2 when live trading is enabled.
+    """
+    try:
+        from src.hedging import get_hedge_engine, GregPosition
+        from src.greg_position_manager import get_greg_position_rules
+        
+        engine = get_hedge_engine(dry_run=True)
+        
+        mock_positions = [
+            GregPosition(
+                position_id="demo:BTC-STRADDLE-1",
+                strategy_type="STRATEGY_A_STRADDLE",
+                underlying="BTC",
+                option_legs=[
+                    {"instrument": "BTC-27DEC25-100000-C", "delta": -0.50, "size": 1.0},
+                    {"instrument": "BTC-27DEC25-100000-P", "delta": 0.50, "size": 1.0},
+                ],
+                hedge_perp_size=0.0,
+                net_delta=0.0,
+            ),
+            GregPosition(
+                position_id="demo:BTC-STRADDLE-2",
+                strategy_type="STRATEGY_A_STRADDLE",
+                underlying="BTC",
+                option_legs=[
+                    {"instrument": "BTC-27DEC25-95000-C", "delta": -0.35, "size": 1.0},
+                    {"instrument": "BTC-27DEC25-95000-P", "delta": 0.65, "size": 1.0},
+                ],
+                hedge_perp_size=0.0,
+                net_delta=0.30,
+            ),
+            GregPosition(
+                position_id="demo:ETH-STRANGLE-1",
+                strategy_type="STRATEGY_A_STRANGLE",
+                underlying="ETH",
+                option_legs=[
+                    {"instrument": "ETH-27DEC25-4000-C", "delta": -0.25, "size": 1.0},
+                    {"instrument": "ETH-27DEC25-3000-P", "delta": 0.10, "size": 1.0},
+                ],
+                hedge_perp_size=0.0,
+                net_delta=-0.15,
+            ),
+        ]
+        
+        proposed_hedges = []
+        for pos in mock_positions:
+            hedge_rules = engine.get_hedge_rules(pos.strategy_type)
+            order = engine.build_hedge_order(pos, hedge_rules)
+            if order:
+                proposed_hedges.append({
+                    "position_id": pos.position_id,
+                    "strategy_type": pos.strategy_type,
+                    "underlying": pos.underlying,
+                    "net_delta": engine.compute_net_delta_for_position(pos),
+                    "threshold": hedge_rules.delta_abs_threshold,
+                    "proposed_order": order.to_dict(),
+                })
+            else:
+                proposed_hedges.append({
+                    "position_id": pos.position_id,
+                    "strategy_type": pos.strategy_type,
+                    "underlying": pos.underlying,
+                    "net_delta": engine.compute_net_delta_for_position(pos),
+                    "threshold": hedge_rules.delta_abs_threshold,
+                    "proposed_order": None,
+                    "status": "no_hedge_needed",
+                })
+        
+        return JSONResponse(content={
+            "ok": True,
+            "positions_evaluated": len(mock_positions),
+            "hedges_proposed": len([h for h in proposed_hedges if h.get("proposed_order")]),
+            "results": proposed_hedges,
+            "dry_run": engine.dry_run,
+        })
+    except Exception as e:
+        return JSONResponse(content={"ok": False, "error": str(e)})
+
+
+@app.get("/api/bots/greg/hedge_history")
+def get_greg_hedge_history(limit: int = 50) -> JSONResponse:
+    """Return recent hedge execution history."""
+    try:
+        from src.hedging import get_hedge_engine
+        
+        engine = get_hedge_engine(dry_run=True)
+        history = engine.get_hedge_history(limit=limit)
+        
+        return JSONResponse(content={
+            "ok": True,
+            "history": history,
+            "count": len(history),
+        })
+    except Exception as e:
+        return JSONResponse(content={"ok": False, "error": str(e)})
+
+
+@app.post("/api/bots/greg/hedging/dry_run")
+def set_hedge_dry_run(request: dict) -> JSONResponse:
+    """
+    Toggle dry-run mode for the hedge engine.
+    Body: {"dry_run": true/false}
+    """
+    try:
+        from src.hedging import get_hedge_engine
+        
+        dry_run = request.get("dry_run", True)
+        engine = get_hedge_engine()
+        engine.set_dry_run(dry_run)
+        
+        return JSONResponse(content={
+            "ok": True,
+            "dry_run": engine.dry_run,
+            "message": f"Hedge engine dry_run set to {dry_run}",
+        })
+    except Exception as e:
+        return JSONResponse(content={"ok": False, "error": str(e)})
+
+
 @app.post("/api/test_kill_switch")
 def test_kill_switch() -> JSONResponse:
     """Test risk engine with a synthetic action (dry run)."""
@@ -4284,6 +4450,83 @@ def index() -> str:
           </div>
           <div id="greg-management-status" style="font-size: 0.8rem; color: #666; margin-top: 0.5rem;" aria-live="polite"></div>
         </div>
+        
+        <!-- Delta Hedging Engine Panel -->
+        <div id="greg-hedging-panel" style="margin-top: 1rem; background: #e3f2fd; padding: 1rem; border-radius: 6px; border: 1px solid #90caf9;">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.75rem;">
+            <h4 style="margin: 0; color: #1565c0; font-size: 1rem;">Delta Hedging Engine</h4>
+            <div style="display: flex; gap: 0.5rem; align-items: center;">
+              <span id="hedge-dry-run-badge" style="padding: 0.25rem 0.5rem; font-size: 0.75rem; background: #fff3e0; color: #e65100; border-radius: 4px;">DRY RUN</span>
+              <button onclick="evaluateHedging()" style="padding: 0.4rem 0.8rem; font-size: 0.8rem; background: #42a5f5; color: white; border: none; border-radius: 4px; cursor: pointer;">
+                Evaluate Hedges
+              </button>
+              <button onclick="refreshHedgingStatus()" style="padding: 0.4rem 0.8rem; font-size: 0.8rem; background: #1565c0; color: white; border: none; border-radius: 4px; cursor: pointer;">
+                Refresh
+              </button>
+            </div>
+          </div>
+          <p style="font-size: 0.8rem; color: #666; margin: 0 0 0.75rem 0;">
+            Delta-neutral hedging for short-vol strategies (straddles, strangles, iron flies). Uses perpetual futures to restore delta to target.
+          </p>
+          
+          <!-- Hedge Rules Summary -->
+          <details style="margin-bottom: 0.75rem;">
+            <summary style="cursor: pointer; font-weight: bold; color: #1565c0; font-size: 0.85rem;">Hedging Rules by Strategy</summary>
+            <div id="hedge-rules-container" style="margin-top: 0.5rem; padding: 0.5rem; background: white; border-radius: 4px;">
+              <table style="width: 100%; border-collapse: collapse; font-size: 0.8rem;">
+                <thead>
+                  <tr style="background: #f5f5f5;">
+                    <th style="padding: 0.4rem; text-align: left; border-bottom: 1px solid #ddd;">Strategy</th>
+                    <th style="padding: 0.4rem; text-align: left; border-bottom: 1px solid #ddd;">Hedge Mode</th>
+                    <th style="padding: 0.4rem; text-align: left; border-bottom: 1px solid #ddd;">Delta Threshold</th>
+                  </tr>
+                </thead>
+                <tbody id="hedge-rules-tbody">
+                  <tr><td colspan="3" style="padding: 0.5rem; color: #666; font-style: italic;">Loading...</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </details>
+          
+          <!-- Proposed Hedges Table -->
+          <div id="hedge-proposals-container" style="overflow-x: auto;">
+            <table id="hedge-proposals-table" style="width: 100%; border-collapse: collapse; font-size: 0.85rem;">
+              <thead>
+                <tr style="background: #f5f5f5;">
+                  <th style="padding: 0.5rem; text-align: left; border-bottom: 2px solid #ddd;">Position</th>
+                  <th style="padding: 0.5rem; text-align: left; border-bottom: 2px solid #ddd;">Strategy</th>
+                  <th style="padding: 0.5rem; text-align: left; border-bottom: 2px solid #ddd;">Net Delta</th>
+                  <th style="padding: 0.5rem; text-align: left; border-bottom: 2px solid #ddd;">Threshold</th>
+                  <th style="padding: 0.5rem; text-align: left; border-bottom: 2px solid #ddd;">Proposed Hedge</th>
+                </tr>
+              </thead>
+              <tbody id="hedge-proposals-tbody">
+                <tr><td colspan="5" style="padding: 1rem; color: #666; font-style: italic; text-align: center;">Click "Evaluate Hedges" to analyze positions.</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <div id="hedge-status" style="font-size: 0.8rem; color: #666; margin-top: 0.5rem;" aria-live="polite"></div>
+          
+          <!-- Hedge History -->
+          <details style="margin-top: 0.75rem;">
+            <summary style="cursor: pointer; font-weight: bold; color: #1565c0; font-size: 0.85rem;">Recent Hedge History</summary>
+            <div id="hedge-history-container" style="margin-top: 0.5rem; max-height: 200px; overflow-y: auto;">
+              <table style="width: 100%; border-collapse: collapse; font-size: 0.8rem;">
+                <thead>
+                  <tr style="background: #f5f5f5;">
+                    <th style="padding: 0.4rem; text-align: left; border-bottom: 1px solid #ddd;">Time</th>
+                    <th style="padding: 0.4rem; text-align: left; border-bottom: 1px solid #ddd;">Position</th>
+                    <th style="padding: 0.4rem; text-align: left; border-bottom: 1px solid #ddd;">Order</th>
+                    <th style="padding: 0.4rem; text-align: left; border-bottom: 1px solid #ddd;">Status</th>
+                  </tr>
+                </thead>
+                <tbody id="hedge-history-tbody">
+                  <tr><td colspan="4" style="padding: 0.5rem; color: #666; font-style: italic;">No hedge history yet.</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </details>
+        </div>
       </div>
       
       <p style="color: #888; font-size: 0.85rem; margin-top: 1rem;">
@@ -5139,6 +5382,147 @@ def index() -> str:
       }}
       
       tbody.innerHTML = html;
+    }}
+    
+    // ==============================================
+    // DELTA HEDGING ENGINE FUNCTIONS
+    // ==============================================
+    
+    async function refreshHedgingStatus() {{
+      const rulesTbody = document.getElementById('hedge-rules-tbody');
+      const historyTbody = document.getElementById('hedge-history-tbody');
+      const statusEl = document.getElementById('hedge-status');
+      const dryRunBadge = document.getElementById('hedge-dry-run-badge');
+      
+      try {{
+        const res = await fetch('/api/bots/greg/hedging');
+        const data = await res.json();
+        
+        if (data.ok) {{
+          // Update dry run badge
+          if (data.dry_run) {{
+            dryRunBadge.textContent = 'DRY RUN';
+            dryRunBadge.style.background = '#fff3e0';
+            dryRunBadge.style.color = '#e65100';
+          }} else {{
+            dryRunBadge.textContent = 'LIVE';
+            dryRunBadge.style.background = '#ffebee';
+            dryRunBadge.style.color = '#c62828';
+          }}
+          
+          // Render rules table
+          if (rulesTbody && data.strategies) {{
+            const hedgeModeColors = {{
+              'DYNAMIC_DELTA': {{ bg: '#e3f2fd', color: '#1565c0', label: 'Dynamic Delta' }},
+              'LIGHT_DELTA': {{ bg: '#e8f5e9', color: '#2e7d32', label: 'Light Delta' }},
+              'LOOSE_DELTA': {{ bg: '#fff8e1', color: '#f9a825', label: 'Loose Delta' }},
+              'NONE': {{ bg: '#f5f5f5', color: '#666', label: 'None' }},
+            }};
+            
+            let rulesHtml = '';
+            for (const s of data.strategies) {{
+              const modeStyle = hedgeModeColors[s.hedge_mode] || {{ bg: '#f5f5f5', color: '#333', label: s.hedge_mode }};
+              const threshold = s.delta_threshold !== null ? s.delta_threshold.toFixed(2) : '-';
+              rulesHtml += `<tr>
+                <td style="padding: 0.4rem;">${{s.display_name || s.strategy}}</td>
+                <td style="padding: 0.4rem;">
+                  <span style="background: ${{modeStyle.bg}}; color: ${{modeStyle.color}}; padding: 0.15rem 0.4rem; border-radius: 3px; font-size: 0.75rem;">
+                    ${{modeStyle.label}}
+                  </span>
+                </td>
+                <td style="padding: 0.4rem;">${{threshold}}</td>
+              </tr>`;
+            }}
+            rulesTbody.innerHTML = rulesHtml || '<tr><td colspan="3" style="padding: 0.5rem; color: #666;">No strategies found.</td></tr>';
+          }}
+          
+          // Render history table
+          if (historyTbody && data.history) {{
+            if (data.history.length === 0) {{
+              historyTbody.innerHTML = '<tr><td colspan="4" style="padding: 0.5rem; color: #666; font-style: italic;">No hedge history yet.</td></tr>';
+            }} else {{
+              let historyHtml = '';
+              for (const h of data.history) {{
+                const order = h.order || {{}};
+                const time = h.order?.timestamp ? new Date(h.order.timestamp).toLocaleTimeString() : 'N/A';
+                const orderStr = order.side ? `${{order.side.toUpperCase()}} ${{order.size}} ${{order.instrument}}` : '-';
+                const statusBadge = h.dry_run ? 
+                  '<span style="background: #fff3e0; color: #e65100; padding: 0.1rem 0.3rem; border-radius: 3px; font-size: 0.7rem;">DRY RUN</span>' :
+                  (h.executed ? '<span style="background: #e8f5e9; color: #2e7d32; padding: 0.1rem 0.3rem; border-radius: 3px; font-size: 0.7rem;">EXECUTED</span>' : 
+                   '<span style="background: #f5f5f5; color: #666; padding: 0.1rem 0.3rem; border-radius: 3px; font-size: 0.7rem;">PENDING</span>');
+                
+                historyHtml += `<tr>
+                  <td style="padding: 0.4rem;">${{time}}</td>
+                  <td style="padding: 0.4rem; font-size: 0.75rem;">${{order.strategy_position_id || '-'}}</td>
+                  <td style="padding: 0.4rem; font-size: 0.75rem;">${{orderStr}}</td>
+                  <td style="padding: 0.4rem;">${{statusBadge}}</td>
+                </tr>`;
+              }}
+              historyTbody.innerHTML = historyHtml;
+            }}
+          }}
+          
+          statusEl.textContent = `Loaded. Instruments: ${{Object.keys(data.hedge_instruments || {{}}).join(', ')}}`;
+        }} else {{
+          statusEl.textContent = 'Error: ' + (data.error || 'Unknown error');
+        }}
+      }} catch (e) {{
+        statusEl.textContent = 'Error: ' + e.message;
+      }}
+    }}
+    
+    async function evaluateHedging() {{
+      const tbody = document.getElementById('hedge-proposals-tbody');
+      const statusEl = document.getElementById('hedge-status');
+      
+      statusEl.textContent = 'Evaluating hedge needs...';
+      
+      try {{
+        const res = await fetch('/api/bots/greg/hedging/evaluate', {{ method: 'POST' }});
+        const data = await res.json();
+        
+        if (data.ok) {{
+          const results = data.results || [];
+          
+          if (results.length === 0) {{
+            tbody.innerHTML = '<tr><td colspan="5" style="padding: 1rem; color: #666; font-style: italic; text-align: center;">No positions to evaluate.</td></tr>';
+          }} else {{
+            let html = '';
+            for (const r of results) {{
+              const order = r.proposed_order;
+              const netDelta = r.net_delta !== undefined ? r.net_delta.toFixed(4) : '-';
+              const threshold = r.threshold !== undefined ? r.threshold.toFixed(2) : '-';
+              
+              let orderCell = '';
+              if (order) {{
+                const deltaChange = `${{order.net_delta_before.toFixed(4)}} → ${{order.net_delta_after.toFixed(4)}}`;
+                orderCell = `<span style="background: #e3f2fd; color: #1565c0; padding: 0.2rem 0.5rem; border-radius: 4px; font-size: 0.8rem;">
+                  ${{order.side.toUpperCase()}} ${{order.size}} ${{order.instrument}}
+                </span><br/><span style="font-size: 0.7rem; color: #666;">Δ: ${{deltaChange}}</span>`;
+              }} else {{
+                orderCell = '<span style="color: #2e7d32; font-size: 0.8rem;">No hedge needed</span>';
+              }}
+              
+              html += `<tr style="border-bottom: 1px solid #eee;">
+                <td style="padding: 0.5rem; font-size: 0.8rem;">${{r.position_id}}</td>
+                <td style="padding: 0.5rem;">${{r.strategy_type}}</td>
+                <td style="padding: 0.5rem; font-family: monospace;">${{netDelta}}</td>
+                <td style="padding: 0.5rem;">${{threshold}}</td>
+                <td style="padding: 0.5rem;">${{orderCell}}</td>
+              </tr>`;
+            }}
+            tbody.innerHTML = html;
+          }}
+          
+          statusEl.innerHTML = `Evaluated ${{data.positions_evaluated}} position(s). <strong>${{data.hedges_proposed}} hedge(s) proposed.</strong> ${{data.dry_run ? '(Dry Run)' : ''}}`;
+        }} else {{
+          statusEl.textContent = 'Error: ' + (data.error || 'Unknown error');
+          tbody.innerHTML = '<tr><td colspan="5" style="padding: 1rem; color: #c62828; text-align: center;">Error evaluating hedges</td></tr>';
+        }}
+      }} catch (e) {{
+        statusEl.textContent = 'Error: ' + e.message;
+        tbody.innerHTML = '<tr><td colspan="5" style="padding: 1rem; color: #c62828; text-align: center;">Error: ' + e.message + '</td></tr>';
+      }}
     }}
     
     // ==============================================

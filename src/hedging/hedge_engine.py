@@ -195,8 +195,18 @@ class HedgeEngine:
         return options_delta + perp_delta
 
     def compute_net_delta_for_position(self, position: GregPosition) -> float:
-        """Compute net delta from a GregPosition object."""
-        option_deltas = [leg.get("delta", 0.0) for leg in position.option_legs]
+        """
+        Compute net delta from a GregPosition object.
+        
+        Each leg's delta is weighted by its size (contracts).
+        For example: delta=-0.5, size=2 -> contribution = -1.0
+        """
+        option_deltas = []
+        for leg in position.option_legs:
+            delta = leg.get("delta", 0.0)
+            size = leg.get("size", 1.0)
+            option_deltas.append(delta * size)
+        
         perp_delta = position.hedge_perp_size * self._perp_delta
         return self.compute_net_delta(option_deltas, perp_delta)
 

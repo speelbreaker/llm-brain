@@ -68,6 +68,15 @@ The web dashboard provides a user-friendly interface with sections for "Live Age
         - UI panel in Bots tab with color-coded action badges
         - API endpoints: `/api/bots/greg/management`, `/api/bots/greg/management/mock`
         - 24 unit tests covering all strategy evaluation paths
+    - **Delta Hedging Engine v1.0 (HEDGE_ENGINE)**: Advisory-only delta-neutral hedging module for short-vol strategies. Includes:
+        - Core engine in `src/hedging/hedge_engine.py` with HedgeRules, HedgeOrder, HedgeResult, GregPosition dataclasses
+        - Size-weighted net delta calculation (delta * contract_size for each leg)
+        - Strategy-specific hedging modes: DYNAMIC_DELTA (straddles/strangles), LIGHT_DELTA (calendars), LOOSE_DELTA (iron flies), NONE (directional)
+        - Dry-run mode prevents real orders (Phase 1 = advisory only)
+        - Perpetual futures as hedge instruments (BTC-PERPETUAL, ETH-PERPETUAL)
+        - API endpoints: `/api/bots/greg/hedging`, `/api/bots/greg/hedging/evaluate`, `/api/bots/greg/hedge_history`
+        - UI panel in Bots tab with hedging rules table, proposed hedges display, and hedge history
+        - 30 unit tests covering delta calculations, order building, and execution paths
 - **Strategy Layer**: A pluggable architecture allowing multiple trading strategies to run concurrently, with `strategy_id` for attribution.
 
 ## External Dependencies

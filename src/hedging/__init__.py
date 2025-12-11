@@ -6,6 +6,8 @@ from src.hedging.hedge_engine import (
     HedgeRules,
     HedgeOrder,
     HedgeResult,
+    GregPosition,
+    get_hedge_engine,
     load_greg_hedge_rules,
 )
 
@@ -14,5 +16,7 @@ __all__ = [
     "HedgeRules",
     "HedgeOrder",
     "HedgeResult",
+    "GregPosition",
+    "get_hedge_engine",
     "load_greg_hedge_rules",
 ]
