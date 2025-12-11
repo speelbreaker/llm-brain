@@ -58,6 +58,15 @@ The web dashboard provides a user-friendly interface with sections for "Live Age
     - **Greg Mandolini VRP Harvester (GregBot) ENTRY_ENGINE v8.0**: A quantitative VRP strategy selector based on 11 volatility sensors and a decision waterfall, with advisory functionality and 8 evaluated strategies per underlying.
     - **v8.0 Decision Waterfall**: Supports branching logic (e.g., Bull Put / Bear Call spreads in step 7), `min_vrp_directional` floor (2.0) for directional spreads, and RSI thresholds for oversold/overbought detection.
     - **Dynamic Calibration**: Strategy thresholds are dynamically loaded from JSON (`global_entry_filters.calibration`). Includes 53+ invariant and scenario tests, an API endpoint for calibration spec, and a UI panel.
+    - **Greg Position Management v1.0 (POSITION_ENGINE)**: Advisory-only position management module for open Greg positions. Evaluates positions for hedge triggers, profit targets, stop-loss, roll, and assignment rules. Includes:
+        - JSON spec file (`docs/greg_mandolini/GREG_POSITION_RULES_V1.json`) with calibrated thresholds
+        - Evaluation logic for all 7 strategy types (straddle, strangle, calendar, short put, iron fly, bull put spread, bear call spread)
+        - Management actions: HEDGE, TAKE_PROFIT, ROLL, ASSIGN, CLOSE, HOLD
+        - Delta hedge suggestions with perp size recommendations
+        - Funding-based assignment decisions (perp vs spot)
+        - UI panel in Bots tab with color-coded action badges
+        - API endpoints: `/api/bots/greg/management`, `/api/bots/greg/management/mock`
+        - 24 unit tests covering all strategy evaluation paths
 - **Strategy Layer**: A pluggable architecture allowing multiple trading strategies to run concurrently, with `strategy_id` for attribution.
 
 ## External Dependencies

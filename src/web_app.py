@@ -1942,6 +1942,134 @@ def get_bots_strategies() -> JSONResponse:
         return JSONResponse(content={"ok": False, "error": str(e)})
 
 
+@app.get("/api/bots/greg/management")
+def get_greg_management() -> JSONResponse:
+    """
+    Return the latest Greg position management suggestions.
+    These are advisory-only suggestions for managing open Greg positions.
+    No actual orders are sent.
+    """
+    try:
+        from src.greg_position_manager import greg_management_store, get_greg_position_rules
+        
+        store_data = greg_management_store.get()
+        rules = get_greg_position_rules()
+        
+        return JSONResponse(content={
+            "ok": True,
+            "suggestions": store_data.get("suggestions", []),
+            "count": store_data.get("count", 0),
+            "updated_at": store_data.get("updated_at"),
+            "rules_version": rules.meta.get("version", "unknown"),
+        })
+    except Exception as e:
+        return JSONResponse(content={"ok": False, "error": str(e)})
+
+
+@app.post("/api/bots/greg/management/evaluate")
+def evaluate_greg_management() -> JSONResponse:
+    """
+    Manually trigger evaluation of Greg position management.
+    For testing, accepts optional mock_positions payload.
+    """
+    try:
+        from src.greg_position_manager import (
+            evaluate_greg_positions,
+            greg_management_store,
+            GregManagementSuggestion,
+        )
+        from src.models import AgentState
+        
+        status = status_store.get() or {}
+        state_dict = status.get("state")
+        
+        if state_dict:
+            state = AgentState.model_validate(state_dict)
+        else:
+            from src.deribit_client import DeribitClient
+            from src.state_builder import build_agent_state
+            
+            with DeribitClient() as client:
+                state = build_agent_state(client, settings)
+        
+        suggestions = evaluate_greg_positions(state)
+        greg_management_store.update(suggestions)
+        
+        return JSONResponse(content={
+            "ok": True,
+            "suggestions": [s.to_dict() for s in suggestions],
+            "count": len(suggestions),
+        })
+    except Exception as e:
+        return JSONResponse(content={"ok": False, "error": str(e)})
+
+
+@app.post("/api/bots/greg/management/mock")
+def mock_greg_management() -> JSONResponse:
+    """
+    Evaluate Greg position management with mock positions for demo/testing.
+    Creates sample positions to show what the UI would look like.
+    """
+    try:
+        from src.greg_position_manager import (
+            evaluate_greg_positions,
+            greg_management_store,
+        )
+        from src.models import AgentState
+        
+        mock_state = AgentState(
+            spot={"BTC": 100000.0, "ETH": 3500.0},
+        )
+        
+        mock_positions = [
+            {
+                "strategy_code": "STRATEGY_A_STRADDLE",
+                "underlying": "BTC",
+                "position_id": "demo:BTC-STRADDLE-100000",
+                "net_delta": 0.22,
+                "dte": 28,
+                "profit_pct": 0.18,
+                "loss_pct": 0.0,
+            },
+            {
+                "strategy_code": "STRATEGY_A_STRANGLE",
+                "underlying": "ETH",
+                "position_id": "demo:ETH-STRANGLE-3500",
+                "net_delta": 0.05,
+                "dte": 35,
+                "profit_pct": 0.55,
+                "loss_pct": 0.0,
+            },
+            {
+                "strategy_code": "STRATEGY_C_SHORT_PUT",
+                "underlying": "BTC",
+                "position_id": "demo:BTC-PUT-95000",
+                "delta": -0.85,
+                "profit_pct": 0.40,
+                "funding_rate": 0.0002,
+            },
+            {
+                "strategy_code": "STRATEGY_F_BULL_PUT_SPREAD",
+                "underlying": "BTC",
+                "position_id": "demo:BTC-BULL-PUT-SPREAD",
+                "short_strike": 95000,
+                "profit_pct": 0.62,
+            },
+        ]
+        
+        suggestions = evaluate_greg_positions(mock_state, mock_positions=mock_positions)
+        greg_management_store.update(suggestions)
+        
+        return JSONResponse(content={
+            "ok": True,
+            "suggestions": [s.to_dict() for s in suggestions],
+            "count": len(suggestions),
+            "mock": True,
+        })
+    except Exception as e:
+        return JSONResponse(content={"ok": False, "error": str(e)})
+
+
 @app.post("/api/test_kill_switch")
 def test_kill_switch() -> JSONResponse:
     """Test risk engine with a synthetic action (dry run)."""
@@ -4113,6 +4241,41 @@ def index() -> str:
             </button>
           </div>
         </details>
+        
+        <!-- Greg Position Management Panel -->
+        <div id="greg-management-panel" style="margin-top: 1rem; background: #fff8e1; padding: 1rem; border-radius: 6px; border: 1px solid #ffe082;">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.75rem;">
+            <h4 style="margin: 0; color: #f57c00; font-size: 1rem;">Position Management (Advice Only)</h4>
+            <div style="display: flex; gap: 0.5rem;">
+              <button onclick="loadMockGregManagement()" style="padding: 0.4rem 0.8rem; font-size: 0.8rem; background: #ffa726; color: white; border: none; border-radius: 4px; cursor: pointer;">
+                Load Demo Positions
+              </button>
+              <button onclick="refreshGregManagement()" style="padding: 0.4rem 0.8rem; font-size: 0.8rem; background: #f57c00; color: white; border: none; border-radius: 4px; cursor: pointer;">
+                Refresh
+              </button>
+            </div>
+          </div>
+          <p style="font-size: 0.8rem; color: #666; margin: 0 0 0.75rem 0;">
+            Greg-style management suggestions for open positions. <strong>Advisory only</strong> - no real orders sent.
+          </p>
+          <div id="greg-management-table-container" style="overflow-x: auto;">
+            <table id="greg-management-table" style="width: 100%; border-collapse: collapse; font-size: 0.85rem;">
+              <thead>
+                <tr style="background: #f5f5f5;">
+                  <th style="padding: 0.5rem; text-align: left; border-bottom: 2px solid #ddd;">Underlying</th>
+                  <th style="padding: 0.5rem; text-align: left; border-bottom: 2px solid #ddd;">Strategy</th>
+                  <th style="padding: 0.5rem; text-align: left; border-bottom: 2px solid #ddd;">Position</th>
+                  <th style="padding: 0.5rem; text-align: left; border-bottom: 2px solid #ddd;">Suggested Action</th>
+                  <th style="padding: 0.5rem; text-align: left; border-bottom: 2px solid #ddd;">Key Metrics</th>
+                </tr>
+              </thead>
+              <tbody id="greg-management-tbody">
+                <tr><td colspan="5" style="padding: 1rem; color: #666; font-style: italic; text-align: center;">No management suggestions loaded. Click "Load Demo Positions" or "Refresh" to see suggestions.</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <div id="greg-management-status" style="font-size: 0.8rem; color: #666; margin-top: 0.5rem;" aria-live="polite"></div>
+        </div>
       </div>
       
       <p style="color: #888; font-size: 0.85rem; margin-top: 1rem;">
@@ -4795,6 +4958,7 @@ def index() -> str:
       refreshBotsSensors();
       refreshBotsStrategies();
       refreshGregCalibration();
+      refreshGregManagement();
     }}
     
     async function refreshGregCalibration() {{
@@ -4845,6 +5009,128 @@ def index() -> str:
       }} catch (e) {{
         statusEl.textContent = 'Error: ' + e.message;
       }}
+    }}
+    
+    // ==============================================
+    // GREG POSITION MANAGEMENT FUNCTIONS
+    // ==============================================
+    
+    async function refreshGregManagement() {{
+      const tbody = document.getElementById('greg-management-tbody');
+      const statusEl = document.getElementById('greg-management-status');
+      
+      if (!tbody || !statusEl) return;
+      
+      statusEl.textContent = 'Loading...';
+      
+      try {{
+        const res = await fetch('/api/bots/greg/management');
+        const data = await res.json();
+        
+        if (data.ok) {{
+          renderGregManagementTable(data.suggestions || [], tbody);
+          const count = data.count || 0;
+          const updatedAt = data.updated_at ? new Date(data.updated_at).toLocaleTimeString() : 'N/A';
+          statusEl.innerHTML = `Loaded ${{count}} suggestion(s). Rules v${{data.rules_version || 'unknown'}}. Updated: ${{updatedAt}}`;
+        }} else {{
+          statusEl.textContent = 'Error: ' + (data.error || 'Unknown error');
+          tbody.innerHTML = '<tr><td colspan="5" style="padding: 1rem; color: #c62828; text-align: center;">Error loading suggestions</td></tr>';
+        }}
+      }} catch (e) {{
+        statusEl.textContent = 'Error: ' + e.message;
+        tbody.innerHTML = '<tr><td colspan="5" style="padding: 1rem; color: #c62828; text-align: center;">Error: ' + e.message + '</td></tr>';
+      }}
+    }}
+    
+    async function loadMockGregManagement() {{
+      const tbody = document.getElementById('greg-management-tbody');
+      const statusEl = document.getElementById('greg-management-status');
+      
+      if (!tbody || !statusEl) return;
+      
+      statusEl.textContent = 'Loading demo positions...';
+      
+      try {{
+        const res = await fetch('/api/bots/greg/management/mock', {{ method: 'POST' }});
+        const data = await res.json();
+        
+        if (data.ok) {{
+          renderGregManagementTable(data.suggestions || [], tbody);
+          statusEl.innerHTML = `<span style="color: #f57c00;">Demo mode:</span> Loaded ${{data.count || 0}} sample suggestion(s).`;
+        }} else {{
+          statusEl.textContent = 'Error: ' + (data.error || 'Unknown error');
+        }}
+      }} catch (e) {{
+        statusEl.textContent = 'Error: ' + e.message;
+      }}
+    }}
+    
+    function renderGregManagementTable(suggestions, tbody) {{
+      if (!suggestions || suggestions.length === 0) {{
+        tbody.innerHTML = '<tr><td colspan="5" style="padding: 1rem; color: #666; font-style: italic; text-align: center;">No management suggestions available.</td></tr>';
+        return;
+      }}
+      
+      const actionColors = {{
+        'HEDGE': {{ bg: '#fff3e0', color: '#e65100', label: 'Hedge' }},
+        'TAKE_PROFIT': {{ bg: '#e8f5e9', color: '#2e7d32', label: 'Take Profit' }},
+        'ROLL': {{ bg: '#fff8e1', color: '#f9a825', label: 'Roll' }},
+        'ASSIGN': {{ bg: '#fce4ec', color: '#c62828', label: 'Assign' }},
+        'CLOSE': {{ bg: '#ffebee', color: '#c62828', label: 'Close' }},
+        'HOLD': {{ bg: '#f5f5f5', color: '#666', label: 'Hold' }},
+      }};
+      
+      const strategyLabels = {{
+        'STRATEGY_A_STRADDLE': 'ATM Straddle (A)',
+        'STRATEGY_A_STRANGLE': 'ATM Strangle (A)',
+        'STRATEGY_B_CALENDAR': 'Calendar Spread (B)',
+        'STRATEGY_C_SHORT_PUT': 'Short Put (C)',
+        'STRATEGY_D_IRON_BUTTERFLY': 'Iron Butterfly (D)',
+        'STRATEGY_F_BULL_PUT_SPREAD': 'Bull Put Spread (F)',
+        'STRATEGY_F_BEAR_CALL_SPREAD': 'Bear Call Spread (F)',
+      }};
+      
+      let html = '';
+      for (const s of suggestions) {{
+        const actionStyle = actionColors[s.action] || {{ bg: '#f5f5f5', color: '#333', label: s.action }};
+        const stratLabel = strategyLabels[s.strategy_code] || s.strategy_code;
+        
+        // Format key metrics
+        const metrics = s.metrics || {{}};
+        let metricsHtml = [];
+        
+        if (metrics.net_delta !== undefined) {{
+          metricsHtml.push(`<span title="Net Delta">Δ=${{metrics.net_delta.toFixed(2)}}</span>`);
+        }}
+        if (metrics.target_delta_abs !== undefined) {{
+          metricsHtml.push(`<span title="Target Delta Threshold">(tgt: ${{metrics.target_delta_abs}})</span>`);
+        }}
+        if (metrics.dte !== undefined) {{
+          metricsHtml.push(`<span title="Days to Expiry">DTE=${{metrics.dte}}</span>`);
+        }}
+        if (metrics.profit_pct !== undefined) {{
+          const pnlColor = metrics.profit_pct >= 0 ? '#2e7d32' : '#c62828';
+          metricsHtml.push(`<span style="color: ${{pnlColor}};" title="Profit %">PnL=${{(metrics.profit_pct * 100).toFixed(1)}}%</span>`);
+        }}
+        if (metrics.delta_abs !== undefined) {{
+          metricsHtml.push(`<span title="Absolute Delta">|Δ|=${{metrics.delta_abs.toFixed(2)}}</span>`);
+        }}
+        
+        html += `<tr style="border-bottom: 1px solid #eee;" title="${{s.reason}}">
+          <td style="padding: 0.5rem; font-weight: 600;">${{s.underlying}}</td>
+          <td style="padding: 0.5rem;">${{stratLabel}}</td>
+          <td style="padding: 0.5rem; font-size: 0.8rem; color: #666;">${{s.position_id.substring(0, 30)}}</td>
+          <td style="padding: 0.5rem;">
+            <span style="background: ${{actionStyle.bg}}; color: ${{actionStyle.color}}; padding: 0.2rem 0.5rem; border-radius: 4px; font-weight: 600; font-size: 0.8rem;">
+              ${{actionStyle.label}}
+            </span>
+            <div style="font-size: 0.75rem; color: #666; margin-top: 0.25rem; max-width: 200px;">${{s.summary}}</div>
+          </td>
+          <td style="padding: 0.5rem; font-size: 0.8rem;">${{metricsHtml.join(' | ')}}</td>
+        </tr>`;
+      }}
+      
+      tbody.innerHTML = html;
     }}
     
     // ==============================================
