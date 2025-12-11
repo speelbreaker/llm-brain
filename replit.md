@@ -51,6 +51,7 @@ The web dashboard provides a user-friendly interface with sections for "Live Age
     - **Robust ATM IV Fallback**: If ATM IV cannot be determined by delta (0.5), falls back to nearest-strike method.
     - **Fixed Sampling Logic**: Uses `math.ceil()` to properly respect `max_samples` limit (e.g., 81 quotes with max 80 → correctly samples to ≤80).
     - **Enhanced API Error Messages**: Structured error responses include `error`, `message`, and `error_type` fields, with specific handling for validation errors, Deribit timeouts, and API errors.
+    - **Guardrail Enforcement on Apply**: The `/api/calibration/use_latest` endpoint now blocks application of failed calibrations (multiplier outside 0.7-1.6 bounds), returning a clear error message instead of blindly applying invalid values.
 - **Calibration Update Policy System**: Policy layer with smoothing (EWMA), thresholds (min_delta, min_sample_size, min_vega_sum), and file-based history storage. Includes configurable thresholds, decision logic for applying updates, CLI integration, and API endpoints/UI for policy management.
 - **Harvester Data Quality & Reproducibility**: Includes `harvester/health.py` for schema validation and quality assessment of harvested Parquet snapshots. Provides `DataQualityStatus` (OK/DEGRADED/FAILED), integrates into historical calibration and realism checks, and displays a "Data Health & Reproducibility" UI panel.
 - **Bots System**: Provides a comprehensive view of expert trading bots, market sensors, and strategy evaluations.

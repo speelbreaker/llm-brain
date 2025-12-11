@@ -585,6 +585,18 @@ def use_latest_calibration(request: dict) -> JSONResponse:
                 },
             )
         
+        if entry.status == "failed":
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "error": "calibration_failed_guardrails",
+                    "message": f"Cannot apply failed calibration (multiplier={entry.multiplier:.4f}). Reason: {entry.reason}. The calibration violates guardrail bounds (0.7-1.6) or data quality checks.",
+                    "multiplier": entry.multiplier,
+                    "status": entry.status,
+                    "reason": entry.reason,
+                },
+            )
+        
         set_iv_multiplier_override(underlying, entry.multiplier, dte_min, dte_max)
         
         return JSONResponse(content={
