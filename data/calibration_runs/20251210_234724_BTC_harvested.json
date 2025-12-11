@@ -1,0 +1,16 @@
+{
+  "timestamp": "2025-12-10T23:47:24.797718Z",
+  "underlying": "BTC",
+  "source": "harvested",
+  "config_hash": null,
+  "global_metrics": {},
+  "bands": null,
+  "recommended_iv_multiplier": 1.0,
+  "recommended_band_multipliers": null,
+  "sample_size": 0,
+  "vega_sum": 0.0,
+  "smoothed_global_multiplier": 1.0781,
+  "smoothed_band_multipliers": null,
+  "applied": false,
+  "applied_reason": "Sample size too small (0 < 50)"
+}

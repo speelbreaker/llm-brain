@@ -157,9 +157,9 @@ def main() -> None:
             dte_min=args.dte_min,
             dte_max=args.dte_max,
             lookback_days=args.lookback_days,
-            multiplier=result.best_multiplier,
-            mae_pct=result.mae_pct,
-            num_samples=result.num_samples,
+            multiplier=float(result.best_multiplier),
+            mae_pct=float(result.mae_pct),
+            num_samples=int(result.num_samples),
         )
         
         row_id = insert_calibration_history(entry)
