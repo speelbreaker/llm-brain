@@ -1,0 +1,178 @@
+You are working in my Options Trading Agent repo.
+
+There are two small inconsistencies in the calibration UI and metadata that I want you to fix.
+
+1) “Current Applied Multipliers” must match the actually applied calibration
+
+Symptom in UI (BTC example):
+
+“Calibration vs Deribit” (live) shows a good run:
+
+IV Multiplier tested: 0.9266
+
+MAE ≈ 15.74%, vega-weighted ≈ 12.82%
+
+RV_7d = 43.2%, ATM IV = 41.9%, recommended multiplier ≈ 0.969
+
+“Latest Calibration Run” shows:
+
+Source: live
+
+Recommended: 1.0488
+
+Smoothed: 1.0833
+
+Status: Applied
+
+Reason: Forced by user
+
+Samples: 47
+
+BUT “Current Applied Multipliers” panel shows:
+
+Global = 1.0000 (Last Updated 12/11/2025)
+
+So: the UI says the latest run (smoothed 1.0833) was applied, but the “Current Applied Multipliers” panel still shows the old value (1.0). That suggests the “applied” state in calibration history and the source used for the panel are out of sync.
+
+What I want:
+
+Source of truth
+
+Identify where the “Current Applied Multipliers” panel reads from (likely a config object or DB record derived from VolSurfaceConfig / calibration_policy_state).
+
+Identify where, in code, we update the “applied” multipliers when:
+
+The update policy decides to apply a live calibration run, or
+
+The user clicks “Force-Apply Latest”.
+
+Unify them
+
+Ensure that when a calibration run is marked Applied (either by policy or by Force-Apply), the same underlying state that feeds “Current Applied Multipliers” is updated to the new smoothed value.
+
+After an apply, the “Current Applied Multipliers” panel must show exactly the multipliers being used by the synthetic engine (e.g., Global = 1.0833, and any per-band multipliers if applicable).
+
+API/UI consistency
+
+If there is a dedicated API endpoint for calibration policy state (e.g., /api/calibration/state or similar), make sure it:
+
+Reads from the same store that the apply function writes to.
+
+Returns the up-to-date multiplier values and last-updated timestamps.
+
+No change to auto-calibrate behavior:
+
+Only live calibration runs and the user’s “Force-Apply Latest” should affect “Current Applied Multipliers”.
+
+Auto-calibrate (harvested) history entries should never change the applied multipliers.
+
+Acceptance check:
+
+After applying a live run (either by policy or Force-Apply), I should:
+
+Click Refresh on the calibration UI,
+
+See “Latest Calibration Run” with Smoothed = X, Status: Applied,
+
+See “Current Applied Multipliers → Global = X” (and per-band values that match the applied ones).
+
+2) Auto-calibrate history: mark insane runs as FAILED, not OK
+
+In “Calibration History (Auto-Calibrate)”, current entries look like this:
+
+Date                  Status  DTE Range  Lookback  Multiplier  vMAE %  MAE %           Samples  Reason
+12/11/2025, 11:16     failed  3-10d      1d        4.8579      -      55.67%         2,595    Data quality failed (schema/coverage issues)
+12/11/2025, 10:42     failed  3-10d      14d       4.9737      -      54.45%         3,056    Data quality failed (schema/coverage issues)
+12/11/2025, 10:16     ok      3-10d      14d       0.5000      -      4668684.92%    2,305    -
+12/11/2025, 10:13     ok      3-10d      14d       0.5000      -      4668684.92%    2,305    -
+...
+
+
+The 4.8579 and 4.9737 runs are correctly marked failed.
+But the 0.5000 runs (MAE in the millions %) are still status = ok.
+
+What I want:
+
+A realism-based status for auto-calibrate runs that considers both:
+
+data_quality.status (ok / degraded / failed),
+
+and the sanity of multiplier and errors.
+
+Implement (or adjust) a helper in scripts/auto_calibrate_iv.py (or whichever module classifies runs), for example:
+
+MIN_MULT = 0.7
+MAX_MULT = 1.6
+MAX_MAE = 400.0         # percent
+MAX_VEGA_MAE = 200.0    # percent
+
+def assess_calibration_realism(multiplier, mae_pct, vega_weighted_mae_pct, data_quality_status):
+    # returns (status, reason)
+
+
+Suggested logic:
+
+If data_quality_status == "failed":
+
+status = "failed"
+
+reason = "Data quality failed (schema/coverage issues)"
+
+Else if:
+
+multiplier < MIN_MULT or multiplier > MAX_MULT, or
+
+(mae_pct is not None and mae_pct > MAX_MAE), or
+
+(vega_weighted_mae_pct is not None and vega_weighted_mae_pct > MAX_VEGA_MAE)
+
+Then:
+
+status = "failed"
+
+reason = "Unrealistic auto-calibration: multiplier or MAE outside sane range"
+
+Else if data_quality_status == "degraded":
+
+status = "degraded"
+
+reason = "Data quality degraded; use with caution"
+
+Else:
+
+status = "ok"
+
+reason = "Calibration within thresholds"
+
+Make sure vega_weighted_mae_pct is computed and stored for auto-calibrate runs (right now it’s shown as -), so we can eventually use it in the thresholds as well.
+
+Use (status, reason) from assess_calibration_realism when writing the auto-calibrate history row:
+
+status: "ok" | "degraded" | "failed"
+
+reason: short human-readable text.
+
+Do not retroactively mutate old DB rows; only ensure future runs (like multiplier=0.5 with MAE=4,668,684.92%) are written as status = "failed" with a clear reason.
+
+Acceptance check:
+
+Run:
+
+python scripts/auto_calibrate_iv.py --underlying BTC
+
+
+using current harvested data.
+
+Open the UI and:
+
+Confirm that any future pathological runs (e.g. multiplier ~0.5 with insane MAE) show as:
+
+Status = failed
+
+Reason mentioning unrealistic multiplier/MAE.
+
+Confirm that realistic runs (multiplier ~1.0–1.3 with modest MAE) remain status = ok.
+
+Confirm that “Current Applied Multipliers” still never use auto-calibrate results; they are anchored only by live calibration + policy / Force-Apply.
+
+Please keep all changes backwards-compatible with the existing DB and API responses, and leave a short summary (e.g. in comments or a small CALIBRATION_NOTES.md section) of what was changed so I can understand the behavior from the UI side.

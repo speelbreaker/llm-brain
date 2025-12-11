@@ -287,6 +287,34 @@ class Settings(BaseSettings):
         description="Minimum open interest (contracts) per strike for liquidity checks",
     )
 
+    # Delta hedging configuration
+    hedge_enabled: bool = Field(
+        default=False,
+        description="Enable delta hedging for Greg strategies",
+    )
+    hedge_check_interval_sec: int = Field(
+        default=60,
+        description="Interval between hedge checks in seconds",
+    )
+    hedge_on_price_move_pct: float = Field(
+        default=0.01,
+        description="Trigger hedge check on price move greater than this percentage",
+    )
+
+    # Force test mode for smoke testing hedging
+    force_test_strategy: str = Field(
+        default="",
+        description="Force a specific strategy for testing (e.g., STRATEGY_A_STRADDLE). Skips normal entry logic.",
+    )
+    force_test_underlying: str = Field(
+        default="BTC",
+        description="Underlying for force test (BTC or ETH)",
+    )
+    force_test_size: float = Field(
+        default=0.01,
+        description="Size for force test positions (small for safety)",
+    )
+
     @property
     def is_research(self) -> bool:
         """Check if running in research mode."""
