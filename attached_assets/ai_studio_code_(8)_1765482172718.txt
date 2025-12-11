@@ -1,0 +1,83 @@
+{
+  "meta": {
+    "module": "ENTRY_ENGINE",
+    "version": "8.0-Diamond-Polished",
+    "description": "Determines Market Regime and selects the optimal Strategy Type. DOES NOT MANAGE POSITIONS."
+  },
+
+  "global_entry_filters": {
+    "allowed_dte_range": {
+      "standard": {"min": 25, "max": 45},
+      "calendar_exception": {"front_leg_min": 7, "front_leg_max": 14},
+      "spread_exception": {"min": 20, "max": 35}
+    },
+    "calibration": {
+      "skew_neutral_threshold": 4.0, // +/- Vol points. Below = Neutral. Above = Directional.
+      "min_vrp_floor": 0.0, // Hard floor for ANY short vol.
+      "min_vrp_directional": 2.0, // Higher floor for directional spreads (don't sell cheap vol just because of Skew).
+      "rsi_thresholds": {
+        "lower": 30, // Default: Oversold (Fear)
+        "upper": 70  // Default: Overbought (Greed)
+      }
+    }
+  },
+
+  "decision_waterfall": [
+    {
+      "step": 1,
+      "name": "SAFETY_FILTER",
+      "condition": "adx_14d > 35 OR chop_factor_7d > 0.85",
+      "outcome": "NO_TRADE"
+    },
+    {
+      "step": 2,
+      "name": "CALENDAR_CHECK",
+      "condition": "term_structure_spread > 5.0 AND front_rv_iv_ratio < 0.8 AND vrp_7d > 5.0",
+      "outcome": "STRATEGY_B_CALENDAR"
+    },
+    {
+      "step": 3,
+      "name": "EXTREME_VOL_CHECK",
+      "condition": "iv_rank_6m > 0.80 AND vrp_30d > 10",
+      "outcome": "STRATEGY_D_IRON_BUTTERFLY"
+    },
+    {
+      "step": 4,
+      "name": "STRADDLE_CHECK",
+      "condition": "vrp_30d > 15.0 AND chop_factor_7d < 0.6 AND adx_14d < 20 AND ABS(skew_25d) < skew_neutral_threshold",
+      "outcome": "STRATEGY_A_STRADDLE"
+    },
+    {
+      "step": 5,
+      "name": "STRANGLE_CHECK",
+      "condition": "vrp_30d >= 10.0 AND chop_factor_7d < 0.8 AND adx_14d < 30 AND ABS(skew_25d) < skew_neutral_threshold",
+      "outcome": "STRATEGY_A_STRANGLE"
+    },
+    {
+      "step": 6,
+      "name": "ACCUMULATION_CHECK",
+      "condition": "skew_25d > skew_neutral_threshold AND price_vs_ma200 > 0 AND vrp_30d > min_vrp_directional",
+      "outcome": "STRATEGY_C_SHORT_PUT"
+    },
+    {
+      "step": 7,
+      "name": "DIRECTIONAL_SPREAD_CHECK",
+      // *FIX: Added VRP Floor (> 2.0) and RSI Calibration defaults (30/70)*
+      "branches": [
+        {
+          "condition": "skew_25d > skew_neutral_threshold AND rsi_14d < rsi_thresholds.lower AND vrp_30d > min_vrp_directional",
+          "outcome": "STRATEGY_F_BULL_PUT_SPREAD"
+        },
+        {
+          "condition": "skew_25d < (skew_neutral_threshold * -1) AND rsi_14d > rsi_thresholds.upper AND vrp_30d > min_vrp_directional",
+          "outcome": "STRATEGY_F_BEAR_CALL_SPREAD"
+        }
+      ]
+    },
+    {
+      "step": 8,
+      "name": "DEFAULT",
+      "outcome": "NO_TRADE"
+    }
+  ]
+}

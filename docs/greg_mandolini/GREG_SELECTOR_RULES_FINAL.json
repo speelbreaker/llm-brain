@@ -1,56 +1,40 @@
 {
   "meta": {
+    "module": "ENTRY_ENGINE",
+    "version": "8.0-Diamond-Polished",
+    "description": "Determines Market Regime and selects the optimal Strategy Type. DOES NOT MANAGE POSITIONS.",
     "bot_name": "Magadini_VRP_Harvester",
-    "version": "6.0-Diamond-Grade",
     "market_type": "Deribit_Cash_Settled",
-    "author_style": "Quantitative_Vol_Selling_&_Accumulation",
-    "calibration_version": "Greg-aligned-v1"
+    "author_style": "Quantitative_Vol_Selling_&_Accumulation"
   },
 
-  "global_constraints": {
-    "allowed_entry_dte": {
-      "default_min": 25,
-      "default_max": 45,
-      "exceptions": [
-        {"strategy": "STRATEGY_B_CALENDAR", "front_leg_min": 7, "front_leg_max": 14},
-        {"strategy": "STRATEGY_F_SPREADS", "min": 20, "max": 35}
-      ]
-    },
-    "risk_limits": {
-      "max_risk_per_trade": "2.0% of Equity (Portfolio Margin Impact)",
-      "max_short_vega_notional": "30% of Total Account Equity",
-      "max_strategies_per_underlying": 2,
-      "execution_protocol": {
-        "standard": "LIMIT_ORDERS_ONLY",
-        "black_swan_override": "MARKET_ORDERS_ALLOWED"
-      }
+  "global_entry_filters": {
+    "allowed_dte_range": {
+      "standard": {"min": 25, "max": 45},
+      "calendar_exception": {"front_leg_min": 7, "front_leg_max": 14},
+      "spread_exception": {"min": 20, "max": 35}
     },
     "calibration": {
       "skew_neutral_threshold": 4.0,
       "min_vrp_floor": 0.0,
-
+      "min_vrp_directional": 2.0,
+      "rsi_thresholds": {
+        "lower": 30,
+        "upper": 70
+      },
       "safety_adx_high": 35.0,
       "safety_chop_high": 0.85,
-
       "straddle_vrp_min": 15.0,
       "straddle_adx_max": 20.0,
       "straddle_chop_max": 0.6,
-
       "strangle_vrp_min": 10.0,
       "strangle_adx_max": 30.0,
       "strangle_chop_max": 0.8,
-
       "calendar_term_spread_min": 5.0,
       "calendar_front_rv_iv_ratio_max": 0.8,
-
+      "calendar_vrp_7d_min": 5.0,
       "iron_fly_iv_rank_min": 0.80,
-      "iron_fly_vrp_min": 10.0,
-
-      "short_put_iv_rank_min": 0.50,
-      "short_put_price_vs_ma200_min": 0.0,
-
-      "bull_put_rsi_max": 30.0,
-      "bear_call_rsi_min": 70.0
+      "iron_fly_vrp_min": 10.0
     }
   },
 
@@ -72,50 +56,69 @@
     }
   },
 
-  "decision_tree": [
+  "decision_waterfall": [
     {
+      "step": 1,
+      "name": "SAFETY_FILTER",
       "condition": "adx_14d > safety_adx_high OR chop_factor_7d > safety_chop_high",
-      "selected_strategy": "NO_TRADE",
+      "outcome": "NO_TRADE",
       "reasoning": "Trend too strong or Realized Vol is matching Implied Vol."
     },
     {
-      "condition": "term_structure_spread > calendar_term_spread_min AND front_rv_iv_ratio < calendar_front_rv_iv_ratio_max AND vrp_7d > min_vrp_floor",
-      "selected_strategy": "STRATEGY_B_CALENDAR",
+      "step": 2,
+      "name": "CALENDAR_CHECK",
+      "condition": "term_structure_spread > calendar_term_spread_min AND front_rv_iv_ratio < calendar_front_rv_iv_ratio_max AND vrp_7d > calendar_vrp_7d_min",
+      "outcome": "STRATEGY_B_CALENDAR",
       "reasoning": "Front-end event pricing detected with favorable RV/IV ratio."
     },
     {
+      "step": 3,
+      "name": "EXTREME_VOL_CHECK",
       "condition": "iv_rank_6m > iron_fly_iv_rank_min AND vrp_30d > iron_fly_vrp_min",
-      "selected_strategy": "STRATEGY_D_IRON_BUTTERFLY",
+      "outcome": "STRATEGY_D_IRON_BUTTERFLY",
       "reasoning": "Vol is too high for naked exposure. Defined risk only."
     },
     {
+      "step": 4,
+      "name": "STRADDLE_CHECK",
       "condition": "vrp_30d > straddle_vrp_min AND chop_factor_7d < straddle_chop_max AND adx_14d < straddle_adx_max AND ABS(skew_25d) < skew_neutral_threshold",
-      "selected_strategy": "STRATEGY_A_STRADDLE",
+      "outcome": "STRATEGY_A_STRADDLE",
       "reasoning": "High premium, low realized movement, neutral skew."
     },
     {
+      "step": 5,
+      "name": "STRANGLE_CHECK",
       "condition": "vrp_30d >= strangle_vrp_min AND chop_factor_7d < strangle_chop_max AND adx_14d < strangle_adx_max AND ABS(skew_25d) < skew_neutral_threshold",
-      "selected_strategy": "STRATEGY_A_STRANGLE",
+      "outcome": "STRATEGY_A_STRANGLE",
       "reasoning": "Good edge, market drifting, neutral skew. Strangle accommodates drift."
     },
     {
-      "condition": "skew_25d > skew_neutral_threshold AND price_vs_ma200 > short_put_price_vs_ma200_min AND iv_rank_6m > short_put_iv_rank_min AND vrp_30d > min_vrp_floor",
-      "selected_strategy": "STRATEGY_C_SHORT_PUT",
+      "step": 6,
+      "name": "ACCUMULATION_CHECK",
+      "condition": "skew_25d > skew_neutral_threshold AND price_vs_ma200 > 0 AND vrp_30d > min_vrp_directional",
+      "outcome": "STRATEGY_C_SHORT_PUT",
       "reasoning": "Bullish trend, expensive Puts. Paid to buy."
     },
     {
-      "condition": "skew_25d > skew_neutral_threshold AND rsi_14d < bull_put_rsi_max AND vrp_30d > min_vrp_floor",
-      "selected_strategy": "STRATEGY_F_BULL_PUT_SPREAD",
-      "reasoning": "Oversold + Fear Skew with positive VRP."
+      "step": 7,
+      "name": "DIRECTIONAL_SPREAD_CHECK",
+      "branches": [
+        {
+          "condition": "skew_25d > skew_neutral_threshold AND rsi_14d < rsi_thresholds.lower AND vrp_30d > min_vrp_directional",
+          "outcome": "STRATEGY_F_BULL_PUT_SPREAD",
+          "reasoning": "Oversold + Fear Skew with positive VRP."
+        },
+        {
+          "condition": "skew_25d < (skew_neutral_threshold * -1) AND rsi_14d > rsi_thresholds.upper AND vrp_30d > min_vrp_directional",
+          "outcome": "STRATEGY_F_BEAR_CALL_SPREAD",
+          "reasoning": "Overbought + FOMO Skew with positive VRP."
+        }
+      ]
     },
     {
-      "condition": "skew_25d < (skew_neutral_threshold * -1) AND rsi_14d > bear_call_rsi_min AND vrp_30d > min_vrp_floor",
-      "selected_strategy": "STRATEGY_F_BEAR_CALL_SPREAD",
-      "reasoning": "Overbought + FOMO Skew with positive VRP."
-    },
-    {
-      "condition": "default",
-      "selected_strategy": "NO_TRADE",
+      "step": 8,
+      "name": "DEFAULT",
+      "outcome": "NO_TRADE",
       "reasoning": "No valid setup found."
     }
   ],

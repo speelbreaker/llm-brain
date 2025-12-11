@@ -1,8 +1,8 @@
 """
-Greg Mandolini VRP Harvester - Phase 1 Master Selector.
+Greg Mandolini VRP Harvester - ENTRY_ENGINE v8.0 Selector.
 
 This module implements the strategy selection logic based on market sensors.
-Phase 1 is read-only: computes sensors, runs decision tree, returns recommendation.
+Phase 1 is read-only: computes sensors, runs decision waterfall, returns recommendation.
 No trades are placed.
 """
 from __future__ import annotations
@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
@@ -18,7 +18,7 @@ from src.models import AgentState
 
 
 class GregSelectorSensors(BaseModel):
-    """Sensor values used by the Greg selector decision tree (v6.0)."""
+    """Sensor values used by the Greg selector decision waterfall (v8.0)."""
     vrp_30d: Optional[float] = Field(
         default=None,
         description="Volatility Risk Premium (IV_30d - RV_30d)"
@@ -66,7 +66,7 @@ class GregSelectorSensors(BaseModel):
 
 
 class GregSelectorDecision(BaseModel):
-    """Result of running the Greg selector decision tree."""
+    """Result of running the Greg selector decision waterfall."""
     selected_strategy: str = Field(
         ...,
         description="Selected strategy name (e.g., STRATEGY_A_STRADDLE) or NO_TRADE"
@@ -81,7 +81,11 @@ class GregSelectorDecision(BaseModel):
     )
     rule_index: int = Field(
         ...,
-        description="Index of the matched rule in the decision tree (0-based)"
+        description="Index of the matched rule in the decision waterfall (0-based)"
+    )
+    step_name: str = Field(
+        default="",
+        description="Name of the matched step in the waterfall"
     )
     meta: Dict[str, Any] = Field(
         default_factory=dict,
@@ -100,6 +104,15 @@ def load_greg_spec() -> Dict[str, Any]:
 def clear_greg_spec_cache() -> None:
     """Clear the cached spec so it reloads on next call."""
     load_greg_spec.cache_clear()
+
+
+def get_calibration_spec() -> Dict[str, Any]:
+    """
+    Get the calibration configuration from the Greg spec.
+    Returns the calibration block from global_entry_filters.
+    """
+    spec = load_greg_spec()
+    return spec.get("global_entry_filters", {}).get("calibration", {})
 
 
 def build_sensors_from_state(state: AgentState) -> GregSelectorSensors:
@@ -182,53 +195,96 @@ def _get_calibration_context(spec: Dict[str, Any]) -> Dict[str, float]:
     """
     Extract all calibration variables from the spec for expression evaluation.
     
+    Supports both v6.0 (global_constraints.calibration) and v8.0 (global_entry_filters.calibration).
     Returns a dict with all numeric calibration values that can be used
-    as variables in decision tree condition expressions.
+    as variables in decision waterfall condition expressions.
     """
-    calibration = spec.get("global_constraints", {}).get("calibration", {})
+    calibration = spec.get("global_entry_filters", {}).get("calibration", {})
+    if not calibration:
+        calibration = spec.get("global_constraints", {}).get("calibration", {})
+    
     ctx: Dict[str, float] = {}
-    for key, value in calibration.items():
-        if isinstance(value, (int, float)):
-            ctx[key] = float(value)
+    
+    def extract_values(d: Dict[str, Any], prefix: str = "") -> None:
+        for key, value in d.items():
+            full_key = f"{prefix}.{key}" if prefix else key
+            if isinstance(value, (int, float)):
+                ctx[full_key] = float(value)
+                if not prefix:
+                    ctx[key] = float(value)
+            elif isinstance(value, dict):
+                extract_values(value, full_key)
+    
+    extract_values(calibration)
+    
     if "skew_neutral_threshold" not in ctx:
         ctx["skew_neutral_threshold"] = 4.0
     if "min_vrp_floor" not in ctx:
         ctx["min_vrp_floor"] = 0.0
+    if "min_vrp_directional" not in ctx:
+        ctx["min_vrp_directional"] = 2.0
+    if "rsi_thresholds.lower" not in ctx:
+        ctx["rsi_thresholds.lower"] = 30.0
+    if "rsi_thresholds.upper" not in ctx:
+        ctx["rsi_thresholds.upper"] = 70.0
+    
     return ctx
 
 
 def evaluate_greg_selector(sensors: GregSelectorSensors) -> GregSelectorDecision:
     """
-    Walk the decision tree from the JSON spec in order; first match wins.
-    Implements each condition explicitly in Python (no eval).
+    Walk the decision waterfall from the JSON spec in order; first match wins.
+    Supports v8.0 decision_waterfall format with branches.
     None values are treated as "condition not satisfied".
-    Supports v6.0 calibration variables and ABS() function.
     """
     spec = load_greg_spec()
     meta = spec.get("meta", {})
-    decision_tree = spec.get("decision_tree", [])
+    
+    decision_waterfall = spec.get("decision_waterfall", [])
+    if not decision_waterfall:
+        decision_waterfall = spec.get("decision_tree", [])
+    
     calibration_ctx = _get_calibration_context(spec)
     
-    for idx, rule in enumerate(decision_tree):
+    for idx, rule in enumerate(decision_waterfall):
+        step_name = rule.get("name", f"step_{idx}")
         condition = rule.get("condition", "")
-        selected_strategy = rule.get("selected_strategy", "NO_TRADE")
+        outcome = rule.get("outcome") or rule.get("selected_strategy", "NO_TRADE")
         reasoning = rule.get("reasoning", "")
+        branches = rule.get("branches", [])
         
-        if condition == "default":
+        if condition == "default" or (not condition and not branches and outcome):
             return GregSelectorDecision(
-                selected_strategy=selected_strategy,
-                reasoning=reasoning,
+                selected_strategy=outcome,
+                reasoning=reasoning or "No valid setup found.",
                 sensors=sensors,
                 rule_index=idx,
+                step_name=step_name,
                 meta=meta,
             )
         
-        if _matches_condition(condition, sensors, calibration_ctx):
+        if branches:
+            for branch in branches:
+                branch_condition = branch.get("condition", "")
+                branch_outcome = branch.get("outcome", "NO_TRADE")
+                branch_reasoning = branch.get("reasoning", "")
+                
+                if _matches_condition(branch_condition, sensors, calibration_ctx):
+                    return GregSelectorDecision(
+                        selected_strategy=branch_outcome,
+                        reasoning=branch_reasoning,
+                        sensors=sensors,
+                        rule_index=idx,
+                        step_name=step_name,
+                        meta=meta,
+                    )
+        elif condition and _matches_condition(condition, sensors, calibration_ctx):
             return GregSelectorDecision(
-                selected_strategy=selected_strategy,
+                selected_strategy=outcome,
                 reasoning=reasoning,
                 sensors=sensors,
                 rule_index=idx,
+                step_name=step_name,
                 meta=meta,
             )
     
@@ -236,7 +292,8 @@ def evaluate_greg_selector(sensors: GregSelectorSensors) -> GregSelectorDecision
         selected_strategy="NO_TRADE",
         reasoning="No valid setup found (fallback).",
         sensors=sensors,
-        rule_index=len(decision_tree),
+        rule_index=len(decision_waterfall),
+        step_name="FALLBACK",
         meta=meta,
     )
 
@@ -272,7 +329,7 @@ def _resolve_value(
     Resolve an expression to a float value.
     Supports:
     - Sensor names: vrp_30d, skew_25d, etc.
-    - Calibration variables: skew_neutral_threshold, min_vrp_floor
+    - Calibration variables: skew_neutral_threshold, min_vrp_floor, rsi_thresholds.lower
     - ABS(sensor_name): absolute value of a sensor
     - Numeric literals: 15.0, 0.8, etc.
     - Expressions: (skew_neutral_threshold * -1)

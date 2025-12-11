@@ -1,0 +1,107 @@
+Prompt for AI Builder – Integrate Greg ENTRY_ENGINE v8.0
+
+Repo: https://github.com/speelbreaker/llm-brain
+
+Goal: Replace the old Greg selector rules with the new ENTRY_ENGINE v8.0 JSON spec below, and wire it cleanly into the existing GregBot selection flow. The entry engine is Phase 1: Pre-Trade Scan only – it must not place or manage trades.
+
+1. Locate existing Greg selector JSON + code
+
+Find the current Greg selector spec file (it should be under docs/greg_mandolini/ or similar – search for ENTRY_ENGINE, STRATEGY_A_STRADDLE, or STRATEGY_B_CALENDAR in the repo).
+
+Identify the Python code that:
+
+Loads that JSON (likely in src/greg_selector.py or equivalent),
+
+Evaluates the decision waterfall,
+
+And returns a selected strategy type like STRATEGY_A_STRADDLE, STRATEGY_B_CALENDAR, etc.
+
+2. Replace the spec with ENTRY_ENGINE v8.0
+
+Update the Greg selector JSON file to match this spec (convert from JSON-with-comments to valid JSON – no // comments in the saved file):
+
+{YOUR ENTRY_ENGINE v8.0 JSON FROM CHAT HERE}
+
+
+Keep the same file path and filename the code already expects.
+
+Preserve the field names meta, global_entry_filters, and decision_waterfall so existing loader code keeps working, or update the loader if needed.
+
+3. Ensure the code uses the new calibration knobs
+
+Wherever the selector currently hard-codes thresholds for:
+
+Skew neutral band,
+
+Min VRP floor,
+
+Directional VRP floor,
+
+RSI levels for Bull Put / Bear Call,
+
+Refactor it to read from:
+
+calibration.skew_neutral_threshold
+
+calibration.min_vrp_floor
+
+calibration.min_vrp_directional
+
+calibration.rsi_thresholds.lower / .upper
+inside the loaded ENTRY_ENGINE JSON.
+
+Make sure the branches in decision_waterfall step 7 use the conditions:
+
+vrp_30d > min_vrp_directional
+
+rsi_14d < rsi_thresholds.lower for Bull Put,
+
+rsi_14d > rsi_thresholds.upper for Bear Call.
+
+4. Keep the existing Bots UI working
+
+The “Bots” tab already shows:
+
+Live Market Sensors,
+
+Strategy Matches (All Bots),
+
+Expert Bots → GregBot table.
+
+Make sure the selector still returns the same strategy IDs used by the UI (e.g. STRATEGY_A_STRADDLE, STRATEGY_B_CALENDAR, etc.), so the UI table keeps populating correctly.
+
+Update any code that builds “Details” strings so it keeps showing the actual metric values vs thresholds (e.g. vrp_30d -9.73 < 15), now using the thresholds from the new calibration block instead of old constants.
+
+5. Tests
+
+Update or add tests under tests/ to validate:
+
+The ENTRY_ENGINE v8.0 JSON loads correctly.
+
+A few representative synthetic market states route to the correct strategy:
+
+High VRP + neutral skew + calm ADX → STRATEGY_A_STRADDLE.
+
+Medium VRP + neutral skew + ADX < 30 → STRATEGY_A_STRANGLE.
+
+Bullish skew + price above MA200 + VRP > min_vrp_directional → STRATEGY_C_SHORT_PUT.
+
+Strong put skew + RSI below rsi_thresholds.lower + VRP > min_vrp_directional → STRATEGY_F_BULL_PUT_SPREAD.
+
+Safety filter cases (ADX > 35 or chop > 0.85) → NO_TRADE.
+
+All existing tests must still pass.
+
+6. No position management yet
+
+Do NOT implement delta hedging, profit-taking, or rolling in this task.
+
+The selector should only decide which strategy type is “on” for BTC/ETH under current metrics, as it does today, now using ENTRY_ENGINE v8.0.
+
+When you’re done, summarize:
+
+Which file you updated for the ENTRY_ENGINE spec.
+
+Which Python modules you changed.
+
+The new tests you added and their coverage.
