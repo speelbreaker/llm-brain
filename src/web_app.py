@@ -1821,18 +1821,19 @@ def get_greg_calibration() -> JSONResponse:
     """
     Return Greg spec version and calibration snapshot.
     Used by the Bots tab UI to display current calibration values.
+    Supports both v6.0 (global_constraints) and v8.0 (global_entry_filters) spec formats.
     """
     try:
-        from src.strategies.greg_selector import load_greg_spec
+        from src.strategies.greg_selector import load_greg_spec, get_calibration_spec
         
         spec = load_greg_spec()
         meta = spec.get("meta", {})
-        calib = spec.get("global_constraints", {}).get("calibration", {})
+        calib = get_calibration_spec()
         
         return JSONResponse(content={
             "ok": True,
             "version": meta.get("version", "unknown"),
-            "calibration_version": meta.get("calibration_version", "unknown"),
+            "module": meta.get("module", "ENTRY_ENGINE"),
             "calibration": calib,
         })
     except Exception as e:

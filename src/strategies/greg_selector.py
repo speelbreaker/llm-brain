@@ -109,10 +109,17 @@ def clear_greg_spec_cache() -> None:
 def get_calibration_spec() -> Dict[str, Any]:
     """
     Get the calibration configuration from the Greg spec.
-    Returns the calibration block from global_entry_filters.
+    Supports both v8.0 (global_entry_filters.calibration) and v6.0 (global_constraints.calibration).
+    Returns the calibration block, or an empty dict if neither exists.
     """
     spec = load_greg_spec()
-    return spec.get("global_entry_filters", {}).get("calibration", {})
+    
+    calib = spec.get("global_entry_filters", {}).get("calibration", {})
+    if calib:
+        return calib
+    
+    calib = spec.get("global_constraints", {}).get("calibration", {})
+    return calib
 
 
 def build_sensors_from_state(state: AgentState) -> GregSelectorSensors:

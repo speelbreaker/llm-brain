@@ -55,8 +55,9 @@ The web dashboard provides a user-friendly interface with sections for "Live Age
 - **Calibration Update Policy System**: Policy layer with smoothing (EWMA), thresholds (min_delta, min_sample_size, min_vega_sum), and file-based history storage. Includes configurable thresholds, decision logic for applying updates, CLI integration, and API endpoints/UI for policy management.
 - **Harvester Data Quality & Reproducibility**: Includes `harvester/health.py` for schema validation and quality assessment of harvested Parquet snapshots. Provides `DataQualityStatus` (OK/DEGRADED/FAILED), integrates into historical calibration and realism checks, and displays a "Data Health & Reproducibility" UI panel.
 - **Bots System**: Provides a comprehensive view of expert trading bots, market sensors, and strategy evaluations.
-    - **Greg Mandolini VRP Harvester (GregBot) v6.0 "Diamond-Grade"**: A quantitative VRP strategy selector based on 11 volatility sensors and a decision tree, with advisory functionality and 8 evaluated strategies per underlying.
-    - **Greg v1 Calibration & Tests**: Decision tree thresholds are dynamically loaded from JSON. Includes invariant and scenario tests, an API endpoint for calibration spec, and a UI panel.
+    - **Greg Mandolini VRP Harvester (GregBot) ENTRY_ENGINE v8.0**: A quantitative VRP strategy selector based on 11 volatility sensors and a decision waterfall, with advisory functionality and 8 evaluated strategies per underlying.
+    - **v8.0 Decision Waterfall**: Supports branching logic (e.g., Bull Put / Bear Call spreads in step 7), `min_vrp_directional` floor (2.0) for directional spreads, and RSI thresholds for oversold/overbought detection.
+    - **Dynamic Calibration**: Strategy thresholds are dynamically loaded from JSON (`global_entry_filters.calibration`). Includes 53+ invariant and scenario tests, an API endpoint for calibration spec, and a UI panel.
 - **Strategy Layer**: A pluggable architecture allowing multiple trading strategies to run concurrently, with `strategy_id` for attribution.
 
 ## External Dependencies
