@@ -1,0 +1,345 @@
+AI BUILDER PROMPT – Fix auto_calibrate_iv.py (Guardrails + Use Extended Calibration)
+
+You are working in my Options Trading Agent repo.
+
+Context:
+
+We already have an extended calibration engine:
+
+CalibrationConfig and CalibrationResult in src/calibration_config.py / src/calibration_extended.py.
+
+run_calibration_extended() for live runs.
+
+run_historical_calibration_from_harvest() for harvested Parquet data.
+
+These return rich metrics:
+
+global mae_pct, mae_vol_points, vega_weighted_mae_pct, bias_pct,
+
+per-band metrics (weekly / monthly / quarterly),
+
+skew-fitting data (recommended_skew, skew_misfit, etc.),
+
+data_quality info for harvested runs.
+
+We also have:
+
+A Calibration UI with:
+
+“Calibration vs Deribit” panel,
+
+Option-type metrics table,
+
+Term Structure (DTE buckets) table with Vega-Weighted MAE % and Rec. IV Mult,
+
+Skew Fit Analysis card (current vs recommended anchor ratios, max misfit),
+
+IV Calibration Update Policy section,
+
+Calibration history & recent runs.
+
+A script scripts/auto_calibrate_iv.py that currently:
+
+Parses --underlying (BTC/ETH) plus other args,
+
+Loads harvested Parquet data from data/live_deribit,
+
+Runs its own internal calibrator,
+
+Prints things like “Recommended multiplier: 0.5000, MAE: 4668684.92% of mark”,
+
+Writes to a calibration_history table / store.
+
+The bug we just saw:
+
+For both BTC and ETH, auto_calibrate_iv.py suggested multiplier = 0.5000 with MAE in the hundreds of thousands / millions %, which is clearly wrong.
+
+The live calibration engine, when tested with multiplier 0.5, reported:
+
+~52% MAE, heavy negative bias,
+
+recommended multipliers around 1.09–1.21, and
+
+large skew misfit (wings ~2× ATM).
+
+Your task is to:
+
+Add guardrails to auto_calibrate_iv.py so absurd calibrations are marked as failed and never treated as “good”.
+
+Refactor auto_calibrate_iv.py to call run_historical_calibration_from_harvest() instead of using its own ad-hoc calibration logic, so harvested calibrations match the same math & metrics as the UI.
+
+Surface the new status clearly in the UI, so I can see when auto-calibration runs were OK vs flagged.
+
+1) Refactor auto_calibrate_iv.py to use extended calibration
+
+Change scripts/auto_calibrate_iv.py so that:
+
+It still accepts the existing CLI arguments:
+
+--underlying {BTC,ETH}
+
+--dte-min, --dte-max (for calibration DTE band; default 3–10)
+
+--lookback-days for harvested window (default 14)
+
+--max-samples
+
+--data-dir etc.
+
+Instead of manually:
+
+Loading Parquet,
+
+Filtering rows,
+
+Fitting a multiplier with custom code,
+
+it should:
+
+Build a CalibrationConfig with:
+
+source = "harvested",
+
+underlying from CLI,
+
+min_dte / max_dte from CLI,
+
+bands set to standard term buckets if not provided (weekly / monthly / quarterly),
+
+option_types = ["C"] or ["C","P"] (configurable / default to current behavior),
+
+fit_skew = True,
+
+emit_recommended_vol_surface = True,
+
+harvest sub-config containing:
+
+data_root from --data-dir,
+
+start_time / end_time derived from --lookback-days and “now”,
+
+snapshot_step / max_snapshots settings.
+
+Call:
+
+result = run_historical_calibration_from_harvest(calibration_config)
+
+
+Extract from result:
+
+global_metrics:
+
+recommended_iv_multiplier (global),
+
+mae_pct, mae_vol_points, vega_weighted_mae_pct, bias_pct,
+
+term-structure band metrics (weekly/monthly/quarterly),
+
+skew fit (recommended_skew, current_skew, skew_misfit),
+
+data_quality.
+
+Print a friendly summary to stdout, similar to what it does now, but based on the extended result:
+
+Underlying, DTE range, lookback, samples.
+
+Global recommended multiplier.
+
+Global vega-weighted MAE %.
+
+Per-band Rec. IV Mult and vega-weighted MAE.
+
+Skew misfit summary (max_abs_diff, largest anchor diff).
+
+Persist the run to the same calibration history system that the UI uses for “Calibration History (Auto-Calibrate)”:
+
+Include:
+
+underlying,
+
+source = "harvested",
+
+recommended multiplier,
+
+vega-weighted MAE,
+
+per-band metrics,
+
+skew info,
+
+data_quality summary (status, issues, etc.),
+
+status (ok/degraded/failed),
+
+applied (always False for now; auto-calibrate is for analysis/history, not direct apply),
+
+reason (free-form string, see below).
+
+Make sure you do not break existing DB / JSON structures relied on by the UI; extend them in a backwards-compatible way.
+
+2) Add guardrails for unrealistic calibrations
+
+We want the script to detect obviously broken results like:
+
+MAE or vega-weighted MAE astronomically huge,
+
+multipliers pinned at the hard boundary (0.5) or out of a sane range,
+
+terrible data quality.
+
+Implement something like:
+
+MIN_REASONABLE_MULT = 0.7
+MAX_REASONABLE_MULT = 1.6
+MAX_VEGA_WEIGHTED_MAE = 200.0   # 200%
+MAX_UNWEIGHTED_MAE = 400.0      # 400%
+
+
+From the extended result, compute:
+
+m = global_metrics.recommended_iv_multiplier
+
+mae = global_metrics.mae_pct
+
+vmae = global_metrics.vega_weighted_mae_pct
+
+dq_status = data_quality.status (e.g. "ok", "degraded", "failed")
+
+Add a helper function in the script (or a small utility module) like:
+
+def assess_calibration_realism(m, mae, vmae, data_quality) -> Tuple[str, str]:
+    """
+    Returns (status, reason) where status is 'ok', 'degraded', or 'failed'.
+    """
+
+
+Logic (example):
+
+If dq_status == "failed" → status "failed", reason "Data quality failed (schema/coverage issues)"
+
+Else if:
+
+m <= MIN_REASONABLE_MULT or m >= MAX_REASONABLE_MULT, or
+
+vmae is not None and vmae > MAX_VEGA_WEIGHTED_MAE, or
+
+mae is not None and mae > MAX_UNWEIGHTED_MAE
+→ status "failed", reason like "Unrealistic auto-calibration: multiplier at boundary or MAE too high (m=0.5, vMAE=53%)"
+
+Else if dq_status == "degraded" → status "degraded", reason "Data quality degraded; use with caution"
+
+Else → status "ok", reason "Calibration within thresholds"
+
+Use this status + reason when writing to calibration history and in CLI output.
+
+In the CLI printout:
+
+If status == "ok":
+
+Show recommended multiplier, MAE/vMAE, and say something like:
+
+“Result looks reasonable (status=ok). See Calibration UI → Calibration History (Auto-Calibrate).”
+
+If status == "failed":
+
+Print a big warning:
+
+WARNING: auto-calibration flagged as unrealistic:
+  - status = failed
+  - reason = Unreasonable multiplier or huge MAE (m=0.5000, vMAE=...).
+This run will be recorded for debugging but should not be used to update the vol surface.
+
+
+In the history record, set:
+
+status field to "ok" / "degraded" / "failed",
+
+applied = False,
+
+reason to the same human-readable text.
+
+3) UI: show auto-calibrate status & guardrail reasons
+
+Enhance the Calibration UI so “Calibration History (Auto-Calibrate)” clearly shows which runs were good, degraded, or failed.
+
+In the Calibration History (Auto-Calibrate) table:
+
+Add a Status column (if not already present) with values:
+
+OK (green badge),
+
+Degraded (orange badge),
+
+Failed (red badge).
+
+Use the status field from the stored auto-calibration history.
+
+In the Reason / Notes column:
+
+Show the reason string returned by assess_calibration_realism, e.g.:
+
+“Unrealistic auto-calibration: multiplier at boundary (0.5) and vMAE too high”
+
+“Data quality failed: missing mark_iv in many snapshots”
+
+“Data quality degraded; use with caution”
+
+If a run has status="failed":
+
+Optionally dim or grey the row, and/or show a warning icon.
+
+Make it visually obvious that this is a diagnostic-only run, not a candidate to update multipliers.
+
+Add a short explanation block near the “Calibration History (Auto-Calibrate)” header, such as:
+
+“Auto-calibrations use harvested Deribit data and the same calibration engine as the live UI.
+Each run is scored as OK, Degraded, or Failed based on data quality, error magnitude, and multiplier sanity.
+Failed runs are recorded for debugging only and are not used to update the vol surface.”
+
+Use existing styling and components; keep the text simple and non-technical.
+
+4) Tests & sanity checks
+
+Add or update tests to cover the new logic:
+
+Unit tests for realism assessment:
+
+Cases where:
+
+m = 1.10, vMAE = 5% → status "ok".
+
+m = 0.5, vMAE = 50% → status "failed".
+
+m = 1.2, vMAE = 250% → status "failed".
+
+data_quality.status = "failed" → status "failed".
+
+data_quality.status = "degraded", m reasonable, vMAE moderate → "degraded".
+
+End-to-end smoke test for auto_calibrate_iv.py:
+
+Use a small synthetic harvested dataset or mocks so that:
+
+One run produces a realistic m (~1.1) and low vMAE → status "ok".
+
+Another run produces a boundary m (0.5) and crazy MAE → status "failed".
+
+UI check (manual or Cypress-style):
+
+After running the script twice (once realistic, once broken), confirm:
+
+Both runs appear under “Calibration History (Auto-Calibrate)”.
+
+Status badges show OK vs Failed correctly.
+
+Reasons are displayed.
+
+Nothing in the “IV Calibration Update Policy / Current Applied Multipliers” section changes due to a failed auto-calibrate run.
+
+Key constraints:
+
+Do not change the live calibration API behavior or the existing update policy logic.
+
+Make auto_calibrate_iv.py a consumer of the extended calibration engine, not a second, divergent implementation.
+
+Make failure modes visible and safe: auto-calibrate can break, but it must fail loudly and not drive your multipliers off a cliff.

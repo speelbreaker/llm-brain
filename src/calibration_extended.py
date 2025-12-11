@@ -946,7 +946,7 @@ def run_historical_calibration_from_harvest(
         )
     
     if "dte_days" not in df.columns and "expiry_timestamp" in df.columns and "harvest_time" in df.columns:
-        df["dte_days"] = (pd.to_datetime(df["expiry_timestamp"], unit="ms", utc=True) - df["harvest_time"]).dt.total_seconds() / 86400.0
+        df["dte_days"] = (pd.to_datetime(df["expiry_timestamp"], unit="s", utc=True) - df["harvest_time"]).dt.total_seconds() / 86400.0
     
     mask = (
         (df["dte_days"] >= config.min_dte) &

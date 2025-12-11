@@ -2,11 +2,8 @@
 """
 Auto-calibrate IV multiplier using harvester data.
 
-This script:
-1. Loads multi-day option snapshots from the harvester (parquet files)
-2. Filters to near-ATM, near-dated calls
-3. Fits an IV multiplier that minimizes MAE between synthetic BS prices and observed mark prices
-4. Stores the result in the calibration_history database table
+This script uses the extended calibration engine (run_historical_calibration_from_harvest)
+with realism guardrails to ensure only valid calibrations are marked as usable.
 
 Usage:
     python scripts/auto_calibrate_iv.py --underlying BTC --dte-min 3 --dte-max 10 --lookback-days 14
@@ -15,15 +12,24 @@ from __future__ import annotations
 
 import argparse
 import sys
-from datetime import date, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 project_root = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(project_root))
 
-from src.data.live_deribit_exam import build_live_deribit_exam_dataset
-from src.calibration_core import extract_calibration_samples, calibrate_iv_multiplier
-from src.db.models_calibration import CalibrationHistoryEntry, insert_calibration_history
+from src.calibration_config import (
+    CalibrationConfig,
+    HarvestConfig,
+    BandConfig,
+    DEFAULT_TERM_BANDS,
+)
+from src.calibration_extended import run_historical_calibration_from_harvest
+from src.db.models_calibration import (
+    CalibrationHistoryEntry,
+    insert_calibration_history,
+    assess_calibration_realism,
+)
 from src.db import init_db
 
 
@@ -77,7 +83,7 @@ def main() -> None:
     args = parser.parse_args()
     
     print(f"\n{'='*60}")
-    print("Auto IV Calibration")
+    print("Auto IV Calibration (Extended Engine)")
     print(f"{'='*60}")
     print(f"  Underlying: {args.underlying}")
     print(f"  DTE range: {args.dte_min}–{args.dte_max} days")
@@ -86,64 +92,120 @@ def main() -> None:
     print(f"  Data dir: {args.data_dir}")
     print(f"{'='*60}\n")
     
-    end_date = date.today()
-    start_date = end_date - timedelta(days=args.lookback_days)
+    end_time = datetime.now(timezone.utc)
+    start_time = end_time - timedelta(days=args.lookback_days)
     
-    print(f"Loading harvester data from {start_date} to {end_date}...")
+    print(f"Building calibration config...")
+    print(f"  Time range: {start_time.isoformat()} to {end_time.isoformat()}")
     
-    try:
-        df, summary = build_live_deribit_exam_dataset(
-            underlying=args.underlying,
-            start_date=start_date,
-            end_date=end_date,
-            base_dir=args.data_dir,
-            write_files=False,
-        )
-    except ValueError as e:
-        print(f"\nError: {e}")
-        print("Make sure the data harvester has collected data for the specified period.")
-        sys.exit(1)
-    
-    print(f"  Loaded {len(df):,} rows from {summary.get('num_files', 0)} files")
-    print(f"  Snapshots: {summary.get('num_snapshots', 0)}")
-    print(f"  Time range: {summary.get('time_min', 'N/A')} to {summary.get('time_max', 'N/A')}")
-    
-    print(f"\nExtracting calibration samples...")
-    samples = extract_calibration_samples(
-        df=df,
+    config = CalibrationConfig(
         underlying=args.underlying,
-        dte_min=args.dte_min,
-        dte_max=args.dte_max,
-        moneyness_range=0.10,
+        min_dte=float(args.dte_min),
+        max_dte=float(args.dte_max),
+        source="harvested",
+        harvest=HarvestConfig(
+            data_root=args.data_dir,
+            underlying=args.underlying,
+            start_time=start_time,
+            end_time=end_time,
+            snapshot_step=1,
+            max_snapshots=None,
+        ),
+        option_types=["C"],
+        bands=[
+            BandConfig(name="target", min_dte=args.dte_min, max_dte=args.dte_max),
+        ],
+        fit_skew=True,
+        emit_recommended_vol_surface=True,
         max_samples=args.max_samples,
+        return_rows=False,
     )
     
-    if not samples:
-        print("\nNo valid samples found after filtering. Check:")
-        print("  - DTE range may be too narrow")
-        print("  - Moneyness filter may be too strict")
-        print("  - Data may not have the required columns")
+    print(f"\nRunning historical calibration from harvest...")
+    
+    try:
+        result = run_historical_calibration_from_harvest(config, validate_quality=True)
+    except Exception as e:
+        print(f"\nError during calibration: {e}")
+        print("Check harvester data availability and schema.")
         sys.exit(1)
     
-    print(f"  Found {len(samples):,} calibration samples")
+    rec_mult = result.recommended_iv_multiplier or result.iv_multiplier
+    global_metrics = result.global_metrics
+    data_quality = result.data_quality
     
-    print(f"\nFitting IV multiplier...")
-    result = calibrate_iv_multiplier(
-        samples=samples,
-        multiplier_min=0.5,
-        multiplier_max=1.5,
-        search_points=100,
+    mae_pct = global_metrics.mae_pct if global_metrics else result.mae_pct
+    vega_weighted_mae_pct = global_metrics.vega_weighted_mae_pct if global_metrics else None
+    bias_pct = global_metrics.bias_pct if global_metrics else result.bias_pct
+    dq_status = data_quality.status if data_quality else "ok"
+    
+    status, reason = assess_calibration_realism(
+        multiplier=rec_mult,
+        mae_pct=mae_pct,
+        vega_weighted_mae_pct=vega_weighted_mae_pct,
+        data_quality_status=dq_status,
     )
     
     print(f"\n{'='*60}")
-    print("Auto IV calibration complete:")
+    print("Auto IV Calibration Complete")
     print(f"{'='*60}")
     print(f"  Underlying: {args.underlying}")
     print(f"  DTE range: {args.dte_min}–{args.dte_max} days")
     print(f"  Lookback: {args.lookback_days} days")
-    print(f"  Samples: {result.num_samples:,}")
-    print(f"  Recommended multiplier: {result.best_multiplier:.4f}")
-    print(f"  MAE: {result.mae_pct:.2f}% of mark")
+    print(f"  Samples: {result.count:,}")
+    print(f"  Snapshots: {result.snapshot_count}")
+    print(f"{'='*60}")
+    print(f"\nMetrics:")
+    print(f"  Recommended multiplier: {rec_mult:.4f}")
+    if vega_weighted_mae_pct is not None:
+        print(f"  Vega-weighted MAE: {vega_weighted_mae_pct:.2f}%")
+    print(f"  MAE: {mae_pct:.2f}%")
+    print(f"  Bias: {bias_pct:.2f}%")
+    
+    if result.bands:
+        print(f"\nPer-band metrics:")
+        for band in result.bands:
+            band_mult = band.recommended_iv_multiplier or "-"
+            band_vmae = f"{band.vega_weighted_mae_pct:.2f}%" if band.vega_weighted_mae_pct else "-"
+            print(f"  {band.name}: mult={band_mult}, vMAE={band_vmae}, count={band.count}")
+    
+    if result.skew_misfit:
+        print(f"\nSkew misfit:")
+        print(f"  Max abs diff: {result.skew_misfit.max_abs_diff:.4f}")
+        for anchor, diff in result.skew_misfit.anchor_diffs.items():
+            print(f"  {anchor}: {diff:+.4f}")
+    
+    if data_quality:
+        print(f"\nData quality:")
+        print(f"  Status: {data_quality.status}")
+        print(f"  Snapshots: {data_quality.num_snapshots}")
+        print(f"  Schema failures: {data_quality.num_schema_failures}")
+        if data_quality.issues:
+            for issue in data_quality.issues:
+                print(f"  - {issue}")
+    
+    print(f"\n{'='*60}")
+    print(f"Realism Assessment:")
+    print(f"{'='*60}")
+    
+    if status == "ok":
+        print(f"  Status: OK (green)")
+        print(f"  Reason: {reason}")
+        print(f"\nResult looks reasonable. See Calibration UI → Calibration History (Auto-Calibrate).")
+    elif status == "degraded":
+        print(f"  Status: DEGRADED (orange)")
+        print(f"  Reason: {reason}")
+        print(f"\nResult usable but exercise caution.")
+    else:
+        print(f"\n{'!'*60}")
+        print(f"  WARNING: Auto-calibration flagged as FAILED")
+        print(f"{'!'*60}")
+        print(f"  Status: FAILED (red)")
+        print(f"  Reason: {reason}")
+        print(f"\nThis run will be recorded for debugging but should NOT be")
+        print(f"used to update the vol surface.")
+        print(f"{'!'*60}")
+    
     print(f"{'='*60}")
     
     if args.dry_run:
@@ -157,13 +219,18 @@ def main() -> None:
             dte_min=args.dte_min,
             dte_max=args.dte_max,
             lookback_days=args.lookback_days,
-            multiplier=float(result.best_multiplier),
-            mae_pct=float(result.mae_pct),
-            num_samples=int(result.num_samples),
+            multiplier=float(rec_mult),
+            mae_pct=float(mae_pct) if mae_pct is not None else 0.0,
+            vega_weighted_mae_pct=float(vega_weighted_mae_pct) if vega_weighted_mae_pct is not None else None,
+            bias_pct=float(bias_pct) if bias_pct is not None else None,
+            num_samples=int(result.count),
+            source="harvested",
+            status=status,
+            reason=reason,
         )
         
         row_id = insert_calibration_history(entry)
-        print(f"Row saved to calibration_history (id={row_id})")
+        print(f"Row saved to calibration_history (id={row_id}, status={status})")
     
     print("\nDone.")
 

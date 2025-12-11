@@ -513,7 +513,12 @@ def get_calibration_history(
                     "lookback_days": e.lookback_days,
                     "multiplier": e.multiplier,
                     "mae_pct": e.mae_pct,
+                    "vega_weighted_mae_pct": e.vega_weighted_mae_pct,
+                    "bias_pct": e.bias_pct,
                     "num_samples": e.num_samples,
+                    "source": e.source,
+                    "status": e.status,
+                    "reason": e.reason,
                 }
                 for e in entries
             ],
@@ -3839,26 +3844,34 @@ def index() -> str:
       
       <div class="card" style="margin-top:1rem;">
         <h3 style="margin-top:0;">Calibration History (Auto-Calibrate)</h3>
-        <p style="color:#666;font-size:0.9rem;margin-bottom:12px;">
-          Historical IV multiplier calibrations from harvester data. Run <code>scripts/auto_calibrate_iv.py</code> to add new entries.
+        <p style="color:#666;font-size:0.9rem;margin-bottom:8px;">
+          Auto-calibrations use harvested Deribit data and the same calibration engine as the live UI.
+          Each run is scored as OK, Degraded, or Failed based on data quality, error magnitude, and multiplier sanity.
+          Failed runs are recorded for debugging only and are not used to update the vol surface.
+        </p>
+        <p style="color:#888;font-size:0.85rem;margin-bottom:12px;">
+          Run <code>scripts/auto_calibrate_iv.py --underlying BTC</code> or <code>--underlying ETH</code> to add new entries.
         </p>
         <div style="display:flex;gap:8px;margin-bottom:12px;">
           <button id="calib-history-refresh-btn" onclick="fetchCalibrationHistory()" style="background:#2196f3;color:#fff;border:none;padding:6px 12px;border-radius:4px;cursor:pointer;">Refresh History</button>
         </div>
-        <div style="overflow-x:auto;max-height:280px;overflow-y:auto;">
-          <table class="steps-table">
+        <div style="overflow-x:auto;max-height:320px;overflow-y:auto;">
+          <table class="steps-table" style="font-size:0.85rem;">
             <thead>
               <tr>
                 <th>Date</th>
+                <th>Status</th>
                 <th>DTE Range</th>
                 <th>Lookback</th>
                 <th>Multiplier</th>
+                <th>vMAE %</th>
                 <th>MAE %</th>
                 <th>Samples</th>
+                <th style="max-width:200px;">Reason</th>
               </tr>
             </thead>
             <tbody id="calib-history-body">
-              <tr><td colspan="6" style="text-align:center;color:#666;">No history data</td></tr>
+              <tr><td colspan="9" style="text-align:center;color:#666;">No history data</td></tr>
             </tbody>
           </table>
         </div>
@@ -6267,7 +6280,7 @@ def index() -> str:
       const underlying = document.getElementById('calib-underlying').value || 'BTC';
       const tbody = document.getElementById('calib-history-body');
       
-      tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:#666;">Loading...</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="9" style="text-align:center;color:#666;">Loading...</td></tr>';
       
       try {{
         const res = await fetch(`/api/calibration/history?underlying=${{underlying}}&limit=20`);
@@ -6276,24 +6289,34 @@ def index() -> str:
         
         const entries = data.entries || [];
         if (entries.length === 0) {{
-          tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:#666;">No calibration history. Run scripts/auto_calibrate_iv.py</td></tr>';
+          tbody.innerHTML = '<tr><td colspan="9" style="text-align:center;color:#666;">No calibration history. Run scripts/auto_calibrate_iv.py --underlying BTC</td></tr>';
           return;
         }}
         
         tbody.innerHTML = entries.map(e => {{
           const dt = e.created_at ? new Date(e.created_at).toLocaleString() : 'N/A';
-          return `<tr>
-            <td style="font-size:0.85rem;">${{dt}}</td>
+          const status = e.status || 'ok';
+          const statusColor = status === 'ok' ? '#4caf50' : (status === 'degraded' ? '#ff9800' : '#f44336');
+          const statusBadge = `<span style="background:${{statusColor}};color:#fff;padding:2px 6px;border-radius:3px;font-size:0.75rem;text-transform:uppercase;">${{status}}</span>`;
+          const rowStyle = status === 'failed' ? 'opacity:0.6;' : '';
+          const vMAE = e.vega_weighted_mae_pct != null ? e.vega_weighted_mae_pct.toFixed(2) + '%' : '-';
+          const mae = e.mae_pct != null ? e.mae_pct.toFixed(2) + '%' : '-';
+          const reason = e.reason || '-';
+          return `<tr style="${{rowStyle}}">
+            <td style="font-size:0.8rem;white-space:nowrap;">${{dt}}</td>
+            <td>${{statusBadge}}</td>
             <td>${{e.dte_min}}-${{e.dte_max}}d</td>
             <td>${{e.lookback_days}}d</td>
             <td style="font-weight:600;">${{e.multiplier.toFixed(4)}}</td>
-            <td>${{e.mae_pct.toFixed(2)}}%</td>
+            <td>${{vMAE}}</td>
+            <td>${{mae}}</td>
             <td>${{e.num_samples.toLocaleString()}}</td>
+            <td style="max-width:200px;font-size:0.75rem;white-space:normal;word-wrap:break-word;color:#666;">${{reason}}</td>
           </tr>`;
         }}).join('');
       }} catch (err) {{
         console.error('Failed to fetch calibration history:', err);
-        tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:#c00;">Error loading history</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="9" style="text-align:center;color:#c00;">Error loading history</td></tr>';
       }}
     }}
     
