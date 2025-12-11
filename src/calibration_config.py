@@ -215,7 +215,9 @@ class ExtendedCalibrationResult(BaseModel):
     bias_pct: float
     timestamp: datetime
     rv_annualized: Optional[float] = None
+    rv_source: Optional[str] = Field(default=None, description="Source of RV: 'deribit_history' or 'default_iv'")
     atm_iv: Optional[float] = None
+    atm_source: Optional[str] = Field(default=None, description="Source of ATM IV: 'delta', 'nearest_strike', or 'none'")
     recommended_iv_multiplier: Optional[float] = None
     
     global_metrics: Optional[GlobalMetrics] = None

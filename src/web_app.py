@@ -9,6 +9,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+import httpx
+
 from fastapi import FastAPI, Body, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, Field
@@ -463,7 +465,9 @@ def get_calibration(
             "iv_multiplier": result.iv_multiplier,
             "default_iv": result.default_iv,
             "rv_annualized": result.rv_annualized,
+            "rv_source": result.rv_source,
             "atm_iv": result.atm_iv,
+            "atm_source": result.atm_source,
             "recommended_iv_multiplier": result.recommended_iv_multiplier,
             "count": result.count,
             "mae_pct": result.mae_pct,
@@ -477,10 +481,25 @@ def get_calibration(
             "rows": result.rows if result.rows else [],
         }
         return JSONResponse(content=payload)
+    except ValueError as e:
+        return JSONResponse(
+            status_code=400,
+            content={"error": "validation_error", "message": str(e), "error_type": "validation"},
+        )
+    except httpx.TimeoutException as e:
+        return JSONResponse(
+            status_code=504,
+            content={"error": "deribit_timeout", "message": "Deribit API timeout, please retry", "error_type": "timeout"},
+        )
+    except httpx.HTTPError as e:
+        return JSONResponse(
+            status_code=502,
+            content={"error": "deribit_error", "message": f"Deribit API error: {str(e)}", "error_type": "api_error"},
+        )
     except Exception as e:
         return JSONResponse(
             status_code=500,
-            content={"error": "calibration_failed", "message": str(e)},
+            content={"error": "calibration_failed", "message": str(e), "error_type": "internal"},
         )
 
 

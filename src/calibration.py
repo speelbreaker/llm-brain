@@ -479,7 +479,7 @@ def run_calibration(
         recommended_iv_multiplier = atm_iv / rv_annualized
 
     if len(quotes) > max_samples:
-        step = max(1, len(quotes) // max_samples)
+        step = math.ceil(len(quotes) / max_samples)
         quotes = quotes[::step]
 
     rows: List[CalibrationRow] = []

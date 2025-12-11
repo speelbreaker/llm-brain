@@ -396,14 +396,21 @@ def run_calibration_extended(
     spot = get_index_price(underlying)
     spot_history = get_spot_history_for_rv(underlying, as_of=now, window_days=config.rv_window_days)
     
+    rv_source: str = "none"
     if spot_history:
         rv_annualized = compute_realized_volatility(
             prices=spot_history,
             as_of=now,
             window_days=config.rv_window_days,
         )
+        rv_source = "deribit_history"
     else:
         rv_annualized = config.default_iv
+        rv_source = "default_iv"
+        import logging
+        logging.getLogger(__name__).warning(
+            f"RV computation failed for {underlying}, using default_iv={config.default_iv}"
+        )
     
     option_types = config.option_types if config.option_types else ["C"]
     quotes = get_option_chain(underlying, min_dte=config.min_dte, max_dte=config.max_dte, option_types=option_types)
@@ -424,11 +431,15 @@ def run_calibration_extended(
             bias_pct=0.0,
             timestamp=now,
             rv_annualized=rv_annualized,
+            rv_source=rv_source,
+            atm_source="none",
             liquidity_filters=liquidity_result,
         )
     
     atm_iv: Optional[float] = None
+    atm_source: str = "none"
     best_delta_diff: Optional[float] = None
+    
     for q in quotes:
         if q.mark_iv is None or q.mark_iv <= 0:
             continue
@@ -438,13 +449,27 @@ def run_calibration_extended(
         if best_delta_diff is None or diff < best_delta_diff:
             best_delta_diff = diff
             atm_iv = float(q.mark_iv) / 100.0
+            atm_source = "delta"
+    
+    if atm_iv is None and spot > 0:
+        best_strike_diff: Optional[float] = None
+        for q in quotes:
+            if q.mark_iv is None or q.mark_iv <= 0:
+                continue
+            if q.kind != "call":
+                continue
+            strike_diff = abs(q.strike - spot)
+            if best_strike_diff is None or strike_diff < best_strike_diff:
+                best_strike_diff = strike_diff
+                atm_iv = float(q.mark_iv) / 100.0
+                atm_source = "nearest_strike"
     
     recommended_iv_multiplier: Optional[float] = None
     if rv_annualized and rv_annualized > 0.0 and atm_iv and atm_iv > 0.0:
         recommended_iv_multiplier = round(atm_iv / rv_annualized, 4)
     
     if len(quotes) > config.max_samples:
-        step = max(1, len(quotes) // config.max_samples)
+        step = math.ceil(len(quotes) / config.max_samples)
         quotes = quotes[::step]
     
     rows: List[Dict[str, Any]] = []
@@ -648,7 +673,9 @@ def run_calibration_extended(
         bias_pct=global_metrics.bias_pct,
         timestamp=now,
         rv_annualized=rv_annualized,
+        rv_source=rv_source,
         atm_iv=atm_iv,
+        atm_source=atm_source,
         recommended_iv_multiplier=recommended_iv_multiplier,
         global_metrics=global_metrics,
         residuals_summary=residuals_summary if buckets else None,
