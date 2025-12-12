@@ -7617,47 +7617,7 @@ def index() -> str:
     }}
     
     async function updateOpenPositions() {{
-      try {{
-        const res = await fetch('/api/positions/open');
-        const data = await res.json();
-        const tbody = document.getElementById('live-open-positions-body');
-        const positions = data.positions || [];
-        const totals = data.totals || {{}};
-        const summaryEl = document.getElementById('positions-pnl-summary');
-
-        if (positions.length === 0) {{
-          tbody.innerHTML = '<tr><td colspan="12" style="text-align:center;color:#666;">No open positions</td></tr>';
-          summaryEl.innerHTML = '';
-          return;
-        }}
-
-        const totalPnl = totals.unrealized_pnl || 0;
-        const pnlColor = totalPnl >= 0 ? '#26a69a' : '#ef5350';
-        summaryEl.innerHTML = `Total Unrealized: <span style="color:${{pnlColor}};font-weight:600;">${{totalPnl >= 0 ? '+' : ''}}${{totalPnl.toFixed(2)}}</span>`;
-
-        tbody.innerHTML = positions.map(pos => {{
-          const typeLabel = (pos.side || 'SHORT') + ' ' + (pos.option_type || 'CALL');
-          const stratLabel = (pos.strategy_type || '').replace(/_/g, ' ');
-          const pnlClass = pos.unrealized_pnl >= 0 ? 'traded-yes' : 'traded-no';
-
-          return `<tr>
-            <td>${{pos.underlying}}</td>
-            <td>${{typeLabel}}</td>
-            <td>${{stratLabel}}</td>
-            <td>${{pos.symbol}}</td>
-            <td>${{pos.quantity.toFixed(3)}}</td>
-            <td>${{pos.entry_price.toFixed(6)}}</td>
-            <td>${{pos.mark_price.toFixed(6)}}</td>
-            <td class="${{pnlClass}}">${{pos.unrealized_pnl.toFixed(2)}}</td>
-            <td class="${{pnlClass}}">${{pos.unrealized_pnl_pct.toFixed(1)}}%</td>
-            <td>${{Math.max(0, pos.dte).toFixed(1)}}</td>
-            <td>${{pos.num_rolls}}</td>
-            <td>${{pos.mode}}</td>
-          </tr>`;
-        }}).join('');
-      }} catch (err) {{
-        console.error('Open positions fetch error:', err);
-      }}
+      await updateDashboardPositions();
     }}
     
     async function updateClosedPositions() {{
@@ -7724,15 +7684,14 @@ def index() -> str:
           const ethVal = ethSensors[name];
           const btcDisplay = btcVal !== null && btcVal !== undefined ? Number(btcVal).toFixed(name === 'chop_factor_7d' ? 3 : 2) : '--';
           const ethDisplay = ethVal !== null && ethVal !== undefined ? Number(ethVal).toFixed(name === 'chop_factor_7d' ? 3 : 2) : '--';
-          const btcClass = classifySensorValue(name, btcVal);
-          const ethClass = classifySensorValue(name, ethVal);
           html += `<tr>
             <td>${{sensorLabels[name] || name}}</td>
-            <td class="${{btcClass}}">${{btcDisplay}}</td>
-            <td class="${{ethClass}}">${{ethDisplay}}</td>
+            <td>${{btcDisplay}}</td>
+            <td>${{ethDisplay}}</td>
           </tr>`;
         }}
         tbody.innerHTML = html;
+        console.log('Dashboard sensors updated:', sensorNames.length, 'sensors');
       }} catch (err) {{
         console.error('Dashboard sensors fetch error:', err);
         tbody.innerHTML = '<tr><td colspan="3" style="text-align:center;color:#f44336;">Error loading sensors</td></tr>';
