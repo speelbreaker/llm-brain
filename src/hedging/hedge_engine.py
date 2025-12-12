@@ -115,6 +115,9 @@ class GregPosition:
     net_delta: float = 0.0
     entry_price: float = 0.0
     current_value: float = 0.0
+    sandbox: bool = False
+    origin: Optional[str] = None
+    run_id: Optional[str] = None
 
     @property
     def is_hedgeable(self) -> bool:
@@ -124,6 +127,9 @@ class GregPosition:
             "STRATEGY_B_CALENDAR",
             "STRATEGY_D_IRON_BUTTERFLY",
         )
+
+    def is_sandbox(self) -> bool:
+        return self.sandbox or self.origin == "GREG_SANDBOX"
 
 
 def load_greg_hedge_rules() -> Dict[str, Any]:

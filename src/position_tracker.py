@@ -25,7 +25,17 @@ DEFAULT_PERSISTENCE_PATH = Path("data/positions.json")
 
 Side = Literal["SHORT", "LONG"]
 OptionType = Literal["CALL", "PUT"]
-StrategyType = Literal["COVERED_CALL", "CASH_SECURED_PUT"]
+StrategyType = Literal[
+    "COVERED_CALL",
+    "CASH_SECURED_PUT",
+    "STRATEGY_A_STRADDLE",
+    "STRATEGY_A_STRANGLE",
+    "STRATEGY_B_CALENDAR",
+    "STRATEGY_C_SHORT_PUT",
+    "STRATEGY_D_IRON_BUTTERFLY",
+    "STRATEGY_F_BULL_PUT_SPREAD",
+    "STRATEGY_F_BEAR_CALL_SPREAD",
+]
 ModeType = Literal["LIVE", "DRY_RUN"]
 
 
@@ -79,8 +89,15 @@ class PositionChain:
     unrealized_pnl_pct: float = 0.0
     expiry: Optional[datetime] = None
 
+    sandbox: bool = False
+    origin: Optional[str] = None
+    run_id: Optional[str] = None
+
     def is_open(self) -> bool:
         return self.close_time is None
+
+    def is_sandbox(self) -> bool:
+        return self.sandbox or self.origin == "GREG_SANDBOX"
 
     @property
     def num_legs(self) -> int:
@@ -277,11 +294,19 @@ class PositionTracker:
                             pass
                 self._update_chain_unrealized(chain)
 
-    def get_open_positions_payload(self) -> Dict[str, Any]:
+    def get_open_positions_payload(self, include_sandbox: bool = False) -> Dict[str, Any]:
+        """
+        Get payload for open positions.
+        
+        Args:
+            include_sandbox: If False (default), excludes sandbox positions for main bots.
+        """
         with self._lock:
             positions: List[Dict[str, Any]] = []
             for chain in self._chains.values():
                 if not chain.is_open():
+                    continue
+                if not include_sandbox and chain.is_sandbox():
                     continue
                 positions.append(self._chain_to_open_summary(chain))
 
@@ -292,11 +317,19 @@ class PositionTracker:
             }
             return {"positions": positions, "totals": totals}
 
-    def get_closed_positions_payload(self) -> Dict[str, Any]:
+    def get_closed_positions_payload(self, include_sandbox: bool = False) -> Dict[str, Any]:
+        """
+        Get payload for closed positions.
+        
+        Args:
+            include_sandbox: If False (default), excludes sandbox positions for main bots.
+        """
         with self._lock:
             chains: List[Dict[str, Any]] = []
             for chain in self._chains.values():
                 if chain.is_open():
+                    continue
+                if not include_sandbox and chain.is_sandbox():
                     continue
                 chains.append(self._chain_to_closed_summary(chain))
 
@@ -306,6 +339,22 @@ class PositionTracker:
                 "realized_pnl_pct": float(sum(c["realized_pnl_pct"] for c in chains)) if chains else 0.0,
             }
             return {"chains": chains, "totals": totals}
+
+    def get_sandbox_positions(self) -> List[PositionChain]:
+        """Get only sandbox positions."""
+        with self._lock:
+            return [
+                chain for chain in self._chains.values()
+                if chain.is_sandbox()
+            ]
+
+    def get_live_positions(self) -> List[PositionChain]:
+        """Get only non-sandbox (live) positions."""
+        with self._lock:
+            return [
+                chain for chain in self._chains.values()
+                if not chain.is_sandbox()
+            ]
 
     def _pnl_for_leg(self, leg: PositionLeg, mark_price: Optional[float] = None) -> float:
         """
@@ -433,6 +482,9 @@ class PositionTracker:
                     "unrealized_pnl": chain.unrealized_pnl,
                     "unrealized_pnl_pct": chain.unrealized_pnl_pct,
                     "expiry": chain.expiry.isoformat() if chain.expiry else None,
+                    "sandbox": chain.sandbox,
+                    "origin": chain.origin,
+                    "run_id": chain.run_id,
                     "legs": [],
                 }
                 
@@ -512,6 +564,9 @@ class PositionTracker:
                     unrealized_pnl=chain_data.get("unrealized_pnl", 0.0),
                     unrealized_pnl_pct=chain_data.get("unrealized_pnl_pct", 0.0),
                     expiry=datetime.fromisoformat(chain_data["expiry"]) if chain_data.get("expiry") else None,
+                    sandbox=chain_data.get("sandbox", False),
+                    origin=chain_data.get("origin"),
+                    run_id=chain_data.get("run_id"),
                 )
                 self._chains[position_id] = chain
                 loaded_count += 1
