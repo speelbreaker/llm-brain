@@ -64,6 +64,43 @@ The web dashboard offers a user-friendly interface with sections for "Live Agent
 - **UI Enhancements**: Priority coloring, demo vs live badges, mode badges, and view hedge links.
 - **Greg Lab UI**: Dedicated dashboard tab for viewing and managing Greg strategy positions. Features mode banner (ADVICE ONLY / LIVE EXECUTION), sandbox summary, underlying/sandbox filters, positions table with badges (SANDBOX, DEMO, LIVE), PnL tracking, DTE display, suggested actions, and per-position log timelines. Includes Observer Notes stub for future LLM summaries. API endpoints: `/api/greg/positions`, `/api/greg/positions/{position_id}/logs`.
 
+## Daily Auto-Calibration (Cron Example)
+
+The script `scripts/daily_auto_calibrate.sh` can be run once per day to add entries to **Calibration History (Auto-Calibrate)** for BTC and ETH using harvested Parquet data.
+
+### Safety Note
+This is **safe** because auto-calibration only writes to the `calibration_history` table. It does **not** modify the currently applied IV multipliers used by the synthetic vol surface. Applied multipliers are still controlled exclusively by live calibration runs + the update policy system.
+
+### Usage
+
+Run manually from the repo root:
+```bash
+scripts/daily_auto_calibrate.sh
+```
+
+Override underlyings via environment variable:
+```bash
+AUTO_CALIBRATE_UNDERLYINGS="BTC,ETH" scripts/daily_auto_calibrate.sh
+```
+
+### Cron Example (Linux/Unix)
+
+To run daily at 03:10 server time:
+```cron
+# Run daily auto-calibration at 03:10 server time
+10 3 * * * /path/to/repo/scripts/daily_auto_calibrate.sh >> /path/to/repo/logs/auto_calibrate_cron.log 2>&1
+```
+
+With custom underlyings:
+```cron
+10 3 * * * AUTO_CALIBRATE_UNDERLYINGS="BTC,ETH" /path/to/repo/scripts/daily_auto_calibrate.sh >> /path/to/repo/logs/auto_calibrate_cron.log 2>&1
+```
+
+**Notes:**
+- Adjust `/path/to/repo` to your actual repository path.
+- Ensure the `logs/` directory exists: `mkdir -p /path/to/repo/logs`
+- Results appear in the UI under **Calibration → Calibration History (Auto-Calibrate)**.
+
 ## External Dependencies
 - **Deribit API**: Used for real-time market data (testnet) and historical data (mainnet public API for backtesting and data harvesting).
 - **OpenAI**: Integrated for LLM-powered decision-making and generating insights.
