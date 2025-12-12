@@ -23,7 +23,7 @@ The web dashboard offers a user-friendly interface with sections for "Live Agent
 - **Order Execution**: Handles order translation and dry-run simulations.
 - **Structured Logging**: Uses JSONL for logging decisions and actions.
 - **Position Persistence**: Bot-managed positions are saved to `data/positions.json` and restored on restart.
-- **Agent Healthcheck Module**: Self-contained system for critical pipeline validation.
+- **Agent Healthcheck Module**: Self-contained system for critical pipeline validation with expanded config validation (risk settings, LLM config), auto-trigger on tab open (60s throttle), status badge (OK/WARN/FAIL), and LLM diagnostic gating.
 - **Decision Policies**: Supports rule-based strategies with scoring and epsilon-greedy exploration, and an LLM-powered decision mode validated by a risk engine. Decision modes include `rule_only`, `llm_only`, and `hybrid_shadow`.
 - **LLM Validation**: Comprehensive validation of LLM decisions including symbol, action type, position, and size clamping.
 - **Market Context**: Integrates `MarketContext` for regime detection, returns, and realized volatility.

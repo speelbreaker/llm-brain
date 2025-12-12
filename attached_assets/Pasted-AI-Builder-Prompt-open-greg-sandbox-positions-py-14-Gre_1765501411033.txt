@@ -1,0 +1,219 @@
+AI Builder Prompt – open_greg_sandbox_positions.py (14 Greg testnet trades)
+
+You’re working in my “Greg” options bot repo (Deribit BTC/ETH, FastAPI app, Greg selector & strategies, delta-hedging, etc.).
+
+I want a small script that opens sandbox Greg positions on Deribit testnet / DRY_RUN:
+
+7 Greg strategies
+
+For both BTC and ETH
+
+With tiny size, bypassing normal entry conditions
+
+Clearly tagged as sandbox so they can be tracked separately.
+
+1. Find the existing entry helper
+
+Locate the function(s) that currently open a Greg strategy position, something like:
+
+open_greg_strategy_position(...) or
+
+a method on a PositionManager / Execution service that takes strategy_type and underlying and opens the corresponding options + hedges.
+
+If such a helper doesn’t exist yet, create a small internal function that:
+
+def open_greg_strategy_position(
+    session,
+    underlying: str,
+    strategy_type: str,
+    size: float,
+    sandbox: bool,
+    origin: str,
+    run_id: str,
+) -> Position:
+    """
+    - Underlying: 'BTC' or 'ETH'
+    - strategy_type: one of the Greg strategies (STRATEGY_A_STRADDLE, etc.)
+    - size: small test size (e.g. 0.01 BTC or 0.1 ETH equivalent)
+    - sandbox: marks the position as sandbox/test-only
+    - origin: e.g. 'GREG_SANDBOX'
+    - run_id: identifier shared by all positions opened in this run
+    - Returns the created Position model instance.
+    """
+    ```
+
+It should use the same code path as the live agent for constructing the structure (straddle, calendar, etc.), just with a minimal size.
+
+
+
+Ensure the Position model / DB schema has fields or equivalents to store:
+
+sandbox (bool)
+
+origin (string)
+
+run_id (string)
+
+If not present, add them with sensible defaults (sandbox=False, origin=None, run_id=None) and a DB migration if required.
+
+2. Implement scripts/open_greg_sandbox_positions.py
+
+Create a new script:
+
+scripts/open_greg_sandbox_positions.py
+
+Behavior:
+
+Run from CLI:
+
+python scripts/open_greg_sandbox_positions.py \
+  --underlyings BTC,ETH \
+  --btc-size 0.01 \
+  --eth-size 0.1
+
+
+It should:
+
+Load app settings via the usual get_settings() function.
+
+Refuse to run unless we are in testnet/DRY_RUN mode, e.g.:
+
+If environment is clearly mainnet and dry_run=False, exit with a warning like:
+
+“Refusing to run sandbox opener on non-testnet / non-DRY_RUN environment.”
+
+Build a list of Greg strategies to exercise, e.g.:
+
+GREG_STRATEGIES = [
+    "STRATEGY_A_STRADDLE",
+    "STRATEGY_A_STRANGLE",
+    "STRATEGY_B_CALENDAR",
+    "STRATEGY_C_SHORT_PUT",
+    "STRATEGY_D_IRON_BUTTERFLY",
+    "STRATEGY_F_BULL_PUT_SPREAD",
+    "STRATEGY_F_BEAR_CALL_SPREAD",
+]
+
+
+Parse CLI args:
+
+--underlyings (comma-separated, default "BTC,ETH")
+
+--btc-size (float, default 0.01)
+
+--eth-size (float, default 0.1)
+
+Create a unique run_id to tag this batch, e.g.:
+
+run_id = f"GREG_SANDBOX_{datetime.utcnow().strftime('%Y%m%dT%H%M%SZ')}"
+
+
+For each underlying in underlyings and for each strategy_type in GREG_STRATEGIES:
+
+Compute size:
+
+BTC → btc_size
+
+ETH → eth_size
+
+Call open_greg_strategy_position(...) with:
+
+sandbox=True
+origin="GREG_SANDBOX"
+run_id=run_id
+
+
+Print/log a short line per position:
+
+On success:
+OK underlying=BTC strategy=STRATEGY_A_STRADDLE size=0.01 position_id=...
+
+On failure (exception):
+FAILED underlying=BTC strategy=STRATEGY_A_STRADDLE error=...
+
+Close DB session cleanly at the end.
+
+Implementation sketch (adjust imports to match repo):
+
+#!/usr/bin/env python
+import argparse
+from datetime import datetime
+
+from app.settings import get_settings
+from app.database import SessionLocal
+from app.services.greg_entry import open_greg_strategy_position
+
+GREG_STRATEGIES = [
+    "STRATEGY_A_STRADDLE",
+    "STRATEGY_A_STRANGLE",
+    "STRATEGY_B_CALENDAR",
+    "STRATEGY_C_SHORT_PUT",
+    "STRATEGY_D_IRON_BUTTERFLY",
+    "STRATEGY_F_BULL_PUT_SPREAD",
+    "STRATEGY_F_BEAR_CALL_SPREAD",
+]
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Open sandbox Greg positions on Deribit testnet")
+    parser.add_argument("--underlyings", default="BTC,ETH", help="Comma-separated list: e.g. BTC,ETH")
+    parser.add_argument("--btc-size", type=float, default=0.01)
+    parser.add_argument("--eth-size", type=float, default=0.1)
+    args = parser.parse_args()
+
+    settings = get_settings()
+    if not settings.dry_run and not settings.use_testnet:
+        raise SystemExit("Refusing to run sandbox opener on non-testnet / non-DRY_RUN environment.")
+
+    session = SessionLocal()
+    run_id = f"GREG_SANDBOX_{datetime.utcnow().strftime('%Y%m%dT%H%M%SZ')}"
+    underlyings = [u.strip().upper() for u in args.underlyings.split(",") if u.strip()]
+
+    print(f"[GREG_SANDBOX] run_id={run_id}")
+    for underlying in underlyings:
+        size = args.btc_size if underlying == "BTC" else args.eth_size
+        for strategy_type in GREG_STRATEGIES:
+            print(f"  -> {underlying} / {strategy_type} / size={size}")
+            try:
+                pos = open_greg_strategy_position(
+                    session=session,
+                    underlying=underlying,
+                    strategy_type=strategy_type,
+                    size=size,
+                    sandbox=True,
+                    origin="GREG_SANDBOX",
+                    run_id=run_id,
+                )
+                print(f"     OK position_id={pos.id}")
+            except Exception as e:
+                print(f"     FAILED: {e}")
+
+    session.close()
+    print("[GREG_SANDBOX] Done.")
+
+
+if __name__ == "__main__":
+    main()
+
+
+Please implement something equivalent in the repo, consistent with existing patterns.
+
+3. Make sure main bots ignore sandbox positions
+
+Finally, ensure that:
+
+Any live trading bots or non-Greg agents ignore positions where sandbox=True or origin="GREG_SANDBOX" (e.g., by checking these flags in their queries).
+
+The Greg dashboard can later filter on sandbox=True to show these 14 testnet positions as a separate “sandbox” section.
+
+All new code should be type hinted and pass existing tests.
+
+End of prompt
+
+You can hand this straight to your AI Builder.
+Once it’s done, you’ll have a one-liner:
+
+python scripts/open_greg_sandbox_positions.py
+
+
+…that spins up all 14 Greg sandbox positions on testnet, ready to be watched by your Greg dashboard and HedgeEngine.

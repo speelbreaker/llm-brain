@@ -1,0 +1,227 @@
+Prompt for AI Builder – System Health Improvements (Batch 1)
+
+You are an AI pair-programmer working on my Options Trading Agent repo.
+
+Repo: https://github.com/speelbreaker/llm-brain
+
+Context: We have a System Health feature and a set of smoke tests. I’ve written a “System Health Review” document that describes current behavior, observed issues, and recommended improvements (pasted below). Your job is to implement a focused first batch of improvements, mostly around:
+
+Expanding config validation.
+
+Making healthcheck more visible and actionable in the web UI.
+
+Making smoke scripts more robust.
+
+Reducing brittle Deribit dependencies in tests.
+
+0. Reference – System Health Review (for your context)
+
+(This is high-level context, not something you need to rewrite; follow the concrete tasks below.)
+
+How System Health works now
+
+Backend: src/healthcheck.py
+
+run_agent_healthcheck() aggregates:
+
+check_config() – validates basic settings (Deribit env, loop interval, margin/delta caps).
+
+check_deribit_public() – verifies public Deribit connectivity (index price fetch).
+
+check_deribit_private() – verifies private Deribit credentials, returns SKIPPED if none.
+
+check_state_builder() – runs full state builder on live data; WARNs for private-auth issues, FAILs on other errors.
+
+Returns an overall_status of OK/WARN/FAIL.
+
+API:
+
+/api/agent_healthcheck in src/web_app.py calls run_agent_healthcheck() and returns {ok, overall_status, results}.
+
+Dashboard:
+
+System Health tab calls runHealthcheck() only when the user clicks the “Run Healthcheck” button. loadSystemHealthStatus() does some light config fetching for LLM/risk, but does not run the full healthcheck by default.
+
+Current issues (high-level)
+
+Config validation is too narrow: key risk knobs (kill switch, drawdown limits, reconcile settings, LLM config/keys) aren’t covered, so overall_status can be OK even when important parts are misconfigured.
+
+Network/credential failures appear as WARN/FAIL in the JSON, but the System Health tab never auto-runs the healthcheck, so the operator might miss it. Some “WARN” conditions should arguably be “FAIL” when live trading is intended.
+
+Backtest/training smoke tests depend directly on Deribit public API for OHLC/chart data and fail hard if Deribit returns 403/blocked, even though we’d like to exercise simulator logic in “offline” conditions.
+
+LLM diagnostic runs even when llm_enabled is false or AI keys are missing, returning DO_NOTHING with an error message inside “reasoning” instead of a structured failure.
+
+scripts/smoke_web_api.sh hangs if the FastAPI web server is not running, with no timeout or helpful message.
+
+Recommended improvements are in the same doc; the tasks below pick a concrete subset for this batch.
+
+1. Expand config validation in src/healthcheck.py
+
+Goal: System Health should better reflect operational readiness, not just a few numeric bounds.
+
+In check_config():
+
+Add checks for:
+
+Kill switch setting (e.g. settings.kill_switch_enabled or equivalent).
+
+Daily drawdown limit (settings.daily_drawdown_limit_pct).
+
+Max expiry exposure (settings.max_expiry_exposure and settings.research_max_expiry_exposure).
+
+Basic LLM config:
+
+settings.llm_enabled
+
+settings.llm_model_name
+
+Any required AI integration environment variables (e.g. key and endpoint), if present in Settings.
+
+For each missing/invalid critical field:
+
+Add a HealthCheckResult entry that clearly states the problem and suggests a fix.
+
+Adjust run_agent_healthcheck() aggregation logic:
+
+If any config sub-check that relates to risk or LLM readiness is in FAIL, make overall_status = "FAIL".
+
+For non-critical items (e.g. optional research-only settings), use WARN instead.
+
+Keep this function readable: prefer a few clear helper methods over a huge monolithic block.
+
+2. Improve System Health UX in src/web_app.py
+
+Goal: Make healthcheck more visible, reduce “I forgot to click the button” risk.
+
+In the System Health tab front-end logic (look for loadSystemHealthStatus() and runHealthcheck() in src/web_app.py):
+
+When the System Health tab is first opened, auto-trigger a healthcheck:
+
+Call /api/agent_healthcheck once on initial load.
+
+Use a simple throttle so it won’t auto-run on every small tab switch (e.g. don’t re-run automatically if last run was < 60 seconds ago).
+
+Show the overall status prominently:
+
+Example: a badge at the top of the System Health tab:
+
+Green “OK”
+
+Yellow “WARN”
+
+Red “FAIL”
+
+Include a short textual summary: e.g. “Config OK, Deribit public FAIL (403), LLM keys missing.”
+
+For LLM diagnostics:
+
+If settings.llm_enabled is False or required LLM env vars are missing:
+
+Disable or grey-out the “Test LLM Decision Pipeline” button,
+
+Or show a tooltip explaining what’s missing.
+
+Optionally, when the user clicks it anyway, show a clear error message in the System Health panel instead of burying this in the LLM “reasoning”.
+
+Ensure runHealthcheck() still works as a manual “Run again” button and updates the status badge + details table.
+
+3. Make scripts/smoke_web_api.sh self-contained and robust
+
+Goal: Avoid hangs when the FastAPI server is not running; fail fast with a clear message.
+
+Open scripts/smoke_web_api.sh:
+
+Before running any curl against the web API:
+
+Check whether the expected port (e.g. localhost:5000 or whatever is configured) is reachable.
+
+If it is not, print a clear message like:
+
+"FastAPI server is not running on port 5000. Start src/web_app.py before running this smoke test."
+
+Exit with a non-zero code instead of hanging.
+
+Add a reasonable timeout to curl calls, e.g. curl --max-time 10 ... so that a misconfigured URL doesn’t block indefinitely.
+
+Keep the script POSIX-compatible and simple (no heavy dependencies).
+
+4. Reduce brittle Deribit dependency in smoke tests (first step)
+
+We don’t want to fully refactor all backtest/training data paths in this batch, but add a small “offline-friendly” guard:
+
+Identify the main smoke scripts that fail purely because Deribit public API returns 403 when fetching OHLC or chart data (likely under scripts/ and/or tests exercising backtest/env_simulator.py or a Deribit data source).
+
+Add a simple “offline mode” switch or failure handling:
+
+If Deribit public requests consistently fail with 403 / network blocked:
+
+Print a clear message:
+
+"Deribit public API unreachable (403). Running in OFFLINE mode – skipping external data fetch and not marking this smoke test as a hard failure."
+
+Allow the smoke test to skip external data and still run some basic logic where possible.
+
+For this batch, it’s acceptable to:
+
+Short-circuit with a SKIPPED / WARN state, as long as the logs and System Health view clearly reflect this.
+
+Do not fully redesign the data pipeline in this task; just make the smoke tests less brittle when Deribit is blocked.
+
+5. Tests & Acceptance Criteria
+
+Add/update tests to validate the changes:
+
+Config validation tests (e.g. tests/test_healthcheck_config.py):
+
+Simulate bad config:
+
+Missing or obviously invalid kill switch / drawdown / expiry exposure / LLM settings.
+
+Assert that:
+
+check_config() returns a HealthCheckResult with status FAIL (for critical fields) or WARN.
+
+run_agent_healthcheck() aggregates these properly and sets overall_status accordingly.
+
+Web API + System Health UX tests:
+
+Using TestClient, verify that:
+
+/api/agent_healthcheck still returns {ok, overall_status, results}.
+
+When LLM is disabled or misconfigured in a test config, the “LLM diagnostic” path surfaces this as a structured status (not a hidden DO_NOTHING).
+
+You don’t have to fully render HTML in tests; it’s enough to ensure the new endpoint behavior/flags are present for the front-end JS.
+
+Smoke script behavior:
+
+It’s fine if these are hard to test automatically, but:
+
+Keep scripts/smoke_web_api.sh simple and readable so manual inspection shows the new port-check + timeout logic.
+
+Success criteria
+
+App still starts; all existing tests pass.
+
+New tests for healthcheck config validation pass.
+
+System Health tab:
+
+Auto-runs a healthcheck on first open,
+
+Shows a clear OK/WARN/FAIL badge with summary,
+
+Gates LLM diagnostic test when obvious prerequisites are missing.
+
+scripts/smoke_web_api.sh fails fast with a clear message when the FastAPI server isn’t running, instead of hanging.
+
+Smoke tests that used to fail purely due to Deribit 403 now produce a clear SKIPPED/WARN behavior instead of a hard, opaque failure.
+
+At the end, please summarize:
+
+Files you changed,
+
+New tests added,
+
+Any explicit limitations (e.g. where we still rely on Deribit data and how offline mode behaves)

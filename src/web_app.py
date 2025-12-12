@@ -2747,8 +2747,21 @@ def run_healthcheck_endpoint() -> JSONResponse:
         return JSONResponse(content={
             "ok": result.get("overall_status") != "FAIL",
             "overall_status": result.get("overall_status", "UNKNOWN"),
+            "summary": result.get("summary", ""),
             "results": result.get("results", []),
         })
+    except Exception as e:
+        return JSONResponse(content={"ok": False, "error": str(e)})
+
+
+@app.get("/api/llm_readiness")
+def get_llm_readiness_endpoint() -> JSONResponse:
+    """Check if LLM is ready for diagnostic tests."""
+    try:
+        from src.healthcheck import get_llm_readiness
+        
+        result = get_llm_readiness(settings)
+        return JSONResponse(content={"ok": True, **result})
     except Exception as e:
         return JSONResponse(content={"ok": False, "error": str(e)})
 
@@ -5039,7 +5052,17 @@ def index() -> str:
   <div id="tab-health" class="tab-content">
     <div class="section">
       <h2>System Controls & Health</h2>
-      <p style="color: #666; margin-bottom: 1.5rem;">Run diagnostics and test system components. These are dry-run tests that do not execute trades.</p>
+      <p style="color: #666; margin-bottom: 1rem;">Run diagnostics and test system components. These are dry-run tests that do not execute trades.</p>
+      
+      <!-- Overall Health Status Badge -->
+      <div id="health-status-badge" style="display: flex; align-items: center; gap: 1rem; padding: 1rem; background: #f5f5f5; border-radius: 8px; margin-bottom: 1.5rem;">
+        <div id="health-badge" style="padding: 0.5rem 1rem; border-radius: 4px; font-weight: bold; background: #e0e0e0; color: #666;">PENDING</div>
+        <div style="flex: 1;">
+          <div id="health-summary" style="font-size: 0.9rem; color: #333;">Healthcheck not run yet</div>
+          <div id="health-last-run" style="font-size: 0.8rem; color: #666;">Last run: never</div>
+        </div>
+        <button onclick="runHealthcheck()" style="padding: 0.5rem 1rem;">Run Healthcheck</button>
+      </div>
       
       <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 1.5rem;">
         
@@ -5047,7 +5070,7 @@ def index() -> str:
         <div style="background: #f8f9fa; padding: 1.25rem; border-radius: 8px; border-left: 4px solid #1565c0;">
           <h3 style="margin: 0 0 0.75rem 0; color: #1565c0; font-size: 1rem;">LLM & Decision Mode</h3>
           <div id="llm-status-line" style="font-size: 0.85rem; color: #666; margin-bottom: 1rem;">Loading...</div>
-          <button onclick="testLlmDecision()" style="width: 100%; margin-bottom: 0.5rem;">Test LLM Decision Pipeline</button>
+          <button id="llm-test-btn" onclick="testLlmDecision()" style="width: 100%; margin-bottom: 0.5rem;">Test LLM Decision Pipeline</button>
           <div id="llm-result" style="font-size: 0.85rem; min-height: 2rem; padding: 0.5rem; background: white; border-radius: 4px;"></div>
         </div>
         
@@ -6237,16 +6260,39 @@ def index() -> str:
     // SYSTEM HEALTH TAB FUNCTIONS
     // ==============================================
     
+    let lastHealthcheckTime = 0;
+    const HEALTHCHECK_THROTTLE_MS = 60000; // Don't auto-run within 60 seconds
+    
     async function loadSystemHealthStatus() {{
-      // Load LLM status
+      // Load LLM status and check LLM readiness
       try {{
-        const llmRes = await fetch('/api/llm_status');
+        const [llmRes, readinessRes] = await Promise.all([
+          fetch('/api/llm_status'),
+          fetch('/api/llm_readiness')
+        ]);
         const llmData = await llmRes.json();
+        const readinessData = await readinessRes.json();
+        
         if (llmData.ok) {{
           const llmStatus = `Decision: ${{llmData.decision_mode}} | Env: ${{llmData.deribit_env}} | LLM: ${{llmData.llm_enabled ? 'enabled' : 'disabled'}}`;
           document.getElementById('llm-status-line').textContent = llmStatus;
         }} else {{
           document.getElementById('llm-status-line').textContent = 'Error loading LLM status';
+        }}
+        
+        // Gate LLM test button based on readiness
+        const llmTestBtn = document.getElementById('llm-test-btn');
+        if (llmTestBtn) {{
+          if (readinessData.ready) {{
+            llmTestBtn.disabled = false;
+            llmTestBtn.title = 'Run LLM decision pipeline test';
+            llmTestBtn.style.opacity = '1';
+          }} else {{
+            llmTestBtn.disabled = true;
+            llmTestBtn.title = readinessData.reason || 'LLM not ready';
+            llmTestBtn.style.opacity = '0.5';
+            document.getElementById('llm-result').innerHTML = `<span style="color: #ff9800; font-size: 0.8rem;">⚠️ ${{readinessData.reason || 'LLM not configured'}}</span>`;
+          }}
         }}
       }} catch (e) {{
         document.getElementById('llm-status-line').textContent = 'Error: ' + e.message;
@@ -6273,6 +6319,13 @@ def index() -> str:
       
       // Load LLM & Strategy tuning config
       await loadLLMStrategyConfig();
+      
+      // Auto-trigger healthcheck if not run recently
+      const now = Date.now();
+      if (now - lastHealthcheckTime > HEALTHCHECK_THROTTLE_MS) {{
+        lastHealthcheckTime = now;
+        runHealthcheck();
+      }}
     }}
     
     async function loadRuntimeConfig() {{
@@ -6760,34 +6813,57 @@ def index() -> str:
       const statusEl = document.getElementById('healthcheck-status-line');
       const detailsEl = document.getElementById('healthcheck-details');
       const detailsContent = document.getElementById('healthcheck-details-content');
-      el.innerHTML = '<span style="color: #666;">Running healthcheck...</span>';
-      detailsEl.style.display = 'none';
+      const badge = document.getElementById('health-badge');
+      const summary = document.getElementById('health-summary');
+      const lastRun = document.getElementById('health-last-run');
+      
+      if (el) el.innerHTML = '<span style="color: #666;">Running healthcheck...</span>';
+      if (detailsEl) detailsEl.style.display = 'none';
+      if (badge) {{ badge.textContent = 'CHECKING...'; badge.style.background = '#e0e0e0'; badge.style.color = '#666'; }}
+      
       try {{
         const res = await fetch('/api/agent_healthcheck', {{ method: 'POST' }});
         const data = await res.json();
-        if (data.ok) {{
+        const now = new Date().toLocaleTimeString();
+        
+        if (data.ok !== false) {{
           const status = data.overall_status;
           const checksStr = data.results.map(r => `${{r.name}}=${{r.status}}`).join(', ');
+          const summaryText = data.summary || checksStr;
+          
           if (status === 'OK') {{
-            el.innerHTML = `<span style="color: #2e7d32;">✅ Healthcheck OK – ${{checksStr}}</span>`;
-            statusEl.textContent = 'Last check: OK';
+            if (el) el.innerHTML = `<span style="color: #2e7d32;">✅ Healthcheck OK – ${{checksStr}}</span>`;
+            if (statusEl) statusEl.textContent = 'Last check: OK';
+            if (badge) {{ badge.textContent = 'OK'; badge.style.background = '#c8e6c9'; badge.style.color = '#2e7d32'; }}
+            if (summary) summary.textContent = 'All systems operational';
           }} else if (status === 'WARN') {{
-            el.innerHTML = `<span style="color: #ff9800;">⚠️ Healthcheck WARN – ${{checksStr}}</span>`;
-            statusEl.textContent = 'Last check: WARN';
+            if (el) el.innerHTML = `<span style="color: #ff9800;">⚠️ Healthcheck WARN – ${{checksStr}}</span>`;
+            if (statusEl) statusEl.textContent = 'Last check: WARN';
+            if (badge) {{ badge.textContent = 'WARN'; badge.style.background = '#fff3e0'; badge.style.color = '#e65100'; }}
+            if (summary) summary.textContent = summaryText;
           }} else {{
-            el.innerHTML = `<span style="color: #c62828;">❌ Healthcheck FAIL – ${{checksStr}}</span>`;
-            statusEl.textContent = 'Last check: FAIL';
+            if (el) el.innerHTML = `<span style="color: #c62828;">❌ Healthcheck FAIL – ${{checksStr}}</span>`;
+            if (statusEl) statusEl.textContent = 'Last check: FAIL';
+            if (badge) {{ badge.textContent = 'FAIL'; badge.style.background = '#ffcdd2'; badge.style.color = '#c62828'; }}
+            if (summary) summary.textContent = summaryText;
           }}
+          if (lastRun) lastRun.textContent = `Last run: ${{now}}`;
+          
           // Show details
-          detailsContent.textContent = data.results.map(r => `${{r.name}}: ${{r.status}} - ${{r.detail}}`).join('\\n');
-          detailsEl.style.display = 'block';
+          if (detailsContent) detailsContent.textContent = data.results.map(r => `${{r.name}}: ${{r.status}} - ${{r.detail}}`).join('\\n');
+          if (detailsEl) detailsEl.style.display = 'block';
         }} else {{
-          el.innerHTML = `<span style="color: #c62828;">❌ Healthcheck failed: ${{data.error || data.overall_status}}</span>`;
-          statusEl.textContent = 'Last check: ERROR';
+          if (el) el.innerHTML = `<span style="color: #c62828;">❌ Healthcheck failed: ${{data.error || data.overall_status}}</span>`;
+          if (statusEl) statusEl.textContent = 'Last check: ERROR';
+          if (badge) {{ badge.textContent = 'ERROR'; badge.style.background = '#ffcdd2'; badge.style.color = '#c62828'; }}
+          if (summary) summary.textContent = data.error || 'Request failed';
+          if (lastRun) lastRun.textContent = `Last run: ${{now}}`;
         }}
       }} catch (e) {{
-        el.innerHTML = `<span style="color: #c62828;">❌ Request error: ${{e.message}}</span>`;
-        statusEl.textContent = 'Last check: ERROR';
+        if (el) el.innerHTML = `<span style="color: #c62828;">❌ Request error: ${{e.message}}</span>`;
+        if (statusEl) statusEl.textContent = 'Last check: ERROR';
+        if (badge) {{ badge.textContent = 'ERROR'; badge.style.background = '#ffcdd2'; badge.style.color = '#c62828'; }}
+        if (summary) summary.textContent = 'Network error';
       }}
     }}
     
