@@ -1,0 +1,456 @@
+Prompt – Batch 3: Bots layout refactor + Test/Live + editable risk & entry rules (TEST only)
+
+You are the code assistant for my options-trading web app.
+Repo: this project (FastAPI + vanilla JS dashboard, src/web_app.py UI, src/config.py settings, src/risk_engine.py, src/bots/*, docs/greg_mandolini/*.json, etc.).
+
+We’ve already implemented:
+
+Unified Backtesting Lab (no separate “Backtest Runs” tab).
+
+A Dashboard/Home tab that shows:
+
+Live/Test positions (by bot, strategy, underlying, PnL, risk status).
+
+A Bots tab with:
+
+Live Market Sensors
+
+Strategy Matches
+
+Expert Bots (GregBot + others).
+
+Now I want to refactor the Bots layer and add a Test vs Live environment view plus editable risk/entry rules for TEST only.
+
+High-level goals
+
+Bots re-layout
+
+Keep the existing APIs (/api/bots/market_sensors, /api/bots/strategies etc.).
+
+But refactor the Bots tab UI into a multi-bot layout that is ready for multiple bots, not just Greg.
+
+We will not put Live Market Sensors here anymore (they moved to the Dashboard in an earlier batch). Bots is now “per-bot brains & rules.”
+
+Test vs Live views
+
+Inside the Bots area, add a simple environment selector: Test vs Live.
+
+Test view is where we can experiment with overrides and looser rules.
+
+Live view is read-only and always reflects the safe production config.
+
+Per-bot structure
+
+For each environment, show a horizontal tab strip of bots at the top:
+
+e.g. GregBot (for now), later CoveredCallBot, etc.
+
+When a bot is selected, show a left sidebar with sections:
+
+Overview
+
+Entry Rules (Lab)
+
+Global Risk (Engine)
+
+Bot Risk (Per-bot)
+
+The right-hand content pane changes based on which section is selected.
+
+Editable rules in TEST only
+
+In TEST environment only, let me:
+
+See and edit:
+
+Global risk engine rules (shared caps).
+
+Per-bot risk config.
+
+Per-bot entry rules (Greg selector thresholds).
+
+Toggle “Override defaults” on/off per section.
+
+In LIVE environment, all of this should be read-only with no edit controls and no overrides.
+
+Wire overrides into the strategy/risk engine (TEST only)
+
+When the app is in TEST mode and a given override toggle is ON:
+
+Use the override values instead of the default config/JSON thresholds for:
+
+Global risk engine caps.
+
+Bot-specific risk caps.
+
+Greg’s entry rules (selectors for VRP/ADX/etc.).
+
+When overrides are OFF, or when we are in LIVE environment:
+
+Use the current default values (exact behavior must match today).
+
+1. Add a simple environment concept for UI and logic
+
+In src/config.py (or the main Settings model), add a small environment mode concept:
+
+Something like:
+
+class EnvironmentMode(str, Enum):
+    TEST = "test"
+    LIVE = "live"
+
+
+And a field on Settings:
+
+env_mode: EnvironmentMode = EnvironmentMode.TEST
+
+
+Default to "test" for now (this is just a label and UX switch; we will still distinguish Deribit testnet/mainnet via existing config).
+
+Expose env_mode in the web app templates:
+
+Wherever we render the main layout in src/web_app.py, make env_mode available to the template/JS so the UI knows if we’re in test mode.
+
+Important: we are not changing Deribit credentials logic in this batch.
+
+env_mode is about UI behavior and rule overrides, not network selection.
+
+2. Refactor Bots tab: Test/Live + per-bot + sidebar sections
+
+In src/web_app.py:
+
+Bots tab layout
+
+Replace the current Bots tab markup with a layout like:
+
+Top: environment pill toggle: Test | Live
+
+Use buttons or a small pill group, e.g.:
+
+<div id="bots-env-toggle" class="btn-group">
+  <button data-env="test">Test</button>
+  <button data-env="live">Live</button>
+</div>
+
+
+The active environment should be visually highlighted.
+
+Below that: bot tabs (horizontal):
+
+<ul id="bots-bot-tabs" class="nav nav-tabs">
+  <!-- e.g. GregBot, FutureBot, etc. -->
+</ul>
+
+
+For now you can hardcode a single GregBot tab using existing Greg config, but make it easy to extend to more bots later (e.g. shoehorn this onto your StrategyConfig / registry when available).
+
+Main body: a two-column layout:
+
+Left: sidebar nav:
+
+<div id="bot-sidebar">
+  <ul>
+    <li data-section="overview">Overview</li>
+    <li data-section="entry-rules">Entry Rules (Lab)</li>
+    <li data-section="global-risk">Global Risk (Engine)</li>
+    <li data-section="bot-risk">Bot Risk (Per-bot)</li>
+  </ul>
+</div>
+
+
+Right: content pane (<div id="bot-section-content"></div>) that updates based on selected section.
+
+JS behavior
+
+Add JS in the same file (<script>…</script> part) to:
+
+Track selected env (test/live), selected bot_id (GregBot), and selected section.
+
+When any of these changes, call a function like loadBotSection(env, botId, section).
+
+Note: Existing Live Market Sensors stay on the Dashboard/Home tab (from previous batch).
+
+The Bots tab focuses on rules, risk, and strategy evaluations moving forward.
+
+3. Data model for rules & risk (base vs overrides)
+
+We already have:
+
+Global risk engine caps in src/config.py / src/risk_engine.py.
+
+Greg’s selector thresholds in JSON under docs/greg_mandolini/… (e.g. GREG_SELECTOR_RULES_FINAL.json).
+
+Bot-specific risk config lives either in Settings or Greg-specific config (check current implementation).
+
+Add a small override structure for TEST environment:
+
+New module: src/bots/overrides.py (or similar) with:
+
+A Pydantic model (or dataclasses) for:
+
+class GlobalRiskOverrides(BaseModel):
+    max_margin_pct: Optional[float] = None
+    max_net_delta: Optional[float] = None
+    # ... any other global caps you want to expose
+
+class BotRiskOverrides(BaseModel):
+    max_equity_share: Optional[float] = None
+    max_positions_per_underlying: Optional[int] = None
+    # etc.
+
+class EntryRuleOverrides(BaseModel):
+    # Map like "STRATEGY_A_STRADDLE.vrp_min" -> 18.0, etc.
+    thresholds: Dict[str, float] = {}
+
+
+A top-level container:
+
+class BotOverrideConfig(BaseModel):
+    use_global_risk_overrides: bool = False
+    use_bot_risk_overrides: bool = False
+    use_entry_rule_overrides: bool = False
+    global_risk: GlobalRiskOverrides = GlobalRiskOverrides()
+    bots: Dict[str, BotRiskOverrides] = {}
+    entry_rules: Dict[str, EntryRuleOverrides] = {}
+
+
+Utility functions:
+
+load_overrides(env_mode: EnvironmentMode) -> BotOverrideConfig
+
+For now, only load from TEST file, e.g. data/bot_overrides_test.json.
+
+For LIVE, always return defaults with use_* = False.
+
+save_overrides(env_mode: EnvironmentMode, cfg: BotOverrideConfig).
+
+File location
+
+Persist overrides to something like:
+
+data/bot_overrides_test.json
+
+Do not create a LIVE override file.
+
+4. Wire overrides into risk engine & Greg rules (TEST only)
+
+Global risk engine (src/risk_engine.py)
+
+Update wherever global caps are read (max margin %, net delta, etc.) to:
+
+overrides = load_overrides(settings.env_mode)
+if (
+    settings.env_mode == EnvironmentMode.TEST
+    and overrides.use_global_risk_overrides
+):
+    # Use override values if not None, else fall back to existing config
+else:
+    # Keep existing behavior
+
+
+Do not change semantics when env_mode == LIVE:
+
+Overrides must be ignored.
+
+LIVE behavior must match current behavior exactly.
+
+Per-bot risk
+
+If there is a GregBot-specific risk config already: wrap it similarly with:
+
+if settings.env_mode == EnvironmentMode.TEST and overrides.use_bot_risk_overrides:
+    bot_overrides = overrides.bots.get("GregBot")
+    # apply non-None fields instead of defaults
+
+
+Entry rules (Greg selector)
+
+In the module that loads Greg’s selector spec (e.g. docs/greg_mandolini/GREG_SELECTOR_RULES_FINAL.json + any loader in src/bots/greg_*):
+
+Add a layer that, after loading the base JSON, applies overrides when:
+
+if settings.env_mode == EnvironmentMode.TEST and overrides.use_entry_rule_overrides:
+    # for each thresholds key in overrides.entry_rules["GregBot"].thresholds:
+    #   override the relevant value in the in-memory rules structure
+
+
+Use human-readable keys for overrides like:
+
+"STRATEGY_A_STRADDLE.vrp_30d_min"
+
+"STRATEGY_A_STRADDLE.adx_14d_min"
+
+etc.
+
+This way the UI can work with a simple list of name → value pairs.
+
+5. UI: section content & edit forms
+
+In src/web_app.py (Bots tab template + JS):
+
+5.1 Overview
+
+For the selected env + bot, show:
+
+Bot name, description, policy type (rule vs LLM), underlyings, etc.
+
+A small list of current live rules (read-only), e.g. “GregBot currently uses v6.0 thresholds.”
+
+5.2 Entry Rules (Lab)
+
+For TEST env:
+
+Fetch a small JSON endpoint, e.g. GET /api/bots/<bot_id>/entry_rules?env=test that returns:
+
+{
+  "env": "test",
+  "bot_id": "GregBot",
+  "rules": [
+    {
+      "key": "STRATEGY_A_STRADDLE.vrp_30d_min",
+      "label": "ATM Straddle: VRP 30d min",
+      "default_value": 18.0,
+      "current_value": 20.0,
+      "unit": "vol pts"
+    },
+    ...
+  ],
+  "use_overrides": true
+}
+
+
+Render a table:
+
+Columns: Rule, Default, Current, New value (input)
+
+At top: a toggle switch:
+
+“Use entry rule overrides (TEST only)”
+
+Buttons: Save and Reset to defaults.
+
+On Save:
+
+POST /api/bots/<bot_id>/entry_rules?env=test with new values & toggle.
+
+Server updates BotOverrideConfig.entry_rules + use_entry_rule_overrides.
+
+For LIVE env:
+
+Same table, but:
+
+No inputs (read-only).
+
+No Save/Reset buttons.
+
+No override toggle.
+
+5.3 Global Risk (Engine)
+
+Similar pattern:
+
+Backed by GET /api/bots/global_risk?env=test|live.
+
+Show fields like max_margin_pct, max_net_delta, etc.
+
+TEST env:
+
+Editable inputs + “Use global overrides (TEST only)” toggle.
+
+LIVE:
+
+Read-only.
+
+5.4 Bot Risk (Per-bot)
+
+Same pattern per bot:
+
+GET /api/bots/<bot_id>/risk?env=test|live.
+
+Fields like max_equity_share, max_positions_per_underlying, etc.
+
+TEST env: editable + override toggle.
+
+LIVE: read-only.
+
+6. New API endpoints
+
+In src/web_app.py:
+
+Add endpoints for fetching/updating overrides:
+
+GET /api/bots/global_risk
+
+POST /api/bots/global_risk
+
+GET /api/bots/{bot_id}/risk
+
+POST /api/bots/{bot_id}/risk
+
+GET /api/bots/{bot_id}/entry_rules
+
+POST /api/bots/{bot_id}/entry_rules
+
+Query param env=test|live must be required.
+
+Behavior:
+
+If env == "live":
+
+All POST endpoints should reject with a 400 or 403 (we do not allow editing LIVE).
+
+If env == "test":
+
+POST updates the override config JSON and returns the updated view.
+
+7. Safety & tests
+
+Unit tests
+
+Add tests for overrides module:
+
+Loading default overrides returns use_* == False.
+
+Applying overrides in TEST mode changes thresholds.
+
+In LIVE mode, overrides are ignored even if present on disk.
+
+Add a small test around Greg selector logic to assert that:
+
+With TEST overrides on, a changed VRP threshold actually changes the pass/fail result for a synthetic sensor config.
+
+Manual smoke checklist
+
+Start the web app.
+
+Go to Bots → Test → GregBot:
+
+Edit one entry rule threshold (e.g. make VRP min extremely low).
+
+Turn “Use entry rule overrides” ON.
+
+Save.
+
+Confirm:
+
+The Greg strategy evaluations reflect the new threshold (e.g. strategy moves from BLOCKED → PASS under the same sensors).
+
+Switch to Bots → Live → GregBot:
+
+Confirm:
+
+Thresholds match default JSON.
+
+No inputs/toggles are editable.
+
+System uses LIVE safe values even if TEST overrides exist.
+
+Please implement this Batch 3 exactly as described:
+
+Refactor the Bots tab into env (Test/Live) → bot → sidebar sections.
+
+Add an override system stored in data/bot_overrides_test.json.
+
+Wire overrides into the risk engine and Greg selector only when env_mode == TEST and the relevant toggle is ON.
+
+Keep LIVE behavior identical to today and read-only in the UI.

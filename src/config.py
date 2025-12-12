@@ -17,6 +17,12 @@ class GregTradingMode(str, Enum):
     LIVE = "live"
 
 
+class EnvironmentMode(str, Enum):
+    """UI environment mode for testing vs production views."""
+    TEST = "test"
+    LIVE = "live"
+
+
 class Settings(BaseSettings):
     """
     Main configuration for the options trading agent.
@@ -386,6 +392,15 @@ class Settings(BaseSettings):
     force_test_size: float = Field(
         default=0.01,
         description="Size for force test positions (small for safety)",
+    )
+
+    env_mode: EnvironmentMode = Field(
+        default=EnvironmentMode.TEST,
+        description=(
+            "UI environment mode: 'test' allows rule overrides and experimentation, "
+            "'live' is read-only and uses safe production config. "
+            "Note: This is independent of Deribit network (testnet/mainnet)."
+        ),
     )
 
     @property
