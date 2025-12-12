@@ -5845,8 +5845,8 @@ def index() -> str:
             </thead>
             <tbody>`;
           
-          const sensorNames = ['iv_30d', 'rv_30d', 'vrp_30d', 'chop_factor_7d', 'iv_rank_6m', 'term_structure_spread', 'skew_25d', 'adx_14d', 'rsi_14d', 'price_vs_ma200'];
-          const sensorLabels = {{'iv_30d': 'IV 30d (DVOL)', 'rv_30d': 'RV 30d (hourly)', 'vrp_30d': 'VRP 30d (IV-RV)', 'chop_factor_7d': 'Chop Factor 7d', 'iv_rank_6m': 'IV Rank 6m', 'term_structure_spread': 'Term Spread', 'skew_25d': 'Skew 25d', 'adx_14d': 'ADX 14d', 'rsi_14d': 'RSI 14d', 'price_vs_ma200': 'Price vs MA200'}};
+          const sensorNames = ['iv_30d', 'rv_30d', 'rv_7d', 'vrp_30d', 'chop_factor_7d', 'iv_rank_6m', 'term_structure_spread', 'skew_25d', 'adx_14d', 'rsi_14d', 'price_vs_ma200'];
+          const sensorLabels = {{'iv_30d': 'IV 30d (DVOL)', 'rv_30d': 'RV 30d (hourly)', 'rv_7d': 'RV 7d (hourly)', 'vrp_30d': 'VRP 30d (IV-RV)', 'chop_factor_7d': 'Chop Factor 7d', 'iv_rank_6m': 'IV Rank 6m', 'term_structure_spread': 'Term Spread', 'skew_25d': 'Skew 25d', 'adx_14d': 'ADX 14d', 'rsi_14d': 'RSI 14d', 'price_vs_ma200': 'Price vs MA200'}};
           
           for (const name of sensorNames) {{
             html += `<tr style="border-bottom: 1px solid #eee;">
