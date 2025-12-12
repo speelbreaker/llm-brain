@@ -191,6 +191,37 @@ class TestExecuteSuggestionSafetyGates:
         fresh_settings = Settings()
         assert fresh_settings.greg_trading_mode == GregTradingMode.ADVICE_ONLY
         assert not fresh_settings.greg_enable_live_execution
+    
+    def test_notional_limits_enforcement(self):
+        """Test that notional limits are enforced in LIVE mode."""
+        from src.greg_trading_store import GregTradingStore
+        
+        store = GregTradingStore()
+        store.set_mode(GregTradingMode.LIVE, "Test")
+        store.set_notional_limits(500.0, 2000.0)
+        
+        ok, reason = store.check_notional_limits(400.0, 0.0)
+        assert ok
+        assert "Within" in reason
+        
+        ok, reason = store.check_notional_limits(600.0, 0.0)
+        assert not ok
+        assert "exceeds" in reason.lower()
+        
+        ok, reason = store.check_notional_limits(300.0, 1800.0)
+        assert not ok
+        assert "underlying" in reason.lower()
+    
+    def test_notional_limits_only_in_live(self):
+        """Test that notional limits only apply in LIVE mode."""
+        from src.greg_trading_store import GregTradingStore
+        
+        store = GregTradingStore()
+        store.set_mode(GregTradingMode.PAPER, "Test")
+        store.set_notional_limits(100.0, 100.0)
+        
+        ok, reason = store.check_notional_limits(500.0, 500.0)
+        assert ok
 
 
 class TestDecisionReportScript:
