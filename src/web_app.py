@@ -3714,8 +3714,7 @@ def index() -> str:
 
   <div class="tabs">
     <button class="tab active" onclick="showTab('live')">Live Agent</button>
-    <button class="tab" onclick="showTab('backtest')">Backtesting Lab</button>
-    <button class="tab" onclick="showTab('runs')">Backtest Runs</button>
+    <button class="tab" onclick="showTab('backtesting')">Backtesting</button>
     <button class="tab" onclick="showTab('calibration')">Calibration</button>
     <button class="tab" onclick="showTab('strategies')">Bots</button>
     <button class="tab" onclick="showTab('greglab')">Greg Lab</button>
@@ -3906,10 +3905,17 @@ def index() -> str:
     </div>
   </div>
 
-  <!-- BACKTESTING LAB TAB -->
-  <div id="tab-backtest" class="tab-content">
-    <div class="section">
-      <h2>Backtest Configuration</h2>
+  <!-- UNIFIED BACKTESTING TAB -->
+  <div id="tab-backtesting" class="tab-content">
+    <!-- Collapsible Card: Backtesting Lab -->
+    <div class="card collapsible-section" style="margin-bottom: 1.5rem;">
+      <div class="card-header" style="display:flex;justify-content:space-between;align-items:center;padding:12px 16px;background:#2a2a2a;border-radius:8px 8px 0 0;cursor:pointer;" onclick="toggleBacktestSection('lab')">
+        <h3 style="margin:0;font-size:1.1rem;color:#4fc3f7;">Backtesting Lab - Configure &amp; Run</h3>
+        <span id="lab-toggle-icon" style="font-size:1.2rem;color:#888;">&#9660;</span>
+      </div>
+      <div id="backtest-lab-body" class="card-body collapsible-body" style="display:block;padding:16px;background:#1e1e1e;border-radius:0 0 8px 8px;">
+        <div class="section" style="margin:0;">
+          <h4 style="margin-top:0;">Backtest Configuration</h4>
       <div class="form-row">
         <div class="form-group">
           <label>Underlying</label>
@@ -4569,6 +4575,92 @@ def index() -> str:
       <div class="spinner"></div>
       <p>Running backtest... This may take a minute.</p>
     </div>
+        </div>
+      </div>
+    </div>
+    
+    <!-- Collapsible Card: Backtest Runs History -->
+    <div class="card collapsible-section">
+      <div class="card-header" style="display:flex;justify-content:space-between;align-items:center;padding:12px 16px;background:#2a2a2a;border-radius:8px 8px 0 0;cursor:pointer;" onclick="toggleBacktestSection('runs')">
+        <h3 style="margin:0;font-size:1.1rem;color:#81c784;">Backtest Runs - History</h3>
+        <span id="runs-toggle-icon" style="font-size:1.2rem;color:#888;">&#9654;</span>
+      </div>
+      <div id="backtest-runs-body" class="card-body collapsible-body" style="display:none;padding:16px;background:#1e1e1e;border-radius:0 0 8px 8px;">
+        <p style="color: #888; margin-bottom: 15px;">View all saved backtest runs with performance metrics. Each run is saved automatically when completed.</p>
+        
+        <div style="margin-bottom: 12px;">
+          <button onclick="fetchBacktestRuns()" style="background:#2196f3;color:#fff;border:none;padding:8px 16px;border-radius:4px;cursor:pointer;">Refresh Runs</button>
+        </div>
+        
+        <div style="overflow-x:auto;">
+          <table class="steps-table" id="runs-table">
+            <thead>
+              <tr>
+                <th>Run ID</th>
+                <th>Created</th>
+                <th>Underlying</th>
+                <th>Date Range</th>
+                <th>Status</th>
+                <th>Exit Style</th>
+                <th>Net PnL %</th>
+                <th>Max DD %</th>
+                <th>Sharpe</th>
+                <th>Trades</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody id="runs-table-body">
+              <tr><td colspan="11" style="text-align:center;color:#666;">Loading...</td></tr>
+            </tbody>
+          </table>
+        </div>
+        
+        <!-- Run Detail Modal -->
+        <div id="run-detail-modal" class="modal" style="display:none;">
+          <div class="modal-content" style="max-width:900px;background:#1e1e1e;color:#fff;max-height:90vh;overflow-y:auto;">
+            <span class="modal-close" onclick="closeRunDetailModal()" style="color:#888;">&times;</span>
+            <h3 id="run-detail-title" style="margin-top:0;">Backtest Run Details</h3>
+            
+            <div id="run-detail-config" style="margin-bottom:16px;padding:12px;background:#2a2a2a;border-radius:6px;">
+              <h4 style="margin:0 0 8px 0;color:#4fc3f7;">Configuration</h4>
+              <div id="run-config-grid" style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;font-size:0.85em;"></div>
+            </div>
+            
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px;">
+              <div id="run-metrics-hte" style="padding:12px;background:#2a2a2a;border-radius:6px;">
+                <h4 style="margin:0 0 8px 0;color:#81c784;">Hold to Expiry</h4>
+                <div id="run-metrics-hte-content"></div>
+              </div>
+              <div id="run-metrics-tpr" style="padding:12px;background:#2a2a2a;border-radius:6px;">
+                <h4 style="margin:0 0 8px 0;color:#ffb74d;">TP & Roll</h4>
+                <div id="run-metrics-tpr-content"></div>
+              </div>
+            </div>
+            
+            <div style="margin-bottom:16px;">
+              <h4 style="margin:0 0 8px 0;color:#ce93d8;">Recent Chains (TP & Roll)</h4>
+              <div style="overflow-x:auto;max-height:200px;overflow-y:auto;">
+                <table class="steps-table">
+                  <thead>
+                    <tr>
+                      <th>Decision Time</th>
+                      <th>Underlying</th>
+                      <th>Legs</th>
+                      <th>Rolls</th>
+                      <th>Total PnL</th>
+                      <th>Max DD %</th>
+                    </tr>
+                  </thead>
+                  <tbody id="run-chains-body">
+                    <tr><td colspan="6" style="text-align:center;color:#666;">No chains</td></tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
   </div>
 
   <!-- CALIBRATION TAB -->
@@ -4903,86 +4995,6 @@ def index() -> str:
               <tr><td colspan="9" style="text-align:center;color:#666;">No history data</td></tr>
             </tbody>
           </table>
-        </div>
-      </div>
-    </div>
-  </div>
-
-  <!-- BACKTEST RUNS TAB -->
-  <div id="tab-runs" class="tab-content">
-    <div class="section">
-      <h2>Backtest Run History</h2>
-      <p style="color: #888; margin-bottom: 15px;">View all saved backtest runs with performance metrics. Each run is saved automatically when completed.</p>
-      
-      <div style="margin-bottom: 12px;">
-        <button onclick="fetchBacktestRuns()" style="background:#2196f3;color:#fff;border:none;padding:8px 16px;border-radius:4px;cursor:pointer;">Refresh Runs</button>
-      </div>
-      
-      <div style="overflow-x:auto;">
-        <table class="steps-table" id="runs-table">
-          <thead>
-            <tr>
-              <th>Run ID</th>
-              <th>Created</th>
-              <th>Underlying</th>
-              <th>Date Range</th>
-              <th>Status</th>
-              <th>Exit Style</th>
-              <th>Net PnL %</th>
-              <th>Max DD %</th>
-              <th>Sharpe</th>
-              <th>Trades</th>
-              <th>Actions</th>
-            </tr>
-          </thead>
-          <tbody id="runs-table-body">
-            <tr><td colspan="11" style="text-align:center;color:#666;">Loading...</td></tr>
-          </tbody>
-        </table>
-      </div>
-    </div>
-    
-    <!-- Run Detail Modal -->
-    <div id="run-detail-modal" class="modal" style="display:none;">
-      <div class="modal-content" style="max-width:900px;background:#1e1e1e;color:#fff;max-height:90vh;overflow-y:auto;">
-        <span class="modal-close" onclick="closeRunDetailModal()" style="color:#888;">&times;</span>
-        <h3 id="run-detail-title" style="margin-top:0;">Backtest Run Details</h3>
-        
-        <div id="run-detail-config" style="margin-bottom:16px;padding:12px;background:#2a2a2a;border-radius:6px;">
-          <h4 style="margin:0 0 8px 0;color:#4fc3f7;">Configuration</h4>
-          <div id="run-config-grid" style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;font-size:0.85em;"></div>
-        </div>
-        
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px;">
-          <div id="run-metrics-hte" style="padding:12px;background:#2a2a2a;border-radius:6px;">
-            <h4 style="margin:0 0 8px 0;color:#81c784;">Hold to Expiry</h4>
-            <div id="run-metrics-hte-content"></div>
-          </div>
-          <div id="run-metrics-tpr" style="padding:12px;background:#2a2a2a;border-radius:6px;">
-            <h4 style="margin:0 0 8px 0;color:#ffb74d;">TP & Roll</h4>
-            <div id="run-metrics-tpr-content"></div>
-          </div>
-        </div>
-        
-        <div style="margin-bottom:16px;">
-          <h4 style="margin:0 0 8px 0;color:#ce93d8;">Recent Chains (TP & Roll)</h4>
-          <div style="overflow-x:auto;max-height:200px;overflow-y:auto;">
-            <table class="steps-table">
-              <thead>
-                <tr>
-                  <th>Decision Time</th>
-                  <th>Underlying</th>
-                  <th>Legs</th>
-                  <th>Rolls</th>
-                  <th>Total PnL</th>
-                  <th>Max DD %</th>
-                </tr>
-              </thead>
-              <tbody id="run-chains-body">
-                <tr><td colspan="6" style="text-align:center;color:#666;">No chains</td></tr>
-              </tbody>
-            </table>
-          </div>
         </div>
       </div>
     </div>
@@ -5696,7 +5708,7 @@ def index() -> str:
       if (name === 'chat') {{
         loadChatHistory();
       }}
-      if (name === 'runs') {{
+      if (name === 'backtesting') {{
         fetchBacktestRuns();
       }}
       if (name === 'health') {{
@@ -5707,6 +5719,19 @@ def index() -> str:
       }}
       if (name === 'greglab') {{
         loadGregPositions();
+      }}
+    }}
+    
+    function toggleBacktestSection(which) {{
+      const bodyId = which === 'lab' ? 'backtest-lab-body' : 'backtest-runs-body';
+      const iconId = which === 'lab' ? 'lab-toggle-icon' : 'runs-toggle-icon';
+      const el = document.getElementById(bodyId);
+      const iconEl = document.getElementById(iconId);
+      if (!el) return;
+      const isHidden = el.style.display === 'none';
+      el.style.display = isHidden ? 'block' : 'none';
+      if (iconEl) {{
+        iconEl.innerHTML = isHidden ? '&#9660;' : '&#9654;';
       }}
     }}
     

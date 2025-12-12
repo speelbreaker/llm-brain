@@ -1,0 +1,161 @@
+PROMPT FOR AI BUILDER – UNIFY BACKTESTING LAB + BACKTEST RUNS INTO ONE TAB WITH COLLAPSIBLE SECTIONS
+
+You are working inside my Deribit options bot repo (llm-brain / “Options Agent”).
+
+The app already has:
+
+A Backtesting Lab UI (form + live status) wired to /api/backtest/*.
+
+A separate Backtest Runs panel wired to /api/backtests* that lists historical runs.
+
+I want to unify these into a single Backtesting tab, and make both areas collapsible cards, so I don’t have to see everything at once.
+
+Goals
+
+Replace the separate “Backtesting Lab” and “Backtest Runs” tabs with a single top-level tab called “Backtesting” in the main UI.
+
+Under that tab, keep both:
+
+The existing Backtesting Lab (configure + start a backtest, show live progress).
+
+The existing Backtest Runs panel (history table + download links).
+
+Wrap each of those areas in a collapsible card/section, so I can expand/collapse them independently:
+
+Card 1: “Backtesting Lab – Configure & Run”
+
+Card 2: “Backtest Runs – History”
+
+Keep all existing endpoints and JS behavior intact; this is purely a layout & UX refactor.
+
+Files to edit
+
+Focus on:
+
+src/web_app.py – where the main HTML template and tabs are defined.
+
+Any Jinja/HTML helpers you find in that same file related to Backtesting Lab and Backtest Runs.
+
+Do not modify the backtest engine itself (src/backtest/manager.py, etc.) or the /api/backtest* and /api/backtests* logic beyond what’s needed for the layout.
+
+Step 1 – Unify the tabs
+
+Find the part of the main HTML in src/web_app.py where the top-level tabs are defined (e.g. “Dashboard”, “Bots”, “Backtesting Lab”, “Backtest Runs”, “System Health”, etc.).
+
+Remove the separate “Backtesting Lab” and “Backtest Runs” tabs.
+
+Add a single tab named “Backtesting”.
+
+Make sure clicking this new “Backtesting” tab shows one content area that contains both the Lab and the Runs sections (described below).
+
+Result: In the top nav, I should now see just Backtesting, not two separate entries.
+
+Step 2 – Collapsible cards inside the Backtesting tab
+
+Inside the new Backtesting tab content:
+
+2.1 Wrap Backtesting Lab in a collapsible card
+
+Locate the existing Backtesting Lab HTML (form with underlying/start/end/timeframe/decision interval/exit style/etc., plus the live status/progress area).
+
+Wrap that block in a card like:
+
+<div class="card collapsible-section">
+  <div class="card-header">
+    <button class="toggle-button" onclick="toggleBacktestSection('lab')">
+      Backtesting Lab – Configure & Run
+    </button>
+  </div>
+  <div id="backtest-lab-body" class="card-body collapsible-body">
+    <!-- existing Backtesting Lab form + status go here -->
+  </div>
+</div>
+
+
+Do not change the IDs or names of the existing elements inside the Lab (form fields, progress labels, etc.) so that the current JS functions (startBacktest, polling /api/backtest/status, etc.) keep working.
+
+2.2 Wrap Backtest Runs in a collapsible card
+
+Locate the existing Backtest Runs panel HTML (table listing runs from /api/backtests, download links, etc.).
+
+Move that block into the same Backtesting tab and wrap it similarly:
+
+<div class="card collapsible-section">
+  <div class="card-header">
+    <button class="toggle-button" onclick="toggleBacktestSection('runs')">
+      Backtest Runs – History
+    </button>
+  </div>
+  <div id="backtest-runs-body" class="card-body collapsible-body">
+    <!-- existing Backtest Runs table + controls go here -->
+  </div>
+</div>
+
+
+Again, keep existing DOM IDs (backtest-runs-table, etc.) and JS fetch logic unchanged; only move the block into this new card.
+
+Step 3 – Simple JS to control collapse/expand
+
+In the same HTML template (still in src/web_app.py, inside the <script> block where other dashboard JS lives), add a small helper:
+
+function toggleBacktestSection(which) {
+  const bodyId = which === 'lab' ? 'backtest-lab-body' : 'backtest-runs-body';
+  const el = document.getElementById(bodyId);
+  if (!el) return;
+  const isHidden = el.style.display === 'none';
+  el.style.display = isHidden ? 'block' : 'none';
+}
+
+
+Initial state:
+
+On page load, make Backtesting Lab expanded and Backtest Runs collapsed by default:
+
+<div id="backtest-lab-body" class="card-body collapsible-body" style="display: block;">
+...
+<div id="backtest-runs-body" class="card-body collapsible-body" style="display: none;">
+
+
+You can also add a light visual cue (e.g. arrow icon or “(click to expand)”) reusing any existing CSS, but keep it simple.
+
+Step 4 – Clean up and verify
+
+Remove any now-unused standalone page/tab for Backtest Runs, so there is exactly one place in the UI where Backtest history is shown (inside the Backtesting tab’s “Backtest Runs – History” card).
+
+Verify:
+
+The Backtesting tab appears in the top nav instead of “Backtesting Lab” + “Backtest Runs”.
+
+Clicking Backtesting shows two cards:
+
+“Backtesting Lab – Configure & Run” expanded.
+
+“Backtest Runs – History” collapsed.
+
+The Lab card still:
+
+Starts/stops backtests via /api/backtest/start (or the existing endpoint).
+
+Shows status and progress as before.
+
+The Runs card still:
+
+Calls /api/backtests to list runs.
+
+Shows net PnL%, DD, Sharpe, status, etc.
+
+Lets me download result JSON for any run.
+
+Toggling each card’s header button hides/shows that section without breaking any other JS.
+
+Do not change any backtest behavior, endpoints, or data formats: this is a layout/UX-only change.
+
+After this change, I should be able to:
+
+Click Backtesting once.
+
+Expand/collapse Backtesting Lab and Backtest Runs independently.
+
+Run a new backtest and inspect historical runs from the same tab, without extra clutter.
+
+Please implement this refactor now.
