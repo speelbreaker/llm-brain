@@ -157,6 +157,58 @@ def get_dvol(underlying: str) -> Optional[float]:
     return _fetch_dvol_cached(underlying, cache_key)
 
 
+@lru_cache(maxsize=2)
+def _fetch_volmex_iv_cached(underlying: str, cache_key: str) -> Optional[float]:
+    """
+    Fetch current Volmex IV (BVIV for BTC, EVIV for ETH) via GraphQL API.
+    Returns the most recent index value as a percentage.
+    """
+    import httpx
+    
+    asset = underlying.upper()
+    if asset not in ("BTC", "ETH"):
+        return None
+    
+    query = """
+    query impliedVol {
+      impliedVolatilitys(limit: 1, query: { asset: %s }, sort: "-timestamp") {
+        index
+        asset
+        timestamp
+      }
+    }
+    """ % asset
+    
+    try:
+        with httpx.Client(timeout=10.0) as http_client:
+            response = http_client.post(
+                "https://api.volmex.finance/graphql",
+                json={"query": query},
+                headers={"Content-Type": "application/json"},
+            )
+            response.raise_for_status()
+            data = response.json()
+        
+        volatilities = data.get("data", {}).get("impliedVolatilitys", [])
+        if not volatilities:
+            return None
+        
+        index_value = volatilities[0].get("index")
+        if index_value is None:
+            return None
+        
+        return float(index_value) * 100
+    except Exception:
+        return None
+
+
+def get_volmex_iv(underlying: str) -> Optional[float]:
+    """Get current Volmex IV (BVIV/EVIV) with 10-minute cache invalidation."""
+    now = datetime.now(timezone.utc)
+    cache_key = f"{now.year}-{now.month}-{now.day}-{now.hour}-{now.minute // 10}"
+    return _fetch_volmex_iv_cached(underlying, cache_key)
+
+
 def compute_realized_volatility_hourly(closes: pd.Series, hours: int = 720) -> Optional[float]:
     """
     Compute annualized realized volatility from hourly closes.
@@ -537,6 +589,7 @@ class SensorBundle:
         self.price_vs_ma200: Optional[float] = None
         self.spot: Optional[float] = None
         self.iv_30d: Optional[float] = None
+        self.iv_volmex: Optional[float] = None
         self.iv_7d: Optional[float] = None
         self.rv_30d: Optional[float] = None
         self.rv_7d: Optional[float] = None
@@ -550,6 +603,7 @@ class SensorBundle:
         """Return sensor values as dictionary (v6.0 compatible)."""
         return {
             "iv_30d": self.iv_30d,
+            "iv_volmex": self.iv_volmex,
             "rv_30d": self.rv_30d,
             "rv_7d": self.rv_7d,
             "vrp_30d": self.vrp_30d,
@@ -729,6 +783,9 @@ def compute_sensors_for_underlying(
     dvol = get_dvol(underlying)
     if iv_30d is None and dvol is not None:
         iv_30d = dvol
+    
+    volmex_iv = get_volmex_iv(underlying)
+    bundle.iv_volmex = volmex_iv
     
     if iv_30d is None:
         term_spread_live, iv_7d_live, iv_30d_live = compute_term_structure_and_atm_iv(
