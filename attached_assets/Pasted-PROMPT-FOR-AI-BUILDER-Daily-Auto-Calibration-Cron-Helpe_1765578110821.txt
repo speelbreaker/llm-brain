@@ -1,0 +1,122 @@
+PROMPT FOR AI BUILDER – Daily Auto-Calibration Cron Helper
+
+You are working in my Options Trading Agent repo.
+
+We already have:
+
+A Deribit data harvester writing Parquet snapshots under data/live_deribit/....
+
+A script scripts/auto_calibrate_iv.py that:
+
+Runs historical calibration from harvested data,
+
+Writes to calibration_history,
+
+Shows up in the Calibration History (Auto-Calibrate) table in the UI.
+
+Live calibration + update policy that only updates the applied IV multipliers from live runs (not auto-calibrate), with thresholds on min_delta, min_samples, min_vega, smoothing, etc.
+
+I want a small, safe, production-ish way to run auto-calibration once per day via cron (or any scheduler), without auto-applying the results to the live vol surface.
+
+1) Add a daily auto-calibration script
+
+Create a new shell script:
+
+scripts/daily_auto_calibrate.sh
+
+Requirements:
+
+Shebang + safety flags:
+
+#!/usr/bin/env bash
+set -euo pipefail
+
+
+Change directory to the project root (where scripts/ and pyproject.toml live). Use a robust pattern, e.g.:
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$REPO_ROOT"
+
+
+Run auto-calibration for BTC and ETH using the existing script:
+
+python scripts/auto_calibrate_iv.py --underlying BTC
+python scripts/auto_calibrate_iv.py --underlying ETH
+
+
+Allow future extension via an environment variable:
+
+If AUTO_CALIBRATE_UNDERLYINGS is set (e.g. "BTC,ETH"), iterate over that list instead of hardcoding BTC/ETH.
+
+Default to BTC,ETH when the variable is not defined.
+
+Write nothing fancy to stdout/stderr (cron will capture output). No interactivity.
+
+Make the script executable in the repo (you can add a note, but obviously you can’t run chmod yourself):
+
+chmod +x scripts/daily_auto_calibrate.sh
+
+2) Keep auto-calibrate strictly “history-only” (no auto-apply!)
+
+Very important safety requirement:
+
+Do NOT change any logic so that auto-calibrate runs influence Current Applied Multipliers or live vol surfaces.
+
+scripts/auto_calibrate_iv.py should continue to:
+
+Read harvested Parquet data,
+
+Run extended calibration,
+
+Insert a row into calibration_history with status / reason / MAE / vMAE / multiplier,
+
+But never flip any “applied” flags or change global/term multipliers used by the synthetic universe.
+
+If there is any shared helper that handles both live and harvested calibration, make sure the “apply” path is only reachable from the live calibration endpoint and not from auto_calibrate_iv.py.
+
+3) Add cron usage documentation
+
+Add a short section to an appropriate doc (e.g. replit.md, CALIBRATION_NOTES.md, or README.md) titled something like:
+
+Daily Auto-Calibration (Cron Example)
+
+Explain briefly:
+
+That scripts/daily_auto_calibrate.sh can be run once per day to add entries to Calibration History (Auto-Calibrate) for BTC/ETH.
+
+That it is safe because it does not modify the currently applied multipliers; those are still controlled by live calibration + policy.
+
+Include a sample cron snippet (for a generic Linux server), for example:
+
+# Run daily auto-calibration at 03:10 server time
+10 3 * * * /path/to/repo/scripts/daily_auto_calibrate.sh >> /path/to/repo/logs/auto_calibrate_cron.log 2>&1
+
+
+Mention:
+
+Adjust /path/to/repo to the actual repo path.
+
+Ensure logs/ exists.
+
+If AUTO_CALIBRATE_UNDERLYINGS is needed, show an example:
+
+10 3 * * * AUTO_CALIBRATE_UNDERLYINGS="BTC,ETH" /path/to/repo/scripts/daily_auto_calibrate.sh >> /path/to/repo/logs/auto_calibrate_cron.log 2>&1
+
+4) Quick smoke test
+
+After implementing:
+
+Run manually from the repo root:
+
+scripts/daily_auto_calibrate.sh
+
+
+Confirm:
+
+Script exits cleanly.
+
+New entries appear in Calibration History (Auto-Calibrate) for BTC and ETH.
+
+Current Applied Multipliers remain unchanged (no automatic apply from auto-calibrate).
+
+Please keep everything backward-compatible and avoid changing the existing behavior of live calibration / update policy.
