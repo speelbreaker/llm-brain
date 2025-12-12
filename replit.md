@@ -1,7 +1,7 @@
 # Options Trading Agent - Deribit Testnet
 
 ## Overview
-This project is a modular Python framework for automated BTC/ETH covered call trading on the Deribit testnet. It functions as a research and experimentation system for testing trading strategies, generating training data, and analyzing performance via a web dashboard and backtesting suite. The system supports both rule-based and LLM-powered decision-making, with a focus on exploration-based learning and ambitions for eventual mainnet deployment.
+This project is a modular Python framework for automated BTC/ETH covered call trading on the Deribit testnet. It serves as a research and experimentation system for developing and testing trading strategies, generating training data, and analyzing performance via a web dashboard and backtesting suite. The system supports both rule-based and LLM-powered decision-making, with a focus on exploration-based learning and ambitions for eventual mainnet deployment.
 
 ## User Preferences
 - Python 3.11
@@ -14,18 +14,16 @@ This project is a modular Python framework for automated BTC/ETH covered call tr
 The agent features a clear separation of concerns, with modules for configuration, data modeling, API interaction, market context generation, risk management, policy decisions (rule-based and LLM), execution, and logging. It supports "research" and "production" modes, with a FastAPI web application providing a real-time dashboard for monitoring, interaction, and backtesting.
 
 ### UI/UX Decisions
-The web dashboard provides a user-friendly interface with sections for "Live Agent" status, "Backtesting Lab", "Backtest Runs", "Calibration", "System Health", "Chat" interface, "Bots" tab for expert trading bot analysis, and an "AI Steward" panel for project insights.
+The web dashboard offers a user-friendly interface with sections for "Live Agent" status, "Backtesting Lab", "Backtest Runs", "Calibration", "System Health", "Chat" interface, "Bots" tab for expert trading bot analysis, and an "AI Steward" panel for project insights.
 
 ### Technical Implementations
 - **Configuration**: Pydantic settings manage application configuration.
-- **API Wrapper**: `deribit_client.py` provides an `httpx`-based wrapper for the Deribit testnet API.
-- **State Management**: `state_builder.py` aggregates market data; `status_store.py` manages thread-safe status updates. `state_core.py` provides unified state-building logic.
-- **Order Execution**: `execution.py` handles order translation and dry-run simulations.
+- **API Wrapper**: An `httpx`-based wrapper (`deribit_client.py`) for the Deribit testnet API.
+- **State Management**: Aggregates market data, manages thread-safe status updates, and unifies state-building logic.
+- **Order Execution**: Handles order translation and dry-run simulations.
 - **Structured Logging**: Uses JSONL for logging decisions and actions.
 - **Position Persistence**: Bot-managed positions are saved to `data/positions.json` and restored on restart.
-- **Agent Healthcheck Module**: Self-contained healthcheck system for critical pipeline validation.
-
-### Feature Specifications
+- **Agent Healthcheck Module**: Self-contained system for critical pipeline validation.
 - **Decision Policies**: Supports rule-based strategies with scoring and epsilon-greedy exploration, and an LLM-powered decision mode validated by a risk engine. Decision modes include `rule_only`, `llm_only`, and `hybrid_shadow`.
 - **LLM Validation**: Comprehensive validation of LLM decisions including symbol, action type, position, and size clamping.
 - **Market Context**: Integrates `MarketContext` for regime detection, returns, and realized volatility.
@@ -42,72 +40,20 @@ The web dashboard provides a user-friendly interface with sections for "Live Age
 - **State-Aware Chat Assistant**: A multi-turn assistant that understands current trading state, answers questions, and provides project information.
 - **Position Reconciliation**: Compares local position tracker against exchange positions, with configurable actions.
 - **Calibration vs Deribit**: Compares synthetic Black-Scholes prices against live Deribit marks.
-- **Synthetic Universe v2 (Greg-sensor cluster regimes)**: Incorporates `RegimeParams`, KMeans clustering, AR(1) IV dynamics, and Greg-sensor clusters for realistic IV evolution and regime modeling.
+- **Synthetic Universe v2**: Incorporates `RegimeParams`, KMeans clustering, AR(1) IV dynamics, and Greg-sensor clusters for realistic IV evolution and regime modeling.
 - **Extended Calibration System (v2)**: Enhanced `run_calibration_extended()` with liquidity filtering, multi-DTE bands, bucket metrics, skew fitting, recommended `vol_surface` generation, and vega-weighted MAE. Includes UI panels for calibration coverage and skew fit analysis.
-- **Auto IV Calibration Pipeline**: Persists time series of auto-calculated IV multipliers in a `calibration_history` table. Includes a CLI script (`scripts/auto_calibrate_iv.py`) that uses the extended calibration engine (`run_historical_calibration_from_harvest`), a runtime in-memory override store, and API endpoints/UI for management.
-    - **Guardrails & Realism Assessment**: The `assess_calibration_realism()` function validates calibrations with thresholds for multiplier bounds (0.7-1.6), max MAE (400%), and max vega-weighted MAE (200%). Returns status as OK/DEGRADED/FAILED with reasons.
-    - **Enhanced History Table**: Calibration history now includes `status`, `reason`, `vega_weighted_mae_pct`, `bias_pct`, and `source` fields. UI displays status badges (green/orange/red) and failure reasons.
-    - **Data Provenance Tracking**: `ExtendedCalibrationResult` now includes `rv_source` (deribit_history/default_iv) and `atm_source` (delta/nearest_strike/none) fields for tracking data origins.
-    - **Robust ATM IV Fallback**: If ATM IV cannot be determined by delta (0.5), falls back to nearest-strike method.
-    - **Fixed Sampling Logic**: Uses `math.ceil()` to properly respect `max_samples` limit (e.g., 81 quotes with max 80 → correctly samples to ≤80).
-    - **Enhanced API Error Messages**: Structured error responses include `error`, `message`, and `error_type` fields, with specific handling for validation errors, Deribit timeouts, and API errors.
-    - **Guardrail Enforcement on Apply**: The `/api/calibration/use_latest` endpoint now blocks application of failed calibrations (multiplier outside 0.7-1.6 bounds), returning a clear error message instead of blindly applying invalid values.
-    - **Skew Ratio Application**: When calibrations are applied (via policy, force-apply, or direct apply), the recommended skew anchor ratios are now stored in the calibration store and applied to the vol surface config. New endpoint `/api/calibration/apply_skew` allows direct skew ratio application. UI "Current Ratio" column now reads from the calibration store instead of static settings.
-    - **Applied Multiplier State Tracking**: The `calibration_store.py` module now tracks applied multipliers with timestamps via `AppliedMultiplierState`. When calibrations are applied (via policy or "Use Latest Recommended"), the state is updated and the UI "Current Applied Multipliers" panel reflects the change immediately.
-- **Calibration Update Policy System**: Policy layer with smoothing (EWMA), thresholds (min_delta, min_sample_size, min_vega_sum), and file-based history storage. Includes configurable thresholds, decision logic for applying updates, CLI integration, and API endpoints/UI for policy management.
-- **Harvester Data Quality & Reproducibility**: Includes `harvester/health.py` for schema validation and quality assessment of harvested Parquet snapshots. Provides `DataQualityStatus` (OK/DEGRADED/FAILED), integrates into historical calibration and realism checks, and displays a "Data Health & Reproducibility" UI panel.
+- **Auto IV Calibration Pipeline**: Persists time series of auto-calculated IV multipliers in a `calibration_history` table. Includes a CLI script (`scripts/auto_calibrate_iv.py`) that uses the extended calibration engine, a runtime in-memory override store, and API endpoints/UI for management. Guardrails assess calibration realism (multiplier bounds, MAE thresholds) and data provenance is tracked.
+- **Calibration Update Policy System**: Policy layer with smoothing (EWMA), thresholds, and file-based history storage. Includes configurable thresholds, decision logic for applying updates, CLI integration, and API endpoints/UI for policy management.
+- **Harvester Data Quality & Reproducibility**: Includes `harvester/health.py` for schema validation and quality assessment of harvested Parquet snapshots, integrated into historical calibration and realism checks, and displayed in a UI panel.
 - **Bots System**: Provides a comprehensive view of expert trading bots, market sensors, and strategy evaluations.
-    - **Greg Mandolini VRP Harvester (GregBot) ENTRY_ENGINE v8.0**: A quantitative VRP strategy selector based on 11 volatility sensors and a decision waterfall, with advisory functionality and 8 evaluated strategies per underlying.
-    - **v8.0 Decision Waterfall**: Supports branching logic (e.g., Bull Put / Bear Call spreads in step 7), `min_vrp_directional` floor (2.0) for directional spreads, and RSI thresholds for oversold/overbought detection.
-    - **Dynamic Calibration**: Strategy thresholds are dynamically loaded from JSON (`global_entry_filters.calibration`). Includes 53+ invariant and scenario tests, an API endpoint for calibration spec, and a UI panel.
-    - **Greg Position Management v1.0 (POSITION_ENGINE)**: Advisory-only position management module for open Greg positions. Evaluates positions for hedge triggers, profit targets, stop-loss, roll, and assignment rules. Includes:
-        - JSON spec file (`docs/greg_mandolini/GREG_POSITION_RULES_V1.json`) with calibrated thresholds
-        - Evaluation logic for all 7 strategy types (straddle, strangle, calendar, short put, iron fly, bull put spread, bear call spread)
-        - Management actions: HEDGE, TAKE_PROFIT, ROLL, ASSIGN, CLOSE, HOLD
-        - Delta hedge suggestions with perp size recommendations
-        - Funding-based assignment decisions (perp vs spot)
-        - UI panel in Bots tab with color-coded action badges
-        - API endpoints: `/api/bots/greg/management`, `/api/bots/greg/management/mock`
-        - 24 unit tests covering all strategy evaluation paths
-    - **Delta Hedging Engine v1.0 (HEDGE_ENGINE)**: Advisory-only delta-neutral hedging module for short-vol strategies. Includes:
-        - Core engine in `src/hedging/hedge_engine.py` with HedgeRules, HedgeOrder, HedgeResult, GregPosition dataclasses
-        - Size-weighted net delta calculation (delta * contract_size for each leg)
-        - Strategy-specific hedging modes: DYNAMIC_DELTA (straddles/strangles), LIGHT_DELTA (calendars), LOOSE_DELTA (iron flies), NONE (directional)
-        - Dry-run mode prevents real orders (Phase 1 = advisory only)
-        - Perpetual futures as hedge instruments (BTC-PERPETUAL, ETH-PERPETUAL)
-        - API endpoints: `/api/bots/greg/hedging`, `/api/bots/greg/hedging/evaluate`, `/api/bots/greg/hedge_history`
-        - UI panel in Bots tab with hedging rules table, proposed hedges display, and hedge history
-        - 30 unit tests covering delta calculations, order building, and execution paths
+    - **Greg Mandolini VRP Harvester (GregBot) ENTRY_ENGINE v8.0**: A quantitative VRP strategy selector based on 11 volatility sensors and a decision waterfall, with advisory functionality and 8 evaluated strategies per underlying. Supports dynamic calibration of strategy thresholds.
+    - **Greg Position Management v1.0 (POSITION_ENGINE)**: Advisory-only position management module for open Greg positions, evaluating for hedge triggers, profit targets, stop-loss, roll, and assignment rules.
+    - **Delta Hedging Engine v1.0 (HEDGE_ENGINE)**: Advisory-only delta-neutral hedging module for short-vol strategies. Supports various strategy-specific hedging modes and uses perpetual futures as hedge instruments.
 - **Strategy Layer**: A pluggable architecture allowing multiple trading strategies to run concurrently, with `strategy_id` for attribution.
-- **Smoke Test Harness**: `scripts/smoke_greg_strategies.py` provides comprehensive testing:
-    - Environment Matrix Tests: Verifies Greg selector picks expected strategies for synthetic market regimes (6/6 pass)
-    - Strategy Smoke Tests: Runs all 7 Greg strategies in DRY_RUN mode with simulated price moves (+/-3%, +/-5%)
-    - Tests position management logic (TP/SL/exits) and hedge engine integration
-    - Usage: `python scripts/smoke_greg_strategies.py --underlying BTC --dry-run`
-- **Real-Trading Mode (Phase 2)**: Execution support with strong safety gates:
-    - **GregTradingMode Enum**: Three modes - ADVICE_ONLY (default), PAPER (testnet/DRY_RUN), LIVE (real orders)
-    - **Safety Gates**: Three-layer protection for live orders:
-        1. Global mode must be LIVE
-        2. Master switch `greg_enable_live_execution` must be True
-        3. Per-strategy flag must be enabled (all False by default)
-    - **Execute Suggestion API**: `POST /api/bots/greg/execute_suggestion` for HEDGE, TAKE_PROFIT, ASSIGN, ROLL actions
-    - **Trading Mode API**: `GET/POST /api/greg/trading_mode` for mode management with double-confirmation for LIVE
-    - **UI Mode Settings Modal**: Per-strategy toggles, confirmation dialog for LIVE mode
-    - **Execute Buttons**: Show in Position Management table when mode allows execution
-- **Decision Logging System**: Comprehensive audit trail for Greg decisions:
-    - **Database Table**: `greg_decision_log` with fields for timestamp, underlying, strategy, action, mode, suggested/executed flags, snapshot metrics (VRP, chop, ADX, skew, PnL)
-    - **Logging Hooks**: All suggestions and executions logged automatically
-    - **Decision Log API**: `GET /api/greg/decision_log` for history and statistics
-    - **What-If Report Script**: `scripts/greg_decision_report.py` generates analysis:
-        - Count of suggestions vs executions
-        - Follow rate by strategy and action type
-        - Average PnL comparison (followed vs ignored)
-        - CLI: `python scripts/greg_decision_report.py --from 2025-01-01 --to 2025-12-31 --underlying BTC`
-- **UI Enhancements**:
-    - **Priority Coloring**: Left border (red=HIGH, orange=MEDIUM, green=LOW) with tooltips
-    - **Demo vs Live Badges**: DEMO (grey) vs LIVE (blue) badges on position rows
-    - **Mode Badge**: Header shows current mode (ADVICE ONLY, PAPER MODE, LIVE MODE)
-    - **View Hedge Link**: Hedge suggestions link to Delta Hedging Engine panel
+- **Smoke Test Harness**: `scripts/smoke_greg_strategies.py` provides comprehensive testing for environmental matrix, strategy execution, position management, and hedge engine integration.
+- **Real-Trading Mode (Phase 2)**: Execution support with strong safety gates (Global mode, master switch, per-strategy flags, environment verification, dry_run cross-check) and tiny-size guardrails (`greg_live_max_notional_usd_per_position`, `greg_live_max_notional_usd_per_underlying`). Includes API for executing suggestions and managing trading modes, along with UI modals and execute buttons.
+- **Decision Logging System**: Comprehensive audit trail for Greg decisions stored in a `greg_decision_log` database table, with API for history and statistics, and a "What-If Report Script" for analysis.
+- **UI Enhancements**: Priority coloring, demo vs live badges, mode badges, and view hedge links.
 
 ## External Dependencies
 - **Deribit API**: Used for real-time market data (testnet) and historical data (mainnet public API for backtesting and data harvesting).
