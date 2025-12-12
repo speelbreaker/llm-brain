@@ -641,9 +641,7 @@ class SensorBundle:
         """Return sensor values as dictionary (v6.0 compatible)."""
         return {
             "iv_30d": self.iv_30d,
-            "iv_volmex": self.iv_volmex,
             "rv_30d": self.rv_30d,
-            "rv_7d": self.rv_7d,
             "vrp_30d": self.vrp_30d,
             "vrp_7d": self.vrp_7d,
             "front_rv_iv_ratio": self.front_rv_iv_ratio,
