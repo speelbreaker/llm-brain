@@ -24,6 +24,13 @@ The web dashboard offers a user-friendly interface with sections for "Live Agent
 - **Structured Logging**: Uses JSONL for logging decisions and actions.
 - **Position Persistence**: Bot-managed positions are saved to `data/positions.json` and restored on restart.
 - **Agent Healthcheck Module**: Self-contained system for critical pipeline validation with expanded config validation (risk settings, LLM config), auto-trigger on tab open (60s throttle), status badge (OK/WARN/FAIL), and LLM diagnostic gating.
+- **Health Guard System**: Runtime health guard with severity-based decision making:
+    - **HealthSeverity Enum**: Classifies errors as TRANSIENT (retry), DEGRADED (pause on testnet), or FATAL (halt on mainnet).
+    - **CachedHealthStatus**: Thread-safe cached health results with `worst_severity` for intelligent recovery.
+    - **Startup Guard**: Severity-aware startup checks - FATAL aborts on mainnet, TRANSIENT proceeds with warning.
+    - **Runtime Re-check**: Periodic health checks during trading loop with severity-based pause/resume.
+    - **Agent Pause Indicator**: UI display of health guard status and agent pause state.
+    - **Config Settings**: `health_check_on_startup`, `auto_kill_on_health_fail`, `health_recheck_interval_seconds`.
 - **Decision Policies**: Supports rule-based strategies with scoring and epsilon-greedy exploration, and an LLM-powered decision mode validated by a risk engine. Decision modes include `rule_only`, `llm_only`, and `hybrid_shadow`.
 - **LLM Validation**: Comprehensive validation of LLM decisions including symbol, action type, position, and size clamping.
 - **Market Context**: Integrates `MarketContext` for regime detection, returns, and realized volatility.
