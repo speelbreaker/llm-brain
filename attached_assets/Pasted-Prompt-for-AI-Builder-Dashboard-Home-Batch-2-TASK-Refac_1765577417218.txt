@@ -1,0 +1,360 @@
+Prompt for AI Builder – Dashboard Home (Batch 2)
+
+TASK: Refactor the Live Agent tab into a proper Home / Dashboard that shows:
+
+Live Market Sensors (BTC/ETH) at the top.
+
+A clear split between Test (DRY_RUN) and Live bot positions.
+
+Use the existing endpoints and helpers wherever possible (especially /api/positions/open and the existing Live Market Sensors endpoint).
+
+1) Rename “Live Agent” → “Dashboard / Home”
+
+Goal: The current “Live Agent” tab is effectively the home screen. We want to rename and slightly reframe it as a Dashboard.
+
+Requirements:
+
+In src/web_app.py (or wherever the main nav is rendered):
+
+Change the label of the tab from “Live Agent” to “Dashboard” or “Home” (pick one and be consistent in the HTML + JS IDs; I’ll call it “Dashboard” below).
+
+Keep the route / tab ID the same underlying route (don’t break URLs), just change labels and any display titles.
+
+The top H1 / header on that tab should read something like:
+
+<h1>Options Agent – Dashboard</h1>
+
+
+instead of “Live Agent”.
+
+Do not remove the existing content you already added previously for:
+
+Market overview strip (BTC/ETH prices, portfolio equity, margin used, net delta, training mode, LLM mode). 
+
+Untitled document
+
+Strategy & Safeguards card. 
+
+Untitled document
+
+Latest Decision card + mini timeline. 
+
+Untitled document
+
+Just re-title the page as “Dashboard”.
+
+2) Move Live Market Sensors onto the Dashboard
+
+We already have a Live Market Sensors table under the Bots / Greg UI. We want that same sensor view to live on the Dashboard, at the top.
+
+Backend (reuse, not new logic):
+
+Reuse the existing endpoint that returns sensor data (e.g. /api/bots/market_sensors or whatever you implemented earlier for: VRP 30d, Chop Factor 7d, IV Rank 6m, Term Spread, Skew 25d, ADX, RSI, Price vs MA200 for BTC and ETH). This endpoint already powers the “Live Market Sensors” section. 
+
+UI_FEATURE_GAPS
+
+Do not change the response shape; just consume it in a new front-end block on the Dashboard.
+
+Frontend (Dashboard tab):
+
+At the top of the Dashboard content (just under the main header and existing market overview strip), add a new section:
+
+<div class="section">
+  <h2>Live Market Sensors</h2>
+
+  <div style="margin-bottom: 8px;">
+    <button id="dashboard-refresh-sensors-btn">Refresh Sensors</button>
+    <label style="margin-left: 12px; font-size: 0.9em;">
+      <input type="checkbox" id="dashboard-show-sensor-debug" />
+      Show debug inputs
+    </label>
+  </div>
+
+  <div style="overflow-x:auto;">
+    <table class="steps-table">
+      <thead>
+        <tr>
+          <th>Sensor</th>
+          <th>BTC</th>
+          <th>ETH</th>
+        </tr>
+      </thead>
+      <tbody id="dashboard-sensors-body">
+        <tr>
+          <td colspan="3" style="text-align:center;color:#666;">Loading...</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+
+Add JS to fetch + render, reusing the same logic you already wrote for the Bots tab sensor table, but scoped to the Dashboard IDs:
+
+async function updateDashboardSensors() {
+  const tbody = document.getElementById('dashboard-sensors-body');
+  if (!tbody) return;
+
+  try {
+    const res = await fetch('/api/bots/market_sensors');
+    const data = await res.json();
+
+    const showDebug = document.getElementById('dashboard-show-sensor-debug')?.checked;
+
+    const sensors = data.sensors || []; // or whatever structure you use
+
+    if (!sensors.length) {
+      tbody.innerHTML = '<tr><td colspan="3" style="text-align:center;color:#666;">No sensor data</td></tr>';
+      return;
+    }
+
+    // Expect something like: [{ name: 'VRP 30d', btc: ..., eth: ..., debug: {...} }, ...]
+    tbody.innerHTML = sensors.map(s => {
+      const btc = showDebug && s.btc_debug
+        ? `${s.btc} (${s.btc_debug})`
+        : s.btc;
+      const eth = showDebug && s.eth_debug
+        ? `${s.eth} (${s.eth_debug})`
+        : s.eth;
+
+      return `
+        <tr>
+          <td>${s.name}</td>
+          <td>${btc}</td>
+          <td>${eth}</td>
+        </tr>
+      `;
+    }).join('');
+  } catch (err) {
+    tbody.innerHTML = `<tr><td colspan="3" style="text-align:center;color:#b00;">Error loading sensors: ${err}</td></tr>`;
+  }
+}
+
+function initDashboardSensors() {
+  const btn = document.getElementById('dashboard-refresh-sensors-btn');
+  const debug = document.getElementById('dashboard-show-sensor-debug');
+  if (btn) btn.onclick = updateDashboardSensors;
+  if (debug) debug.onchange = updateDashboardSensors;
+
+  updateDashboardSensors();
+}
+
+
+Call initDashboardSensors() from your existing JS tab-init for the Dashboard (whatever currently initializes the “Live Agent” tab).
+
+Optional: You can also leave the sensors table under Bots/Greg if you want, but the primary place we care about now is the Dashboard.
+
+3) Split Bot Positions into Test (DRY_RUN) vs Live on Dashboard
+
+We already have:
+
+A backend representation of open position chains with fields including mode (“LIVE” or “DRY_RUN”). 
+
+Untitled document (1)_1
+
+A JSON design + UI skeleton for /api/positions/open used in the Live Agent tab. 
+
+Untitled document (1)_1
+
+We want the Dashboard to show two containers:
+
+Test Positions – all open positions whose mode == "DRY_RUN".
+
+Live Positions – all open positions whose mode == "LIVE".
+
+3.1 Backend – enrich open positions (minimal)
+
+In the helper that serializes open chains (something like _chain_to_open_summary in the position tracker module), ensure the JSON for /api/positions/open includes at least:
+
+{
+    "position_id": ...,
+    "underlying": ...,
+    "option_type": ...,
+    "strategy_type": ...,
+    "symbol": ...,
+    "quantity": ...,
+    "entry_price": ...,
+    "mark_price": ...,
+    "unrealized_pnl": ...,
+    "unrealized_pnl_pct": ...,
+    "dte": ...,
+    "num_rolls": ...,
+    "mode": chain.mode,          # "LIVE" or "DRY_RUN" (already conceptualized) :contentReference[oaicite:6]{index=6}
+    "entry_time": ...,
+    "entry_mode": "NATURAL"      # NEW: placeholder for now
+}
+
+
+entry_mode is a new string field. For now, just set "NATURAL" for all entries. We will later wire override modes (e.g. "OVERRIDE_RISK", "OVERRIDE_ENTRY_RULES") when we build the override UI; the Dashboard UI should be ready to display those.
+
+Make sure /api/positions/open returns:
+
+{
+  "positions": [ ... ]
+}
+
+
+with the new entry_mode key present.
+
+3.2 Frontend – Test vs Live tables on Dashboard
+
+Under the Live Market Sensors section on the Dashboard, add a new Bot Positions section that splits the data:
+
+<div class="section">
+  <h2>Bot Positions</h2>
+
+  <div class="subsection">
+    <h3>Test Positions (DRY_RUN)</h3>
+    <div style="overflow-x:auto; max-height: 220px; overflow-y:auto;">
+      <table class="steps-table">
+        <thead>
+          <tr>
+            <th>Underlying</th>
+            <th>Strategy</th>
+            <th>Symbol</th>
+            <th>Qty</th>
+            <th>Entry</th>
+            <th>Mark</th>
+            <th>Unreal. PnL</th>
+            <th>Unreal. PnL %</th>
+            <th>DTE</th>
+            <th>Rolls</th>
+            <th>Entry Mode</th>
+          </tr>
+        </thead>
+        <tbody id="dashboard-test-positions-body">
+          <tr>
+            <td colspan="11" style="text-align:center;color:#666;">Loading...</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="subsection" style="margin-top:16px;">
+    <h3>Live Positions</h3>
+    <div style="overflow-x:auto; max-height: 220px; overflow-y:auto;">
+      <table class="steps-table">
+        <thead>
+          <tr>
+            <th>Underlying</th>
+            <th>Strategy</th>
+            <th>Symbol</th>
+            <th>Qty</th>
+            <th>Entry</th>
+            <th>Mark</th>
+            <th>Unreal. PnL</th>
+            <th>Unreal. PnL %</th>
+            <th>DTE</th>
+            <th>Rolls</th>
+            <th>Entry Mode</th>
+          </tr>
+        </thead>
+        <tbody id="dashboard-live-positions-body">
+          <tr>
+            <td colspan="11" style="text-align:center;color:#666;">Loading...</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+
+Add a JS function to fetch and split:
+
+async function updateDashboardPositions() {
+  const testBody = document.getElementById('dashboard-test-positions-body');
+  const liveBody = document.getElementById('dashboard-live-positions-body');
+  if (!testBody || !liveBody) return;
+
+  try {
+    const res = await fetch('/api/positions/open');
+    const data = await res.json();
+    const positions = data.positions || [];
+
+    const testPositions = positions.filter(p => p.mode === 'DRY_RUN');
+    const livePositions = positions.filter(p => p.mode === 'LIVE');
+
+    function renderBody(body, list, label) {
+      if (!list.length) {
+        body.innerHTML = `<tr><td colspan="11" style="text-align:center;color:#666;">No ${label} positions</td></tr>`;
+        return;
+      }
+
+      body.innerHTML = list.map(pos => {
+        const strategyLabel = (pos.strategy_type || '').replace(/_/g, ' ');
+        const pnl = (pos.unrealized_pnl ?? 0).toFixed(2);
+        const pnlPct = (pos.unrealized_pnl_pct ?? 0).toFixed(2) + ' %';
+        const qty = (pos.quantity ?? 0).toFixed(3);
+        const dte = pos.dte != null ? pos.dte.toFixed(1) : '';
+
+        return `
+          <tr>
+            <td>${pos.underlying}</td>
+            <td>${strategyLabel}</td>
+            <td>${pos.symbol}</td>
+            <td>${qty}</td>
+            <td>${pos.entry_price}</td>
+            <td>${pos.mark_price}</td>
+            <td>${pnl}</td>
+            <td>${pnlPct}</td>
+            <td>${dte}</td>
+            <td>${pos.num_rolls ?? 0}</td>
+            <td>${pos.entry_mode || 'NATURAL'}</td>
+          </tr>
+        `;
+      }).join('');
+    }
+
+    renderBody(testBody, testPositions, 'test');
+    renderBody(liveBody, livePositions, 'live');
+  } catch (err) {
+    const msg = `<tr><td colspan="11" style="text-align:center;color:#b00;">Error loading positions: ${err}</td></tr>`;
+    testBody.innerHTML = msg;
+    liveBody.innerHTML = msg;
+  }
+}
+
+function initDashboardPositions() {
+  updateDashboardPositions();
+  // Optional: refresh every 20–30s while the dashboard is active
+  setInterval(updateDashboardPositions, 30000);
+}
+
+
+Hook initDashboardPositions() into the same tab-init code that currently runs when the Live Agent / Dashboard tab is shown (alongside initDashboardSensors() and any existing Live Agent initialization).
+
+Important: Do not remove the existing detailed “Open Positions” table elsewhere if it's still used; this Dashboard view is a summary with a clean split between Test and Live, but it can reuse the same /api/positions/open endpoint.
+
+4) Wiring & Sanity Checks
+
+Ensure:
+
+mode is correctly set on each PositionChain as "LIVE" vs "DRY_RUN". 
+
+Untitled document (1)_1
+
+/api/positions/open returns the new entry_mode field and still works for any existing consumers (e.g. if some UI expects positions array, keep that contract). 
+
+Untitled document (1)_1
+
+Quick manual checks after implementation:
+
+Open the Dashboard tab:
+
+Live Market Sensors table loads with BTC/ETH rows.
+
+“Show debug inputs” checkbox toggles debug details on/off if debug fields exist.
+
+With no open positions:
+
+“Test Positions” and “Live Positions” tables both show “No test/live positions”.
+
+After opening one DRY_RUN position (e.g. via training / test mode):
+
+That position appears under Test Positions with Mode=DRY_RUN and Entry Mode = NATURAL.
+
+After opening a real LIVE position:
+
+That position appears under Live Positions with Mode=LIVE and Entry Mode = NATURAL.
