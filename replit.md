@@ -14,7 +14,7 @@ This project is a modular Python framework for automated BTC/ETH covered call tr
 The agent features a clear separation of concerns, with modules for configuration, data modeling, API interaction, market context generation, risk management, policy decisions (rule-based and LLM), execution, and logging. It supports "research" and "production" modes, with a FastAPI web application providing a real-time dashboard for monitoring, interaction, and backtesting.
 
 ### UI/UX Decisions
-The web dashboard offers a user-friendly interface with sections for "Live Agent" status, "Backtesting Lab", "Backtest Runs", "Calibration", "System Health", "Chat" interface, "Bots" tab for expert trading bot analysis, and an "AI Steward" panel for project insights.
+The web dashboard offers a user-friendly interface with sections for "Live Agent" status, unified "Backtesting" tab (with collapsible Lab and Runs sections), "Calibration", "System Health", "Chat" interface, "Bots" tab for expert trading bot analysis, "Greg Lab" for position management, and an "AI Steward" panel for project insights.
 
 ### Technical Implementations
 - **Configuration**: Pydantic settings manage application configuration.
