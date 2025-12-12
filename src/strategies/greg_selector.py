@@ -122,6 +122,59 @@ def get_calibration_spec() -> Dict[str, Any]:
     return calib
 
 
+def get_calibration_spec_with_overrides(env_mode: Optional[str] = None) -> Dict[str, Any]:
+    """
+    Get calibration spec with TEST environment overrides applied.
+    
+    In TEST mode with entry rule overrides enabled, override values
+    from data/bot_overrides_test.json take precedence over spec defaults.
+    In LIVE mode or with overrides disabled, returns the base spec.
+    
+    Args:
+        env_mode: Environment mode string ("test" or "live"). 
+                  If None, uses settings.env_mode.
+    
+    Returns:
+        Calibration dict with overrides applied where set.
+    """
+    from src.config import settings, EnvironmentMode
+    from src.bots.overrides import load_overrides, EntryRuleOverrides
+    
+    base_calib = get_calibration_spec()
+    
+    if env_mode is None:
+        effective_mode = settings.env_mode
+    else:
+        try:
+            effective_mode = EnvironmentMode(env_mode)
+        except ValueError:
+            effective_mode = EnvironmentMode.LIVE
+    
+    if effective_mode != EnvironmentMode.TEST:
+        return base_calib
+    
+    overrides = load_overrides(effective_mode)
+    if not overrides.use_entry_rule_overrides:
+        return base_calib
+    
+    greg_overrides = overrides.entry_rules.get("gregbot", EntryRuleOverrides())
+    if not greg_overrides.thresholds:
+        return base_calib
+    
+    result = dict(base_calib)
+    for key, value in greg_overrides.thresholds.items():
+        if "." in key:
+            parts = key.split(".", 1)
+            parent_key, child_key = parts
+            if parent_key in result and isinstance(result[parent_key], dict):
+                result[parent_key] = dict(result[parent_key])
+                result[parent_key][child_key] = value
+        else:
+            result[key] = value
+    
+    return result
+
+
 def build_sensors_from_state(state: AgentState) -> GregSelectorSensors:
     """
     Map AgentState / market_context / vol_state into the Greg selector sensors.
@@ -198,17 +251,24 @@ def _safe_check(value: Optional[float], op: str, threshold: float) -> bool:
     return False
 
 
-def _get_calibration_context(spec: Dict[str, Any]) -> Dict[str, float]:
+def _get_calibration_context(spec: Dict[str, Any], env_mode: Optional[str] = None) -> Dict[str, float]:
     """
     Extract all calibration variables from the spec for expression evaluation.
     
     Supports both v6.0 (global_constraints.calibration) and v8.0 (global_entry_filters.calibration).
     Returns a dict with all numeric calibration values that can be used
     as variables in decision waterfall condition expressions.
+    
+    Args:
+        spec: The loaded Greg spec (ignored if env_mode is provided, uses override-aware version)
+        env_mode: If provided, uses get_calibration_spec_with_overrides for TEST override support
     """
-    calibration = spec.get("global_entry_filters", {}).get("calibration", {})
-    if not calibration:
-        calibration = spec.get("global_constraints", {}).get("calibration", {})
+    if env_mode is not None:
+        calibration = get_calibration_spec_with_overrides(env_mode)
+    else:
+        calibration = spec.get("global_entry_filters", {}).get("calibration", {})
+        if not calibration:
+            calibration = spec.get("global_constraints", {}).get("calibration", {})
     
     ctx: Dict[str, float] = {}
     
@@ -238,11 +298,18 @@ def _get_calibration_context(spec: Dict[str, Any]) -> Dict[str, float]:
     return ctx
 
 
-def evaluate_greg_selector(sensors: GregSelectorSensors) -> GregSelectorDecision:
+def evaluate_greg_selector(
+    sensors: GregSelectorSensors,
+    env_mode: Optional[str] = None,
+) -> GregSelectorDecision:
     """
     Walk the decision waterfall from the JSON spec in order; first match wins.
     Supports v8.0 decision_waterfall format with branches.
     None values are treated as "condition not satisfied".
+    
+    Args:
+        sensors: Sensor values for evaluation
+        env_mode: Environment mode ("test" or "live") for TEST override support
     """
     spec = load_greg_spec()
     meta = spec.get("meta", {})
@@ -251,7 +318,7 @@ def evaluate_greg_selector(sensors: GregSelectorSensors) -> GregSelectorDecision
     if not decision_waterfall:
         decision_waterfall = spec.get("decision_tree", [])
     
-    calibration_ctx = _get_calibration_context(spec)
+    calibration_ctx = _get_calibration_context(spec, env_mode=env_mode)
     
     for idx, rule in enumerate(decision_waterfall):
         step_name = rule.get("name", f"step_{idx}")

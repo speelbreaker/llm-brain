@@ -1901,7 +1901,7 @@ def get_greg_selector() -> JSONResponse:
             state = AgentState.model_validate(state_dict)
 
         sensors = build_sensors_from_state(state)
-        decision = evaluate_greg_selector(sensors)
+        decision = evaluate_greg_selector(sensors, env_mode=settings.env_mode.value)
 
         payload = decision.model_dump()
         payload["ok"] = True
@@ -1975,11 +1975,25 @@ def get_bots_market_sensors(debug: str = "0") -> JSONResponse:
 
 
 @app.get("/api/bots/strategies")
-def get_bots_strategies() -> JSONResponse:
+def get_bots_strategies(env: str = "test") -> JSONResponse:
     """
     Aggregate StrategyEvaluation objects for all expert bots.
     For now, only GregBot is implemented.
+    
+    Args:
+        env: Environment mode ("test" or "live") to fetch strategies for.
+             Allows viewing LIVE strategy thresholds even when server is in TEST mode.
     """
+    from src.config import EnvironmentMode
+    
+    try:
+        env_mode = EnvironmentMode(env.lower())
+    except ValueError:
+        return JSONResponse(
+            status_code=400,
+            content={"ok": False, "error": f"Invalid env: '{env}'. Must be 'test' or 'live'."}
+        )
+    
     try:
         from src.bots.gregbot import get_gregbot_evaluations_for_underlying
         
@@ -1987,11 +2001,11 @@ def get_bots_strategies() -> JSONResponse:
         all_evals = []
         
         for u in underlyings:
-            payload = get_gregbot_evaluations_for_underlying(u)
+            payload = get_gregbot_evaluations_for_underlying(u, env_mode=env_mode)
             strat_evals = payload.get("strategies", [])
             all_evals.extend([e.model_dump() for e in strat_evals])
         
-        return JSONResponse(content={"ok": True, "strategies": all_evals})
+        return JSONResponse(content={"ok": True, "strategies": all_evals, "env_mode": env_mode.value})
     except Exception as e:
         return JSONResponse(content={"ok": False, "error": str(e)})
 
@@ -2498,6 +2512,240 @@ def update_greg_trading_mode(request: UpdateGregModeRequest) -> JSONResponse:
         "max_notional_per_underlying": state["max_notional_per_underlying"],
         "deribit_env": settings.deribit_env,
     })
+
+
+@app.get("/api/bots/global_risk")
+def get_bots_global_risk(env: str = "test") -> JSONResponse:
+    """Get global risk settings for UI display."""
+    from src.config import EnvironmentMode
+    from src.bots.overrides import get_global_risk_for_ui
+    
+    try:
+        env_mode = EnvironmentMode(env.lower())
+    except ValueError:
+        env_mode = EnvironmentMode.TEST
+    
+    result = get_global_risk_for_ui(env_mode)
+    return JSONResponse(content={"ok": True, **result})
+
+
+class UpdateGlobalRiskRequest(BaseModel):
+    """Request to update global risk overrides."""
+    use_overrides: bool
+    fields: Dict[str, Optional[float]] = {}
+
+
+@app.post("/api/bots/global_risk")
+def update_bots_global_risk(request: UpdateGlobalRiskRequest) -> JSONResponse:
+    """Update global risk overrides (TEST mode only)."""
+    from src.config import EnvironmentMode
+    from src.bots.overrides import load_overrides, save_overrides, GlobalRiskOverrides
+    
+    validation_errors: List[str] = []
+    validated_fields: Dict[str, Any] = {}
+    
+    for key, val in request.fields.items():
+        if val is None:
+            validated_fields[key] = None
+            continue
+        if key == "liquidity_min_open_interest":
+            try:
+                validated_fields[key] = int(float(val))
+            except (ValueError, TypeError):
+                validation_errors.append(f"Invalid value for {key}: expected integer, got '{val}'")
+        else:
+            try:
+                validated_fields[key] = float(val)
+            except (ValueError, TypeError):
+                validation_errors.append(f"Invalid value for {key}: expected number, got '{val}'")
+    
+    if validation_errors:
+        return JSONResponse(
+            status_code=400,
+            content={"ok": False, "errors": validation_errors}
+        )
+    
+    env_mode = EnvironmentMode.TEST
+    overrides = load_overrides(env_mode)
+    overrides.use_global_risk_overrides = request.use_overrides
+    
+    if validated_fields:
+        existing = overrides.global_risk or GlobalRiskOverrides()
+        overrides.global_risk = GlobalRiskOverrides(
+            max_margin_pct=validated_fields.get("max_margin_pct") if "max_margin_pct" in validated_fields else existing.max_margin_pct,
+            max_net_delta=validated_fields.get("max_net_delta") if "max_net_delta" in validated_fields else existing.max_net_delta,
+            daily_drawdown_limit_pct=validated_fields.get("daily_drawdown_limit_pct") if "daily_drawdown_limit_pct" in validated_fields else existing.daily_drawdown_limit_pct,
+            liquidity_max_spread_pct=validated_fields.get("liquidity_max_spread_pct") if "liquidity_max_spread_pct" in validated_fields else existing.liquidity_max_spread_pct,
+            liquidity_min_open_interest=validated_fields.get("liquidity_min_open_interest") if "liquidity_min_open_interest" in validated_fields else existing.liquidity_min_open_interest,
+        )
+    
+    success = save_overrides(env_mode, overrides)
+    return JSONResponse(content={"ok": success})
+
+
+VALID_BOT_IDS = {"gregbot"}
+
+
+@app.get("/api/bots/{bot_id}/risk")
+def get_bot_risk(bot_id: str, env: str = "test") -> JSONResponse:
+    """Get per-bot risk settings for UI display."""
+    from src.config import EnvironmentMode
+    from src.bots.overrides import get_bot_risk_for_ui
+    
+    if bot_id.lower() not in VALID_BOT_IDS:
+        return JSONResponse(
+            status_code=400,
+            content={"ok": False, "error": f"Unknown bot_id: {bot_id}. Valid bots: {list(VALID_BOT_IDS)}"}
+        )
+    
+    try:
+        env_mode = EnvironmentMode(env.lower())
+    except ValueError:
+        env_mode = EnvironmentMode.TEST
+    
+    result = get_bot_risk_for_ui(bot_id.lower(), env_mode)
+    return JSONResponse(content={"ok": True, **result})
+
+
+class UpdateBotRiskRequest(BaseModel):
+    """Request to update per-bot risk overrides."""
+    use_overrides: bool
+    fields: Dict[str, Optional[float]] = {}
+
+
+@app.post("/api/bots/{bot_id}/risk")
+def update_bot_risk(bot_id: str, request: UpdateBotRiskRequest) -> JSONResponse:
+    """Update per-bot risk overrides (TEST mode only)."""
+    from src.config import EnvironmentMode
+    from src.bots.overrides import load_overrides, save_overrides, BotRiskOverrides
+    
+    if bot_id.lower() not in VALID_BOT_IDS:
+        return JSONResponse(
+            status_code=400,
+            content={"ok": False, "error": f"Unknown bot_id: {bot_id}. Valid bots: {list(VALID_BOT_IDS)}"}
+        )
+    
+    validation_errors: List[str] = []
+    validated_fields: Dict[str, Any] = {}
+    
+    for key, val in request.fields.items():
+        if val is None:
+            validated_fields[key] = None
+            continue
+        if key == "max_positions_per_underlying":
+            try:
+                validated_fields[key] = int(float(val))
+            except (ValueError, TypeError):
+                validation_errors.append(f"Invalid value for {key}: expected integer, got '{val}'")
+        else:
+            try:
+                validated_fields[key] = float(val)
+            except (ValueError, TypeError):
+                validation_errors.append(f"Invalid value for {key}: expected number, got '{val}'")
+    
+    if validation_errors:
+        return JSONResponse(
+            status_code=400,
+            content={"ok": False, "errors": validation_errors}
+        )
+    
+    bot_id = bot_id.lower()
+    env_mode = EnvironmentMode.TEST
+    overrides = load_overrides(env_mode)
+    overrides.use_bot_risk_overrides = request.use_overrides
+    
+    existing = overrides.bots.get(bot_id, BotRiskOverrides())
+    
+    merged = BotRiskOverrides(
+        max_equity_share=validated_fields.get("max_equity_share") if "max_equity_share" in validated_fields else existing.max_equity_share,
+        max_notional_usd_per_position=validated_fields.get("max_notional_usd_per_position") if "max_notional_usd_per_position" in validated_fields else existing.max_notional_usd_per_position,
+        max_notional_usd_per_underlying=validated_fields.get("max_notional_usd_per_underlying") if "max_notional_usd_per_underlying" in validated_fields else existing.max_notional_usd_per_underlying,
+        max_positions_per_underlying=validated_fields.get("max_positions_per_underlying") if "max_positions_per_underlying" in validated_fields else existing.max_positions_per_underlying,
+    )
+    overrides.bots[bot_id] = merged
+    
+    success = save_overrides(env_mode, overrides)
+    return JSONResponse(content={"ok": success})
+
+
+@app.get("/api/bots/{bot_id}/entry_rules")
+def get_bot_entry_rules(bot_id: str, env: str = "test") -> JSONResponse:
+    """Get entry rule thresholds for UI display."""
+    from src.config import EnvironmentMode
+    from src.bots.overrides import get_entry_rules_for_ui
+    
+    if bot_id.lower() not in VALID_BOT_IDS:
+        return JSONResponse(
+            status_code=400,
+            content={"ok": False, "error": f"Unknown bot_id: {bot_id}. Valid bots: {list(VALID_BOT_IDS)}"}
+        )
+    
+    try:
+        env_mode = EnvironmentMode(env.lower())
+    except ValueError:
+        env_mode = EnvironmentMode.TEST
+    
+    result = get_entry_rules_for_ui(bot_id.lower(), env_mode)
+    return JSONResponse(content={"ok": True, **result})
+
+
+class UpdateEntryRulesRequest(BaseModel):
+    """Request to update entry rule threshold overrides."""
+    use_overrides: bool
+    thresholds: Dict[str, float] = {}
+
+
+@app.post("/api/bots/{bot_id}/entry_rules")
+def update_bot_entry_rules(bot_id: str, request: UpdateEntryRulesRequest) -> JSONResponse:
+    """Update entry rule threshold overrides (TEST mode only)."""
+    from src.config import EnvironmentMode
+    from src.bots.overrides import load_overrides, save_overrides, EntryRuleOverrides
+    from src.strategies.greg_selector import clear_greg_spec_cache
+    from src.bots.gregbot import clear_strategies_cache
+    
+    if bot_id.lower() not in VALID_BOT_IDS:
+        return JSONResponse(
+            status_code=400,
+            content={"ok": False, "error": f"Unknown bot_id: {bot_id}. Valid bots: {list(VALID_BOT_IDS)}"}
+        )
+    
+    bot_id = bot_id.lower()
+    env_mode = EnvironmentMode.TEST
+    overrides = load_overrides(env_mode)
+    overrides.use_entry_rule_overrides = request.use_overrides
+    
+    validation_errors: List[str] = []
+    
+    def coerce_threshold(key: str, val: Any) -> Optional[float]:
+        try:
+            return float(val)
+        except (ValueError, TypeError):
+            validation_errors.append(f"Invalid value for {key}: expected number, got '{val}'")
+            return None
+    
+    coerced_thresholds: Dict[str, float] = {}
+    for k, v in request.thresholds.items():
+        result = coerce_threshold(k, v)
+        if result is not None:
+            coerced_thresholds[k] = result
+    
+    if validation_errors:
+        return JSONResponse(
+            status_code=400,
+            content={"ok": False, "errors": validation_errors}
+        )
+    
+    existing = overrides.entry_rules.get(bot_id, EntryRuleOverrides())
+    merged_thresholds = {**existing.thresholds, **coerced_thresholds}
+    entry_overrides = EntryRuleOverrides(thresholds=merged_thresholds)
+    overrides.entry_rules[bot_id] = entry_overrides
+    
+    success = save_overrides(env_mode, overrides)
+    
+    clear_greg_spec_cache()
+    clear_strategies_cache()
+    
+    return JSONResponse(content={"ok": success})
 
 
 @app.get("/api/greg/decision_log")
@@ -5058,49 +5306,78 @@ def index() -> str:
   <!-- BOTS TAB -->
   <div id="tab-strategies" class="tab-content">
     <div class="section">
-      <h2>Bots</h2>
-      <p style="color: #666; margin-bottom: 1.5rem;">A live view of expert bots, their market sensors, and which strategies currently pass.</p>
+      <!-- Header with Test/Live Toggle -->
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+        <h2 style="margin: 0;">Bots</h2>
+        <div id="bots-env-toggle" style="display: flex; gap: 0; border-radius: 6px; overflow: hidden; border: 2px solid #7c4dff;">
+          <button id="bots-env-test" onclick="switchBotsEnv('test')" style="padding: 0.5rem 1.25rem; font-weight: 600; border: none; cursor: pointer; background: #7c4dff; color: white;">TEST</button>
+          <button id="bots-env-live" onclick="switchBotsEnv('live')" style="padding: 0.5rem 1.25rem; font-weight: 600; border: none; cursor: pointer; background: #f5f5f5; color: #333;">LIVE</button>
+        </div>
+      </div>
+      <p style="color: #666; margin-bottom: 1rem;">View and configure expert trading bots. In TEST mode, you can override thresholds and risk settings.</p>
       
-      <!-- Live Market Sensors -->
-      <div style="background: #f8f9fa; padding: 1.5rem; border-radius: 8px; border-left: 4px solid #1565c0; margin-bottom: 1.5rem;">
-        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
-          <h3 style="margin: 0; color: #1565c0; font-size: 1.1rem;">Live Market Sensors</h3>
-          <div style="display: flex; align-items: center; gap: 1rem;">
-            <label style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.85rem; cursor: pointer;">
-              <input type="checkbox" id="bots-debug-toggle">
-              Show debug inputs
-            </label>
-            <button onclick="refreshBotsSensors()" style="padding: 0.5rem 1rem; background: #1565c0; color: white; border: none; border-radius: 4px; cursor: pointer;">
-              Refresh Sensors
-            </button>
+      <!-- Bot Tabs -->
+      <div id="bots-bot-tabs" style="display: flex; gap: 0.5rem; margin-bottom: 1rem; border-bottom: 2px solid #e0e0e0; padding-bottom: 0.5rem;">
+        <button class="bots-bot-tab active" data-bot-id="gregbot" onclick="selectBotTab('gregbot')" style="padding: 0.5rem 1rem; background: #7c4dff; color: white; border: none; border-radius: 4px 4px 0 0; cursor: pointer; font-weight: 600;">GregBot</button>
+      </div>
+      
+      <!-- Main Layout: Sidebar + Content -->
+      <div id="bots-main-layout" style="display: flex; gap: 1.5rem;">
+        <!-- Left Sidebar -->
+        <div id="bots-sidebar" style="min-width: 180px; flex-shrink: 0;">
+          <div style="background: #f8f9fa; border-radius: 8px; padding: 0.5rem;">
+            <button class="bots-sidebar-item active" data-section="overview" onclick="selectBotsSection('overview')" style="display: block; width: 100%; text-align: left; padding: 0.75rem 1rem; border: none; background: #7c4dff; color: white; border-radius: 4px; cursor: pointer; margin-bottom: 0.25rem; font-weight: 500;">Overview</button>
+            <button class="bots-sidebar-item" data-section="entry_rules" onclick="selectBotsSection('entry_rules')" style="display: block; width: 100%; text-align: left; padding: 0.75rem 1rem; border: none; background: transparent; color: #333; border-radius: 4px; cursor: pointer; margin-bottom: 0.25rem;">Entry Rules</button>
+            <button class="bots-sidebar-item" data-section="global_risk" onclick="selectBotsSection('global_risk')" style="display: block; width: 100%; text-align: left; padding: 0.75rem 1rem; border: none; background: transparent; color: #333; border-radius: 4px; cursor: pointer; margin-bottom: 0.25rem;">Global Risk</button>
+            <button class="bots-sidebar-item" data-section="bot_risk" onclick="selectBotsSection('bot_risk')" style="display: block; width: 100%; text-align: left; padding: 0.75rem 1rem; border: none; background: transparent; color: #333; border-radius: 4px; cursor: pointer;">Bot Risk</button>
           </div>
         </div>
-        <div id="bots-live-sensors" style="overflow-x: auto;">
-          <p style="color: #666; font-style: italic;">Loading live market sensors...</p>
-        </div>
-        <details id="bots-debug-panel" style="margin-top: 0.75rem; display: none;">
-          <summary style="cursor: pointer; color: #1565c0; font-weight: 500;">Debug: raw sensor inputs</summary>
-          <pre id="bots-debug-output" style="max-height: 400px; overflow: auto; background: #fff; padding: 1rem; border: 1px solid #ddd; border-radius: 4px; font-size: 0.8rem; white-space: pre-wrap; margin-top: 0.5rem;"></pre>
-        </details>
-      </div>
-      
-      <!-- Strategy Matches (All Bots) -->
-      <div style="background: #e8f5e9; padding: 1.5rem; border-radius: 8px; border-left: 4px solid #2e7d32; margin-bottom: 1.5rem;">
-        <h3 style="margin: 0 0 1rem 0; color: #2e7d32; font-size: 1.1rem;">Strategy Matches (All Bots)</h3>
-        <div id="bots-strategy-matches" style="overflow-x: auto;">
-          <p style="color: #666; font-style: italic;">Loading strategy matches...</p>
-        </div>
-      </div>
-      
-      <!-- Expert Bots -->
-      <div style="background: #f3e5f5; padding: 1.5rem; border-radius: 8px; border-left: 4px solid #7c4dff; margin-bottom: 1.5rem;">
-        <h3 style="margin: 0 0 1rem 0; color: #7c4dff; font-size: 1.1rem;">Expert Bots</h3>
         
-        <div id="bots-expert-tabs" style="margin-bottom: 1rem;">
-          <button class="bots-expert-tab active" data-expert-id="greg_mandolini" onclick="selectExpertTab('greg_mandolini')" style="padding: 0.5rem 1rem; background: #7c4dff; color: white; border: none; border-radius: 4px; cursor: pointer; margin-right: 0.5rem;">
-            GregBot
-          </button>
-        </div>
+        <!-- Right Content Pane -->
+        <div id="bots-content-pane" style="flex: 1; min-width: 0;">
+          
+          <!-- OVERVIEW Section -->
+          <div id="bots-section-overview" class="bots-section" style="display: block;">
+            <!-- Live Market Sensors -->
+            <div style="background: #f8f9fa; padding: 1.5rem; border-radius: 8px; border-left: 4px solid #1565c0; margin-bottom: 1.5rem;">
+              <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+                <h3 style="margin: 0; color: #1565c0; font-size: 1.1rem;">Live Market Sensors</h3>
+                <div style="display: flex; align-items: center; gap: 1rem;">
+                  <label style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.85rem; cursor: pointer;">
+                    <input type="checkbox" id="bots-debug-toggle">
+                    Show debug inputs
+                  </label>
+                  <button onclick="refreshBotsSensors()" style="padding: 0.5rem 1rem; background: #1565c0; color: white; border: none; border-radius: 4px; cursor: pointer;">
+                    Refresh Sensors
+                  </button>
+                </div>
+              </div>
+              <div id="bots-live-sensors" style="overflow-x: auto;">
+                <p style="color: #666; font-style: italic;">Loading live market sensors...</p>
+              </div>
+              <details id="bots-debug-panel" style="margin-top: 0.75rem; display: none;">
+                <summary style="cursor: pointer; color: #1565c0; font-weight: 500;">Debug: raw sensor inputs</summary>
+                <pre id="bots-debug-output" style="max-height: 400px; overflow: auto; background: #fff; padding: 1rem; border: 1px solid #ddd; border-radius: 4px; font-size: 0.8rem; white-space: pre-wrap; margin-top: 0.5rem;"></pre>
+              </details>
+            </div>
+            
+            <!-- Strategy Matches (All Bots) -->
+            <div style="background: #e8f5e9; padding: 1.5rem; border-radius: 8px; border-left: 4px solid #2e7d32; margin-bottom: 1.5rem;">
+              <h3 style="margin: 0 0 1rem 0; color: #2e7d32; font-size: 1.1rem;">Strategy Matches (All Bots)</h3>
+              <div id="bots-strategy-matches" style="overflow-x: auto;">
+                <p style="color: #666; font-style: italic;">Loading strategy matches...</p>
+              </div>
+            </div>
+            
+            <!-- Expert Bots Table -->
+            <div style="background: #f3e5f5; padding: 1.5rem; border-radius: 8px; border-left: 4px solid #7c4dff; margin-bottom: 1.5rem;">
+              <h3 style="margin: 0 0 1rem 0; color: #7c4dff; font-size: 1.1rem;">Strategy Evaluations</h3>
+              
+              <div id="bots-expert-tabs" style="margin-bottom: 1rem; display: none;">
+                <button class="bots-expert-tab active" data-expert-id="greg_mandolini" onclick="selectExpertTab('greg_mandolini')" style="padding: 0.5rem 1rem; background: #7c4dff; color: white; border: none; border-radius: 4px; cursor: pointer; margin-right: 0.5rem;">
+                  GregBot
+                </button>
+              </div>
         
         <!-- Filters -->
         <div id="bots-expert-filters" style="margin-bottom: 1rem; display: flex; gap: 1rem; flex-wrap: wrap; font-size: 0.85rem;">
@@ -5302,7 +5579,99 @@ def index() -> str:
             </div>
           </details>
         </div>
+            </div>
+          </div>
+          <!-- End of OVERVIEW Section -->
+          
+          <!-- ENTRY RULES Section -->
+          <div id="bots-section-entry_rules" class="bots-section" style="display: none;">
+            <div style="background: #fff3e0; padding: 1.5rem; border-radius: 8px; border-left: 4px solid #ff9800;">
+              <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+                <h3 style="margin: 0; color: #e65100; font-size: 1.1rem;">Entry Rule Thresholds</h3>
+                <div id="entry-rules-mode-badge" style="padding: 0.25rem 0.75rem; border-radius: 4px; font-size: 0.75rem; font-weight: 600; background: #7c4dff; color: white;">TEST MODE</div>
+              </div>
+              <p style="color: #666; font-size: 0.9rem; margin-bottom: 1rem;">Configure the sensor thresholds that determine when strategies are eligible for entry.</p>
+              
+              <div id="entry-rules-override-toggle" style="margin-bottom: 1rem; padding: 0.75rem; background: #f5f5f5; border-radius: 4px;">
+                <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer;">
+                  <input type="checkbox" id="entry-rules-use-overrides" onchange="toggleEntryRulesOverrides()">
+                  <span style="font-weight: 500;">Enable TEST Mode Overrides</span>
+                </label>
+                <p style="color: #888; font-size: 0.8rem; margin: 0.5rem 0 0 1.5rem;">When enabled, you can modify thresholds for testing without affecting production values.</p>
+              </div>
+              
+              <div id="entry-rules-form" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem;">
+                <p style="color: #666; font-style: italic;">Loading entry rules...</p>
+              </div>
+              
+              <div id="entry-rules-actions" style="margin-top: 1rem; display: none;">
+                <button onclick="saveEntryRules()" style="padding: 0.5rem 1rem; background: #ff9800; color: white; border: none; border-radius: 4px; cursor: pointer; margin-right: 0.5rem;">Save Overrides</button>
+                <button onclick="resetEntryRules()" style="padding: 0.5rem 1rem; background: #e0e0e0; color: #333; border: none; border-radius: 4px; cursor: pointer;">Reset to Defaults</button>
+              </div>
+              <div id="entry-rules-status" style="margin-top: 0.5rem; font-size: 0.85rem;"></div>
+            </div>
+          </div>
+          
+          <!-- GLOBAL RISK Section -->
+          <div id="bots-section-global_risk" class="bots-section" style="display: none;">
+            <div style="background: #ffebee; padding: 1.5rem; border-radius: 8px; border-left: 4px solid #c62828;">
+              <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+                <h3 style="margin: 0; color: #c62828; font-size: 1.1rem;">Global Risk Settings</h3>
+                <div id="global-risk-mode-badge" style="padding: 0.25rem 0.75rem; border-radius: 4px; font-size: 0.75rem; font-weight: 600; background: #7c4dff; color: white;">TEST MODE</div>
+              </div>
+              <p style="color: #666; font-size: 0.9rem; margin-bottom: 1rem;">System-wide risk parameters that apply to all bots and strategies.</p>
+              
+              <div id="global-risk-override-toggle" style="margin-bottom: 1rem; padding: 0.75rem; background: #f5f5f5; border-radius: 4px;">
+                <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer;">
+                  <input type="checkbox" id="global-risk-use-overrides" onchange="toggleGlobalRiskOverrides()">
+                  <span style="font-weight: 500;">Enable TEST Mode Overrides</span>
+                </label>
+              </div>
+              
+              <div id="global-risk-form" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem;">
+                <p style="color: #666; font-style: italic;">Loading global risk settings...</p>
+              </div>
+              
+              <div id="global-risk-actions" style="margin-top: 1rem; display: none;">
+                <button onclick="saveGlobalRisk()" style="padding: 0.5rem 1rem; background: #c62828; color: white; border: none; border-radius: 4px; cursor: pointer; margin-right: 0.5rem;">Save Overrides</button>
+                <button onclick="resetGlobalRisk()" style="padding: 0.5rem 1rem; background: #e0e0e0; color: #333; border: none; border-radius: 4px; cursor: pointer;">Reset to Defaults</button>
+              </div>
+              <div id="global-risk-status" style="margin-top: 0.5rem; font-size: 0.85rem;"></div>
+            </div>
+          </div>
+          
+          <!-- BOT RISK Section -->
+          <div id="bots-section-bot_risk" class="bots-section" style="display: none;">
+            <div style="background: #e3f2fd; padding: 1.5rem; border-radius: 8px; border-left: 4px solid #1565c0;">
+              <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+                <h3 style="margin: 0; color: #1565c0; font-size: 1.1rem;">Per-Bot Risk Settings</h3>
+                <div id="bot-risk-mode-badge" style="padding: 0.25rem 0.75rem; border-radius: 4px; font-size: 0.75rem; font-weight: 600; background: #7c4dff; color: white;">TEST MODE</div>
+              </div>
+              <p style="color: #666; font-size: 0.9rem; margin-bottom: 1rem;">Risk parameters specific to the currently selected bot (GregBot).</p>
+              
+              <div id="bot-risk-override-toggle" style="margin-bottom: 1rem; padding: 0.75rem; background: #f5f5f5; border-radius: 4px;">
+                <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer;">
+                  <input type="checkbox" id="bot-risk-use-overrides" onchange="toggleBotRiskOverrides()">
+                  <span style="font-weight: 500;">Enable TEST Mode Overrides</span>
+                </label>
+              </div>
+              
+              <div id="bot-risk-form" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem;">
+                <p style="color: #666; font-style: italic;">Loading bot risk settings...</p>
+              </div>
+              
+              <div id="bot-risk-actions" style="margin-top: 1rem; display: none;">
+                <button onclick="saveBotRisk()" style="padding: 0.5rem 1rem; background: #1565c0; color: white; border: none; border-radius: 4px; cursor: pointer; margin-right: 0.5rem;">Save Overrides</button>
+                <button onclick="resetBotRisk()" style="padding: 0.5rem 1rem; background: #e0e0e0; color: #333; border: none; border-radius: 4px; cursor: pointer;">Reset to Defaults</button>
+              </div>
+              <div id="bot-risk-status" style="margin-top: 0.5rem; font-size: 0.85rem;"></div>
+            </div>
+          </div>
+          
+        </div>
+        <!-- End of Right Content Pane -->
       </div>
+      <!-- End of Main Layout -->
       
       <p style="color: #888; font-size: 0.85rem; margin-top: 1rem;">
         <strong>Phase 1 (Read-Only):</strong> Computes sensors, runs decision tree, displays recommendation. No orders placed.
@@ -6110,11 +6479,501 @@ def index() -> str:
       container.innerHTML = html;
     }}
     
+    // State for Bots tab navigation
+    let currentBotsEnv = 'test';
+    let currentBotId = 'gregbot';
+    let currentBotsSection = 'overview';
+    
     function loadBotsTab() {{
       refreshBotsSensors();
       refreshBotsStrategies();
       refreshGregCalibration();
       refreshGregManagement();
+      updateBotsEnvUI();
+      updateBotsSectionUI();
+    }}
+    
+    function switchBotsEnv(env) {{
+      currentBotsEnv = env;
+      updateBotsEnvUI();
+      // Reload current section data
+      if (currentBotsSection === 'entry_rules') {{
+        loadEntryRules();
+      }} else if (currentBotsSection === 'global_risk') {{
+        loadGlobalRisk();
+      }} else if (currentBotsSection === 'bot_risk') {{
+        loadBotRisk();
+      }}
+    }}
+    
+    function updateBotsEnvUI() {{
+      const testBtn = document.getElementById('bots-env-test');
+      const liveBtn = document.getElementById('bots-env-live');
+      if (testBtn && liveBtn) {{
+        if (currentBotsEnv === 'test') {{
+          testBtn.style.background = '#7c4dff';
+          testBtn.style.color = 'white';
+          liveBtn.style.background = '#f5f5f5';
+          liveBtn.style.color = '#333';
+        }} else {{
+          testBtn.style.background = '#f5f5f5';
+          testBtn.style.color = '#333';
+          liveBtn.style.background = '#7c4dff';
+          liveBtn.style.color = 'white';
+        }}
+      }}
+      // Update mode badges
+      const entryBadge = document.getElementById('entry-rules-mode-badge');
+      const globalBadge = document.getElementById('global-risk-mode-badge');
+      const botBadge = document.getElementById('bot-risk-mode-badge');
+      const badgeText = currentBotsEnv === 'test' ? 'TEST MODE' : 'LIVE MODE';
+      const badgeBg = currentBotsEnv === 'test' ? '#7c4dff' : '#2e7d32';
+      [entryBadge, globalBadge, botBadge].forEach(b => {{
+        if (b) {{
+          b.textContent = badgeText;
+          b.style.background = badgeBg;
+        }}
+      }});
+      // Hide override toggles and actions in LIVE mode
+      const overrideToggles = ['entry-rules-override-toggle', 'global-risk-override-toggle', 'bot-risk-override-toggle'];
+      const actionContainers = ['entry-rules-actions', 'global-risk-actions', 'bot-risk-actions'];
+      overrideToggles.forEach(id => {{
+        const el = document.getElementById(id);
+        if (el) el.style.display = currentBotsEnv === 'test' ? 'block' : 'none';
+      }});
+      if (currentBotsEnv === 'live') {{
+        actionContainers.forEach(id => {{
+          const el = document.getElementById(id);
+          if (el) el.style.display = 'none';
+        }});
+      }}
+    }}
+    
+    function selectBotTab(botId) {{
+      currentBotId = botId;
+      // Update tab styling
+      document.querySelectorAll('.bots-bot-tab').forEach(btn => {{
+        if (btn.dataset.botId === botId) {{
+          btn.style.background = '#7c4dff';
+          btn.style.color = 'white';
+          btn.classList.add('active');
+        }} else {{
+          btn.style.background = '#f5f5f5';
+          btn.style.color = '#333';
+          btn.classList.remove('active');
+        }}
+      }});
+      // Reload section if it's bot-specific
+      if (currentBotsSection === 'entry_rules') loadEntryRules();
+      if (currentBotsSection === 'bot_risk') loadBotRisk();
+    }}
+    
+    function selectBotsSection(section) {{
+      currentBotsSection = section;
+      updateBotsSectionUI();
+      // Load data for the selected section
+      if (section === 'entry_rules') loadEntryRules();
+      if (section === 'global_risk') loadGlobalRisk();
+      if (section === 'bot_risk') loadBotRisk();
+    }}
+    
+    function updateBotsSectionUI() {{
+      // Hide all sections
+      document.querySelectorAll('.bots-section').forEach(sec => {{
+        sec.style.display = 'none';
+      }});
+      // Show selected section
+      const sectionEl = document.getElementById(`bots-section-${{currentBotsSection}}`);
+      if (sectionEl) sectionEl.style.display = 'block';
+      // Update sidebar styling
+      document.querySelectorAll('.bots-sidebar-item').forEach(btn => {{
+        if (btn.dataset.section === currentBotsSection) {{
+          btn.style.background = '#7c4dff';
+          btn.style.color = 'white';
+          btn.classList.add('active');
+        }} else {{
+          btn.style.background = 'transparent';
+          btn.style.color = '#333';
+          btn.classList.remove('active');
+        }}
+      }});
+    }}
+    
+    // Entry Rules functions
+    async function loadEntryRules() {{
+      const form = document.getElementById('entry-rules-form');
+      const checkbox = document.getElementById('entry-rules-use-overrides');
+      const actions = document.getElementById('entry-rules-actions');
+      const status = document.getElementById('entry-rules-status');
+      if (!form) return;
+      
+      form.innerHTML = '<p style="color: #666; font-style: italic;">Loading...</p>';
+      if (status) status.textContent = '';
+      
+      try {{
+        const res = await fetch(`/api/bots/${{currentBotId}}/entry_rules?env=${{currentBotsEnv}}`);
+        const data = await res.json();
+        
+        if (data.ok) {{
+          const rules = data.rules || [];
+          const useOverrides = data.use_overrides || false;
+          const isTest = currentBotsEnv === 'test';
+          const canEdit = isTest && useOverrides;
+          
+          if (checkbox) checkbox.checked = useOverrides;
+          if (actions) actions.style.display = canEdit ? 'block' : 'none';
+          
+          let html = '';
+          if (!isTest) {{
+            html += '<p style="color: #2e7d32; font-weight: 500; margin-bottom: 1rem; padding: 0.5rem; background: #e8f5e9; border-radius: 4px;">Read-only view of LIVE production values</p>';
+          }}
+          for (const r of rules) {{
+            const inputDisabled = !canEdit ? 'disabled' : '';
+            const inputStyle = !canEdit 
+              ? 'width: 100%; padding: 0.5rem; border: 1px solid #ccc; border-radius: 4px; background: #f5f5f5; color: #666;'
+              : 'width: 100%; padding: 0.5rem; border: 1px solid #ccc; border-radius: 4px;';
+            html += `
+              <div style="background: white; padding: 0.75rem; border-radius: 4px; border: 1px solid #ddd;">
+                <label style="font-weight: 500; font-size: 0.9rem; display: block; margin-bottom: 0.25rem;">${{r.label}}</label>
+                <input type="number" step="any" id="entry-${{r.key}}" data-key="${{r.key}}" value="${{r.current_value}}" ${{inputDisabled}}
+                  style="${{inputStyle}}">
+                <span style="font-size: 0.75rem; color: #888;">Default: ${{r.default_value}} ${{r.unit}}</span>
+              </div>
+            `;
+          }}
+          form.innerHTML = html || '<p style="color: #666;">No entry rules defined.</p>';
+        }} else {{
+          form.innerHTML = `<p style="color: #c62828;">Error: ${{data.error}}</p>`;
+        }}
+      }} catch (e) {{
+        form.innerHTML = `<p style="color: #c62828;">Error: ${{e.message}}</p>`;
+      }}
+    }}
+    
+    async function saveEntryRules() {{
+      const status = document.getElementById('entry-rules-status');
+      const checkbox = document.getElementById('entry-rules-use-overrides');
+      if (status) status.textContent = 'Saving...';
+      
+      const thresholds = {{}};
+      document.querySelectorAll('#entry-rules-form input[data-key]').forEach(inp => {{
+        thresholds[inp.dataset.key] = parseFloat(inp.value) || 0;
+      }});
+      
+      try {{
+        const res = await fetch(`/api/bots/${{currentBotId}}/entry_rules`, {{
+          method: 'POST',
+          headers: {{'Content-Type': 'application/json'}},
+          body: JSON.stringify({{
+            use_overrides: checkbox ? checkbox.checked : true,
+            thresholds: thresholds
+          }})
+        }});
+        const data = await res.json();
+        if (status) {{
+          status.textContent = data.ok ? 'Saved successfully!' : 'Save failed: ' + (data.error || 'Unknown error');
+          status.style.color = data.ok ? '#2e7d32' : '#c62828';
+        }}
+      }} catch (e) {{
+        if (status) {{
+          status.textContent = 'Error: ' + e.message;
+          status.style.color = '#c62828';
+        }}
+      }}
+    }}
+    
+    async function resetEntryRules() {{
+      const status = document.getElementById('entry-rules-status');
+      const checkbox = document.getElementById('entry-rules-use-overrides');
+      if (status) status.textContent = 'Resetting...';
+      
+      try {{
+        const res = await fetch(`/api/bots/${{currentBotId}}/entry_rules`, {{
+          method: 'POST',
+          headers: {{'Content-Type': 'application/json'}},
+          body: JSON.stringify({{
+            use_overrides: false,
+            thresholds: {{}}
+          }})
+        }});
+        const data = await res.json();
+        if (data.ok) {{
+          if (checkbox) checkbox.checked = false;
+          loadEntryRules();
+          if (status) {{
+            status.textContent = 'Reset to defaults.';
+            status.style.color = '#666';
+          }}
+        }}
+      }} catch (e) {{
+        if (status) {{
+          status.textContent = 'Error: ' + e.message;
+          status.style.color = '#c62828';
+        }}
+      }}
+    }}
+    
+    function toggleEntryRulesOverrides() {{
+      const checkbox = document.getElementById('entry-rules-use-overrides');
+      const actions = document.getElementById('entry-rules-actions');
+      const useOverrides = checkbox ? checkbox.checked : false;
+      
+      // Enable/disable inputs
+      document.querySelectorAll('#entry-rules-form input[data-key]').forEach(inp => {{
+        inp.disabled = !useOverrides;
+      }});
+      // Show/hide action buttons
+      if (actions) actions.style.display = useOverrides ? 'block' : 'none';
+    }}
+    
+    // Global Risk functions
+    async function loadGlobalRisk() {{
+      const form = document.getElementById('global-risk-form');
+      const checkbox = document.getElementById('global-risk-use-overrides');
+      const actions = document.getElementById('global-risk-actions');
+      const status = document.getElementById('global-risk-status');
+      if (!form) return;
+      
+      form.innerHTML = '<p style="color: #666; font-style: italic;">Loading...</p>';
+      if (status) status.textContent = '';
+      
+      try {{
+        const res = await fetch(`/api/bots/global_risk?env=${{currentBotsEnv}}`);
+        const data = await res.json();
+        
+        if (data.ok) {{
+          const fields = data.fields || [];
+          const useOverrides = data.use_overrides || false;
+          const isTest = currentBotsEnv === 'test';
+          const canEdit = isTest && useOverrides;
+          
+          if (checkbox) checkbox.checked = useOverrides;
+          if (actions) actions.style.display = canEdit ? 'block' : 'none';
+          
+          let html = '';
+          if (!isTest) {{
+            html += '<p style="color: #2e7d32; font-weight: 500; margin-bottom: 1rem; padding: 0.5rem; background: #e8f5e9; border-radius: 4px;">Read-only view of LIVE production values</p>';
+          }}
+          for (const f of fields) {{
+            const inputDisabled = !canEdit ? 'disabled' : '';
+            const inputStyle = !canEdit 
+              ? 'width: 100%; padding: 0.5rem; border: 1px solid #ccc; border-radius: 4px; background: #f5f5f5; color: #666;'
+              : 'width: 100%; padding: 0.5rem; border: 1px solid #ccc; border-radius: 4px;';
+            html += `
+              <div style="background: white; padding: 0.75rem; border-radius: 4px; border: 1px solid #ddd;">
+                <label style="font-weight: 500; font-size: 0.9rem; display: block; margin-bottom: 0.25rem;">${{f.label}}</label>
+                <input type="number" step="any" id="global-${{f.key}}" data-key="${{f.key}}" value="${{f.current_value}}" ${{inputDisabled}}
+                  style="${{inputStyle}}">
+                <span style="font-size: 0.75rem; color: #888;">Default: ${{f.default_value}} ${{f.unit}}</span>
+              </div>
+            `;
+          }}
+          form.innerHTML = html || '<p style="color: #666;">No global risk settings defined.</p>';
+        }} else {{
+          form.innerHTML = `<p style="color: #c62828;">Error: ${{data.error}}</p>`;
+        }}
+      }} catch (e) {{
+        form.innerHTML = `<p style="color: #c62828;">Error: ${{e.message}}</p>`;
+      }}
+    }}
+    
+    async function saveGlobalRisk() {{
+      const status = document.getElementById('global-risk-status');
+      const checkbox = document.getElementById('global-risk-use-overrides');
+      if (status) status.textContent = 'Saving...';
+      
+      const fields = {{}};
+      document.querySelectorAll('#global-risk-form input[data-key]').forEach(inp => {{
+        fields[inp.dataset.key] = parseFloat(inp.value) || 0;
+      }});
+      
+      try {{
+        const res = await fetch('/api/bots/global_risk', {{
+          method: 'POST',
+          headers: {{'Content-Type': 'application/json'}},
+          body: JSON.stringify({{
+            use_overrides: checkbox ? checkbox.checked : true,
+            fields: fields
+          }})
+        }});
+        const data = await res.json();
+        if (status) {{
+          status.textContent = data.ok ? 'Saved successfully!' : 'Save failed: ' + (data.error || 'Unknown error');
+          status.style.color = data.ok ? '#2e7d32' : '#c62828';
+        }}
+      }} catch (e) {{
+        if (status) {{
+          status.textContent = 'Error: ' + e.message;
+          status.style.color = '#c62828';
+        }}
+      }}
+    }}
+    
+    async function resetGlobalRisk() {{
+      const status = document.getElementById('global-risk-status');
+      const checkbox = document.getElementById('global-risk-use-overrides');
+      if (status) status.textContent = 'Resetting...';
+      
+      try {{
+        const res = await fetch('/api/bots/global_risk', {{
+          method: 'POST',
+          headers: {{'Content-Type': 'application/json'}},
+          body: JSON.stringify({{
+            use_overrides: false,
+            fields: {{}}
+          }})
+        }});
+        const data = await res.json();
+        if (data.ok) {{
+          if (checkbox) checkbox.checked = false;
+          loadGlobalRisk();
+          if (status) {{
+            status.textContent = 'Reset to defaults.';
+            status.style.color = '#666';
+          }}
+        }}
+      }} catch (e) {{
+        if (status) {{
+          status.textContent = 'Error: ' + e.message;
+          status.style.color = '#c62828';
+        }}
+      }}
+    }}
+    
+    function toggleGlobalRiskOverrides() {{
+      const checkbox = document.getElementById('global-risk-use-overrides');
+      const actions = document.getElementById('global-risk-actions');
+      const useOverrides = checkbox ? checkbox.checked : false;
+      
+      document.querySelectorAll('#global-risk-form input[data-key]').forEach(inp => {{
+        inp.disabled = !useOverrides;
+      }});
+      if (actions) actions.style.display = useOverrides ? 'block' : 'none';
+    }}
+    
+    // Bot Risk functions
+    async function loadBotRisk() {{
+      const form = document.getElementById('bot-risk-form');
+      const checkbox = document.getElementById('bot-risk-use-overrides');
+      const actions = document.getElementById('bot-risk-actions');
+      const status = document.getElementById('bot-risk-status');
+      if (!form) return;
+      
+      form.innerHTML = '<p style="color: #666; font-style: italic;">Loading...</p>';
+      if (status) status.textContent = '';
+      
+      try {{
+        const res = await fetch(`/api/bots/${{currentBotId}}/risk?env=${{currentBotsEnv}}`);
+        const data = await res.json();
+        
+        if (data.ok) {{
+          const fields = data.fields || [];
+          const useOverrides = data.use_overrides || false;
+          const isTest = currentBotsEnv === 'test';
+          const canEdit = isTest && useOverrides;
+          
+          if (checkbox) checkbox.checked = useOverrides;
+          if (actions) actions.style.display = canEdit ? 'block' : 'none';
+          
+          let html = '';
+          if (!isTest) {{
+            html += '<p style="color: #2e7d32; font-weight: 500; margin-bottom: 1rem; padding: 0.5rem; background: #e8f5e9; border-radius: 4px;">Read-only view of LIVE production values</p>';
+          }}
+          for (const f of fields) {{
+            const inputDisabled = !canEdit ? 'disabled' : '';
+            const inputStyle = !canEdit 
+              ? 'width: 100%; padding: 0.5rem; border: 1px solid #ccc; border-radius: 4px; background: #f5f5f5; color: #666;'
+              : 'width: 100%; padding: 0.5rem; border: 1px solid #ccc; border-radius: 4px;';
+            html += `
+              <div style="background: white; padding: 0.75rem; border-radius: 4px; border: 1px solid #ddd;">
+                <label style="font-weight: 500; font-size: 0.9rem; display: block; margin-bottom: 0.25rem;">${{f.label}}</label>
+                <input type="number" step="any" id="botrisk-${{f.key}}" data-key="${{f.key}}" value="${{f.current_value}}" ${{inputDisabled}}
+                  style="${{inputStyle}}">
+                <span style="font-size: 0.75rem; color: #888;">Default: ${{f.default_value}} ${{f.unit}}</span>
+              </div>
+            `;
+          }}
+          form.innerHTML = html || '<p style="color: #666;">No bot risk settings defined.</p>';
+        }} else {{
+          form.innerHTML = `<p style="color: #c62828;">Error: ${{data.error}}</p>`;
+        }}
+      }} catch (e) {{
+        form.innerHTML = `<p style="color: #c62828;">Error: ${{e.message}}</p>`;
+      }}
+    }}
+    
+    async function saveBotRisk() {{
+      const status = document.getElementById('bot-risk-status');
+      const checkbox = document.getElementById('bot-risk-use-overrides');
+      if (status) status.textContent = 'Saving...';
+      
+      const fields = {{}};
+      document.querySelectorAll('#bot-risk-form input[data-key]').forEach(inp => {{
+        fields[inp.dataset.key] = parseFloat(inp.value) || 0;
+      }});
+      
+      try {{
+        const res = await fetch(`/api/bots/${{currentBotId}}/risk`, {{
+          method: 'POST',
+          headers: {{'Content-Type': 'application/json'}},
+          body: JSON.stringify({{
+            use_overrides: checkbox ? checkbox.checked : true,
+            fields: fields
+          }})
+        }});
+        const data = await res.json();
+        if (status) {{
+          status.textContent = data.ok ? 'Saved successfully!' : 'Save failed: ' + (data.error || 'Unknown error');
+          status.style.color = data.ok ? '#2e7d32' : '#c62828';
+        }}
+      }} catch (e) {{
+        if (status) {{
+          status.textContent = 'Error: ' + e.message;
+          status.style.color = '#c62828';
+        }}
+      }}
+    }}
+    
+    async function resetBotRisk() {{
+      const status = document.getElementById('bot-risk-status');
+      const checkbox = document.getElementById('bot-risk-use-overrides');
+      if (status) status.textContent = 'Resetting...';
+      
+      try {{
+        const res = await fetch(`/api/bots/${{currentBotId}}/risk`, {{
+          method: 'POST',
+          headers: {{'Content-Type': 'application/json'}},
+          body: JSON.stringify({{
+            use_overrides: false,
+            fields: {{}}
+          }})
+        }});
+        const data = await res.json();
+        if (data.ok) {{
+          if (checkbox) checkbox.checked = false;
+          loadBotRisk();
+          if (status) {{
+            status.textContent = 'Reset to defaults.';
+            status.style.color = '#666';
+          }}
+        }}
+      }} catch (e) {{
+        if (status) {{
+          status.textContent = 'Error: ' + e.message;
+          status.style.color = '#c62828';
+        }}
+      }}
+    }}
+    
+    function toggleBotRiskOverrides() {{
+      const checkbox = document.getElementById('bot-risk-use-overrides');
+      const actions = document.getElementById('bot-risk-actions');
+      const useOverrides = checkbox ? checkbox.checked : false;
+      
+      document.querySelectorAll('#bot-risk-form input[data-key]').forEach(inp => {{
+        inp.disabled = !useOverrides;
+      }});
+      if (actions) actions.style.display = useOverrides ? 'block' : 'none';
     }}
     
     async function refreshGregCalibration() {{

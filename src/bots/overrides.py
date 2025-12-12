@@ -387,6 +387,13 @@ def get_bot_risk_for_ui(bot_id: str, env_mode: EnvironmentMode) -> Dict[str, Any
     
     fields = [
         {
+            "key": "max_equity_share",
+            "label": "Max Equity Share",
+            "default_value": 25.0,
+            "current_value": bot_overrides.max_equity_share if use_overrides and bot_overrides.max_equity_share is not None else 25.0,
+            "unit": "%",
+        },
+        {
             "key": "max_notional_usd_per_position",
             "label": "Max Notional USD/Position",
             "default_value": settings.greg_live_max_notional_usd_per_position,

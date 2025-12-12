@@ -6,21 +6,33 @@ Based on the JSON spec in docs/greg_mandolini/GREG_SELECTOR_RULES_FINAL.json
 """
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
 from src.bots.types import StrategyCriterion, StrategyEvaluation
 from src.bots.sensors import SensorBundle, compute_sensors_for_underlying
+from src.config import settings, EnvironmentMode
 from src.strategies.greg_selector import (
     GregSelectorSensors,
     load_greg_spec,
     evaluate_greg_selector,
     get_calibration_spec,
+    get_calibration_spec_with_overrides,
 )
 
 
-def _get_calibration_value(key: str, default: float) -> float:
-    """Get a calibration value from the Greg spec, with a fallback default."""
-    cal = get_calibration_spec()
+def _get_calibration_value(key: str, default: float, env_mode: str | None = None) -> float:
+    """
+    Get a calibration value from the Greg spec, with TEST environment overrides applied.
+    
+    Args:
+        key: Calibration key (e.g., "straddle_vrp_min" or "rsi_thresholds.lower")
+        default: Fallback value if key not found
+        env_mode: Environment mode ("test" or "live"). Uses settings.env_mode if None.
+    
+    Returns:
+        Calibration value with any TEST overrides applied.
+    """
+    cal = get_calibration_spec_with_overrides(env_mode)
     if "." in key:
         parts = key.split(".")
         val = cal
@@ -33,34 +45,41 @@ def _get_calibration_value(key: str, default: float) -> float:
     return float(cal.get(key, default))
 
 
-def _build_greg_strategies() -> List[Dict[str, Any]]:
+_STRATEGIES_CACHE: Dict[str, List[Dict[str, Any]]] = {}
+
+
+def _build_greg_strategies(env_mode: str | None = None) -> List[Dict[str, Any]]:
     """
     Build strategy definitions dynamically from the calibration spec.
     Thresholds are pulled from the JSON rather than hardcoded.
+    
+    Args:
+        env_mode: Environment mode ("test" or "live"). Uses settings.env_mode if None.
+                  In TEST mode, applies any overrides from bot_overrides_test.json.
     """
-    skew_thresh = _get_calibration_value("skew_neutral_threshold", 4.0)
-    vrp_min = _get_calibration_value("min_vrp_floor", 0.0)
-    vrp_directional = _get_calibration_value("min_vrp_directional", 2.0)
-    rsi_lower = _get_calibration_value("rsi_thresholds.lower", 30.0)
-    rsi_upper = _get_calibration_value("rsi_thresholds.upper", 70.0)
+    skew_thresh = _get_calibration_value("skew_neutral_threshold", 4.0, env_mode)
+    vrp_min = _get_calibration_value("min_vrp_floor", 0.0, env_mode)
+    vrp_directional = _get_calibration_value("min_vrp_directional", 2.0, env_mode)
+    rsi_lower = _get_calibration_value("rsi_thresholds.lower", 30.0, env_mode)
+    rsi_upper = _get_calibration_value("rsi_thresholds.upper", 70.0, env_mode)
     
-    straddle_vrp = _get_calibration_value("straddle_vrp_min", 15.0)
-    straddle_adx = _get_calibration_value("straddle_adx_max", 20.0)
-    straddle_chop = _get_calibration_value("straddle_chop_max", 0.6)
+    straddle_vrp = _get_calibration_value("straddle_vrp_min", 15.0, env_mode)
+    straddle_adx = _get_calibration_value("straddle_adx_max", 20.0, env_mode)
+    straddle_chop = _get_calibration_value("straddle_chop_max", 0.6, env_mode)
     
-    strangle_vrp = _get_calibration_value("strangle_vrp_min", 10.0)
-    strangle_adx = _get_calibration_value("strangle_adx_max", 30.0)
-    strangle_chop = _get_calibration_value("strangle_chop_max", 0.8)
+    strangle_vrp = _get_calibration_value("strangle_vrp_min", 10.0, env_mode)
+    strangle_adx = _get_calibration_value("strangle_adx_max", 30.0, env_mode)
+    strangle_chop = _get_calibration_value("strangle_chop_max", 0.8, env_mode)
     
-    calendar_term = _get_calibration_value("calendar_term_spread_min", 5.0)
-    calendar_rv_iv = _get_calibration_value("calendar_front_rv_iv_ratio_max", 0.8)
-    calendar_vrp = _get_calibration_value("calendar_vrp_7d_min", 5.0)
+    calendar_term = _get_calibration_value("calendar_term_spread_min", 5.0, env_mode)
+    calendar_rv_iv = _get_calibration_value("calendar_front_rv_iv_ratio_max", 0.8, env_mode)
+    calendar_vrp = _get_calibration_value("calendar_vrp_7d_min", 5.0, env_mode)
     
-    iron_fly_iv_rank = _get_calibration_value("iron_fly_iv_rank_min", 0.80)
-    iron_fly_vrp = _get_calibration_value("iron_fly_vrp_min", 10.0)
+    iron_fly_iv_rank = _get_calibration_value("iron_fly_iv_rank_min", 0.80, env_mode)
+    iron_fly_vrp = _get_calibration_value("iron_fly_vrp_min", 10.0, env_mode)
     
-    safety_adx = _get_calibration_value("safety_adx_high", 35.0)
-    safety_chop = _get_calibration_value("safety_chop_high", 0.85)
+    safety_adx = _get_calibration_value("safety_adx_high", 35.0, env_mode)
+    safety_chop = _get_calibration_value("safety_chop_high", 0.85, env_mode)
     
     return [
         {
@@ -146,7 +165,28 @@ def _build_greg_strategies() -> List[Dict[str, Any]]:
     ]
 
 
-GREG_STRATEGIES = _build_greg_strategies()
+def get_greg_strategies(env_mode: str | None = None) -> List[Dict[str, Any]]:
+    """
+    Get strategy definitions for the given environment mode.
+    
+    Uses caching to avoid rebuilding on every call, but cache can be cleared
+    when overrides change via clear_strategies_cache().
+    
+    Args:
+        env_mode: Environment mode ("test" or "live"). Uses settings.env_mode if None.
+    
+    Returns:
+        List of strategy definition dicts with calibration values applied.
+    """
+    cache_key = env_mode or "default"
+    if cache_key not in _STRATEGIES_CACHE:
+        _STRATEGIES_CACHE[cache_key] = _build_greg_strategies(env_mode)
+    return _STRATEGIES_CACHE[cache_key]
+
+
+def clear_strategies_cache() -> None:
+    """Clear the strategies cache so it rebuilds with fresh calibration values."""
+    _STRATEGIES_CACHE.clear()
 
 
 def _evaluate_criterion(
@@ -322,9 +362,18 @@ def compute_greg_sensors_with_debug(underlying: str) -> Dict[str, Any]:
     }
 
 
-def get_gregbot_evaluations_for_underlying(underlying: str) -> Dict[str, Any]:
+def get_gregbot_evaluations_for_underlying(
+    underlying: str,
+    env_mode: Union[EnvironmentMode, str, None] = None,
+) -> Dict[str, Any]:
     """
     Build current GregBot Phase 1 view for a single underlying.
+    
+    Args:
+        underlying: The underlying asset (BTC or ETH)
+        env_mode: Environment mode (EnvironmentMode enum, "test"/"live" string, or None).
+                  If None, uses settings.env_mode.
+                  This allows callers to request LIVE strategy data even when server is in TEST mode.
     
     Returns:
         {
@@ -333,6 +382,18 @@ def get_gregbot_evaluations_for_underlying(underlying: str) -> Dict[str, Any]:
             "strategies": [StrategyEvaluation, ...]
         }
     """
+    if env_mode is None:
+        effective_mode = settings.env_mode
+    elif isinstance(env_mode, EnvironmentMode):
+        effective_mode = env_mode
+    else:
+        try:
+            effective_mode = EnvironmentMode(env_mode.lower())
+        except ValueError:
+            effective_mode = settings.env_mode
+    
+    mode_str = effective_mode.value
+    
     sensors = compute_greg_sensors(underlying)
     
     greg_sensors = GregSelectorSensors(
@@ -349,10 +410,10 @@ def get_gregbot_evaluations_for_underlying(underlying: str) -> Dict[str, Any]:
         predicted_funding_rate=sensors.get("predicted_funding_rate"),
     )
     
-    decision = evaluate_greg_selector(greg_sensors)
+    decision = evaluate_greg_selector(greg_sensors, env_mode=mode_str)
     selected_strategy = decision.selected_strategy
     
-    strategies_list = _build_greg_strategies()
+    strategies_list = get_greg_strategies(mode_str)
     
     evaluations: List[StrategyEvaluation] = []
     for strat_def in strategies_list:
@@ -368,4 +429,5 @@ def get_gregbot_evaluations_for_underlying(underlying: str) -> Dict[str, Any]:
         "selected_strategy": selected_strategy,
         "decision_reasoning": decision.reasoning,
         "step_name": decision.step_name,
+        "env_mode": mode_str,
     }
