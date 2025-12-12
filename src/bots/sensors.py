@@ -209,6 +209,44 @@ def get_volmex_iv(underlying: str) -> Optional[float]:
     return _fetch_volmex_iv_cached(underlying, cache_key)
 
 
+@lru_cache(maxsize=2)
+def _fetch_deribit_historical_volatility_cached(underlying: str, cache_key: str) -> Optional[float]:
+    """
+    Fetch official Deribit historical volatility (30-day realized volatility).
+    Uses public/get_historical_volatility endpoint.
+    Returns the most recent value as a percentage.
+    """
+    import httpx
+    
+    currency = underlying.upper()
+    if currency not in ("BTC", "ETH"):
+        return None
+    
+    try:
+        with httpx.Client(timeout=10.0) as client:
+            response = client.get(
+                f"https://www.deribit.com/api/v2/public/get_historical_volatility?currency={currency}"
+            )
+            response.raise_for_status()
+            data = response.json()
+        
+        result = data.get("result", [])
+        if not result:
+            return None
+        
+        latest = result[-1]
+        return float(latest[1])
+    except Exception:
+        return None
+
+
+def get_deribit_historical_volatility(underlying: str) -> Optional[float]:
+    """Get official Deribit 30-day historical volatility with 10-minute cache."""
+    now = datetime.now(timezone.utc)
+    cache_key = f"{now.year}-{now.month}-{now.day}-{now.hour}-{now.minute // 10}"
+    return _fetch_deribit_historical_volatility_cached(underlying, cache_key)
+
+
 def compute_realized_volatility_hourly(closes: pd.Series, hours: int = 720) -> Optional[float]:
     """
     Compute annualized realized volatility from hourly closes.
@@ -771,13 +809,22 @@ def compute_sensors_for_underlying(
     closes = df["close"]
     bundle.spot = float(closes.iloc[-1])
     
+    deribit_rv = get_deribit_historical_volatility(underlying)
+    if deribit_rv is not None:
+        bundle.rv_30d = deribit_rv
+    else:
+        hourly_df = get_hourly_ohlc_data(underlying)
+        if not hourly_df.empty and len(hourly_df) >= 48:
+            hourly_closes = hourly_df["close"]
+            bundle.rv_30d = compute_realized_volatility_hourly(hourly_closes, hours=720)
+        else:
+            bundle.rv_30d = compute_realized_volatility(closes, window=30)
+    
     hourly_df = get_hourly_ohlc_data(underlying)
     if not hourly_df.empty and len(hourly_df) >= 48:
         hourly_closes = hourly_df["close"]
-        bundle.rv_30d = compute_realized_volatility_hourly(hourly_closes, hours=720)
         bundle.rv_7d = compute_realized_volatility_hourly(hourly_closes, hours=168)
     else:
-        bundle.rv_30d = compute_realized_volatility(closes, window=30)
         bundle.rv_7d = compute_realized_volatility(closes, window=7)
     
     dvol = get_dvol(underlying)
