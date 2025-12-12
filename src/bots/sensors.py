@@ -69,6 +69,117 @@ def get_ohlc_data(underlying: str) -> pd.DataFrame:
     return _fetch_ohlc_cached(underlying, cache_key)
 
 
+@lru_cache(maxsize=2)
+def _fetch_hourly_ohlc_cached(underlying: str, cache_key: str) -> pd.DataFrame:
+    """
+    Fetch hourly OHLC data for the past 30 days (720 hours).
+    Used for computing RV from hourly returns.
+    """
+    end = datetime.now(timezone.utc)
+    start = end - timedelta(days=30)
+    
+    with DeribitClient() as client:
+        index_name = f"{underlying.lower()}_usd"
+        try:
+            res = client.get_tradingview_chart_data(
+                instrument_name=index_name,
+                start=start,
+                end=end,
+                resolution="60",
+            )
+        except Exception:
+            perp_name = f"{underlying}-PERPETUAL"
+            res = client.get_tradingview_chart_data(
+                instrument_name=perp_name,
+                start=start,
+                end=end,
+                resolution="60",
+            )
+    
+    if not res.get("ticks"):
+        return pd.DataFrame()
+    
+    timestamps = [
+        datetime.fromtimestamp(ts / 1000, tz=timezone.utc) for ts in res["ticks"]
+    ]
+    df = pd.DataFrame(
+        {
+            "open": res["open"],
+            "high": res["high"],
+            "low": res["low"],
+            "close": res["close"],
+        },
+        index=pd.DatetimeIndex(timestamps, name="timestamp"),
+    )
+    return df
+
+
+def get_hourly_ohlc_data(underlying: str) -> pd.DataFrame:
+    """Get hourly OHLC data with 10-minute cache invalidation."""
+    now = datetime.now(timezone.utc)
+    cache_key = f"{now.year}-{now.month}-{now.day}-{now.hour}-{now.minute // 10}"
+    return _fetch_hourly_ohlc_cached(underlying, cache_key)
+
+
+@lru_cache(maxsize=2)
+def _fetch_dvol_cached(underlying: str, cache_key: str) -> Optional[float]:
+    """
+    Fetch current DVOL (Deribit Volatility Index) for an underlying.
+    Returns the most recent close value.
+    """
+    end = datetime.now(timezone.utc)
+    start = end - timedelta(hours=24)
+    
+    try:
+        with DeribitClient() as client:
+            res = client.get_volatility_index_data(
+                currency=underlying.upper(),
+                start=start,
+                end=end,
+                resolution="3600",
+            )
+        
+        data = res.get("data", [])
+        if not data:
+            return None
+        
+        last_point = data[-1]
+        dvol_close = last_point[4]
+        return float(dvol_close)
+    except Exception:
+        return None
+
+
+def get_dvol(underlying: str) -> Optional[float]:
+    """Get current DVOL with 10-minute cache invalidation."""
+    now = datetime.now(timezone.utc)
+    cache_key = f"{now.year}-{now.month}-{now.day}-{now.hour}-{now.minute // 10}"
+    return _fetch_dvol_cached(underlying, cache_key)
+
+
+def compute_realized_volatility_hourly(closes: pd.Series, hours: int = 720) -> Optional[float]:
+    """
+    Compute annualized realized volatility from hourly closes.
+    Uses last 720 hours (30 days) by default.
+    Returns as percentage (e.g., 45.0 for 45%).
+    
+    Annualization: sqrt(8760) for hours in a year (365 * 24).
+    """
+    if len(closes) < min(hours, 48) + 1:
+        return None
+    
+    n_hours = min(hours, len(closes) - 1)
+    recent = closes.iloc[-(n_hours + 1):]
+    log_returns = (recent / recent.shift(1)).apply(lambda x: log(x) if x > 0 else 0).dropna()
+    
+    if len(log_returns) < 24:
+        return None
+    
+    hourly_vol = log_returns.std()
+    annualized = hourly_vol * sqrt(8760) * 100
+    return float(annualized)
+
+
 def compute_rsi(closes: pd.Series, period: int = 14) -> Optional[float]:
     """
     Compute RSI using Wilder's smoothing method.
@@ -572,10 +683,13 @@ def compute_sensors_for_underlying(
     """
     Compute all Greg sensors for a given underlying.
     
+    IV source: DVOL (Deribit Volatility Index) via public/get_volatility_index_data
+    RV source: Hourly price data via public/get_tradingview_chart_data (resolution=60)
+    
     Args:
         underlying: "BTC" or "ETH"
-        iv_30d: Current 30-day implied volatility (from options chain or vol_state)
-        iv_7d: Current 7-day implied volatility (for term structure)
+        iv_30d: Override for 30-day IV (if None, uses DVOL)
+        iv_7d: Override for 7-day IV (for term structure)
         skew: Current 25-delta skew
     
     Returns:
@@ -602,17 +716,33 @@ def compute_sensors_for_underlying(
     closes = df["close"]
     bundle.spot = float(closes.iloc[-1])
     
-    bundle.rv_30d = compute_realized_volatility(closes, window=30)
-    bundle.rv_7d = compute_realized_volatility(closes, window=7)
+    hourly_df = get_hourly_ohlc_data(underlying)
+    if not hourly_df.empty and len(hourly_df) >= 48:
+        hourly_closes = hourly_df["close"]
+        bundle.rv_30d = compute_realized_volatility_hourly(hourly_closes, hours=720)
+        bundle.rv_7d = compute_realized_volatility_hourly(hourly_closes, hours=168)
+    else:
+        bundle.rv_30d = compute_realized_volatility(closes, window=30)
+        bundle.rv_7d = compute_realized_volatility(closes, window=7)
     
-    term_spread_live, iv_7d_live, iv_30d_live = compute_term_structure_and_atm_iv(
-        underlying, bundle.spot
-    )
+    dvol = get_dvol(underlying)
+    if iv_30d is None and dvol is not None:
+        iv_30d = dvol
     
-    if iv_30d is None and iv_30d_live is not None:
-        iv_30d = iv_30d_live
-    if iv_7d is None and iv_7d_live is not None:
-        iv_7d = iv_7d_live
+    if iv_30d is None:
+        term_spread_live, iv_7d_live, iv_30d_live = compute_term_structure_and_atm_iv(
+            underlying, bundle.spot
+        )
+        if iv_30d is None and iv_30d_live is not None:
+            iv_30d = iv_30d_live
+        if iv_7d is None and iv_7d_live is not None:
+            iv_7d = iv_7d_live
+    else:
+        term_spread_live, iv_7d_live, _ = compute_term_structure_and_atm_iv(
+            underlying, bundle.spot
+        )
+        if iv_7d is None and iv_7d_live is not None:
+            iv_7d = iv_7d_live
     
     bundle.iv_30d = iv_30d
     bundle.iv_7d = iv_7d

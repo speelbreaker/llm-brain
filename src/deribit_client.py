@@ -215,3 +215,33 @@ class DeribitClient(DeribitBaseClient):
             "resolution": resolution,
         }
         return self._make_request("public/get_tradingview_chart_data", params)
+    
+    def get_volatility_index_data(
+        self,
+        currency: str,
+        start: datetime,
+        end: datetime,
+        resolution: str = "3600",
+    ) -> dict[str, Any]:
+        """
+        Get DVOL (Deribit Volatility Index) historical data.
+        
+        Args:
+            currency: Currency code (e.g. "BTC", "ETH")
+            start: Start datetime
+            end: End datetime
+            resolution: Resolution in seconds ('60', '3600', '43200', '1D')
+        
+        Returns:
+            Dict with keys: data (list of [timestamp, open, high, low, close])
+        """
+        start_ms = int(start.timestamp() * 1000)
+        end_ms = int(end.timestamp() * 1000)
+        
+        params = {
+            "currency": currency,
+            "start_timestamp": start_ms,
+            "end_timestamp": end_ms,
+            "resolution": resolution,
+        }
+        return self._make_request("public/get_volatility_index_data", params)
