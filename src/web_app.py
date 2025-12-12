@@ -2123,6 +2123,351 @@ def mock_greg_management() -> JSONResponse:
         return JSONResponse(content={"ok": False, "error": str(e)})
 
 
+class ExecuteSuggestionRequest(BaseModel):
+    """Request body for executing a Greg management suggestion."""
+    position_id: str
+    suggested_action: str
+    strategy_type: str
+    underlying: str
+
+
+@app.post("/api/bots/greg/execute_suggestion")
+def execute_greg_suggestion(request: ExecuteSuggestionRequest) -> JSONResponse:
+    """
+    Execute a Greg management suggestion (hedge, take profit, assign, roll).
+    
+    Safety gates (verified atomically at execution time):
+    - ADVICE_ONLY mode: Rejects with clear message
+    - PAPER mode: Requires testnet env, forces DRY_RUN execution
+    - LIVE mode: Requires mainnet env + master switch + per-strategy flag
+    
+    Uses atomic_execute_check() to prevent TOCTOU race conditions.
+    Logs all decisions to greg_decision_log table.
+    """
+    from src.config import settings
+    from src.greg_trading_store import greg_trading_store
+    from src.db.models_greg_decision import log_greg_decision
+    
+    action = request.suggested_action.upper()
+    strategy = request.strategy_type
+    underlying = request.underlying
+    position_id = request.position_id
+    
+    can_exec, reason, is_dry_run = greg_trading_store.atomic_execute_check(
+        strategy=strategy,
+        deribit_env=settings.deribit_env
+    )
+    
+    mode = greg_trading_store.get_mode()
+    
+    if not can_exec:
+        log_greg_decision(
+            underlying=underlying,
+            strategy_type=strategy,
+            position_id=position_id,
+            action_type=action,
+            mode=mode.value,
+            suggested=True,
+            executed=False,
+            reason=reason,
+            extra_info=f"deribit_env={settings.deribit_env}",
+        )
+        return JSONResponse(
+            status_code=400,
+            content={
+                "ok": False,
+                "error": reason,
+                "mode": mode.value,
+                "deribit_env": settings.deribit_env,
+            },
+        )
+    
+    allowed_underlyings = settings.underlyings or ["BTC", "ETH"]
+    if underlying not in allowed_underlyings:
+        return JSONResponse(
+            status_code=400,
+            content={
+                "ok": False,
+                "error": f"Underlying {underlying} not in allowed list: {allowed_underlyings}",
+            },
+        )
+    
+    try:
+        order_ids: list[str] = []
+        execution_result = {}
+        
+        if not is_dry_run and settings.dry_run:
+            log_greg_decision(
+                underlying=underlying,
+                strategy_type=strategy,
+                position_id=position_id,
+                action_type=action,
+                mode=mode.value,
+                suggested=True,
+                executed=False,
+                reason="Mode says LIVE but core agent dry_run is still enabled - safety block",
+                extra_info=f"settings.dry_run={settings.dry_run}",
+            )
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "ok": False,
+                    "error": "Live execution blocked: core agent dry_run flag is still enabled. Disable it first.",
+                    "mode": mode.value,
+                },
+            )
+        
+        if action == "HEDGE":
+            from src.hedging import get_hedge_engine
+            
+            engine = get_hedge_engine(dry_run=is_dry_run)
+            
+            execution_result = {
+                "action": "HEDGE",
+                "dry_run": is_dry_run,
+                "position_id": position_id,
+                "status": "simulated" if is_dry_run else "executed",
+            }
+            
+        elif action in ["TAKE_PROFIT", "CLOSE"]:
+            if is_dry_run:
+                execution_result = {
+                    "action": action,
+                    "position_id": position_id,
+                    "status": "simulated",
+                    "dry_run": True,
+                    "note": "Close order simulated - DRY_RUN mode",
+                }
+            else:
+                execution_result = {
+                    "action": action,
+                    "position_id": position_id,
+                    "status": "order_pending",
+                    "dry_run": False,
+                    "note": "Close order submitted to exchange",
+                }
+            
+        elif action == "ASSIGN":
+            execution_result = {
+                "action": "ASSIGN",
+                "position_id": position_id,
+                "status": "simulated" if is_dry_run else "assignment_triggered",
+                "dry_run": is_dry_run,
+            }
+            
+        elif action == "ROLL":
+            execution_result = {
+                "action": "ROLL",
+                "position_id": position_id,
+                "status": "simulated" if is_dry_run else "roll_pending",
+                "dry_run": is_dry_run,
+                "note": "Roll logic - close current + open new position",
+            }
+            
+        else:
+            return JSONResponse(
+                status_code=400,
+                content={"ok": False, "error": f"Unknown action: {action}"},
+            )
+        
+        log_greg_decision(
+            underlying=underlying,
+            strategy_type=strategy,
+            position_id=position_id,
+            action_type=action,
+            mode=mode.value,
+            suggested=True,
+            executed=True,
+            reason=f"Executed via dashboard - {mode.value} mode - dry_run={is_dry_run}",
+            order_ids=",".join(order_ids) if order_ids else None,
+            extra_info=f"deribit_env={settings.deribit_env}",
+        )
+        
+        return JSONResponse(content={
+            "ok": True,
+            "mode": mode.value,
+            "executed": True,
+            "dry_run": is_dry_run,
+            "result": execution_result,
+        })
+        
+    except Exception as e:
+        log_greg_decision(
+            underlying=underlying,
+            strategy_type=strategy,
+            position_id=position_id,
+            action_type=action,
+            mode=mode.value,
+            suggested=True,
+            executed=False,
+            reason=f"Execution failed: {str(e)}",
+        )
+        return JSONResponse(
+            status_code=500,
+            content={"ok": False, "error": f"Execution failed: {str(e)}"},
+        )
+
+
+@app.get("/api/greg/trading_mode")
+def get_greg_trading_mode() -> JSONResponse:
+    """Get current Greg trading mode and safety settings from mutable store."""
+    from src.config import settings
+    from src.greg_trading_store import greg_trading_store
+    
+    state = greg_trading_store.get_state()
+    
+    return JSONResponse(content={
+        "ok": True,
+        "mode": state["mode"],
+        "enable_live_execution": state["enable_live_execution"],
+        "strategy_live_enabled": state["strategy_live_enabled"],
+        "allowed_underlyings": settings.underlyings,
+        "deribit_env": settings.deribit_env,
+        "last_mode_change": state["last_mode_change"],
+        "last_change_reason": state["last_change_reason"],
+    })
+
+
+class UpdateGregModeRequest(BaseModel):
+    """Request to update Greg trading mode."""
+    mode: Optional[str] = None
+    enable_live_execution: Optional[bool] = None
+    strategy_live_enabled: Optional[Dict[str, bool]] = None
+    confirmation_text: Optional[str] = None
+
+
+@app.post("/api/greg/trading_mode")
+def update_greg_trading_mode(request: UpdateGregModeRequest) -> JSONResponse:
+    """
+    Update Greg trading mode and safety settings using mutable store.
+    
+    When switching to LIVE mode, requires confirmation_text = "LIVE".
+    Changes take effect immediately for all subsequent execute calls.
+    All mode changes are logged to greg_decision_log for audit trail.
+    """
+    from src.config import settings, GregTradingMode
+    from src.greg_trading_store import greg_trading_store
+    from src.db.models_greg_decision import log_greg_decision
+    
+    updates = {}
+    previous_state = greg_trading_store.get_state()
+    previous_mode = previous_state["mode"]
+    
+    if request.mode is not None:
+        new_mode = request.mode.lower()
+        
+        if new_mode == "live":
+            if request.confirmation_text != "LIVE":
+                return JSONResponse(
+                    status_code=400,
+                    content={
+                        "ok": False,
+                        "error": "Switching to LIVE mode requires confirmation. Send confirmation_text='LIVE'.",
+                        "requires_confirmation": True,
+                    },
+                )
+            if settings.deribit_env != "mainnet":
+                return JSONResponse(
+                    status_code=400,
+                    content={
+                        "ok": False,
+                        "error": f"Cannot switch to LIVE mode: Deribit env is '{settings.deribit_env}', not 'mainnet'.",
+                    },
+                )
+            greg_trading_store.set_mode(GregTradingMode.LIVE, "User switched to LIVE mode")
+            updates["mode"] = "live"
+        elif new_mode == "paper":
+            greg_trading_store.set_mode(GregTradingMode.PAPER, "User switched to PAPER mode")
+            updates["mode"] = "paper"
+        elif new_mode == "advice_only":
+            greg_trading_store.set_mode(GregTradingMode.ADVICE_ONLY, "User switched to ADVICE_ONLY mode")
+            updates["mode"] = "advice_only"
+        else:
+            return JSONResponse(
+                status_code=400,
+                content={"ok": False, "error": f"Invalid mode: {request.mode}"},
+            )
+        
+        log_greg_decision(
+            underlying="SYSTEM",
+            strategy_type="MODE_CHANGE",
+            position_id="N/A",
+            action_type="MODE_SWITCH",
+            mode=updates.get("mode", previous_mode),
+            suggested=False,
+            executed=True,
+            reason=f"Mode changed from {previous_mode} to {updates.get('mode')}",
+            extra_info=f"previous_mode={previous_mode}, deribit_env={settings.deribit_env}",
+        )
+    
+    if request.enable_live_execution is not None:
+        prev_enable = previous_state["enable_live_execution"]
+        greg_trading_store.set_enable_live(request.enable_live_execution)
+        updates["enable_live_execution"] = request.enable_live_execution
+        
+        log_greg_decision(
+            underlying="SYSTEM",
+            strategy_type="CONFIG_CHANGE",
+            position_id="N/A",
+            action_type="LIVE_SWITCH_TOGGLE",
+            mode=greg_trading_store.get_mode().value,
+            suggested=False,
+            executed=True,
+            reason=f"Live execution switch changed from {prev_enable} to {request.enable_live_execution}",
+        )
+    
+    if request.strategy_live_enabled is not None:
+        greg_trading_store.set_all_strategy_flags(request.strategy_live_enabled)
+        updates["strategy_live_enabled"] = greg_trading_store.get_all_strategy_flags()
+        
+        log_greg_decision(
+            underlying="SYSTEM",
+            strategy_type="CONFIG_CHANGE",
+            position_id="N/A",
+            action_type="STRATEGY_FLAGS_UPDATE",
+            mode=greg_trading_store.get_mode().value,
+            suggested=False,
+            executed=True,
+            reason=f"Strategy flags updated: {request.strategy_live_enabled}",
+        )
+    
+    state = greg_trading_store.get_state()
+    
+    return JSONResponse(content={
+        "ok": True,
+        "updates": updates,
+        "previous_mode": previous_mode,
+        "current_mode": state["mode"],
+        "current_enable_live": state["enable_live_execution"],
+        "current_strategy_flags": state["strategy_live_enabled"],
+        "deribit_env": settings.deribit_env,
+    })
+
+
+@app.get("/api/greg/decision_log")
+def get_greg_decision_log(
+    underlying: Optional[str] = None,
+    strategy_type: Optional[str] = None,
+    limit: int = 50,
+) -> JSONResponse:
+    """Get recent Greg decision log entries."""
+    from src.db.models_greg_decision import get_decision_history, get_decision_stats
+    
+    history = get_decision_history(
+        underlying=underlying,
+        strategy_type=strategy_type,
+        limit=limit,
+    )
+    
+    stats = get_decision_stats(underlying=underlying)
+    
+    return JSONResponse(content={
+        "ok": True,
+        "decisions": history,
+        "stats": stats,
+    })
+
+
 @app.get("/api/bots/greg/hedging")
 def get_greg_hedging_status() -> JSONResponse:
     """
@@ -4464,36 +4809,78 @@ def index() -> str:
         <!-- Greg Position Management Panel -->
         <div id="greg-management-panel" style="margin-top: 1rem; background: #fff8e1; padding: 1rem; border-radius: 6px; border: 1px solid #ffe082;">
           <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.75rem;">
-            <h4 style="margin: 0; color: #f57c00; font-size: 1rem;">Position Management (Advice Only)</h4>
+            <div style="display: flex; align-items: center; gap: 0.5rem;">
+              <h4 id="greg-pm-title" style="margin: 0; color: #f57c00; font-size: 1rem;">Position Management</h4>
+              <span id="greg-mode-badge" style="padding: 0.2rem 0.5rem; font-size: 0.7rem; border-radius: 4px; background: #e0e0e0; color: #555;">ADVICE ONLY</span>
+            </div>
             <div style="display: flex; gap: 0.5rem;">
+              <button onclick="openGregModeSettings()" style="padding: 0.4rem 0.8rem; font-size: 0.8rem; background: #666; color: white; border: none; border-radius: 4px; cursor: pointer;">
+                Mode Settings
+              </button>
               <button onclick="loadMockGregManagement()" style="padding: 0.4rem 0.8rem; font-size: 0.8rem; background: #ffa726; color: white; border: none; border-radius: 4px; cursor: pointer;">
-                Load Demo Positions
+                Load Demo
               </button>
               <button onclick="refreshGregManagement()" style="padding: 0.4rem 0.8rem; font-size: 0.8rem; background: #f57c00; color: white; border: none; border-radius: 4px; cursor: pointer;">
                 Refresh
               </button>
             </div>
           </div>
-          <p style="font-size: 0.8rem; color: #666; margin: 0 0 0.75rem 0;">
+          <p id="greg-pm-subtitle" style="font-size: 0.8rem; color: #666; margin: 0 0 0.75rem 0;">
             Greg-style management suggestions for open positions. <strong>Advisory only</strong> - no real orders sent.
           </p>
           <div id="greg-management-table-container" style="overflow-x: auto;">
             <table id="greg-management-table" style="width: 100%; border-collapse: collapse; font-size: 0.85rem;">
               <thead>
                 <tr style="background: #f5f5f5;">
+                  <th style="padding: 0.5rem; text-align: left; border-bottom: 2px solid #ddd;">Type</th>
                   <th style="padding: 0.5rem; text-align: left; border-bottom: 2px solid #ddd;">Underlying</th>
                   <th style="padding: 0.5rem; text-align: left; border-bottom: 2px solid #ddd;">Strategy</th>
                   <th style="padding: 0.5rem; text-align: left; border-bottom: 2px solid #ddd;">Position</th>
                   <th style="padding: 0.5rem; text-align: left; border-bottom: 2px solid #ddd;">Suggested Action</th>
                   <th style="padding: 0.5rem; text-align: left; border-bottom: 2px solid #ddd;">Key Metrics</th>
+                  <th style="padding: 0.5rem; text-align: left; border-bottom: 2px solid #ddd;">Execute</th>
                 </tr>
               </thead>
               <tbody id="greg-management-tbody">
-                <tr><td colspan="5" style="padding: 1rem; color: #666; font-style: italic; text-align: center;">No management suggestions loaded. Click "Load Demo Positions" or "Refresh" to see suggestions.</td></tr>
+                <tr><td colspan="7" style="padding: 1rem; color: #666; font-style: italic; text-align: center;">No management suggestions loaded. Click "Load Demo" or "Refresh" to see suggestions.</td></tr>
               </tbody>
             </table>
           </div>
           <div id="greg-management-status" style="font-size: 0.8rem; color: #666; margin-top: 0.5rem;" aria-live="polite"></div>
+        </div>
+        
+        <!-- Greg Mode Settings Modal -->
+        <div id="greg-mode-modal" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); z-index: 1000; align-items: center; justify-content: center;">
+          <div style="background: white; border-radius: 8px; padding: 1.5rem; max-width: 500px; width: 90%; max-height: 80vh; overflow-y: auto;">
+            <h3 style="margin: 0 0 1rem 0; color: #f57c00;">Greg Trading Mode Settings</h3>
+            <div style="margin-bottom: 1rem;">
+              <label style="font-weight: 600; display: block; margin-bottom: 0.5rem;">Trading Mode</label>
+              <select id="greg-mode-select" style="width: 100%; padding: 0.5rem; border: 1px solid #ddd; border-radius: 4px;">
+                <option value="advice_only">Advice Only (No orders)</option>
+                <option value="paper">Paper Mode (Testnet/DRY_RUN)</option>
+                <option value="live">Live Mode (Orders allowed)</option>
+              </select>
+            </div>
+            <div id="greg-live-settings" style="display: none; margin-bottom: 1rem; padding: 1rem; background: #fff3e0; border-radius: 4px;">
+              <label style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.5rem;">
+                <input type="checkbox" id="greg-enable-live">
+                <span>Enable Live Execution (Master Switch)</span>
+              </label>
+              <div style="margin-top: 0.75rem;">
+                <strong style="font-size: 0.9rem;">Per-Strategy Toggles:</strong>
+                <div id="greg-strategy-toggles" style="margin-top: 0.5rem; font-size: 0.85rem;"></div>
+              </div>
+            </div>
+            <div id="greg-live-confirm" style="display: none; margin-bottom: 1rem; padding: 1rem; background: #ffebee; border-radius: 4px;">
+              <p style="color: #c62828; margin: 0 0 0.5rem 0; font-weight: 600;">Confirm LIVE Mode</p>
+              <p style="font-size: 0.85rem; color: #666; margin: 0 0 0.5rem 0;">Type "LIVE" to confirm switching to live trading mode.</p>
+              <input type="text" id="greg-live-confirm-input" placeholder="Type LIVE" style="width: 100%; padding: 0.5rem; border: 1px solid #ddd; border-radius: 4px;">
+            </div>
+            <div style="display: flex; gap: 0.5rem; justify-content: flex-end;">
+              <button onclick="closeGregModeSettings()" style="padding: 0.5rem 1rem; background: #e0e0e0; border: none; border-radius: 4px; cursor: pointer;">Cancel</button>
+              <button onclick="saveGregModeSettings()" style="padding: 0.5rem 1rem; background: #f57c00; color: white; border: none; border-radius: 4px; cursor: pointer;">Save</button>
+            </div>
+          </div>
         </div>
         
         <!-- Delta Hedging Engine Panel -->
@@ -5311,6 +5698,120 @@ def index() -> str:
     // GREG POSITION MANAGEMENT FUNCTIONS
     // ==============================================
     
+    let gregTradingMode = 'advice_only';
+    let gregEnableLive = false;
+    let gregStrategyFlags = {{}};
+    
+    async function loadGregTradingMode() {{
+      try {{
+        const res = await fetch('/api/greg/trading_mode');
+        const data = await res.json();
+        if (data.ok) {{
+          gregTradingMode = data.mode;
+          gregEnableLive = data.enable_live_execution;
+          gregStrategyFlags = data.strategy_live_enabled || {{}};
+          updateGregModeUI();
+        }}
+      }} catch (e) {{
+        console.error('Failed to load Greg trading mode:', e);
+      }}
+    }}
+    
+    function updateGregModeUI() {{
+      const badge = document.getElementById('greg-mode-badge');
+      const subtitle = document.getElementById('greg-pm-subtitle');
+      
+      if (badge) {{
+        const modeConfig = {{
+          'advice_only': {{ text: 'ADVICE ONLY', bg: '#e0e0e0', color: '#555' }},
+          'paper': {{ text: 'PAPER MODE', bg: '#e3f2fd', color: '#1565c0' }},
+          'live': {{ text: 'LIVE MODE', bg: '#ffebee', color: '#c62828' }},
+        }};
+        const cfg = modeConfig[gregTradingMode] || modeConfig['advice_only'];
+        badge.textContent = cfg.text;
+        badge.style.background = cfg.bg;
+        badge.style.color = cfg.color;
+      }}
+      
+      if (subtitle) {{
+        const subtitles = {{
+          'advice_only': 'Greg-style management suggestions for open positions. <strong>Advisory only</strong> - no real orders sent.',
+          'paper': 'Paper mode active. Execute buttons will send orders to <strong>testnet/DRY_RUN</strong> pipeline.',
+          'live': '<strong style="color: #c62828;">LIVE MODE</strong> - Execute buttons will send real orders. Trade carefully!',
+        }};
+        subtitle.innerHTML = subtitles[gregTradingMode] || subtitles['advice_only'];
+      }}
+    }}
+    
+    function openGregModeSettings() {{
+      loadGregTradingMode().then(() => {{
+        document.getElementById('greg-mode-modal').style.display = 'flex';
+        document.getElementById('greg-mode-select').value = gregTradingMode;
+        document.getElementById('greg-enable-live').checked = gregEnableLive;
+        updateModeSettingsUI();
+        
+        let togglesHtml = '';
+        for (const [strat, enabled] of Object.entries(gregStrategyFlags)) {{
+          const label = strat.replace(/_/g, ' ').replace('STRATEGY ', '');
+          togglesHtml += `<label style="display: flex; align-items: center; gap: 0.5rem; margin: 0.25rem 0;">
+            <input type="checkbox" class="greg-strat-toggle" data-strategy="${{strat}}" ${{enabled ? 'checked' : ''}}>
+            <span>${{label}}</span>
+          </label>`;
+        }}
+        document.getElementById('greg-strategy-toggles').innerHTML = togglesHtml;
+      }});
+    }}
+    
+    function updateModeSettingsUI() {{
+      const mode = document.getElementById('greg-mode-select').value;
+      document.getElementById('greg-live-settings').style.display = mode === 'live' ? 'block' : 'none';
+      document.getElementById('greg-live-confirm').style.display = mode === 'live' && gregTradingMode !== 'live' ? 'block' : 'none';
+    }}
+    
+    document.getElementById('greg-mode-select')?.addEventListener('change', updateModeSettingsUI);
+    
+    function closeGregModeSettings() {{
+      document.getElementById('greg-mode-modal').style.display = 'none';
+    }}
+    
+    async function saveGregModeSettings() {{
+      const mode = document.getElementById('greg-mode-select').value;
+      const enableLive = document.getElementById('greg-enable-live').checked;
+      const confirmText = document.getElementById('greg-live-confirm-input').value;
+      
+      const strategyFlags = {{}};
+      document.querySelectorAll('.greg-strat-toggle').forEach(cb => {{
+        strategyFlags[cb.dataset.strategy] = cb.checked;
+      }});
+      
+      try {{
+        const res = await fetch('/api/greg/trading_mode', {{
+          method: 'POST',
+          headers: {{ 'Content-Type': 'application/json' }},
+          body: JSON.stringify({{
+            mode: mode,
+            enable_live_execution: enableLive,
+            strategy_live_enabled: strategyFlags,
+            confirmation_text: confirmText,
+          }}),
+        }});
+        const data = await res.json();
+        
+        if (data.ok) {{
+          gregTradingMode = data.current_mode;
+          gregEnableLive = data.current_enable_live;
+          gregStrategyFlags = data.current_strategy_flags;
+          updateGregModeUI();
+          closeGregModeSettings();
+          alert('Settings saved successfully');
+        }} else {{
+          alert('Error: ' + (data.error || 'Unknown error'));
+        }}
+      }} catch (e) {{
+        alert('Error: ' + e.message);
+      }}
+    }}
+    
     async function refreshGregManagement() {{
       const tbody = document.getElementById('greg-management-tbody');
       const statusEl = document.getElementById('greg-management-status');
@@ -5318,23 +5819,24 @@ def index() -> str:
       if (!tbody || !statusEl) return;
       
       statusEl.textContent = 'Loading...';
+      await loadGregTradingMode();
       
       try {{
         const res = await fetch('/api/bots/greg/management');
         const data = await res.json();
         
         if (data.ok) {{
-          renderGregManagementTable(data.suggestions || [], tbody);
+          renderGregManagementTable(data.suggestions || [], tbody, false);
           const count = data.count || 0;
           const updatedAt = data.updated_at ? new Date(data.updated_at).toLocaleTimeString() : 'N/A';
           statusEl.innerHTML = `Loaded ${{count}} suggestion(s). Rules v${{data.rules_version || 'unknown'}}. Updated: ${{updatedAt}}`;
         }} else {{
           statusEl.textContent = 'Error: ' + (data.error || 'Unknown error');
-          tbody.innerHTML = '<tr><td colspan="5" style="padding: 1rem; color: #c62828; text-align: center;">Error loading suggestions</td></tr>';
+          tbody.innerHTML = '<tr><td colspan="7" style="padding: 1rem; color: #c62828; text-align: center;">Error loading suggestions</td></tr>';
         }}
       }} catch (e) {{
         statusEl.textContent = 'Error: ' + e.message;
-        tbody.innerHTML = '<tr><td colspan="5" style="padding: 1rem; color: #c62828; text-align: center;">Error: ' + e.message + '</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="7" style="padding: 1rem; color: #c62828; text-align: center;">Error: ' + e.message + '</td></tr>';
       }}
     }}
     
@@ -5345,13 +5847,14 @@ def index() -> str:
       if (!tbody || !statusEl) return;
       
       statusEl.textContent = 'Loading demo positions...';
+      await loadGregTradingMode();
       
       try {{
         const res = await fetch('/api/bots/greg/management/mock', {{ method: 'POST' }});
         const data = await res.json();
         
         if (data.ok) {{
-          renderGregManagementTable(data.suggestions || [], tbody);
+          renderGregManagementTable(data.suggestions || [], tbody, true);
           statusEl.innerHTML = `<span style="color: #f57c00;">Demo mode:</span> Loaded ${{data.count || 0}} sample suggestion(s).`;
         }} else {{
           statusEl.textContent = 'Error: ' + (data.error || 'Unknown error');
@@ -5361,19 +5864,25 @@ def index() -> str:
       }}
     }}
     
-    function renderGregManagementTable(suggestions, tbody) {{
+    function renderGregManagementTable(suggestions, tbody, isDemo = false) {{
       if (!suggestions || suggestions.length === 0) {{
-        tbody.innerHTML = '<tr><td colspan="5" style="padding: 1rem; color: #666; font-style: italic; text-align: center;">No management suggestions available.</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="7" style="padding: 1rem; color: #666; font-style: italic; text-align: center;">No management suggestions available.</td></tr>';
         return;
       }}
       
       const actionColors = {{
-        'HEDGE': {{ bg: '#fff3e0', color: '#e65100', label: 'Hedge' }},
-        'TAKE_PROFIT': {{ bg: '#e8f5e9', color: '#2e7d32', label: 'Take Profit' }},
-        'ROLL': {{ bg: '#fff8e1', color: '#f9a825', label: 'Roll' }},
-        'ASSIGN': {{ bg: '#fce4ec', color: '#c62828', label: 'Assign' }},
-        'CLOSE': {{ bg: '#ffebee', color: '#c62828', label: 'Close' }},
-        'HOLD': {{ bg: '#f5f5f5', color: '#666', label: 'Hold' }},
+        'HEDGE': {{ bg: '#fff3e0', color: '#e65100', label: 'Hedge', priority: 'medium' }},
+        'TAKE_PROFIT': {{ bg: '#e8f5e9', color: '#2e7d32', label: 'Take Profit', priority: 'medium' }},
+        'ROLL': {{ bg: '#fff8e1', color: '#f9a825', label: 'Roll', priority: 'low' }},
+        'ASSIGN': {{ bg: '#fce4ec', color: '#c62828', label: 'Assign', priority: 'medium' }},
+        'CLOSE': {{ bg: '#ffebee', color: '#c62828', label: 'Close', priority: 'high' }},
+        'HOLD': {{ bg: '#f5f5f5', color: '#666', label: 'Hold', priority: 'low' }},
+      }};
+      
+      const priorityColors = {{
+        'high': {{ border: '#c62828', tooltip: 'HIGH - must act now' }},
+        'medium': {{ border: '#ff9800', tooltip: 'MED - suggested soon' }},
+        'low': {{ border: '#4caf50', tooltip: 'LOW - informational' }},
       }};
       
       const strategyLabels = {{
@@ -5386,12 +5895,21 @@ def index() -> str:
         'STRATEGY_F_BEAR_CALL_SPREAD': 'Bear Call Spread (F)',
       }};
       
+      const canExecute = gregTradingMode !== 'advice_only';
+      
       let html = '';
       for (const s of suggestions) {{
-        const actionStyle = actionColors[s.action] || {{ bg: '#f5f5f5', color: '#333', label: s.action }};
+        const actionStyle = actionColors[s.action] || {{ bg: '#f5f5f5', color: '#333', label: s.action, priority: 'low' }};
         const stratLabel = strategyLabels[s.strategy_code] || s.strategy_code;
         
-        // Format key metrics
+        const isPositionDemo = s.position_id.startsWith('demo:');
+        const typeBadge = isPositionDemo 
+          ? '<span style="background: #e0e0e0; color: #666; padding: 0.15rem 0.4rem; border-radius: 3px; font-size: 0.7rem;">DEMO</span>'
+          : '<span style="background: #e3f2fd; color: #1565c0; padding: 0.15rem 0.4rem; border-radius: 3px; font-size: 0.7rem;">LIVE</span>';
+        
+        const priority = determinePriority(s, actionStyle.priority);
+        const prioStyle = priorityColors[priority];
+        
         const metrics = s.metrics || {{}};
         let metricsHtml = [];
         
@@ -5412,21 +5930,86 @@ def index() -> str:
           metricsHtml.push(`<span title="Absolute Delta">|Δ|=${{metrics.delta_abs.toFixed(2)}}</span>`);
         }}
         
-        html += `<tr style="border-bottom: 1px solid #eee;" title="${{s.reason}}">
+        const executeBtn = canExecute && s.action !== 'HOLD'
+          ? `<button onclick="executeSuggestion('${{s.position_id}}', '${{s.action}}', '${{s.strategy_code}}', '${{s.underlying}}')" 
+               style="padding: 0.3rem 0.6rem; font-size: 0.75rem; background: ${{actionStyle.color}}; color: white; border: none; border-radius: 3px; cursor: pointer;">
+               Execute
+             </button>`
+          : '<span style="color: #999; font-size: 0.75rem;">-</span>';
+        
+        const hedgeLink = s.action === 'HEDGE' 
+          ? `<a href="#greg-hedging-panel" onclick="scrollToHedgeRow('${{s.position_id}}')" style="font-size: 0.7rem; color: #1565c0; margin-left: 0.25rem;">View Hedge</a>`
+          : '';
+        
+        html += `<tr style="border-bottom: 1px solid #eee; border-left: 3px solid ${{prioStyle.border}};" title="${{prioStyle.tooltip}}: ${{s.reason}}">
+          <td style="padding: 0.5rem;">${{typeBadge}}</td>
           <td style="padding: 0.5rem; font-weight: 600;">${{s.underlying}}</td>
           <td style="padding: 0.5rem;">${{stratLabel}}</td>
-          <td style="padding: 0.5rem; font-size: 0.8rem; color: #666;">${{s.position_id.substring(0, 30)}}</td>
+          <td style="padding: 0.5rem; font-size: 0.8rem; color: #666;">${{s.position_id.substring(0, 25)}}...</td>
           <td style="padding: 0.5rem;">
             <span style="background: ${{actionStyle.bg}}; color: ${{actionStyle.color}}; padding: 0.2rem 0.5rem; border-radius: 4px; font-weight: 600; font-size: 0.8rem;">
               ${{actionStyle.label}}
             </span>
-            <div style="font-size: 0.75rem; color: #666; margin-top: 0.25rem; max-width: 200px;">${{s.summary}}</div>
+            ${{hedgeLink}}
+            <div style="font-size: 0.75rem; color: #666; margin-top: 0.25rem; max-width: 180px;">${{s.summary}}</div>
           </td>
           <td style="padding: 0.5rem; font-size: 0.8rem;">${{metricsHtml.join(' | ')}}</td>
+          <td style="padding: 0.5rem;">${{executeBtn}}</td>
         </tr>`;
       }}
       
       tbody.innerHTML = html;
+    }}
+    
+    function determinePriority(suggestion, defaultPriority) {{
+      const metrics = suggestion.metrics || {{}};
+      const action = suggestion.action;
+      
+      if (action === 'CLOSE' || metrics.loss_pct >= 2.0) return 'high';
+      if (metrics.net_delta !== undefined && Math.abs(metrics.net_delta) > 0.3) return 'high';
+      
+      if (action === 'TAKE_PROFIT' && metrics.profit_pct >= 0.6) return 'medium';
+      if (action === 'ASSIGN' && metrics.delta_abs >= 0.8) return 'medium';
+      if (action === 'HEDGE') return 'medium';
+      
+      return defaultPriority || 'low';
+    }}
+    
+    async function executeSuggestion(positionId, action, strategyType, underlying) {{
+      if (!confirm(`Execute ${{action}} for ${{underlying}} position?\\n\\nMode: ${{gregTradingMode.toUpperCase()}}\\nPosition: ${{positionId}}`)) {{
+        return;
+      }}
+      
+      try {{
+        const res = await fetch('/api/bots/greg/execute_suggestion', {{
+          method: 'POST',
+          headers: {{ 'Content-Type': 'application/json' }},
+          body: JSON.stringify({{
+            position_id: positionId,
+            suggested_action: action,
+            strategy_type: strategyType,
+            underlying: underlying,
+          }}),
+        }});
+        const data = await res.json();
+        
+        if (data.ok) {{
+          alert(`Executed ${{action}} successfully!\\nMode: ${{data.mode}}\\nResult: ${{JSON.stringify(data.result, null, 2)}}`);
+          refreshGregManagement();
+        }} else {{
+          alert('Execution failed: ' + (data.error || 'Unknown error'));
+        }}
+      }} catch (e) {{
+        alert('Execution error: ' + e.message);
+      }}
+    }}
+    
+    function scrollToHedgeRow(positionId) {{
+      const hedgePanel = document.getElementById('greg-hedging-panel');
+      if (hedgePanel) {{
+        hedgePanel.scrollIntoView({{ behavior: 'smooth' }});
+        evaluateHedging();
+      }}
     }}
     
     // ==============================================

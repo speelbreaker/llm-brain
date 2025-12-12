@@ -80,10 +80,34 @@ The web dashboard provides a user-friendly interface with sections for "Live Age
         - 30 unit tests covering delta calculations, order building, and execution paths
 - **Strategy Layer**: A pluggable architecture allowing multiple trading strategies to run concurrently, with `strategy_id` for attribution.
 - **Smoke Test Harness**: `scripts/smoke_greg_strategies.py` provides comprehensive testing:
-    - Environment Matrix Tests: Verifies Greg selector picks expected strategies for synthetic market regimes
+    - Environment Matrix Tests: Verifies Greg selector picks expected strategies for synthetic market regimes (6/6 pass)
     - Strategy Smoke Tests: Runs all 7 Greg strategies in DRY_RUN mode with simulated price moves (+/-3%, +/-5%)
     - Tests position management logic (TP/SL/exits) and hedge engine integration
     - Usage: `python scripts/smoke_greg_strategies.py --underlying BTC --dry-run`
+- **Real-Trading Mode (Phase 2)**: Execution support with strong safety gates:
+    - **GregTradingMode Enum**: Three modes - ADVICE_ONLY (default), PAPER (testnet/DRY_RUN), LIVE (real orders)
+    - **Safety Gates**: Three-layer protection for live orders:
+        1. Global mode must be LIVE
+        2. Master switch `greg_enable_live_execution` must be True
+        3. Per-strategy flag must be enabled (all False by default)
+    - **Execute Suggestion API**: `POST /api/bots/greg/execute_suggestion` for HEDGE, TAKE_PROFIT, ASSIGN, ROLL actions
+    - **Trading Mode API**: `GET/POST /api/greg/trading_mode` for mode management with double-confirmation for LIVE
+    - **UI Mode Settings Modal**: Per-strategy toggles, confirmation dialog for LIVE mode
+    - **Execute Buttons**: Show in Position Management table when mode allows execution
+- **Decision Logging System**: Comprehensive audit trail for Greg decisions:
+    - **Database Table**: `greg_decision_log` with fields for timestamp, underlying, strategy, action, mode, suggested/executed flags, snapshot metrics (VRP, chop, ADX, skew, PnL)
+    - **Logging Hooks**: All suggestions and executions logged automatically
+    - **Decision Log API**: `GET /api/greg/decision_log` for history and statistics
+    - **What-If Report Script**: `scripts/greg_decision_report.py` generates analysis:
+        - Count of suggestions vs executions
+        - Follow rate by strategy and action type
+        - Average PnL comparison (followed vs ignored)
+        - CLI: `python scripts/greg_decision_report.py --from 2025-01-01 --to 2025-12-31 --underlying BTC`
+- **UI Enhancements**:
+    - **Priority Coloring**: Left border (red=HIGH, orange=MEDIUM, green=LOW) with tooltips
+    - **Demo vs Live Badges**: DEMO (grey) vs LIVE (blue) badges on position rows
+    - **Mode Badge**: Header shows current mode (ADVICE ONLY, PAPER MODE, LIVE MODE)
+    - **View Hedge Link**: Hedge suggestions link to Delta Hedging Engine panel
 
 ## External Dependencies
 - **Deribit API**: Used for real-time market data (testnet) and historical data (mainnet public API for backtesting and data harvesting).

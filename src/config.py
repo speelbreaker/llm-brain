@@ -4,9 +4,17 @@ Reads from environment variables and .env file.
 """
 from __future__ import annotations
 
-from typing import Literal
+from enum import Enum
+from typing import Dict, Literal
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class GregTradingMode(str, Enum):
+    """Trading mode for Greg strategies."""
+    ADVICE_ONLY = "advice_only"
+    PAPER = "paper"
+    LIVE = "live"
 
 
 class Settings(BaseSettings):
@@ -253,6 +261,38 @@ class Settings(BaseSettings):
     loop_interval_sec: int = Field(
         default=300,
         description="Sleep interval between agent loop iterations (seconds)",
+    )
+
+    greg_trading_mode: GregTradingMode = Field(
+        default=GregTradingMode.ADVICE_ONLY,
+        description=(
+            "Trading mode for Greg strategies: "
+            "'advice_only' = never sends orders (default); "
+            "'paper' = DRY_RUN/testnet only; "
+            "'live' = can send mainnet orders (requires additional flags)"
+        ),
+    )
+    greg_enable_live_execution: bool = Field(
+        default=False,
+        description=(
+            "Master switch for live execution. MUST be True + mode=LIVE to send real orders. "
+            "Acts as a secondary safety gate."
+        ),
+    )
+    greg_strategy_live_enabled: Dict[str, bool] = Field(
+        default={
+            "STRATEGY_A_STRADDLE": False,
+            "STRATEGY_A_STRANGLE": False,
+            "STRATEGY_B_CALENDAR": False,
+            "STRATEGY_C_SHORT_PUT": False,
+            "STRATEGY_D_IRON_BUTTERFLY": False,
+            "STRATEGY_F_BULL_PUT_SPREAD": False,
+            "STRATEGY_F_BEAR_CALL_SPREAD": False,
+        },
+        description=(
+            "Per-strategy live execution flags. Each strategy must be explicitly enabled "
+            "for live orders to be sent. Only applies when mode=LIVE and enable_live_execution=True."
+        ),
     )
 
     log_dir: str = Field(

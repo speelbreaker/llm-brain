@@ -1,0 +1,312 @@
+You are working in my “Greg” options bot repo (Deribit BTC/ETH, FastAPI app, Greg selector, delta-hedging, smoke tests, web dashboard).
+
+We already have:
+
+Greg selector & strategies (GREG_SELECTOR_RULES_FINAL, greg_position_rules.json).
+
+A Position Management / “Advice Only” panel for Greg (suggests Hedge / Take Profit / Assign, etc.).
+
+A Delta Hedging Engine card (proposes perp hedges, currently DRY RUN only).
+
+scripts/smoke_greg_strategies.py with env-matrix tests + strategy smoke tests.
+
+Your tasks:
+
+1. Add real-trading mode with guarded switches and tiny live size
+1.1 Config & safety
+
+In the main settings/config (Pydantic Settings or similar), add:
+
+class GregTradingMode(str, Enum):
+    ADVICE_ONLY = "advice_only"  # never send orders
+    PAPER = "paper"              # DRY_RUN / testnet only
+    LIVE = "live"                # can send real orders (see extra guards)
+
+
+And config fields:
+
+greg_trading_mode: GregTradingMode = GregTradingMode.ADVICE_ONLY
+
+# Global safety gate for LIVE:
+greg_enable_live_execution: bool = False
+
+# Per-strategy live permission:
+greg_strategy_live_enabled: dict[str, bool] = {
+    "STRATEGY_A_STRADDLE": False,
+    "STRATEGY_A_STRANGLE": False,
+    "STRATEGY_B_CALENDAR": False,
+    "STRATEGY_C_SHORT_PUT": False,
+    "STRATEGY_D_IRON_BUTTERFLY": False,
+    "STRATEGY_F_BULL_PUT_SPREAD": False,
+    "STRATEGY_F_BEAR_CALL_SPREAD": False,
+}
+
+# Live *size* guardrails: keep trades tiny when LIVE.
+greg_live_max_notional_usd_per_position: float = 500.0
+greg_live_max_notional_usd_per_underlying: float = 2000.0
+
+
+Real (mainnet) orders may only be sent if all of the following are true:
+
+greg_trading_mode == LIVE
+
+greg_enable_live_execution is True
+
+greg_strategy_live_enabled[strategy_type] is True
+
+The position notional (options + hedges) for this trade is ≤ greg_live_max_notional_usd_per_position
+
+The total live Greg exposure for this underlying is ≤ greg_live_max_notional_usd_per_underlying
+
+Otherwise, downgrade to Advice Only or Paper behavior and log a warning.
+
+1.2 Dashboard controls & execution
+
+On the Greg tab / settings UI:
+
+Add controls to switch between ADVICE_ONLY, PAPER, and LIVE.
+
+Switching into LIVE mode must require a double confirmation:
+
+Show a modal summarizing:
+
+Current risk caps,
+
+greg_live_max_notional_usd_per_position,
+
+greg_live_max_notional_usd_per_underlying.
+
+Ask user to type LIVE into a textbox to confirm.
+
+Only then set greg_trading_mode=LIVE and allow greg_enable_live_execution=True.
+
+For each strategy, add a toggle:
+
+“Allow live execution: STRATEGY_A_STRADDLE [on/off]” (visible only when mode == LIVE).
+
+In the Position Management card:
+
+Update the header subtitle depending on mode:
+
+ADVICE_ONLY: “Advice only – no orders will be sent.”
+
+PAPER: “Paper / Testnet – tiny simulated orders only.”
+
+LIVE: “Live mode – tiny real orders allowed for enabled strategies.”
+
+For each suggested action (Hedge, Take Profit, Assign, etc.), add an Execute button.
+
+Implement a new endpoint:
+
+POST /api/greg/execute_suggestion
+
+Payload:
+
+{
+  "position_id": "...",
+  "suggested_action": "HEDGE" | "TAKE_PROFIT" | "ASSIGN" | "ROLL",
+  "strategy_type": "...",
+  "underlying": "BTC" | "ETH"
+}
+
+
+Behavior:
+
+Look up the current suggestion for that position.
+
+Enforce the safety gates described above.
+
+If in ADVICE_ONLY or safety fails:
+
+Do not send orders; return a clear message.
+
+If in PAPER:
+
+Send orders only in DRY_RUN / testnet mode.
+
+If in LIVE and allowed:
+
+Ensure resulting position respects the tiny size limits.
+
+Send real orders via the existing Deribit client.
+
+All cases must log into the decision log (see section 2).
+
+2. Decision logging – “Greg said X, we did/didn’t do it”
+
+We want to be able to run “what if we had followed GregBot exactly?” analyses later.
+
+2.1 DB model
+
+Add a table/model greg_decision_log with fields:
+
+id
+
+timestamp
+
+underlying (str)
+
+strategy_type (str)
+
+position_id (str / UUID)
+
+action_type (enum: OPEN, HEDGE, TAKE_PROFIT, ASSIGN, ROLL, CLOSE, IGNORE)
+
+mode (ADVICE_ONLY, PAPER, LIVE)
+
+suggested (bool) – “Greg said X”
+
+executed (bool) – “We actually did X”
+
+reason (short text, e.g. “delta>0.15”, “pnl>=60%”, “dte<5”)
+
+Snapshot metrics:
+
+vrp_30d, chop_factor_7d, adx_14d, term_structure_spread, skew_25d (nullable)
+
+pnl_pct, pnl_usd
+
+Optional: order_ids (text/json) for executed actions.
+
+Add DB migration as needed.
+
+2.2 Logging hooks
+
+When the Position Management engine generates a suggestion:
+
+Insert a log row with:
+
+suggested = True
+
+executed = False
+
+action_type set appropriately
+
+mode = current greg_trading_mode
+
+reason + snapshot metrics.
+
+This is the “Greg said X” record.
+
+When the user presses Execute and orders are sent (PAPER or LIVE):
+
+Update or append a log entry such that:
+
+executed = True
+
+order_ids filled if available.
+
+This is the “we did X” record.
+
+(Optional but nice) If there is a UI “Ignore”/“Dismiss” button for a suggestion:
+
+Log with action_type = IGNORE, suggested = True, executed = False.
+
+2.3 Simple “what-if” report script
+
+Add scripts/greg_decision_report.py:
+
+Usage examples:
+
+python scripts/greg_decision_report.py --from 2025-01-01 --to 2025-12-31 --underlying BTC
+
+
+Compute and print (text/CSV):
+
+For each strategy + action_type:
+
+of times Greg suggested it.
+of times we executed it.
+
+Average PnL at suggestion time.
+
+For suggestions that were not executed:
+
+Using existing position/PnL history, estimate what PnL would have been at:
+
+X days later (e.g., 1d/3d), or
+
+Strategy’s exit/expiry.
+
+This can be approximate; goal is to answer:
+
+“If we had followed Greg’s ‘Take Profit’ more often, would we be better off?”
+
+This script is the basis for later “what if we’d listened to GregBot” analysis.
+
+3. UI polish (4 tweaks)
+3.1 Demo vs live/paper labeling
+
+In the Position Management table:
+
+For each row, show a badge based on source/mode:
+
+DEMO (grey) for smoke/demo positions (e.g. IDs starting with demo:).
+
+PAPER (purple) for DRY_RUN/testnet positions.
+
+LIVE (blue) for real positions.
+
+If both demo and real positions exist, render them in separate sub-tables with clear headings.
+
+3.2 Link PM rows to hedging engine
+
+For suggested action Hedge:
+
+Add a “View Hedge” link/icon on the row.
+
+Clicking it should either:
+
+Scroll the page to the Delta Hedging Engine card and highlight the matching hedge row by position_id, or
+
+Open a modal showing:
+
+current Net Delta,
+
+threshold,
+
+proposed perp order,
+
+buttons: “Execute Hedge” (wired to execute_suggestion) and “Close”.
+
+3.3 Urgency / priority coloring
+
+Compute a priority level for each suggestion:
+
+HIGH (red): 2× premium stop, extreme delta breach, black-swan/account-health triggers.
+
+MED (amber): Take Profit reached, assignment condition, roll window + regime still OK.
+
+LOW (green/grey): informational or early warnings.
+
+Show a colored accent (left border or badge) on each row + tooltip:
+
+“HIGH – act asap”
+
+“MED – act soon”
+
+“LOW – informational”
+
+3.4 Env matrix tests: 6/6 passing
+
+Update the synthetic environment inputs in scripts/smoke_greg_strategies.py so that:
+
+All 6 env tests pass with the current selector thresholds (VRP floors, term spread, skew, RSI, etc.).
+
+Update the doc snippet in the smoke harness comments to say:
+
+“6/6 environment tests pass, 7/7 strategies open successfully.”
+
+4. Safety & tests
+
+Never send mainnet orders unless all LIVE safety conditions are satisfied.
+
+Add basic unit tests for:
+
+Mode & guard logic in the execute endpoint (ADVICE_ONLY vs PAPER vs LIVE).
+
+Decision logging (verify suggested / executed flags and reason fields).
+
+Tiny-size enforcement using greg_live_max_notional_usd_per_position.
+
+Keep code consistent with existing project structure and naming.
