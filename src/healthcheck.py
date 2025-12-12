@@ -3,16 +3,25 @@ Agent Healthcheck Module
 
 Provides health check functionality for the Options Trading Agent.
 Exercises the critical pipeline: config → Deribit → state builder.
+
+Features:
+- Comprehensive config validation (basic, risk, LLM settings)
+- Deribit public/private API connectivity checks
+- State builder pipeline validation
+- Cached health status for runtime guard integration
 """
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+import threading
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from enum import Enum
-from typing import Any
+from typing import Any, Optional
 
 from src.config import Settings, settings
 from src.deribit_client import DeribitClient, DeribitAPIError
+from src.deribit.base_client import DeribitErrorCode, HealthSeverity, get_error_severity
 
 
 class CheckStatus(str, Enum):
@@ -27,6 +36,155 @@ class HealthCheckResult:
     name: str
     status: CheckStatus
     detail: str
+
+
+@dataclass
+class CachedHealthStatus:
+    """Cached result of a healthcheck for runtime guard integration.
+    
+    Attributes:
+        overall_status: "OK" | "WARN" | "FAIL"
+        worst_severity: Highest severity classification from any failing checks
+        last_run_at: Timestamp of the healthcheck
+        summary: Short description of health status
+        details: Full healthcheck result dict
+        agent_paused_due_to_health: Whether agent is currently paused
+    """
+    overall_status: str  # "OK" | "WARN" | "FAIL"
+    worst_severity: Optional[HealthSeverity]
+    last_run_at: datetime
+    summary: str
+    details: dict = field(default_factory=dict)
+    agent_paused_due_to_health: bool = False
+
+
+_cached_health_status: Optional[CachedHealthStatus] = None
+_health_cache_lock = threading.Lock()
+_agent_paused_due_to_health: bool = False
+
+
+def _compute_worst_severity(result: dict) -> Optional[HealthSeverity]:
+    """Compute the worst severity from healthcheck results.
+    
+    Inspects error codes in failed checks to determine the most severe issue.
+    Severity order: FATAL > DEGRADED > TRANSIENT
+    """
+    worst: Optional[HealthSeverity] = None
+    severity_order = {
+        HealthSeverity.TRANSIENT: 1,
+        HealthSeverity.DEGRADED: 2,
+        HealthSeverity.FATAL: 3,
+    }
+    
+    for check in result.get("results", []):
+        if check.get("status") in ("fail", "warn"):
+            detail = check.get("detail", "")
+            error_code = check.get("error_code")
+            
+            if error_code:
+                try:
+                    code = DeribitErrorCode(error_code)
+                    sev = get_error_severity(code)
+                except ValueError:
+                    sev = HealthSeverity.DEGRADED
+            elif "auth" in detail.lower():
+                sev = HealthSeverity.FATAL
+            elif "rate" in detail.lower() or "timeout" in detail.lower():
+                sev = HealthSeverity.TRANSIENT
+            else:
+                sev = HealthSeverity.DEGRADED
+            
+            if worst is None or severity_order.get(sev, 0) > severity_order.get(worst, 0):
+                worst = sev
+    
+    return worst
+
+
+def run_and_cache_healthcheck(cfg: Settings | None = None) -> CachedHealthStatus:
+    """
+    Run full healthcheck and cache the result.
+    
+    This is the primary entry point for runtime health guards.
+    Thread-safe: uses a lock to prevent concurrent writes.
+    
+    Returns:
+        CachedHealthStatus with the healthcheck results
+    """
+    global _cached_health_status
+    
+    result = run_agent_healthcheck(cfg)
+    worst_severity = _compute_worst_severity(result)
+    
+    status = CachedHealthStatus(
+        overall_status=result["overall_status"],
+        worst_severity=worst_severity,
+        last_run_at=datetime.now(timezone.utc),
+        summary=result["summary"],
+        details=result,
+        agent_paused_due_to_health=_agent_paused_due_to_health,
+    )
+    
+    with _health_cache_lock:
+        _cached_health_status = status
+    
+    return status
+
+
+def get_cached_health_status() -> Optional[CachedHealthStatus]:
+    """
+    Get the last cached healthcheck result.
+    
+    Returns:
+        CachedHealthStatus if available, None if healthcheck hasn't been run yet.
+    """
+    with _health_cache_lock:
+        return _cached_health_status
+
+
+def set_agent_paused_due_to_health(paused: bool) -> None:
+    """Set the agent paused state for health guard."""
+    global _agent_paused_due_to_health, _cached_health_status
+    
+    with _health_cache_lock:
+        _agent_paused_due_to_health = paused
+        if _cached_health_status:
+            _cached_health_status.agent_paused_due_to_health = paused
+
+
+def is_agent_paused_due_to_health() -> bool:
+    """Check if agent is paused due to health failure."""
+    return _agent_paused_due_to_health
+
+
+def get_health_status_for_api() -> dict:
+    """
+    Get health status formatted for API response.
+    
+    Returns dict with:
+    - last_run_at: ISO timestamp or null
+    - overall_status: OK/WARN/FAIL or null
+    - worst_severity: transient/degraded/fatal or null
+    - summary: short description
+    - agent_paused_due_to_health: bool
+    """
+    cached = get_cached_health_status()
+    
+    if cached is None:
+        return {
+            "last_run_at": None,
+            "overall_status": None,
+            "worst_severity": None,
+            "summary": "Healthcheck not run yet",
+            "agent_paused_due_to_health": _agent_paused_due_to_health,
+        }
+    
+    return {
+        "last_run_at": cached.last_run_at.isoformat(),
+        "overall_status": cached.overall_status,
+        "worst_severity": cached.worst_severity.value if cached.worst_severity else None,
+        "summary": cached.summary,
+        "agent_paused_due_to_health": cached.agent_paused_due_to_health,
+    }
 
 
 def _validate_basic_config(cfg: Settings) -> list[str]:
@@ -196,6 +354,30 @@ def check_llm_config(cfg: Settings) -> HealthCheckResult:
         )
 
 
+def _format_deribit_error(e: DeribitAPIError) -> tuple[CheckStatus, str]:
+    """
+    Format a DeribitAPIError into (status, detail) tuple.
+    Uses error classification for clear, actionable messages.
+    """
+    error_code = getattr(e, 'error_code', DeribitErrorCode.UNKNOWN)
+    http_status = getattr(e, 'http_status', None)
+    
+    if error_code == DeribitErrorCode.NETWORK:
+        return CheckStatus.FAIL, f"Network error: {e.message}"
+    elif error_code == DeribitErrorCode.TIMEOUT:
+        return CheckStatus.FAIL, f"Request timeout: {e.message}"
+    elif error_code == DeribitErrorCode.AUTH:
+        return CheckStatus.FAIL, f"Authentication error (401): {e.message}"
+    elif error_code == DeribitErrorCode.FORBIDDEN:
+        return CheckStatus.WARN, f"Access forbidden (403): {e.message}"
+    elif error_code == DeribitErrorCode.RATE_LIMIT:
+        return CheckStatus.WARN, f"Rate limited (429): {e.message}"
+    elif error_code == DeribitErrorCode.SERVER_ERROR:
+        return CheckStatus.FAIL, f"Server error ({http_status or '5xx'}): {e.message}"
+    else:
+        return CheckStatus.FAIL, f"API error [{error_code.value}]: {e.message}"
+
+
 def check_deribit_public(client: DeribitClient) -> HealthCheckResult:
     """Check public Deribit API connectivity."""
     try:
@@ -209,10 +391,11 @@ def check_deribit_public(client: DeribitClient) -> HealthCheckResult:
         )
 
     except DeribitAPIError as e:
+        status, detail = _format_deribit_error(e)
         return HealthCheckResult(
             name="deribit_public",
-            status=CheckStatus.FAIL,
-            detail=f"Deribit API error: {str(e)}"
+            status=status,
+            detail=detail,
         )
     except Exception as e:
         return HealthCheckResult(
@@ -243,10 +426,11 @@ def check_deribit_private(client: DeribitClient, cfg: Settings) -> HealthCheckRe
         )
 
     except DeribitAPIError as e:
+        status, detail = _format_deribit_error(e)
         return HealthCheckResult(
             name="deribit_private",
-            status=CheckStatus.FAIL,
-            detail=f"Deribit private API error: {str(e)}"
+            status=status,
+            detail=f"private API: {detail}",
         )
     except Exception as e:
         return HealthCheckResult(
@@ -274,12 +458,21 @@ def check_state_builder(client: DeribitClient, cfg: Settings) -> HealthCheckResu
         )
 
     except DeribitAPIError as e:
-        if "authentication" in str(e).lower() or "unauthorized" in str(e).lower():
+        error_code = getattr(e, 'error_code', DeribitErrorCode.UNKNOWN)
+        
+        if error_code == DeribitErrorCode.AUTH:
             return HealthCheckResult(
                 name="state_builder",
                 status=CheckStatus.WARN,
-                detail=f"state built partially (private API auth failed): {str(e)}"
+                detail=f"state built partially (private API auth failed): {e.message}"
             )
+        elif error_code in (DeribitErrorCode.NETWORK, DeribitErrorCode.TIMEOUT):
+            return HealthCheckResult(
+                name="state_builder",
+                status=CheckStatus.FAIL,
+                detail=f"state builder failed (Deribit connectivity): {e.message}"
+            )
+        
         return HealthCheckResult(
             name="state_builder",
             status=CheckStatus.FAIL,

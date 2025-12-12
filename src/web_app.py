@@ -2912,17 +2912,37 @@ def test_kill_switch() -> JSONResponse:
 
 @app.post("/api/agent_healthcheck")
 def run_healthcheck_endpoint() -> JSONResponse:
-    """Run full agent healthcheck and return results."""
+    """Run full agent healthcheck and return results (with caching)."""
     try:
-        from src.healthcheck import run_agent_healthcheck
+        from src.healthcheck import run_and_cache_healthcheck, get_health_status_for_api
         
-        result = run_agent_healthcheck(settings)
+        cached_status = run_and_cache_healthcheck(settings)
+        result = cached_status.details
+        health_api_status = get_health_status_for_api()
         
         return JSONResponse(content={
             "ok": result.get("overall_status") != "FAIL",
             "overall_status": result.get("overall_status", "UNKNOWN"),
             "summary": result.get("summary", ""),
             "results": result.get("results", []),
+            "last_run_at": health_api_status.get("last_run_at"),
+            "agent_paused_due_to_health": health_api_status.get("agent_paused_due_to_health", False),
+        })
+    except Exception as e:
+        return JSONResponse(content={"ok": False, "error": str(e)})
+
+
+@app.get("/api/system_health/status")
+def get_system_health_status() -> JSONResponse:
+    """Get cached system health status for dashboard display."""
+    try:
+        from src.healthcheck import get_health_status_for_api
+        
+        status = get_health_status_for_api()
+        
+        return JSONResponse(content={
+            "ok": True,
+            **status,
         })
     except Exception as e:
         return JSONResponse(content={"ok": False, "error": str(e)})
@@ -5330,6 +5350,9 @@ def index() -> str:
       <h2>System Controls & Health</h2>
       <p style="color: #666; margin-bottom: 1rem;">Run diagnostics and test system components. These are dry-run tests that do not execute trades.</p>
       
+      <!-- Health Guard Status (Agent Pause Indicator) -->
+      <div id="health-guard-status"></div>
+      
       <!-- Overall Health Status Badge -->
       <div id="health-status-badge" style="display: flex; align-items: center; gap: 1rem; padding: 1rem; background: #f5f5f5; border-radius: 8px; margin-bottom: 1.5rem;">
         <div id="health-badge" style="padding: 0.5rem 1rem; border-radius: 4px; font-weight: bold; background: #e0e0e0; color: #666;">PENDING</div>
@@ -6715,6 +6738,41 @@ def index() -> str:
     const HEALTHCHECK_THROTTLE_MS = 60000; // Don't auto-run within 60 seconds
     
     async function loadSystemHealthStatus() {{
+      // Load agent health guard status
+      try {{
+        const healthStatusRes = await fetch('/api/system_health/status');
+        const healthStatus = await healthStatusRes.json();
+        
+        const healthGuardEl = document.getElementById('health-guard-status');
+        if (healthGuardEl && healthStatus.ok) {{
+          let guardHtml = '';
+          if (healthStatus.agent_paused_due_to_health) {{
+            guardHtml = `<div style="background: #fce4ec; border: 1px solid #c62828; padding: 1rem; margin-bottom: 1rem; border-radius: 4px;">
+              <strong style="color: #c62828;">⛔ AGENT PAUSED</strong>
+              <span style="color: #666; margin-left: 1rem;">Trading suspended due to health failure</span>
+            </div>`;
+          }} else if (healthStatus.overall_status === 'FAIL') {{
+            guardHtml = `<div style="background: #fff3e0; border: 1px solid #e65100; padding: 0.75rem; margin-bottom: 1rem; border-radius: 4px;">
+              <strong style="color: #e65100;">⚠️ Health FAIL</strong>
+              <span style="color: #666; margin-left: 0.5rem;">${{healthStatus.summary || 'Check healthcheck results'}}</span>
+            </div>`;
+          }} else if (healthStatus.overall_status === 'WARN') {{
+            guardHtml = `<div style="background: #fffde7; border: 1px solid #f9a825; padding: 0.75rem; margin-bottom: 1rem; border-radius: 4px;">
+              <strong style="color: #f9a825;">⚠️ Health WARN</strong>
+              <span style="color: #666; margin-left: 0.5rem;">${{healthStatus.summary || 'Check healthcheck results'}}</span>
+            </div>`;
+          }} else if (healthStatus.overall_status === 'OK') {{
+            guardHtml = `<div style="background: #e8f5e9; border: 1px solid #2e7d32; padding: 0.5rem; margin-bottom: 1rem; border-radius: 4px;">
+              <strong style="color: #2e7d32;">✓ Health OK</strong>
+              <span style="color: #666; margin-left: 0.5rem;">${{healthStatus.last_run_at ? 'Last checked: ' + new Date(healthStatus.last_run_at).toLocaleTimeString() : ''}}</span>
+            </div>`;
+          }}
+          healthGuardEl.innerHTML = guardHtml;
+        }}
+      }} catch (e) {{
+        console.error('Error loading health guard status:', e);
+      }}
+      
       // Load LLM status and check LLM readiness
       try {{
         const [llmRes, readinessRes] = await Promise.all([

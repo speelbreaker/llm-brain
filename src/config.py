@@ -322,6 +322,25 @@ class Settings(BaseSettings):
         default=True,
         description="Run position reconciliation on agent startup before entering main loop",
     )
+
+    auto_kill_on_health_fail: bool = Field(
+        default=True,
+        description=(
+            "If True, the agent loop will pause trading when healthcheck returns FAIL. "
+            "Trading resumes when health returns to OK/WARN. On mainnet, agent startup is aborted on FAIL."
+        ),
+    )
+    health_check_on_startup: bool = Field(
+        default=True,
+        description="Run healthcheck on agent startup before entering main loop",
+    )
+    health_recheck_interval_seconds: int = Field(
+        default=600,
+        description=(
+            "Interval in seconds for runtime health re-checks during the agent loop. "
+            "Set to 0 to disable runtime re-checks."
+        ),
+    )
     position_reconcile_on_each_loop: bool = Field(
         default=True,
         description="Run position reconciliation at the start of each loop iteration",

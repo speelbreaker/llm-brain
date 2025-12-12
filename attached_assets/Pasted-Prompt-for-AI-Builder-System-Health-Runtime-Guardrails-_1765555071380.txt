@@ -1,0 +1,578 @@
+Prompt for AI Builder – System Health & Runtime Guardrails (Batch 2)
+You are an AI pair-programmer working on my Options Trading Agent repo.
+
+
+Repo: https://github.com/speelbreaker/llm-brain
+
+
+Context: Batch 1 just improved System Health: broader config validation, better System Health UX, more robust smoke_web_api.sh, and a softer “offline mode” for Deribit-dependent smoke tests.
+
+
+Goal for Batch 2:
+Strengthen runtime guardrails and network/error handling so that:
+
+
+Health problems are visible and actionable at runtime (not just on a dashboard),
+
+
+Deribit/network issues are classified consistently instead of bubbling up as random exceptions,
+
+
+The agent knows when not to run (or to drop into DRY_RUN) based on health status.
+
+
+
+
+Focus on 3 main areas:
+
+
+A small health-aware runtime guard around the live agent loop.
+
+
+Better Deribit/HTTP error classification + timeouts used by healthchecks and smoke tests.
+
+
+A tiny “health history” view in the System Health tab.
+
+
+
+1. Health-aware runtime guard for the live agent loop
+Goal: The live trading loop should not happily run when System Health is clearly FAIL.
+
+
+Find the main agent runner:
+
+
+The module that runs the live loop (e.g. src/agent_loop.py or similar) – the same place that:
+
+
+Builds AgentState,
+
+
+Calls strategy logic,
+
+
+And would (eventually) send orders to Deribit.
+
+
+
+
+Identify where we start the loop (e.g. main() or run_loop()).
+
+
+
+
+Introduce a lightweight runtime health guard:
+
+
+Add a small helper module or function, for example in src/healthcheck.py:
+from dataclasses import dataclass
+from datetime import datetime
+
+@dataclass
+class CachedHealthStatus:
+    overall_status: str  # "OK" | "WARN" | "FAIL"
+    last_run_at: datetime
+    details: dict
+
+
+
+Provide two helpers:
+
+
+run_and_cache_healthcheck() -> CachedHealthStatus
+
+
+Calls run_agent_healthcheck()
+
+
+Stores the result in a process-local cache (module-level variable or similar)
+
+
+Returns CachedHealthStatus
+
+
+
+
+get_cached_health_status() -> Optional[CachedHealthStatus]
+
+
+Returns the last cached healthcheck result, if any.
+
+
+
+
+
+
+
+
+Wire the guard into the live agent loop:
+
+
+Add a new settings flag (if not already present) in src/config.py:
+auto_kill_on_health_fail: bool = True
+health_check_on_startup: bool = True
+
+
+
+On agent startup (before beginning the main loop):
+
+
+If health_check_on_startup is True:
+
+
+Call run_and_cache_healthcheck().
+
+
+If overall_status == "FAIL":
+
+
+Log a clear error banner (e.g. “AGENT ABORTED – System Health FAIL: <short summary>”).
+
+
+Abort starting the loop (do not run live trading).
+
+
+
+
+If overall_status == "WARN":
+
+
+Log a warning banner (“Starting agent with WARN health status…”).
+
+
+
+
+
+
+
+
+Inside the main loop:
+
+
+Optionally, every N iterations or every M minutes (e.g. N and M configurable in Settings like health_recheck_interval_seconds):
+
+
+Re-run run_and_cache_healthcheck() in a lightweight way (no heavy backfills).
+
+
+If auto_kill_on_health_fail is True and overall_status flips to "FAIL":
+
+
+Trigger a soft kill:
+
+
+Stop placing new trades.
+
+
+Log a banner (“AGENT STOPPED – System Health FAIL during runtime.”).
+
+
+Optionally set an in-memory flag like agent_paused_due_to_health = True that the dashboard can display.
+
+
+
+
+
+
+
+
+
+
+Make sure this guard never sends real trades on its own; it only prevents or pauses trading when health is bad.
+
+
+
+
+Expose minimal status for UI & API:
+
+
+Extend the existing System Health API (/api/agent_healthcheck or a new /api/system_health/last) to return:
+
+
+last_run_at
+
+
+overall_status
+
+
+A short summary string (“Config OK; Deribit public WARN; LLM keys missing”).
+
+
+
+
+The System Health tab can already call the healthcheck; just make sure it also displays the last cached health status that the runtime uses.
+
+
+
+
+
+2. Deribit/HTTP error classification + timeouts
+Goal: Instead of random DeribitAPIError / requests exceptions, the system should label common failures and fail fast with timeouts.
+
+
+Locate the Deribit clients:
+
+
+src/deribit_client.py (authenticated/live)
+
+
+src/backtest/deribit_client.py or equivalent for public/backtest data
+
+
+Any common HTTP helper or base class you already use.
+
+
+
+
+Add a simple error classification enum / constants, for example in src/deribit_client.py or a shared module:
+from enum import Enum
+
+class DeribitErrorCode(str, Enum):
+    NETWORK = "network_error"
+    AUTH = "auth_error"
+    RATE_LIMIT = "rate_limit"
+    FORBIDDEN = "forbidden"
+    UNKNOWN = "unknown"
+
+
+
+Wrap HTTP calls with:
+
+
+A reasonable timeout (e.g. 5–10 seconds) for all outbound HTTP requests used in:
+
+
+Healthchecks,
+
+
+Smoke tests,
+
+
+State builder.
+
+
+
+
+Error mapping logic:
+
+
+401/403 → AUTH or FORBIDDEN
+
+
+429 → RATE_LIMIT
+
+
+Connection errors / timeouts → NETWORK
+
+
+Other 5xx → NETWORK or UNKNOWN depending on detail
+
+
+
+
+Make sure thrown exceptions (e.g. DeribitAPIError) include:
+
+
+code: DeribitErrorCode
+
+
+message: str
+
+
+Optional http_status
+
+
+
+
+
+
+Update src/healthcheck.py checks to use these codes:
+
+
+In check_deribit_public() and check_deribit_private():
+
+
+When catching DeribitAPIError, inspect error.code:
+
+
+NETWORK / RATE_LIMIT / FORBIDDEN → surface a clear, short message in detail.
+
+
+For dev/test environments, it’s acceptable to mark as WARN with a precise code; for live trading you might choose FAIL (for now, just make the detail very explicit so we can tune severity later).
+
+
+
+
+
+
+In check_state_builder():
+
+
+If failure is clearly due to Deribit connectivity, tag it as such in the detail string, not just a generic exception dump.
+
+
+
+
+
+
+Make smoke tests use the same classification:
+
+
+For backtest / training smoke scripts that depend on Deribit:
+
+
+Catch classified errors and:
+
+
+If code in {FORBIDDEN, NETWORK, RATE_LIMIT}:
+
+
+Print an “OFFLINE mode” style message (as already started in Batch 1),
+
+
+Mark the smoke test as SKIPPED or WARN instead of a raw crash.
+
+
+
+
+
+
+
+
+Keep the behavior minimal for this batch: focus on clean error messages and no hard hangs.
+
+
+
+
+
+3. System Health “history & status” in the UI
+Goal: Make System Health feel like a living signal, not just a one-off button.
+
+
+In src/web_app.py System Health tab (where you already update the UI):
+
+
+Extend the panel to show:
+
+
+Last healthcheck run: timestamp (e.g. “Last run: 2025-12-11 10:31 UTC”).
+
+
+Last status: OK/WARN/FAIL badge (using the cached value from the backend).
+
+
+If WARN/FAIL: a one-line summary reason (e.g. “Deribit public API FORBIDDEN; LLM keys missing”).
+
+
+
+
+
+
+JS wiring (bottom <script> block):
+
+
+When the System Health tab loads or when the user clicks “Run Healthcheck”:
+
+
+After calling /api/agent_healthcheck, update:
+
+
+#system-health-last-run (new element you add)
+
+
+#system-health-status-badge
+
+
+#system-health-status-summary
+
+
+
+
+Use simple CSS (or inline styles) to color the badge:
+
+
+Green for OK
+
+
+Yellow for WARN
+
+
+Red for FAIL
+
+
+
+
+
+
+
+
+Connect to runtime guard (from part 1):
+
+
+If the backend exposes a flag that the agent is paused due to health, show it in the System Health panel, e.g.:
+
+“Agent status: PAUSED by health guard (auto_kill_on_health_fail).”
+
+
+
+This can be a small additional field in the System Health JSON response (e.g. {"agent_paused_due_to_health": true}).
+
+
+
+
+
+4. Tests & Acceptance Criteria
+Please add/update tests accordingly:
+
+
+Health guard tests (e.g. tests/test_health_guard.py):
+
+
+Simulate run_agent_healthcheck() returning each of:
+
+
+OK, WARN, FAIL.
+
+
+
+
+Ensure the startup logic:
+
+
+Allows loop start on OK.
+
+
+Logs a warning but starts on WARN.
+
+
+Aborts loop start on FAIL (no iterations run).
+
+
+
+
+For runtime re-check:
+
+
+Simulate OK → FAIL transition and assert that the loop stops (or sets agent_paused_due_to_health = True).
+
+
+
+
+
+
+Error classification tests:
+
+
+Add small unit tests for:
+
+
+Mapping HTTP status codes to DeribitErrorCode.
+
+
+DeribitAPIError (or equivalent) carrying the right code.
+
+
+Healthcheck functions emitting clear detail strings for common cases (403, timeout, etc.).
+
+
+
+
+
+
+System Health API / UI tests:
+
+
+Using TestClient, verify:
+
+
+/api/agent_healthcheck now returns:
+
+
+New fields (last_run_at, short summary, maybe agent_paused_due_to_health).
+
+
+
+
+Values are updated after a new run.
+
+
+
+
+You don’t need to parse HTML; just ensure the JSON shape is there so the JS can use it.
+
+
+
+
+Success criteria
+
+
+App still starts; all existing tests pass.
+
+
+New tests for:
+
+
+Health guard,
+
+
+Error classification,
+
+
+Health API fields
+all pass.
+
+
+
+
+When System Health is FAIL, the live agent:
+
+
+Refuses to start (if health fail on startup), or
+
+
+Stops safely (no new trades) when a re-check fails during runtime (if auto_kill_on_health_fail is True).
+
+
+
+
+System Health tab:
+
+
+Shows last run time,
+
+
+Shows OK/WARN/FAIL badge with summary,
+
+
+Reflects if the agent is currently paused due to health.
+
+
+
+
+Deribit outages / 403 / timeouts:
+
+
+Produce clear, classified messages,
+
+
+Don’t cause unbounded hangs in healthcheck or smoke tests.
+
+
+
+
+At the end, please summarize:
+
+
+Files changed,
+
+
+New settings added,
+
+
+New tests added,
+
+
+Any remaining limitations (e.g. which failures still surface as generic errors).
+
+

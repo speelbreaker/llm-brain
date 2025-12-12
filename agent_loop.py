@@ -30,11 +30,19 @@ from src.position_tracker import position_tracker
 from src.strategies import build_default_registry, StrategyRegistry
 from src.policy_rule_based import decide_action as rule_decide_action
 from src.agent_brain_llm import choose_action_with_llm
-from src.healthcheck import run_agent_healthcheck, format_healthcheck_banner
+from src.healthcheck import (
+    run_agent_healthcheck,
+    format_healthcheck_banner,
+    run_and_cache_healthcheck,
+    set_agent_paused_due_to_health,
+    is_agent_paused_due_to_health,
+)
+from src.deribit.base_client import HealthSeverity
 
 StatusCallback = Callable[[Dict[str, Any]], None]
 
 shutdown_requested = False
+last_health_recheck_time: float = 0
 
 
 def signal_handler(signum: int, frame: object) -> None:
@@ -188,25 +196,51 @@ def run_agent_loop_forever(
     print(f"Position Reconcile: {settings.position_reconcile_action.upper()}")
     print("=" * 60)
     
-    print("\n[Startup] Running healthcheck...")
-    try:
-        healthcheck_result = run_agent_healthcheck(settings)
-        print(format_healthcheck_banner(healthcheck_result))
-        
-        if healthcheck_result["overall_status"] == "FAIL":
+    global last_health_recheck_time
+    
+    if settings.health_check_on_startup:
+        print("\n[Startup] Running healthcheck...")
+        try:
+            cached_health = run_and_cache_healthcheck(settings)
+            healthcheck_result = cached_health.details
+            print(format_healthcheck_banner(healthcheck_result))
+            last_health_recheck_time = time.time()
+            
+            if cached_health.overall_status == "FAIL":
+                severity = cached_health.worst_severity
+                sev_str = severity.value if severity else "unknown"
+                
+                if not settings.is_testnet:
+                    if severity == HealthSeverity.FATAL:
+                        print("\n" + "!" * 60)
+                        print(f"FATAL HEALTH FAILURE ON MAINNET - ABORTING AGENT START")
+                        print("!" * 60)
+                        print("Fix the issues above before running on mainnet.")
+                        sys.exit(1)
+                    elif severity == HealthSeverity.TRANSIENT:
+                        print(f"\n[WARNING] TRANSIENT health issue ({sev_str}). Proceeding with caution on mainnet...")
+                    else:
+                        print("\n" + "!" * 60)
+                        print(f"HEALTHCHECK FAILED ON MAINNET (severity: {sev_str}) - ABORTING")
+                        print("!" * 60)
+                        sys.exit(1)
+                elif settings.auto_kill_on_health_fail:
+                    if severity == HealthSeverity.TRANSIENT:
+                        print(f"\n[WARNING] TRANSIENT health issue on testnet ({sev_str}). Continuing...")
+                    else:
+                        print(f"\n[WARNING] Health FAIL (severity: {sev_str}) on testnet, auto_kill armed...")
+                        set_agent_paused_due_to_health(True)
+                else:
+                    print(f"\n[WARNING] Healthcheck failed (severity: {sev_str}) but continuing on testnet...")
+            elif cached_health.overall_status == "WARN":
+                print("\n[INFO] Starting agent with WARN health status...")
+        except Exception as e:
+            print(f"[Startup] Healthcheck error: {e}")
             if not settings.is_testnet:
-                print("\n" + "!" * 60)
-                print("HEALTHCHECK FAILED ON MAINNET - ABORTING AGENT START")
-                print("!" * 60)
-                print("Fix the issues above before running on mainnet.")
+                print("Aborting agent start on mainnet due to healthcheck failure.")
                 sys.exit(1)
-            else:
-                print("\n[WARNING] Healthcheck failed but continuing on testnet...")
-    except Exception as e:
-        print(f"[Startup] Healthcheck error: {e}")
-        if not settings.is_testnet:
-            print("Aborting agent start on mainnet due to healthcheck failure.")
-            sys.exit(1)
+    else:
+        print("\n[Startup] Healthcheck disabled (health_check_on_startup=False)")
     
     client = DeribitClient()
     
@@ -267,6 +301,64 @@ def run_agent_loop_forever(
             print(f"\n{'='*60}")
             print(f"Iteration {iteration} - {datetime.utcnow().isoformat()}")
             print(f"{'='*60}")
+            
+            if is_agent_paused_due_to_health():
+                print("\n[HEALTH GUARD] Agent paused due to health failure. Skipping trading.")
+                print("[HEALTH GUARD] Will re-check health on next interval.")
+                time.sleep(settings.loop_interval_sec)
+                
+                if settings.health_recheck_interval_seconds > 0:
+                    recheck_health = run_and_cache_healthcheck(settings)
+                    last_health_recheck_time = time.time()
+                    severity = recheck_health.worst_severity
+                    
+                    if recheck_health.overall_status != "FAIL":
+                        print(f"[HEALTH GUARD] Health restored to {recheck_health.overall_status}. Resuming trading.")
+                        set_agent_paused_due_to_health(False)
+                    elif severity == HealthSeverity.TRANSIENT:
+                        print(f"[HEALTH GUARD] TRANSIENT issue ({recheck_health.summary}). Resuming trading.")
+                        set_agent_paused_due_to_health(False)
+                    else:
+                        sev_str = severity.value if severity else "unknown"
+                        print(f"[HEALTH GUARD] Health still FAIL (severity: {sev_str}): {recheck_health.summary}")
+                continue
+            
+            if (settings.health_recheck_interval_seconds > 0 and 
+                settings.auto_kill_on_health_fail and
+                time.time() - last_health_recheck_time > settings.health_recheck_interval_seconds):
+                print("\n[HEALTH] Running periodic health re-check...")
+                try:
+                    recheck_health = run_and_cache_healthcheck(settings)
+                    last_health_recheck_time = time.time()
+                    
+                    severity = recheck_health.worst_severity
+                    
+                    if recheck_health.overall_status == "FAIL":
+                        if severity == HealthSeverity.FATAL:
+                            print("\n" + "!" * 60)
+                            print("AGENT PAUSED - FATAL health issue detected")
+                            print(f"Summary: {recheck_health.summary}")
+                            print("!" * 60)
+                            set_agent_paused_due_to_health(True)
+                            time.sleep(settings.loop_interval_sec)
+                            continue
+                        elif severity == HealthSeverity.TRANSIENT:
+                            print(f"[HEALTH] TRANSIENT issue detected ({recheck_health.summary}). Will retry.")
+                        else:
+                            print("\n" + "!" * 60)
+                            print("AGENT PAUSED - System Health FAIL during runtime")
+                            print(f"Summary: {recheck_health.summary} (severity: {severity.value if severity else 'unknown'})")
+                            print("!" * 60)
+                            set_agent_paused_due_to_health(True)
+                            time.sleep(settings.loop_interval_sec)
+                            continue
+                    elif recheck_health.overall_status == "WARN":
+                        sev_str = f", severity: {severity.value}" if severity else ""
+                        print(f"[HEALTH] Health status: WARN ({recheck_health.summary}{sev_str})")
+                    else:
+                        print(f"[HEALTH] Health status: OK")
+                except Exception as e:
+                    print(f"[HEALTH] Re-check error: {e}")
             
             agent_state = None
             proposed_action = {
