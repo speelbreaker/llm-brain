@@ -4922,6 +4922,19 @@ def index() -> str:
                 <span>Enable Live Execution (Master Switch)</span>
               </label>
               <div style="margin-top: 0.75rem;">
+                <strong style="font-size: 0.9rem;">Notional Limits (Safety Guardrails):</strong>
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem; margin-top: 0.5rem;">
+                  <label style="font-size: 0.85rem;">
+                    Max $/Position:
+                    <input type="number" id="greg-max-notional-pos" min="100" max="10000" step="100" style="width: 100%; padding: 0.3rem; margin-top: 0.25rem;">
+                  </label>
+                  <label style="font-size: 0.85rem;">
+                    Max $/Underlying:
+                    <input type="number" id="greg-max-notional-und" min="500" max="50000" step="500" style="width: 100%; padding: 0.3rem; margin-top: 0.25rem;">
+                  </label>
+                </div>
+              </div>
+              <div style="margin-top: 0.75rem;">
                 <strong style="font-size: 0.9rem;">Per-Strategy Toggles:</strong>
                 <div id="greg-strategy-toggles" style="margin-top: 0.5rem; font-size: 0.85rem;"></div>
               </div>
@@ -5756,6 +5769,8 @@ def index() -> str:
     let gregTradingMode = 'advice_only';
     let gregEnableLive = false;
     let gregStrategyFlags = {{}};
+    let gregMaxNotionalPos = 500;
+    let gregMaxNotionalUnd = 2000;
     
     async function loadGregTradingMode() {{
       try {{
@@ -5765,6 +5780,8 @@ def index() -> str:
           gregTradingMode = data.mode;
           gregEnableLive = data.enable_live_execution;
           gregStrategyFlags = data.strategy_live_enabled || {{}};
+          gregMaxNotionalPos = data.max_notional_per_position || 500;
+          gregMaxNotionalUnd = data.max_notional_per_underlying || 2000;
           updateGregModeUI();
         }}
       }} catch (e) {{
@@ -5803,6 +5820,8 @@ def index() -> str:
         document.getElementById('greg-mode-modal').style.display = 'flex';
         document.getElementById('greg-mode-select').value = gregTradingMode;
         document.getElementById('greg-enable-live').checked = gregEnableLive;
+        document.getElementById('greg-max-notional-pos').value = gregMaxNotionalPos;
+        document.getElementById('greg-max-notional-und').value = gregMaxNotionalUnd;
         updateModeSettingsUI();
         
         let togglesHtml = '';
@@ -5833,6 +5852,8 @@ def index() -> str:
       const mode = document.getElementById('greg-mode-select').value;
       const enableLive = document.getElementById('greg-enable-live').checked;
       const confirmText = document.getElementById('greg-live-confirm-input').value;
+      const maxNotionalPos = parseFloat(document.getElementById('greg-max-notional-pos').value) || 500;
+      const maxNotionalUnd = parseFloat(document.getElementById('greg-max-notional-und').value) || 2000;
       
       const strategyFlags = {{}};
       document.querySelectorAll('.greg-strat-toggle').forEach(cb => {{
@@ -5847,6 +5868,8 @@ def index() -> str:
             mode: mode,
             enable_live_execution: enableLive,
             strategy_live_enabled: strategyFlags,
+            max_notional_per_position: maxNotionalPos,
+            max_notional_per_underlying: maxNotionalUnd,
             confirmation_text: confirmText,
           }}),
         }});
@@ -5856,6 +5879,8 @@ def index() -> str:
           gregTradingMode = data.current_mode;
           gregEnableLive = data.current_enable_live;
           gregStrategyFlags = data.current_strategy_flags;
+          gregMaxNotionalPos = data.max_notional_per_position || gregMaxNotionalPos;
+          gregMaxNotionalUnd = data.max_notional_per_underlying || gregMaxNotionalUnd;
           updateGregModeUI();
           closeGregModeSettings();
           alert('Settings saved successfully');
