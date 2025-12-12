@@ -2523,6 +2523,180 @@ def get_greg_decision_log(
     })
 
 
+GREG_STRATEGY_NAMES = {
+    "STRATEGY_A_STRADDLE": "ATM Straddle",
+    "STRATEGY_A_STRANGLE": "OTM Strangle",
+    "STRATEGY_B_CALENDAR": "Calendar Spread",
+    "STRATEGY_C_SHORT_PUT": "Short Put (Accumulation)",
+    "STRATEGY_D_IRON_BUTTERFLY": "Iron Butterfly",
+    "STRATEGY_F_BULL_PUT_SPREAD": "Bull Put Spread",
+    "STRATEGY_F_BEAR_CALL_SPREAD": "Bear Call Spread",
+}
+
+
+@app.get("/api/greg/positions")
+def get_greg_positions(
+    underlying: Optional[str] = None,
+    sandbox_filter: Optional[str] = None,
+) -> JSONResponse:
+    """
+    Get all Greg positions for the Greg Lab view.
+    
+    Args:
+        underlying: Filter by underlying (BTC, ETH)
+        sandbox_filter: 'sandbox_only', 'non_sandbox', or 'all' (default)
+    """
+    from src.position_tracker import PositionTracker
+    from src.greg_trading_store import greg_trading_store
+    
+    tracker = PositionTracker()
+    mode_state = greg_trading_store.get_state()
+    deribit_env = settings.deribit_env
+    
+    positions_data = []
+    sandbox_runs = {}
+    
+    with tracker._lock:
+        for chain in tracker._chains.values():
+            if not chain.is_open():
+                continue
+            
+            is_sandbox = chain.is_sandbox()
+            if sandbox_filter == "sandbox_only" and not is_sandbox:
+                continue
+            if sandbox_filter == "non_sandbox" and is_sandbox:
+                continue
+            
+            if underlying and chain.underlying != underlying.upper():
+                continue
+            
+            is_greg_strategy = chain.strategy_type.startswith("STRATEGY_")
+            if not is_greg_strategy:
+                continue
+            
+            human_name = GREG_STRATEGY_NAMES.get(chain.strategy_type, chain.strategy_type)
+            
+            if chain.expiry:
+                from datetime import timezone as tz
+                now = datetime.now(tz.utc)
+                dte = max(0, int((chain.expiry - now).total_seconds() / 86400))
+            else:
+                dte = 0
+            
+            size = chain.legs[-1].quantity if chain.legs else 0
+            entry_price = chain.legs[0].entry_price if chain.legs else 0
+            notional = size * entry_price
+            
+            if is_sandbox and chain.origin == "GREG_SANDBOX" and chain.run_id:
+                if chain.run_id not in sandbox_runs:
+                    sandbox_runs[chain.run_id] = {"btc": 0, "eth": 0, "total_pnl": 0.0}
+                if chain.underlying == "BTC":
+                    sandbox_runs[chain.run_id]["btc"] += 1
+                elif chain.underlying == "ETH":
+                    sandbox_runs[chain.run_id]["eth"] += 1
+                sandbox_runs[chain.run_id]["total_pnl"] += chain.unrealized_pnl_pct
+            
+            if is_sandbox:
+                badge = "SANDBOX"
+            elif deribit_env == "testnet":
+                badge = "DEMO"
+            elif mode_state["mode"] == "live":
+                badge = "LIVE"
+            else:
+                badge = "PAPER"
+            
+            positions_data.append({
+                "position_id": chain.position_id,
+                "underlying": chain.underlying,
+                "strategy_type": chain.strategy_type,
+                "human_readable_name": human_name,
+                "size": size,
+                "notional": notional,
+                "sandbox": is_sandbox,
+                "origin": chain.origin,
+                "run_id": chain.run_id,
+                "mode": chain.mode,
+                "badge": badge,
+                "pnl_pct": chain.unrealized_pnl_pct,
+                "pnl_usd": chain.unrealized_pnl,
+                "dte": dte,
+                "net_delta": 0.0,
+                "suggested_action": "HOLD",
+                "urgency": "LOW",
+                "entry_time": chain.open_time.isoformat() if chain.open_time else None,
+            })
+    
+    latest_sandbox_run = None
+    if sandbox_runs:
+        latest_run_id = max(sandbox_runs.keys())
+        run_data = sandbox_runs[latest_run_id]
+        latest_sandbox_run = {
+            "run_id": latest_run_id,
+            "btc_count": run_data["btc"],
+            "eth_count": run_data["eth"],
+            "total_pnl_pct": run_data["total_pnl"],
+        }
+    
+    return JSONResponse(content={
+        "ok": True,
+        "positions": positions_data,
+        "count": len(positions_data),
+        "mode": mode_state["mode"],
+        "enable_live_execution": mode_state["enable_live_execution"],
+        "deribit_env": deribit_env,
+        "sandbox_summary": latest_sandbox_run,
+    })
+
+
+@app.get("/api/greg/positions/{position_id}/logs")
+def get_greg_position_logs(position_id: str, limit: int = 50) -> JSONResponse:
+    """
+    Get decision log timeline for a specific position.
+    """
+    from src.db.models_greg_decision import GregDecisionLog
+    from src.db import get_db_session
+    
+    try:
+        with get_db_session() as session:
+            entries = (
+                session.query(GregDecisionLog)
+                .filter(GregDecisionLog.position_id == position_id)
+                .order_by(GregDecisionLog.timestamp.asc())
+                .limit(limit)
+                .all()
+            )
+            
+            logs = []
+            for e in entries:
+                logs.append({
+                    "id": e.id,
+                    "timestamp": e.timestamp.isoformat() if e.timestamp else None,
+                    "action_type": e.action_type,
+                    "mode": e.mode,
+                    "suggested": e.suggested,
+                    "executed": e.executed,
+                    "reason": e.reason,
+                    "pnl_pct": e.pnl_pct,
+                    "pnl_usd": e.pnl_usd,
+                    "net_delta": e.net_delta,
+                    "vrp_30d": e.vrp_30d,
+                    "adx_14d": e.adx_14d,
+                    "order_ids": e.order_ids,
+                })
+            
+            return JSONResponse(content={
+                "ok": True,
+                "position_id": position_id,
+                "logs": logs,
+                "count": len(logs),
+            })
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={"ok": False, "error": str(e)},
+        )
+
+
 @app.get("/api/bots/greg/hedging")
 def get_greg_hedging_status() -> JSONResponse:
     """
@@ -3524,6 +3698,7 @@ def index() -> str:
     <button class="tab" onclick="showTab('runs')">Backtest Runs</button>
     <button class="tab" onclick="showTab('calibration')">Calibration</button>
     <button class="tab" onclick="showTab('strategies')">Bots</button>
+    <button class="tab" onclick="showTab('greglab')">Greg Lab</button>
     <button class="tab" onclick="showTab('health')">System Health</button>
     <button class="tab" onclick="showTab('chat')">Chat</button>
   </div>
@@ -5048,6 +5223,107 @@ def index() -> str:
     </div>
   </div>
 
+  <!-- GREG LAB TAB -->
+  <div id="tab-greglab" class="tab-content">
+    <div class="section">
+      <h2>Greg Lab - Position Management</h2>
+      
+      <!-- Mode Banner -->
+      <div id="greg-mode-banner" style="padding: 0.75rem 1rem; border-radius: 8px; margin-bottom: 1.5rem; display: flex; align-items: center; justify-content: space-between; background: #e3f2fd; border-left: 4px solid #1565c0;">
+        <div>
+          <span id="greg-mode-pill" style="padding: 0.25rem 0.75rem; border-radius: 4px; font-weight: bold; background: #fff3e0; color: #e65100;">ADVICE ONLY</span>
+          <span id="greg-mode-desc" style="margin-left: 0.75rem; color: #333;">No orders will be sent.</span>
+        </div>
+        <div id="greg-env-badge" style="font-size: 0.8rem; color: #666;"></div>
+      </div>
+      
+      <!-- Sandbox Summary -->
+      <div id="greg-sandbox-summary" style="display: none; padding: 0.75rem 1rem; border-radius: 8px; margin-bottom: 1rem; background: #fff8e1; border-left: 4px solid #ffc107;">
+        <strong style="color: #f57c00;">Sandbox Run:</strong> <span id="greg-sandbox-run-id"></span>
+        <span id="greg-sandbox-counts" style="margin-left: 1rem;"></span>
+      </div>
+      
+      <!-- Filters -->
+      <div style="display: flex; gap: 1rem; align-items: center; margin-bottom: 1rem; flex-wrap: wrap;">
+        <div style="display: flex; gap: 0.5rem;">
+          <button class="greg-filter-btn" data-underlying="" onclick="filterGregPositions(this, '')" style="padding: 0.4rem 0.75rem; border-radius: 4px; background: #1565c0; color: white; border: none; cursor: pointer;">All</button>
+          <button class="greg-filter-btn" data-underlying="BTC" onclick="filterGregPositions(this, 'BTC')" style="padding: 0.4rem 0.75rem; border-radius: 4px; background: #e0e0e0; border: none; cursor: pointer;">BTC</button>
+          <button class="greg-filter-btn" data-underlying="ETH" onclick="filterGregPositions(this, 'ETH')" style="padding: 0.4rem 0.75rem; border-radius: 4px; background: #e0e0e0; border: none; cursor: pointer;">ETH</button>
+        </div>
+        <select id="greg-sandbox-filter" onchange="loadGregPositions()" style="padding: 0.4rem 0.5rem; border-radius: 4px;">
+          <option value="all">All Positions</option>
+          <option value="sandbox_only">Sandbox Only</option>
+          <option value="non_sandbox">Non-Sandbox</option>
+        </select>
+        <button onclick="loadGregPositions()" style="padding: 0.4rem 0.75rem;">Refresh</button>
+      </div>
+      
+      <!-- Positions Table -->
+      <div style="overflow-x: auto;">
+        <table style="width: 100%; border-collapse: collapse; font-size: 0.85rem;">
+          <thead>
+            <tr style="background: #f5f5f5;">
+              <th style="padding: 0.6rem; text-align: left; border-bottom: 2px solid #ddd;">Badge</th>
+              <th style="padding: 0.6rem; text-align: left; border-bottom: 2px solid #ddd;">Underlying</th>
+              <th style="padding: 0.6rem; text-align: left; border-bottom: 2px solid #ddd;">Strategy</th>
+              <th style="padding: 0.6rem; text-align: right; border-bottom: 2px solid #ddd;">Size</th>
+              <th style="padding: 0.6rem; text-align: right; border-bottom: 2px solid #ddd;">PnL %</th>
+              <th style="padding: 0.6rem; text-align: right; border-bottom: 2px solid #ddd;">PnL USD</th>
+              <th style="padding: 0.6rem; text-align: right; border-bottom: 2px solid #ddd;">DTE</th>
+              <th style="padding: 0.6rem; text-align: left; border-bottom: 2px solid #ddd;">Action</th>
+              <th style="padding: 0.6rem; text-align: center; border-bottom: 2px solid #ddd;">Actions</th>
+            </tr>
+          </thead>
+          <tbody id="greg-positions-tbody">
+            <tr><td colspan="9" style="padding: 1rem; text-align: center; color: #666;">Loading positions...</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div id="greg-positions-count" style="margin-top: 0.5rem; font-size: 0.85rem; color: #666;"></div>
+    </div>
+    
+    <!-- Position Log Timeline Panel -->
+    <div id="greg-log-panel" style="display: none; margin-top: 1.5rem;" class="section">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+        <h3 id="greg-log-title" style="margin: 0;">Management Log</h3>
+        <button onclick="closeGregLogPanel()" style="padding: 0.25rem 0.5rem;">Close</button>
+      </div>
+      <div style="overflow-x: auto;">
+        <table style="width: 100%; border-collapse: collapse; font-size: 0.8rem;">
+          <thead>
+            <tr style="background: #f5f5f5;">
+              <th style="padding: 0.5rem; text-align: left; border-bottom: 1px solid #ddd;">Time</th>
+              <th style="padding: 0.5rem; text-align: left; border-bottom: 1px solid #ddd;">Action</th>
+              <th style="padding: 0.5rem; text-align: center; border-bottom: 1px solid #ddd;">Suggested</th>
+              <th style="padding: 0.5rem; text-align: center; border-bottom: 1px solid #ddd;">Executed</th>
+              <th style="padding: 0.5rem; text-align: left; border-bottom: 1px solid #ddd;">Reason</th>
+              <th style="padding: 0.5rem; text-align: right; border-bottom: 1px solid #ddd;">PnL%</th>
+              <th style="padding: 0.5rem; text-align: left; border-bottom: 1px solid #ddd;">Sensors</th>
+            </tr>
+          </thead>
+          <tbody id="greg-log-tbody">
+            <tr><td colspan="7" style="padding: 0.5rem; color: #666;">No logs yet.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+    
+    <!-- Observer Notes Stub -->
+    <div class="section" style="margin-top: 1.5rem;">
+      <details>
+        <summary style="cursor: pointer; font-weight: bold; color: #1565c0;">Observer Notes (Coming Soon)</summary>
+        <div style="padding: 1rem; background: #f5f5f5; border-radius: 4px; margin-top: 0.5rem;">
+          <p style="color: #666; font-style: italic;">TODO: Daily Greg Observer LLM summary will be displayed here.</p>
+          <ul style="color: #666; font-size: 0.85rem;">
+            <li>Key market observations</li>
+            <li>Strategy performance notes</li>
+            <li>Risk alerts</li>
+          </ul>
+        </div>
+      </details>
+    </div>
+  </div>
+
   <!-- SYSTEM HEALTH TAB -->
   <div id="tab-health" class="tab-content">
     <div class="section">
@@ -5405,6 +5681,9 @@ def index() -> str:
       }}
       if (name === 'strategies') {{
         loadBotsTab();
+      }}
+      if (name === 'greglab') {{
+        loadGregPositions();
       }}
     }}
     
@@ -6254,6 +6533,178 @@ def index() -> str:
         statusEl.textContent = 'Error: ' + e.message;
         tbody.innerHTML = '<tr><td colspan="5" style="padding: 1rem; color: #c62828; text-align: center;">Error: ' + e.message + '</td></tr>';
       }}
+    }}
+    
+    // ==============================================
+    // GREG LAB TAB FUNCTIONS
+    // ==============================================
+    
+    let gregFilteredUnderlying = '';
+    let gregPositionsCache = [];
+    
+    async function loadGregPositions() {{
+      const tbody = document.getElementById('greg-positions-tbody');
+      const sandboxFilter = document.getElementById('greg-sandbox-filter')?.value || 'all';
+      
+      tbody.innerHTML = '<tr><td colspan="9" style="padding: 1rem; text-align: center; color: #666;">Loading...</td></tr>';
+      
+      try {{
+        let url = `/api/greg/positions?sandbox_filter=${{sandboxFilter}}`;
+        if (gregFilteredUnderlying) {{
+          url += `&underlying=${{gregFilteredUnderlying}}`;
+        }}
+        const resp = await fetch(url);
+        const data = await resp.json();
+        
+        if (!data.ok) {{
+          tbody.innerHTML = `<tr><td colspan="9" style="padding: 1rem; text-align: center; color: #c62828;">Error: ${{data.error}}</td></tr>`;
+          return;
+        }}
+        
+        gregPositionsCache = data.positions || [];
+        
+        // Update mode banner
+        const modePill = document.getElementById('greg-mode-pill');
+        const modeDesc = document.getElementById('greg-mode-desc');
+        const envBadge = document.getElementById('greg-env-badge');
+        
+        if (data.mode === 'live' && data.enable_live_execution) {{
+          modePill.textContent = 'LIVE EXECUTION';
+          modePill.style.background = '#ffcdd2';
+          modePill.style.color = '#c62828';
+          modeDesc.textContent = 'Orders will be sent to exchange!';
+        }} else {{
+          modePill.textContent = 'ADVICE ONLY';
+          modePill.style.background = '#fff3e0';
+          modePill.style.color = '#e65100';
+          modeDesc.textContent = 'No orders will be sent.';
+        }}
+        
+        envBadge.textContent = `Env: ${{data.deribit_env || 'testnet'}}`;
+        
+        // Update sandbox summary
+        const sandboxSummary = document.getElementById('greg-sandbox-summary');
+        if (data.sandbox_summary) {{
+          sandboxSummary.style.display = 'block';
+          document.getElementById('greg-sandbox-run-id').textContent = data.sandbox_summary.run_id;
+          document.getElementById('greg-sandbox-counts').textContent = 
+            `BTC: ${{data.sandbox_summary.btc_count}} | ETH: ${{data.sandbox_summary.eth_count}} | PnL: ${{data.sandbox_summary.total_pnl_pct.toFixed(2)}}%`;
+        }} else {{
+          sandboxSummary.style.display = 'none';
+        }}
+        
+        // Render positions
+        if (gregPositionsCache.length === 0) {{
+          tbody.innerHTML = '<tr><td colspan="9" style="padding: 1.5rem; text-align: center; color: #666;">No Greg positions found. Use the sandbox script to create test positions.</td></tr>';
+          document.getElementById('greg-positions-count').textContent = '0 positions';
+          return;
+        }}
+        
+        let html = '';
+        for (const pos of gregPositionsCache) {{
+          const badgeColor = pos.badge === 'LIVE' ? '#c62828' : 
+                             pos.badge === 'SANDBOX' ? '#ffc107' :
+                             pos.badge === 'DEMO' ? '#1565c0' : '#757575';
+          const badgeBg = pos.badge === 'LIVE' ? '#ffcdd2' : 
+                          pos.badge === 'SANDBOX' ? '#fff8e1' :
+                          pos.badge === 'DEMO' ? '#e3f2fd' : '#e0e0e0';
+          
+          const pnlColor = pos.pnl_pct >= 0 ? '#2e7d32' : '#c62828';
+          const urgencyColor = pos.urgency === 'HIGH' ? '#c62828' : 
+                               pos.urgency === 'MEDIUM' ? '#ff9800' : '#2e7d32';
+          
+          html += `<tr style="border-bottom: 1px solid #eee;" data-position-id="${{pos.position_id}}">
+            <td style="padding: 0.6rem;">
+              <span style="padding: 0.2rem 0.5rem; border-radius: 4px; font-size: 0.75rem; font-weight: bold; background: ${{badgeBg}}; color: ${{badgeColor}};">
+                ${{pos.badge}}
+              </span>
+            </td>
+            <td style="padding: 0.6rem; font-weight: bold;">${{pos.underlying}}</td>
+            <td style="padding: 0.6rem;">${{pos.human_readable_name}}</td>
+            <td style="padding: 0.6rem; text-align: right; font-family: monospace;">${{pos.size.toFixed(2)}}</td>
+            <td style="padding: 0.6rem; text-align: right; font-weight: bold; color: ${{pnlColor}};">${{pos.pnl_pct.toFixed(2)}}%</td>
+            <td style="padding: 0.6rem; text-align: right; color: ${{pnlColor}};">$${{pos.pnl_usd.toFixed(2)}}</td>
+            <td style="padding: 0.6rem; text-align: right;">${{pos.dte}}d</td>
+            <td style="padding: 0.6rem;">
+              <span style="padding: 0.15rem 0.4rem; border-radius: 3px; font-size: 0.75rem; background: #f5f5f5; color: ${{urgencyColor}};">
+                ${{pos.suggested_action}}
+              </span>
+            </td>
+            <td style="padding: 0.6rem; text-align: center;">
+              <button onclick="viewGregPositionLogs('${{pos.position_id}}')" style="padding: 0.25rem 0.5rem; font-size: 0.75rem;">Logs</button>
+            </td>
+          </tr>`;
+        }}
+        tbody.innerHTML = html;
+        document.getElementById('greg-positions-count').textContent = `${{gregPositionsCache.length}} position(s)`;
+        
+      }} catch (e) {{
+        tbody.innerHTML = `<tr><td colspan="9" style="padding: 1rem; text-align: center; color: #c62828;">Error: ${{e.message}}</td></tr>`;
+      }}
+    }}
+    
+    function filterGregPositions(btn, underlying) {{
+      gregFilteredUnderlying = underlying;
+      document.querySelectorAll('.greg-filter-btn').forEach(b => {{
+        b.style.background = '#e0e0e0';
+        b.style.color = 'black';
+      }});
+      btn.style.background = '#1565c0';
+      btn.style.color = 'white';
+      loadGregPositions();
+    }}
+    
+    async function viewGregPositionLogs(positionId) {{
+      const panel = document.getElementById('greg-log-panel');
+      const title = document.getElementById('greg-log-title');
+      const tbody = document.getElementById('greg-log-tbody');
+      
+      panel.style.display = 'block';
+      title.textContent = `Management Log: ${{positionId}}`;
+      tbody.innerHTML = '<tr><td colspan="7" style="padding: 0.5rem; color: #666;">Loading...</td></tr>';
+      
+      try {{
+        const resp = await fetch(`/api/greg/positions/${{positionId}}/logs`);
+        const data = await resp.json();
+        
+        if (!data.ok) {{
+          tbody.innerHTML = `<tr><td colspan="7" style="padding: 0.5rem; color: #c62828;">Error: ${{data.error}}</td></tr>`;
+          return;
+        }}
+        
+        if (data.logs.length === 0) {{
+          tbody.innerHTML = '<tr><td colspan="7" style="padding: 0.5rem; color: #666; font-style: italic;">No decision logs for this position yet.</td></tr>';
+          return;
+        }}
+        
+        let html = '';
+        for (const log of data.logs) {{
+          const suggestedIcon = log.suggested ? '✓' : '';
+          const executedIcon = log.executed ? '✓' : '';
+          const sensors = [];
+          if (log.vrp_30d !== null) sensors.push(`VRP: ${{log.vrp_30d.toFixed(1)}}`);
+          if (log.adx_14d !== null) sensors.push(`ADX: ${{log.adx_14d.toFixed(1)}}`);
+          if (log.net_delta !== null) sensors.push(`Δ: ${{log.net_delta.toFixed(4)}}`);
+          
+          html += `<tr style="border-bottom: 1px solid #eee;">
+            <td style="padding: 0.5rem; font-size: 0.75rem;">${{log.timestamp ? new Date(log.timestamp).toLocaleString() : '--'}}</td>
+            <td style="padding: 0.5rem;">${{log.action_type}}</td>
+            <td style="padding: 0.5rem; text-align: center; color: #1565c0;">${{suggestedIcon}}</td>
+            <td style="padding: 0.5rem; text-align: center; color: #2e7d32;">${{executedIcon}}</td>
+            <td style="padding: 0.5rem; max-width: 200px; overflow: hidden; text-overflow: ellipsis;" title="${{log.reason || ''}}">${{log.reason || '--'}}</td>
+            <td style="padding: 0.5rem; text-align: right;">${{log.pnl_pct !== null ? log.pnl_pct.toFixed(2) + '%' : '--'}}</td>
+            <td style="padding: 0.5rem; font-size: 0.7rem; color: #666;">${{sensors.join(' | ')}}</td>
+          </tr>`;
+        }}
+        tbody.innerHTML = html;
+        
+      }} catch (e) {{
+        tbody.innerHTML = `<tr><td colspan="7" style="padding: 0.5rem; color: #c62828;">Error: ${{e.message}}</td></tr>`;
+      }}
+    }}
+    
+    function closeGregLogPanel() {{
+      document.getElementById('greg-log-panel').style.display = 'none';
     }}
     
     // ==============================================

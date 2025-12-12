@@ -1,0 +1,215 @@
+AI Builder Prompt – Greg Lab UI, Logs Timeline & Sandbox View
+
+You are working in my options bot repo, which already has:
+
+Greg selector & strategies (Magadini-style vol bot).
+
+A Position Management panel that shows Greg suggestions (Hedge / TP / Assign).
+
+Delta Hedging Engine card.
+
+Decision logging (greg_decision_log model / table) as specified earlier.
+
+A script open_greg_sandbox_positions.py that opens 7 strategies on BTC and 7 on ETH on testnet, tagged as sandbox=True, origin="GREG_SANDBOX", with a run_id prefix like GREG_SANDBOX_YYYYMMDDT....
+
+Now I want all those changes fully reflected in the user interface as a dedicated “Greg Lab” view.
+
+1) Create a Greg-only dashboard/tab (“Greg Lab”)
+
+Add a new top-level tab/page in the web UI called “Greg Lab” (or similar):
+
+Route: e.g. /greg or /lab/greg.
+
+Only shows Greg positions & metrics, not other bots.
+
+On this page, call a backend endpoint like GET /api/greg/positions (if it doesn’t exist yet, create it) that returns only positions that belong to Greg:
+
+e.g. bot_name == "Magadini_VRP_Harvester" or strategy_type in the Greg strategy list.
+
+Include fields:
+
+position_id
+
+underlying (BTC/ETH)
+
+strategy_type
+
+human_readable_name (e.g. “ATM Straddle”, “Short Put (Accumulation)”)
+
+size / notional
+
+sandbox (bool)
+
+origin (string)
+
+run_id (string)
+
+mode (ADVICE_ONLY / PAPER / LIVE)
+
+pnl_pct, pnl_usd
+
+dte
+
+net_delta
+
+suggested_action (HEDGE / TAKE_PROFIT / ASSIGN / ROLL / NONE)
+
+urgency (HIGH / MED / LOW)
+
+In the Greg Lab UI, show a positions table with:
+
+Filters:
+
+Underlying chips: [BTC] [ETH] (multi-select).
+
+Toggle: [Sandbox only] / [Non-sandbox] / [All].
+
+Columns:
+
+Badge: SANDBOX / PAPER / LIVE / DEMO (based on flags + environment).
+
+Underlying.
+
+Strategy (human name).
+
+Size / notional.
+
+PnL % and PnL USD.
+
+DTE.
+
+Net Delta.
+
+Suggested action + urgency color.
+
+Buttons:
+
+“View Logs” (open log timeline panel).
+
+“Execute” (only shown/enabled if execution is allowed by mode & strategy flags).
+
+At the top of the page, show the current Greg mode clearly:
+
+A pill or banner:
+
+“Mode: Advice Only – no orders will be sent.”
+
+“Mode: Paper – testnet / DRY_RUN only.”
+
+“Mode: Live – tiny real orders enabled for allowed strategies.”
+
+This should read from the same config fields (greg_trading_mode, etc.) already implemented.
+
+2) Per-position management log timeline UI
+
+Create backend endpoint:
+
+GET /api/greg/positions/{position_id}/logs
+
+It should query greg_decision_log for that position_id, sorted by timestamp ascending, and return fields:
+
+timestamp
+
+action_type (OPEN, HEDGE, TAKE_PROFIT, ASSIGN, ROLL, CLOSE, IGNORE)
+
+mode (ADVICE_ONLY / PAPER / LIVE)
+
+suggested (bool)
+
+executed (bool)
+
+reason (string)
+
+vrp_30d, chop_factor_7d, adx_14d, term_structure_spread, skew_25d (if present)
+
+pnl_pct, pnl_usd
+
+On the Greg Lab page, when user clicks “View Logs” for a row:
+
+Show a side panel or bottom drawer titled “Management Log – {underlying} / {strategy_name} / {position_id_short}”.
+
+Inside, display a timeline / table:
+
+Time	Action	Suggested?	Executed?	Reason	PnL%	VRP / ADX snapshot
+2025-12-11 10:03	HEDGE	yes	yes	delta>0.20	+4%	VRP18 / ADX22
+…	TAKE_PROFIT	yes	no	pnl>=50% credit	+53%	VRP12 / ADX18
+…	CLOSE	yes	yes	dte<5	+60%	VRP10 / ADX25
+
+Use badges or small icons to emphasize:
+
+Suggested vs executed,
+
+Action type color (HEDGE blue, TP green, STOP red, etc.).
+
+If the user clicks “Execute” on the main positions table, it should:
+
+Call the existing POST /api/greg/execute_suggestion endpoint (already specified in previous prompt).
+
+On success, refresh the position row + log panel so the executed flag is updated.
+
+3) Sandbox runs and filters
+
+In the Greg Lab positions table, for any position with sandbox=True or origin="GREG_SANDBOX", show a SANDBOX badge.
+
+Add a small “Sandbox summary” block on the Greg Lab page:
+
+Show the most recent run_id that starts with GREG_SANDBOX_... and:
+
+Number of open sandbox positions by underlying.
+
+Total sandbox PnL (just a rough sum).
+
+Example:
+
+Sandbox Run: GREG_SANDBOX_20251211T160000Z
+BTC: 7 positions, ETH: 7 positions, Total PnL: +3.2%
+
+Make the “Sandbox only” filter easy to toggle, so we can quickly see all 14 testnet positions created by open_greg_sandbox_positions.py.
+
+4) Link to hedging engine view
+
+In the Greg Lab positions table, for any position whose suggested_action is HEDGE, show:
+
+A “View Hedge” link or icon.
+
+When clicked, either:
+
+Scroll to the existing Delta Hedging Engine card and highlight the row corresponding to that position_id, or
+
+Open a small modal showing:
+
+Current Net Delta,
+
+Threshold,
+
+Proposed hedge order (instrument, side, size),
+
+Buttons:
+
+“Execute Hedge” (wired to execute_suggestion),
+
+“Close”.
+
+Reuse the hedge data your backend already computes in the delta-hedging API.
+
+5) (Optional) Observer Notes panel hook
+
+If a file or DB field already exists for a daily/periodic “Greg Observer” LLM summary (for example: reports/greg_observer_YYYY-MM-DD.md or a greg_observer_notes table), then:
+
+Add a small “Observer Notes” box on the Greg Lab page:
+
+Show the latest summary timestamp.
+
+Show 3–5 key bullet points from the latest observer note.
+
+Provide a link/button to open full notes in a modal or link.
+
+If this data is not implemented yet, just stub the panel with placeholder text and TODO comments.
+
+6) Quality
+
+Follow existing front-end framework / styling conventions (same tables, badges, colors).
+
+Keep the Greg Lab UI responsive and easy to scan.
+
+Make sure all API calls are DRY_RUN-safe: this dashboard is allowed to view live positions but must only execute actions through the guarded endpoints you already implemented.

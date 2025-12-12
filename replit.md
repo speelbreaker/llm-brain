@@ -55,6 +55,7 @@ The web dashboard offers a user-friendly interface with sections for "Live Agent
 - **Real-Trading Mode (Phase 2)**: Execution support with strong safety gates (Global mode, master switch, per-strategy flags, environment verification, dry_run cross-check) and tiny-size guardrails (`greg_live_max_notional_usd_per_position`, `greg_live_max_notional_usd_per_underlying`). Includes API for executing suggestions and managing trading modes, along with UI modals and execute buttons.
 - **Decision Logging System**: Comprehensive audit trail for Greg decisions stored in a `greg_decision_log` database table, with API for history and statistics, and a "What-If Report Script" for analysis.
 - **UI Enhancements**: Priority coloring, demo vs live badges, mode badges, and view hedge links.
+- **Greg Lab UI**: Dedicated dashboard tab for viewing and managing Greg strategy positions. Features mode banner (ADVICE ONLY / LIVE EXECUTION), sandbox summary, underlying/sandbox filters, positions table with badges (SANDBOX, DEMO, LIVE), PnL tracking, DTE display, suggested actions, and per-position log timelines. Includes Observer Notes stub for future LLM summaries. API endpoints: `/api/greg/positions`, `/api/greg/positions/{position_id}/logs`.
 
 ## External Dependencies
 - **Deribit API**: Used for real-time market data (testnet) and historical data (mainnet public API for backtesting and data harvesting).
