@@ -14,7 +14,7 @@ from .data_source import Timeframe
 
 ExitStyle = Literal["hold_to_expiry", "tp_and_roll"]
 PricingMode = Literal["deribit_live", "synthetic_bs"]
-SyntheticIVMode = Literal["fixed", "rv_window"]
+SyntheticIVMode = Literal["fixed", "rv_window", "historical_replay"]
 
 
 @dataclass

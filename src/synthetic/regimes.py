@@ -580,3 +580,186 @@ def get_default_transition_matrix(n_regimes: int = 6) -> np.ndarray:
     for i in range(n_regimes):
         matrix[i, i] = 0.90 - 0.02 * (n_regimes - 1)
     return matrix / matrix.sum(axis=1, keepdims=True)
+
+
+VOLATILITY_HISTORY_DIR = Path("data/volatility_history")
+
+
+def load_volatility_history(underlying: str) -> Optional[pd.DataFrame]:
+    """
+    Load historical volatility data from Parquet file.
+    
+    Args:
+        underlying: Currency symbol (BTC, ETH)
+        
+    Returns:
+        DataFrame with timestamp, iv_30d, rv_30d, vrp_30d columns, or None
+    """
+    filepath = VOLATILITY_HISTORY_DIR / f"{underlying.lower()}_volatility_history.parquet"
+    
+    if not filepath.exists():
+        return None
+    
+    try:
+        return pd.read_parquet(filepath)
+    except Exception:
+        return None
+
+
+def calibrate_regimes_from_history(
+    underlying: str,
+    n_regimes: int = 4,
+    resample_freq: str = "1D",
+) -> Optional[RegimeModel]:
+    """
+    Calibrate regime parameters from historical volatility data.
+    
+    Uses K-means clustering on (IV, RV, VRP) to identify distinct volatility regimes,
+    then estimates AR(1) parameters and transition probabilities from the data.
+    
+    Args:
+        underlying: Currency symbol (BTC, ETH)
+        n_regimes: Number of regimes to identify
+        resample_freq: Resample frequency for regime transitions ("1D", "1H")
+        
+    Returns:
+        Calibrated RegimeModel, or None if data not available
+    """
+    df = load_volatility_history(underlying)
+    
+    if df is None or df.empty:
+        return None
+    
+    df = df.dropna(subset=["iv_30d", "rv_30d", "vrp_30d"])
+    
+    if len(df) < n_regimes * 10:
+        return None
+    
+    df_daily = df.set_index("timestamp").resample(resample_freq).last().dropna()
+    
+    if len(df_daily) < n_regimes * 5:
+        df_daily = df.copy()
+    
+    features = df_daily[["iv_30d", "rv_30d", "vrp_30d"]].copy()
+    
+    means = features.mean()
+    stds = features.std()
+    stds = stds.replace(0, 1)
+    features_normalized = (features - means) / stds
+    
+    kmeans = KMeans(n_clusters=n_regimes, random_state=42, n_init=10)
+    labels = kmeans.fit_predict(features_normalized)
+    
+    df_daily["regime_id"] = labels
+    
+    regimes: Dict[int, RegimeParams] = {}
+    
+    for regime_id in range(n_regimes):
+        cluster_data = df_daily[df_daily["regime_id"] == regime_id]
+        
+        if len(cluster_data) == 0:
+            continue
+        
+        mu_rv_30d = float(cluster_data["rv_30d"].mean())
+        mu_iv_30d = float(cluster_data["iv_30d"].mean())
+        mu_vrp_30d = float(cluster_data["vrp_30d"].mean())
+        
+        if mu_rv_30d > 0:
+            vrp_ratio = mu_vrp_30d / mu_rv_30d
+        else:
+            vrp_ratio = 0.1
+        
+        iv_std = float(cluster_data["iv_30d"].std())
+        if np.isnan(iv_std) or iv_std == 0:
+            iv_std = 5.0
+        
+        if len(cluster_data) > 1:
+            iv_series = cluster_data["iv_30d"].values
+            iv_lag1 = pd.Series(iv_series).autocorr(lag=1)
+            if np.isnan(iv_lag1):
+                phi_iv = 0.90
+            else:
+                phi_iv = max(0.5, min(0.99, float(iv_lag1)))
+        else:
+            phi_iv = 0.90
+        
+        name = _name_regime_from_stats(regime_id, mu_rv_30d, vrp_ratio, phi_iv)
+        
+        regimes[regime_id] = RegimeParams(
+            name=name,
+            mu_rv_30d=round(mu_rv_30d, 2),
+            mu_vrp_30d=round(vrp_ratio, 4),
+            iv_level_sigma=round(iv_std, 2),
+            phi_iv=round(phi_iv, 3),
+            phi_skew=0.85,
+            sensor_means={
+                "iv_30d": round(mu_iv_30d, 2),
+                "rv_30d": round(mu_rv_30d, 2),
+                "vrp_30d": round(mu_vrp_30d, 2),
+            },
+            weight=round(len(cluster_data) / len(df_daily), 3),
+        )
+    
+    regime_sequence = df_daily["regime_id"].values
+    transition_matrix = estimate_transition_matrix(regime_sequence, n_regimes)
+    
+    from datetime import datetime as dt
+    
+    model = RegimeModel(
+        underlying=underlying.upper(),
+        n_clusters=n_regimes,
+        regimes=regimes,
+        transition_matrix=transition_matrix,
+        created_at=dt.now().isoformat(),
+    )
+    
+    return model
+
+
+def _name_regime_from_stats(
+    regime_id: int,
+    mu_rv: float,
+    vrp_ratio: float,
+    phi_iv: float,
+) -> str:
+    """Generate descriptive name from calibrated statistics."""
+    if mu_rv > 60:
+        vol_level = "high_vol"
+    elif mu_rv < 40:
+        vol_level = "low_vol"
+    else:
+        vol_level = "mid_vol"
+    
+    if vrp_ratio > 0.10:
+        vrp_level = "rich_vrp"
+    elif vrp_ratio < -0.05:
+        vrp_level = "cheap_vrp"
+    else:
+        vrp_level = "fair_vrp"
+    
+    persistence = "persistent" if phi_iv > 0.92 else "mean_reverting"
+    
+    return f"calibrated_{regime_id}_{vol_level}_{vrp_level}_{persistence}"
+
+
+def calibrate_and_save_regimes(
+    underlying: str,
+    n_regimes: int = 4,
+) -> Optional[RegimeModel]:
+    """
+    Calibrate regimes from historical data and save to disk.
+    
+    Args:
+        underlying: Currency symbol (BTC, ETH)
+        n_regimes: Number of regimes
+        
+    Returns:
+        Calibrated RegimeModel, or None if failed
+    """
+    model = calibrate_regimes_from_history(underlying, n_regimes)
+    
+    if model is not None:
+        save_regime_model(model)
+        return model
+    
+    return None

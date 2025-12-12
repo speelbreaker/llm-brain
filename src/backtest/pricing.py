@@ -147,6 +147,130 @@ def compute_realized_volatility(
     return max(0.10, min(annualized_vol, 2.0))
 
 
+_volatility_history_cache: Dict[str, "pd.DataFrame"] = {}
+
+
+def get_volatility_history_date_range(
+    underlying: str,
+) -> Optional[Tuple[datetime, datetime]]:
+    """
+    Get the available date range for historical volatility data.
+    
+    Args:
+        underlying: Currency symbol (BTC, ETH)
+        
+    Returns:
+        Tuple of (start_date, end_date) or None if no data available
+    """
+    df = _load_volatility_history_for_replay(underlying)
+    
+    if df is None or df.empty:
+        return None
+    
+    return (df.index.min().to_pydatetime(), df.index.max().to_pydatetime())
+
+
+def _load_volatility_history_for_replay(underlying: str) -> Optional["pd.DataFrame"]:
+    """
+    Load historical volatility data for replay mode with caching.
+    
+    Returns:
+        DataFrame with timestamp (as index), iv_30d, rv_30d, vrp_30d
+    """
+    import pandas as pd
+    from pathlib import Path
+    
+    cache_key = underlying.upper()
+    
+    if cache_key in _volatility_history_cache:
+        return _volatility_history_cache[cache_key]
+    
+    filepath = Path("data/volatility_history") / f"{underlying.lower()}_volatility_history.parquet"
+    
+    if not filepath.exists():
+        return None
+    
+    try:
+        df = pd.read_parquet(filepath)
+        df = df.set_index("timestamp").sort_index()
+        _volatility_history_cache[cache_key] = df
+        return df
+    except Exception:
+        return None
+
+
+def get_historical_iv_at_time(
+    underlying: str,
+    as_of: datetime,
+) -> Optional[float]:
+    """
+    Get historical IV at a specific time using nearest neighbor lookup.
+    
+    Args:
+        underlying: Currency symbol (BTC, ETH)
+        as_of: The datetime to get IV for
+        
+    Returns:
+        IV as decimal (e.g., 0.50 for 50%), or None if not available
+        Returns None if as_of is outside the available data range
+    """
+    import pandas as pd
+    
+    df = _load_volatility_history_for_replay(underlying)
+    
+    if df is None or df.empty:
+        return None
+    
+    as_of_tz = as_of
+    if as_of.tzinfo is None:
+        from datetime import timezone
+        as_of_tz = as_of.replace(tzinfo=timezone.utc)
+    
+    if as_of_tz < df.index.min() or as_of_tz > df.index.max():
+        return None
+    
+    idx = df.index.get_indexer([as_of_tz], method="nearest")[0]
+    iv_pct = df["iv_30d"].iloc[idx]
+    
+    return float(iv_pct) / 100.0
+
+
+def get_historical_rv_at_time(
+    underlying: str,
+    as_of: datetime,
+) -> Optional[float]:
+    """
+    Get historical RV at a specific time.
+    
+    Args:
+        underlying: Currency symbol (BTC, ETH)
+        as_of: The datetime to get RV for
+        
+    Returns:
+        RV as decimal (e.g., 0.50 for 50%), or None if not available
+        Returns None if as_of is outside the available data range
+    """
+    import pandas as pd
+    
+    df = _load_volatility_history_for_replay(underlying)
+    
+    if df is None or df.empty:
+        return None
+    
+    as_of_tz = as_of
+    if as_of.tzinfo is None:
+        from datetime import timezone
+        as_of_tz = as_of.replace(tzinfo=timezone.utc)
+    
+    if as_of_tz < df.index.min() or as_of_tz > df.index.max():
+        return None
+    
+    idx = df.index.get_indexer([as_of_tz], method="nearest")[0]
+    rv_pct = df["rv_30d"].iloc[idx]
+    
+    return float(rv_pct) / 100.0 if pd.notna(rv_pct) else None
+
+
 def get_synthetic_iv(
     config: CallSimulationConfig,
     spot_history: List[Tuple[datetime, float]],
@@ -167,6 +291,11 @@ def get_synthetic_iv(
     """
     if config.synthetic_iv_mode == "fixed":
         return config.synthetic_fixed_iv
+    
+    if config.synthetic_iv_mode == "historical_replay":
+        historical_iv = get_historical_iv_at_time(config.underlying, as_of)
+        if historical_iv is not None:
+            return historical_iv * config.synthetic_iv_multiplier
     
     rv = compute_realized_volatility(
         spot_history,
