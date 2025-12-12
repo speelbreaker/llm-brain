@@ -552,6 +552,7 @@ def run_calibration_with_policy(
     
     if decision.should_apply:
         from src.calibration_store import set_applied_multiplier
+        from src.synthetic.vol_surface import SkewTemplate
         
         current_config = get_vol_surface_config()
         
@@ -569,12 +570,25 @@ def run_calibration_with_policy(
             ]
             band_multipliers_dict = {b.name: b.iv_multiplier for b in smoothed_bands}
         
+        skew_config = current_config.skew
+        skew_anchor_ratios: Optional[Dict[str, float]] = None
+        if result.recommended_skew and result.recommended_skew.anchor_ratios:
+            skew_anchor_ratios = result.recommended_skew.anchor_ratios
+            skew_config = SkewTemplate(
+                enabled=True,
+                min_dte=result.recommended_skew.min_dte,
+                max_dte=result.recommended_skew.max_dte,
+                anchor_ratios=skew_anchor_ratios,
+                mode=current_config.skew.mode if current_config.skew else "put_heavy",
+                scale=current_config.skew.scale if current_config.skew else 1.0,
+            )
+        
         new_config = VolSurfaceConfig(
             iv_mode=current_config.iv_mode,
             rv_window_days=current_config.rv_window_days,
             iv_multiplier=smoothed_global,
             dte_bands=dte_bands or current_config.dte_bands,
-            skew=current_config.skew,
+            skew=skew_config,
             regime_override=current_config.regime_override,
             vrp_offset_enabled=current_config.vrp_offset_enabled,
         )
@@ -584,6 +598,7 @@ def run_calibration_with_policy(
             underlying=underlying,
             global_multiplier=smoothed_global,
             band_multipliers=band_multipliers_dict if band_multipliers_dict else None,
+            skew_anchor_ratios=skew_anchor_ratios,
             source=source,
             applied_reason=decision.reason,
         )

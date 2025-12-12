@@ -433,17 +433,13 @@ def get_calibration(
 
         skew_fit_data = None
         if result.recommended_skew:
-            current_skew = None
-            if hasattr(settings, 'synthetic_skew_anchor_15'):
-                current_skew = {
-                    "anchor_ratios": {
-                        "0.15": getattr(settings, 'synthetic_skew_anchor_15', 1.0),
-                        "0.25": getattr(settings, 'synthetic_skew_anchor_25', 1.0),
-                        "0.35": getattr(settings, 'synthetic_skew_anchor_35', 1.0),
-                    },
-                    "min_dte": result.recommended_skew.min_dte,
-                    "max_dte": result.recommended_skew.max_dte,
-                }
+            from src.calibration_store import get_current_skew_ratios
+            current_ratios = get_current_skew_ratios(underlying)
+            current_skew = {
+                "anchor_ratios": current_ratios,
+                "min_dte": result.recommended_skew.min_dte,
+                "max_dte": result.recommended_skew.max_dte,
+            }
             skew_fit_data = {
                 "recommended_skew": {
                     "anchor_ratios": result.recommended_skew.anchor_ratios,
@@ -883,6 +879,55 @@ def run_calibration_with_policy_endpoint(request: ForceApplyCalibrationRequest) 
         return JSONResponse(
             status_code=500,
             content={"error": "failed_to_run_calibration", "message": str(e)},
+        )
+
+
+@app.post("/api/calibration/apply_skew")
+def apply_skew_ratios(request: dict) -> JSONResponse:
+    """
+    Apply recommended skew anchor ratios directly.
+    
+    Body: {"underlying": "BTC", "anchor_ratios": {"0.15": 0.96, "0.25": 0.94, "0.35": 0.92}}
+    """
+    from src.calibration_store import set_skew_anchor_ratios, get_applied_multiplier, set_applied_multiplier
+    
+    underlying = request.get("underlying", "BTC")
+    anchor_ratios = request.get("anchor_ratios", {})
+    
+    if underlying not in ("BTC", "ETH"):
+        return JSONResponse(
+            status_code=400,
+            content={"error": "underlying must be BTC or ETH"},
+        )
+    
+    if not anchor_ratios or not isinstance(anchor_ratios, dict):
+        return JSONResponse(
+            status_code=400,
+            content={"error": "anchor_ratios is required and must be a dict"},
+        )
+    
+    try:
+        set_skew_anchor_ratios(underlying, anchor_ratios)
+        
+        current_state = get_applied_multiplier(underlying)
+        set_applied_multiplier(
+            underlying=underlying,
+            global_multiplier=current_state.global_multiplier,
+            band_multipliers=current_state.band_multipliers if current_state.band_multipliers else None,
+            skew_anchor_ratios=anchor_ratios,
+            source=current_state.source,
+            applied_reason="Skew ratios applied directly",
+        )
+        
+        return JSONResponse(content={
+            "status": "ok",
+            "underlying": underlying,
+            "anchor_ratios": anchor_ratios,
+        })
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={"error": "failed_to_apply_skew", "message": str(e)},
         )
 
 

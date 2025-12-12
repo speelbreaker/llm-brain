@@ -30,12 +30,14 @@ class AppliedMultiplierState:
     """Tracks the currently applied multiplier with metadata."""
     global_multiplier: float = 1.0
     band_multipliers: Dict[str, float] = field(default_factory=dict)
+    skew_anchor_ratios: Dict[str, float] = field(default_factory=dict)
     last_updated: Optional[datetime] = None
     source: str = "default"
     applied_reason: str = ""
 
 
 _applied_state: Dict[str, AppliedMultiplierState] = {}
+_skew_overrides: Dict[str, Dict[str, float]] = {}
 
 
 def set_iv_multiplier_override(
@@ -124,10 +126,55 @@ def clear_all_overrides() -> None:
         _simple_overrides.clear()
 
 
+def set_skew_anchor_ratios(
+    underlying: str,
+    anchor_ratios: Dict[str, float],
+) -> None:
+    """
+    Set skew anchor ratio overrides for an underlying.
+    
+    Args:
+        underlying: Asset symbol (BTC, ETH)
+        anchor_ratios: Dict mapping delta strings to ratios, e.g. {"0.15": 0.96, "0.25": 0.94}
+    """
+    with _lock:
+        _skew_overrides[underlying.upper()] = dict(anchor_ratios)
+
+
+def get_skew_anchor_ratios(underlying: str) -> Dict[str, float]:
+    """
+    Get the skew anchor ratio overrides for an underlying.
+    
+    Returns:
+        Dict mapping delta strings to ratios, or empty dict if no overrides set.
+    """
+    with _lock:
+        return dict(_skew_overrides.get(underlying.upper(), {}))
+
+
+def get_current_skew_ratios(underlying: str) -> Dict[str, float]:
+    """
+    Get the currently active skew ratios for an underlying.
+    
+    First checks runtime overrides, then falls back to settings defaults.
+    This is the source of truth for UI "Current Ratio" column.
+    """
+    with _lock:
+        if underlying.upper() in _skew_overrides and _skew_overrides[underlying.upper()]:
+            return dict(_skew_overrides[underlying.upper()])
+        
+        state = _applied_state.get(underlying.upper())
+        if state and state.skew_anchor_ratios:
+            return dict(state.skew_anchor_ratios)
+    
+    return {"0.15": 1.0, "0.25": 1.0, "0.35": 1.0}
+
+
 def set_applied_multiplier(
     underlying: str,
     global_multiplier: float,
     band_multipliers: Optional[Dict[str, float]] = None,
+    skew_anchor_ratios: Optional[Dict[str, float]] = None,
     source: str = "live",
     applied_reason: str = "",
 ) -> None:
@@ -145,11 +192,15 @@ def set_applied_multiplier(
         _applied_state[underlying.upper()] = AppliedMultiplierState(
             global_multiplier=global_multiplier,
             band_multipliers=band_multipliers or {},
+            skew_anchor_ratios=skew_anchor_ratios or {},
             last_updated=datetime.now(timezone.utc),
             source=source,
             applied_reason=applied_reason,
         )
         _simple_overrides[underlying.upper()] = global_multiplier
+        
+        if skew_anchor_ratios:
+            _skew_overrides[underlying.upper()] = dict(skew_anchor_ratios)
 
 
 def get_applied_multiplier(underlying: str) -> AppliedMultiplierState:
@@ -178,6 +229,7 @@ def get_all_applied_multipliers() -> Dict[str, Dict[str, Any]]:
             result[underlying] = {
                 "global_multiplier": state.global_multiplier,
                 "band_multipliers": state.band_multipliers,
+                "skew_anchor_ratios": state.skew_anchor_ratios,
                 "last_updated": state.last_updated.isoformat() if state.last_updated else None,
                 "source": state.source,
                 "applied_reason": state.applied_reason,

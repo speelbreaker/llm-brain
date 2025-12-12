@@ -1,0 +1,329 @@
+You’re working in my “Greg” options bot repo (Deribit BTC/ETH, FastAPI app, Greg selector, delta-hedging, smoke tests, web dashboard).
+
+We already have:
+
+Greg selector & strategies (GREG_SELECTOR_RULES_FINAL, greg_position_rules.json).
+
+A Position Management / “Advice Only” panel for Greg (suggests Hedge / Take Profit / Assign).
+
+Delta Hedging Engine card (proposes perps hedges, currently DRY RUN only).
+
+scripts/smoke_greg_strategies.py with env matrix tests + strategy smoke tests.
+
+Your tasks:
+
+1. Add real-trading mode (with strong safety)
+1.1 Config + safety flags
+
+In the central settings/config (Pydantic Settings or similar), add:
+
+Global mode enum, default advice only:
+
+class GregTradingMode(str, Enum):
+    ADVICE_ONLY = "advice_only"   # never sends orders
+    PAPER = "paper"               # DRY_RUN/testnet only
+    LIVE = "live"                 # can send mainnet orders (requires extra flags)
+
+
+Settings:
+
+greg_trading_mode: GregTradingMode = GregTradingMode.ADVICE_ONLY
+greg_enable_live_execution: bool = False  # MUST be true + mode=LIVE to send real orders
+
+
+Per-strategy enable flags (default False):
+
+greg_strategy_live_enabled: dict[str, bool] = {
+    "STRATEGY_A_STRADDLE": False,
+    "STRATEGY_A_STRANGLE": False,
+    "STRATEGY_B_CALENDAR": False,
+    "STRATEGY_C_SHORT_PUT": False,
+    "STRATEGY_D_IRON_BUTTERFLY": False,
+    "STRATEGY_F_BULL_PUT_SPREAD": False,
+    "STRATEGY_F_BEAR_CALL_SPREAD": False,
+}
+
+
+Live orders may only be sent if:
+
+greg_trading_mode == LIVE
+
+greg_enable_live_execution is True
+
+The specific strategy’s flag is True
+
+AND the underlying is allowed by any existing allow-list.
+
+Everything else = advice/paper only.
+
+1.2 Wire execution buttons into the dashboard
+
+In the web UI template / FastAPI routes that render the Position Management (Advice Only) card:
+
+Change the title to reflect mode:
+
+“Advice Only (No orders)” in ADVICE_ONLY mode.
+
+“Paper Mode (Testnet/DRY_RUN)” in PAPER mode.
+
+“Live Mode (Orders allowed)” in LIVE mode.
+
+For each suggestion row (Hedge / Take Profit / Assign / Roll), add:
+
+A small “Execute” button when execution is allowed (PAPER/LIVE).
+
+The button should call a new POST endpoint, e.g.
+POST /api/greg/execute_suggestion with payload:
+
+{
+  "position_id": "...",
+  "suggested_action": "HEDGE" | "TAKE_PROFIT" | "ASSIGN" | "ROLL",
+  "strategy_type": "...",
+  "underlying": "BTC" | "ETH"
+}
+
+
+Implement the endpoint:
+
+Look up the position + suggestion.
+
+Check safety gates:
+
+If greg_trading_mode == ADVICE_ONLY → reject with “Advice-only mode, not executing”.
+
+If greg_trading_mode == PAPER → send orders to testnet / DRY_RUN pipeline.
+
+If greg_trading_mode == LIVE:
+
+Require greg_enable_live_execution AND greg_strategy_live_enabled[strategy_type].
+
+If either False → reject with clear error.
+
+Otherwise send real orders.
+
+Always log the decision in the new decision-log table (see section 2).
+
+Add a per-strategy toggle UI (e.g. in a settings panel or on the Greg tab):
+
+For each strategy, show a switch:
+
+“Allow live execution: STRATEGY_A_STRADDLE [on/off]”
+(only visible when global mode is LIVE).
+
+Wire it to the greg_strategy_live_enabled mapping via a small settings endpoint (or reuse existing config update logic).
+
+Require a double-confirmation when switching to LIVE mode:
+
+Simple approach: when user clicks to switch to LIVE in UI, show a modal with:
+
+Summary of risk caps,
+
+“Type LIVE to confirm” text input.
+
+Only then send the settings update.
+
+2. Decision logging for “what if I followed Greg”
+
+We want to log both:
+
+Suggestions (advisory decisions) and
+
+Executions (whether we actually applied them).
+
+2.1 Database table / model
+
+Add a new table / ORM model, e.g. greg_decision_log:
+
+Fields (suggested):
+
+id (PK)
+
+timestamp
+
+underlying (str)
+
+strategy_type (str)
+
+position_id (str / UUID)
+
+action_type (enum: OPEN, HEDGE, TAKE_PROFIT, ASSIGN, ROLL, CLOSE, IGNORE)
+
+mode (enum: ADVICE_ONLY, PAPER, LIVE)
+
+suggested (bool)
+
+executed (bool)
+
+reason (short text: e.g. “delta>0.15”, “pnl>=60% max”, “dte<5”, etc.)
+
+Snapshot fields for env + PnL at decision time:
+
+vrp_30d, chop_factor_7d, adx_14d, term_structure_spread, skew_25d (nullable)
+
+pnl_pct, pnl_usd
+
+Optional: order_ids (text/json) for executions.
+
+Migration: add the table to your DB via your existing migration system (alembic or equivalent). Ensure tests still pass.
+
+2.2 Logging hooks
+
+Whenever the Position Management engine computes a suggestion (HEDGE / TP / ASSIGN / etc):
+
+Insert a greg_decision_log entry with:
+
+suggested = True
+
+executed = False
+
+mode = current greg_trading_mode
+
+action_type set appropriately
+
+Reason + snapshot metrics.
+
+When a user clicks “Execute” and the action actually sends orders:
+
+Update the corresponding log row (or insert a second one) with:
+
+executed = True
+
+order_ids and any extra info.
+
+If user explicitly dismisses a suggestion (e.g. via a “Ignore” button, optional):
+
+Log an action_type = IGNORE, suggested=True, executed=False.
+
+2.3 Simple “what if” report script
+
+Add scripts/greg_decision_report.py:
+
+CLI usage:
+
+python scripts/greg_decision_report.py --from 2025-01-01 --to 2025-12-31 --underlying BTC
+
+
+Behavior:
+
+Query greg_decision_log in that window.
+
+Group by strategy & action_type.
+
+For now, produce a simple text/CSV report with:
+
+Count of suggestions vs executions,
+
+Avg PnL at suggestion time,
+
+For suggestions that weren’t executed, show what PnL would have been X days later using whatever PnL data you already store for positions (even a rough approximation is OK in this first version).
+
+This doesn’t need to be a full backtester yet; just enough to answer:
+
+“How often did Greg say TP/SL/Assign?”
+
+“How often did I actually follow?”
+
+“Did following vs ignoring help/hurt on average?”
+
+3. UI polish (4 small improvements)
+3.1 Demo vs Live labelling
+
+In the Position Management table:
+
+If a position is from the smoke harness or demo loader (e.g. ID starts with demo: or flagged as demo in the backend), add a small badge:
+
+“DEMO” (grey) vs “LIVE” (blue) vs “PAPER” (purple).
+
+Also adjust the subtitle:
+
+“Demo mode: Loaded sample suggestions (no real positions).”
+
+When live positions exist, clearly separate sections:
+
+First table: Live/Paper positions.
+
+Second: Demo/sample positions.
+
+3.2 Link PM rows to Hedging Engine rows
+
+Add a “View Hedge” link or icon on rows where the suggested action is “Hedge”.
+
+Clicking it should either:
+
+Scroll the page to the Delta Hedging Engine card and highlight the corresponding hedge row, or
+
+Open a small modal showing:
+
+Current net delta,
+
+Threshold,
+
+Proposed hedge (size, instrument),
+
+With a button “Execute Hedge” that calls the same execute endpoint.
+
+Make sure the mapping uses position_id to match rows between the two cards.
+
+3.3 Urgency / priority coloring
+
+Assign a priority to suggestions:
+
+High (red):
+
+2× premium stop / catastrophic loss thresholds,
+
+Delta very far beyond hedge limit,
+
+Black-swan triggers / account-health issues.
+
+Medium (amber):
+
+Take-profit reached,
+
+Accumulation put delta >= 0.8 (assignment),
+
+Roll window + regime still OK.
+
+Low (green/grey):
+
+FYI / informational suggestions.
+
+In the Position Management table:
+
+Use a colored pill or left border to indicate priority.
+
+Add a short tooltip:
+
+“HIGH – must act now”
+
+“MED – suggested soon”
+
+“LOW – informational only”.
+
+3.4 Finish the environment matrix tests
+
+Revisit scripts/smoke_greg_strategies.py env test matrix:
+
+Adjust the synthetic env inputs for calendar and short-put regimes so they match the current selector thresholds (VRP floors, term_structure_spread, skew, RSI, etc.).
+
+Goal: all 6 env tests should pass with the current rules.
+
+Update the documentation text in the left panel / README snippet to say:
+
+“6/6 environment tests pass, 7/7 strategies open successfully”.
+
+4. Quality & safety
+
+All new code must:
+
+Respect DRY_RUN / testnet vs LIVE segregation.
+
+Never send mainnet orders unless all safety gates are satisfied.
+
+Have basic unit tests for:
+
+Decision logging helper (writes expected fields),
+
+Execute endpoint respects mode and per-strategy flags.
+
+Keep the changes consistent with existing project structure and naming.
