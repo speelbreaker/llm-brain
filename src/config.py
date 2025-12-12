@@ -294,6 +294,20 @@ class Settings(BaseSettings):
             "for live orders to be sent. Only applies when mode=LIVE and enable_live_execution=True."
         ),
     )
+    greg_live_max_notional_usd_per_position: float = Field(
+        default=500.0,
+        description=(
+            "Maximum notional USD per position for live Greg trades. "
+            "Positions exceeding this limit will be rejected or downsized."
+        ),
+    )
+    greg_live_max_notional_usd_per_underlying: float = Field(
+        default=2000.0,
+        description=(
+            "Maximum total notional USD exposure per underlying (BTC/ETH) for live Greg trades. "
+            "New trades exceeding this limit will be rejected."
+        ),
+    )
 
     log_dir: str = Field(
         default="logs",

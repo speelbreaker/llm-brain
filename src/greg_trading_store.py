@@ -31,6 +31,8 @@ class GregTradingState:
         "STRATEGY_F_BULL_PUT_SPREAD": False,
         "STRATEGY_F_BEAR_CALL_SPREAD": False,
     })
+    max_notional_per_position: float = 500.0
+    max_notional_per_underlying: float = 2000.0
     last_mode_change: Optional[datetime] = None
     last_change_reason: Optional[str] = None
 
@@ -74,6 +76,8 @@ class GregTradingStore:
                 "mode": self._state.mode.value,
                 "enable_live_execution": self._state.enable_live_execution,
                 "strategy_live_enabled": self._state.strategy_live_enabled.copy(),
+                "max_notional_per_position": self._state.max_notional_per_position,
+                "max_notional_per_underlying": self._state.max_notional_per_underlying,
                 "last_mode_change": self._state.last_mode_change.isoformat() if self._state.last_mode_change else None,
                 "last_change_reason": self._state.last_change_reason,
             }
@@ -184,8 +188,55 @@ class GregTradingStore:
                 if strategy in self._state.strategy_live_enabled:
                     self._state.strategy_live_enabled[strategy] = enabled
             
+            self._state.max_notional_per_position = settings.greg_live_max_notional_usd_per_position
+            self._state.max_notional_per_underlying = settings.greg_live_max_notional_usd_per_underlying
+            
             self._state.last_mode_change = datetime.now(timezone.utc)
             self._state.last_change_reason = "Initialized from settings"
+    
+    def get_notional_limits(self) -> Tuple[float, float]:
+        """Get notional limits (per_position, per_underlying)."""
+        with self._lock:
+            return self._state.max_notional_per_position, self._state.max_notional_per_underlying
+    
+    def set_notional_limits(self, per_position: float, per_underlying: float) -> None:
+        """Set notional limits."""
+        with self._lock:
+            self._state.max_notional_per_position = per_position
+            self._state.max_notional_per_underlying = per_underlying
+    
+    def check_notional_limits(
+        self, 
+        position_notional: float, 
+        current_underlying_exposure: float
+    ) -> Tuple[bool, str]:
+        """
+        Check if a trade passes notional limits.
+        
+        Args:
+            position_notional: Notional value of this position in USD
+            current_underlying_exposure: Current total exposure for this underlying in USD
+            
+        Returns:
+            (allowed, reason) tuple
+        """
+        with self._lock:
+            mode = self._state.mode
+            
+            if mode != GregTradingMode.LIVE:
+                return True, "Notional limits only enforced in LIVE mode"
+            
+            max_pos = self._state.max_notional_per_position
+            max_und = self._state.max_notional_per_underlying
+            
+            if position_notional > max_pos:
+                return False, f"Position notional ${position_notional:.0f} exceeds limit ${max_pos:.0f}"
+            
+            new_exposure = current_underlying_exposure + position_notional
+            if new_exposure > max_und:
+                return False, f"Total underlying exposure ${new_exposure:.0f} would exceed limit ${max_und:.0f}"
+            
+            return True, "Within notional limits"
 
 
 greg_trading_store = GregTradingStore()
