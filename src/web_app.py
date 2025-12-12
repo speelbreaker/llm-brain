@@ -2192,6 +2192,35 @@ def execute_greg_suggestion(request: ExecuteSuggestionRequest) -> JSONResponse:
             },
         )
     
+    if mode == GregTradingMode.LIVE:
+        estimated_notional = 100.0
+        current_underlying_exposure = 0.0
+        
+        notional_ok, notional_reason = greg_trading_store.check_notional_limits(
+            position_notional=estimated_notional,
+            current_underlying_exposure=current_underlying_exposure,
+        )
+        
+        if not notional_ok:
+            log_greg_decision(
+                underlying=underlying,
+                strategy_type=strategy,
+                position_id=position_id,
+                action_type=action,
+                mode=mode.value,
+                suggested=True,
+                executed=False,
+                reason=notional_reason,
+            )
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "ok": False,
+                    "error": notional_reason,
+                    "mode": mode.value,
+                },
+            )
+    
     try:
         order_ids: list[str] = []
         execution_result = {}
@@ -2321,6 +2350,8 @@ def get_greg_trading_mode() -> JSONResponse:
         "mode": state["mode"],
         "enable_live_execution": state["enable_live_execution"],
         "strategy_live_enabled": state["strategy_live_enabled"],
+        "max_notional_per_position": state["max_notional_per_position"],
+        "max_notional_per_underlying": state["max_notional_per_underlying"],
         "allowed_underlyings": settings.underlyings,
         "deribit_env": settings.deribit_env,
         "last_mode_change": state["last_mode_change"],
@@ -2333,6 +2364,8 @@ class UpdateGregModeRequest(BaseModel):
     mode: Optional[str] = None
     enable_live_execution: Optional[bool] = None
     strategy_live_enabled: Optional[Dict[str, bool]] = None
+    max_notional_per_position: Optional[float] = None
+    max_notional_per_underlying: Optional[float] = None
     confirmation_text: Optional[str] = None
 
 
@@ -2431,6 +2464,26 @@ def update_greg_trading_mode(request: UpdateGregModeRequest) -> JSONResponse:
             reason=f"Strategy flags updated: {request.strategy_live_enabled}",
         )
     
+    if request.max_notional_per_position is not None or request.max_notional_per_underlying is not None:
+        current_pos, current_und = greg_trading_store.get_notional_limits()
+        new_pos = request.max_notional_per_position if request.max_notional_per_position is not None else current_pos
+        new_und = request.max_notional_per_underlying if request.max_notional_per_underlying is not None else current_und
+        
+        greg_trading_store.set_notional_limits(new_pos, new_und)
+        updates["max_notional_per_position"] = new_pos
+        updates["max_notional_per_underlying"] = new_und
+        
+        log_greg_decision(
+            underlying="SYSTEM",
+            strategy_type="CONFIG_CHANGE",
+            position_id="N/A",
+            action_type="NOTIONAL_LIMITS_UPDATE",
+            mode=greg_trading_store.get_mode().value,
+            suggested=False,
+            executed=True,
+            reason=f"Notional limits updated: per_position=${new_pos}, per_underlying=${new_und}",
+        )
+    
     state = greg_trading_store.get_state()
     
     return JSONResponse(content={
@@ -2440,6 +2493,8 @@ def update_greg_trading_mode(request: UpdateGregModeRequest) -> JSONResponse:
         "current_mode": state["mode"],
         "current_enable_live": state["enable_live_execution"],
         "current_strategy_flags": state["strategy_live_enabled"],
+        "max_notional_per_position": state["max_notional_per_position"],
+        "max_notional_per_underlying": state["max_notional_per_underlying"],
         "deribit_env": settings.deribit_env,
     })
 
