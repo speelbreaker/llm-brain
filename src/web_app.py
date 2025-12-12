@@ -314,6 +314,7 @@ def get_open_positions() -> JSONResponse:
                 "dte": float(p.get("expiry_dte") or 0.0),
                 "num_rolls": 0,
                 "mode": "LIVE",
+                "entry_mode": "NATURAL",
                 "exit_style": "unknown",
             })
         except Exception:
@@ -3713,7 +3714,7 @@ def index() -> str:
   </div>
 
   <div class="tabs">
-    <button class="tab active" onclick="showTab('live')">Live Agent</button>
+    <button class="tab active" onclick="showTab('live')">Dashboard</button>
     <button class="tab" onclick="showTab('backtesting')">Backtesting</button>
     <button class="tab" onclick="showTab('calibration')">Calibration</button>
     <button class="tab" onclick="showTab('strategies')">Bots</button>
@@ -3722,8 +3723,35 @@ def index() -> str:
     <button class="tab" onclick="showTab('chat')">Chat</button>
   </div>
 
-  <!-- LIVE AGENT TAB -->
+  <!-- DASHBOARD TAB (formerly Live Agent) -->
   <div id="tab-live" class="tab-content active">
+    <div class="section">
+      <h2>Live Market Sensors</h2>
+      <div style="margin-bottom: 8px;">
+        <button id="dashboard-refresh-sensors-btn" style="background:#2a2a2a;border:1px solid #444;color:#ccc;padding:6px 12px;border-radius:4px;cursor:pointer;">Refresh Sensors</button>
+        <label style="margin-left: 12px; font-size: 0.9em; color:#ccc;">
+          <input type="checkbox" id="dashboard-show-sensor-debug" />
+          Show debug inputs
+        </label>
+      </div>
+      <div style="overflow-x:auto;">
+        <table class="steps-table">
+          <thead>
+            <tr>
+              <th>Sensor</th>
+              <th>BTC</th>
+              <th>ETH</th>
+            </tr>
+          </thead>
+          <tbody id="dashboard-sensors-body">
+            <tr>
+              <td colspan="3" style="text-align:center;color:#666;">Loading...</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+    
     <div class="section">
       <h2>Market Overview</h2>
       <div class="status-grid" id="status-cards">
@@ -3822,58 +3850,85 @@ def index() -> str:
 
     <div class="section">
       <h2>Bot Positions</h2>
+      <div id="positions-pnl-summary" style="font-size:0.9rem;color:#888;margin-bottom:0.5rem;"></div>
       
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.5rem;">
-        <h3 style="margin:0;">Open Positions</h3>
-        <div id="positions-pnl-summary" style="font-size:0.9rem;color:#888;"></div>
+      <div class="subsection">
+        <h3 style="margin:0 0 8px 0;color:#ff9800;">Test Positions (DRY_RUN)</h3>
+        <div style="overflow-x: auto; max-height: 220px; overflow-y: auto;">
+          <table class="steps-table">
+            <thead>
+              <tr>
+                <th>Underlying</th>
+                <th>Strategy</th>
+                <th>Symbol</th>
+                <th>Qty</th>
+                <th>Entry</th>
+                <th>Mark</th>
+                <th>Unreal. PnL</th>
+                <th>Unreal. %</th>
+                <th>DTE</th>
+                <th>Rolls</th>
+                <th>Entry Mode</th>
+              </tr>
+            </thead>
+            <tbody id="dashboard-test-positions-body">
+              <tr><td colspan="11" style="text-align:center;color:#666;">Loading...</td></tr>
+            </tbody>
+          </table>
+        </div>
       </div>
-      <div style="overflow-x: auto; max-height: 260px; overflow-y: auto; margin-bottom: 1.5rem;">
-        <table class="steps-table">
-          <thead>
-            <tr>
-              <th>Underlying</th>
-              <th>Type</th>
-              <th>Strategy</th>
-              <th>Symbol</th>
-              <th>Qty</th>
-              <th>Entry</th>
-              <th>Mark</th>
-              <th>Unreal. PnL</th>
-              <th>Unreal. %</th>
-              <th>DTE</th>
-              <th>Rolls</th>
-              <th>Mode</th>
-            </tr>
-          </thead>
-          <tbody id="live-open-positions-body">
-            <tr><td colspan="12" style="text-align:center;color:#666;">No open positions</td></tr>
-          </tbody>
-        </table>
+
+      <div class="subsection" style="margin-top:16px;">
+        <h3 style="margin:0 0 8px 0;color:#4caf50;">Live Positions</h3>
+        <div style="overflow-x: auto; max-height: 220px; overflow-y: auto;">
+          <table class="steps-table">
+            <thead>
+              <tr>
+                <th>Underlying</th>
+                <th>Strategy</th>
+                <th>Symbol</th>
+                <th>Qty</th>
+                <th>Entry</th>
+                <th>Mark</th>
+                <th>Unreal. PnL</th>
+                <th>Unreal. %</th>
+                <th>DTE</th>
+                <th>Rolls</th>
+                <th>Entry Mode</th>
+              </tr>
+            </thead>
+            <tbody id="dashboard-live-positions-body">
+              <tr><td colspan="11" style="text-align:center;color:#666;">Loading...</td></tr>
+            </tbody>
+          </table>
+        </div>
       </div>
       
-      <h3 style="margin-bottom: 0.5rem;">Closed Chains</h3>
-      <div style="overflow-x: auto; max-height: 260px; overflow-y: auto;">
-        <table class="steps-table">
-          <thead>
-            <tr>
-              <th>Closed At</th>
-              <th>Underlying</th>
-              <th>Type</th>
-              <th>Strategy</th>
-              <th>Symbol</th>
-              <th>Legs</th>
-              <th>Rolls</th>
-              <th>Real. PnL</th>
-              <th>Real. %</th>
-              <th>Max DD %</th>
-              <th>Mode</th>
-            </tr>
-          </thead>
-          <tbody id="live-closed-positions-body">
-            <tr><td colspan="11" style="text-align:center;color:#666;">No closed chains yet</td></tr>
-          </tbody>
-        </table>
-      </div>
+      <details style="margin-top:16px;">
+        <summary style="cursor:pointer;color:#888;font-size:0.9em;">Closed Chains</summary>
+        <div style="overflow-x: auto; max-height: 260px; overflow-y: auto; margin-top:8px;">
+          <table class="steps-table">
+            <thead>
+              <tr>
+                <th>Closed At</th>
+                <th>Underlying</th>
+                <th>Type</th>
+                <th>Strategy</th>
+                <th>Symbol</th>
+                <th>Legs</th>
+                <th>Rolls</th>
+                <th>Real. PnL</th>
+                <th>Real. %</th>
+                <th>Max DD %</th>
+                <th>Mode</th>
+              </tr>
+            </thead>
+            <tbody id="live-closed-positions-body">
+              <tr><td colspan="11" style="text-align:center;color:#666;">No closed chains yet</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </details>
     </div>
 
     <div class="section">
@@ -7642,6 +7697,118 @@ def index() -> str:
       }}
     }}
     
+    async function updateDashboardSensors() {{
+      const tbody = document.getElementById('dashboard-sensors-body');
+      const debugToggle = document.getElementById('dashboard-show-sensor-debug');
+      const debugMode = debugToggle && debugToggle.checked ? '1' : '0';
+      
+      try {{
+        const res = await fetch(`/api/bots/market_sensors?debug=${{debugMode}}`);
+        const data = await res.json();
+        
+        if (!data.ok) {{
+          tbody.innerHTML = '<tr><td colspan="3" style="text-align:center;color:#f44336;">Failed to load sensors</td></tr>';
+          return;
+        }}
+        
+        const sensors = data.sensors || {{}};
+        const sensorNames = ['iv_30d', 'rv_30d', 'vrp_30d', 'chop_factor_7d', 'iv_rank_6m', 'term_structure_spread', 'skew_25d', 'adx_14d', 'rsi_14d', 'price_vs_ma200'];
+        const sensorLabels = {{'iv_30d': 'IV 30d (DVOL)', 'rv_30d': 'RV 30d', 'vrp_30d': 'VRP 30d', 'chop_factor_7d': 'Chop Factor 7d', 'iv_rank_6m': 'IV Rank 6m', 'term_structure_spread': 'Term Spread', 'skew_25d': 'Skew 25d', 'adx_14d': 'ADX 14d', 'rsi_14d': 'RSI 14d', 'price_vs_ma200': 'Price vs MA200'}};
+        
+        const btcSensors = sensors['BTC'] || {{}};
+        const ethSensors = sensors['ETH'] || {{}};
+        
+        let html = '';
+        for (const name of sensorNames) {{
+          const btcVal = btcSensors[name];
+          const ethVal = ethSensors[name];
+          const btcDisplay = btcVal !== null && btcVal !== undefined ? Number(btcVal).toFixed(name === 'chop_factor_7d' ? 3 : 2) : '--';
+          const ethDisplay = ethVal !== null && ethVal !== undefined ? Number(ethVal).toFixed(name === 'chop_factor_7d' ? 3 : 2) : '--';
+          const btcClass = classifySensorValue(name, btcVal);
+          const ethClass = classifySensorValue(name, ethVal);
+          html += `<tr>
+            <td>${{sensorLabels[name] || name}}</td>
+            <td class="${{btcClass}}">${{btcDisplay}}</td>
+            <td class="${{ethClass}}">${{ethDisplay}}</td>
+          </tr>`;
+        }}
+        tbody.innerHTML = html;
+      }} catch (err) {{
+        console.error('Dashboard sensors fetch error:', err);
+        tbody.innerHTML = '<tr><td colspan="3" style="text-align:center;color:#f44336;">Error loading sensors</td></tr>';
+      }}
+    }}
+    
+    async function updateDashboardPositions() {{
+      const testTbody = document.getElementById('dashboard-test-positions-body');
+      const liveTbody = document.getElementById('dashboard-live-positions-body');
+      const summaryEl = document.getElementById('positions-pnl-summary');
+      
+      try {{
+        const res = await fetch('/api/positions/open');
+        const data = await res.json();
+        const positions = data.positions || [];
+        const totals = data.totals || {{}};
+        
+        const testPositions = positions.filter(p => p.mode === 'DRY_RUN');
+        const livePositions = positions.filter(p => p.mode !== 'DRY_RUN');
+        
+        const totalPnl = totals.unrealized_pnl || 0;
+        const pnlColor = totalPnl >= 0 ? '#26a69a' : '#ef5350';
+        summaryEl.innerHTML = `Total Unrealized: <span style="color:${{pnlColor}};font-weight:600;">${{totalPnl >= 0 ? '+' : ''}}${{totalPnl.toFixed(2)}}</span>`;
+        
+        const renderPositionRow = (pos) => {{
+          const stratLabel = (pos.strategy_type || '').replace(/_/g, ' ');
+          const pnlClass = pos.unrealized_pnl >= 0 ? 'traded-yes' : 'traded-no';
+          const entryMode = pos.entry_mode || 'NATURAL';
+          return `<tr>
+            <td>${{pos.underlying}}</td>
+            <td>${{stratLabel}}</td>
+            <td>${{pos.symbol}}</td>
+            <td>${{pos.quantity.toFixed(3)}}</td>
+            <td>${{pos.entry_price.toFixed(6)}}</td>
+            <td>${{pos.mark_price.toFixed(6)}}</td>
+            <td class="${{pnlClass}}">${{pos.unrealized_pnl.toFixed(2)}}</td>
+            <td class="${{pnlClass}}">${{pos.unrealized_pnl_pct.toFixed(1)}}%</td>
+            <td>${{Math.max(0, pos.dte).toFixed(1)}}</td>
+            <td>${{pos.num_rolls}}</td>
+            <td>${{entryMode}}</td>
+          </tr>`;
+        }};
+        
+        if (testPositions.length === 0) {{
+          testTbody.innerHTML = '<tr><td colspan="11" style="text-align:center;color:#666;">No test positions</td></tr>';
+        }} else {{
+          testTbody.innerHTML = testPositions.map(renderPositionRow).join('');
+        }}
+        
+        if (livePositions.length === 0) {{
+          liveTbody.innerHTML = '<tr><td colspan="11" style="text-align:center;color:#666;">No live positions</td></tr>';
+        }} else {{
+          liveTbody.innerHTML = livePositions.map(renderPositionRow).join('');
+        }}
+      }} catch (err) {{
+        console.error('Dashboard positions fetch error:', err);
+        testTbody.innerHTML = '<tr><td colspan="11" style="text-align:center;color:#f44336;">Error loading positions</td></tr>';
+        liveTbody.innerHTML = '<tr><td colspan="11" style="text-align:center;color:#f44336;">Error loading positions</td></tr>';
+      }}
+    }}
+    
+    function initDashboard() {{
+      const sensorsBtn = document.getElementById('dashboard-refresh-sensors-btn');
+      if (sensorsBtn) {{
+        sensorsBtn.addEventListener('click', updateDashboardSensors);
+      }}
+      const debugToggle = document.getElementById('dashboard-show-sensor-debug');
+      if (debugToggle) {{
+        debugToggle.addEventListener('change', updateDashboardSensors);
+      }}
+      updateDashboardSensors();
+      updateDashboardPositions();
+      setInterval(updateDashboardSensors, 30000);
+      setInterval(updateDashboardPositions, 30000);
+    }}
+    
     async function fetchDecisions() {{
       try {{
         const res = await fetch('/api/agent/decisions');
@@ -9584,6 +9751,7 @@ def index() -> str:
     refreshBacktestStatus();
     loadStewardReport();
     fetchCalibrationHistory();
+    initDashboard();
     setInterval(fetchStatus, 5000);
     setInterval(fetchDecisions, 10000);
     setInterval(refreshBacktestStatus, 3000);

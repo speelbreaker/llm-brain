@@ -424,6 +424,7 @@ class PositionTracker:
             "dte": dte,
             "num_rolls": chain.num_rolls,
             "mode": chain.mode,
+            "entry_mode": getattr(chain, "entry_mode", "NATURAL"),
             "exit_style": chain.exit_style or "hold_to_expiry",
         }
 
