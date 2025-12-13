@@ -57,9 +57,8 @@ Return valid JSON with this structure:
 Be specific and actionable. Reference exact files and line numbers when possible."""
 
 
-# Chat Completions compatible models only (no Responses-only models like gpt-5.2-pro)
+# Chat Completions compatible models (Replit proxy)
 MODEL_FALLBACK_CHAIN = [
-    "gpt-5.2",
     "gpt-5",
     "gpt-4.1",
     "gpt-4o",
@@ -152,7 +151,7 @@ class LLMClient:
     def __init__(self, api_key: Optional[str] = None):
         self.api_key = api_key or (settings.openai_api_key if settings else None)
         self._client = None
-        self._model_review = settings.openai_model_review if settings else "gpt-5.2"
+        self._model_review = settings.openai_model_review if settings else "gpt-5"
         self._model_fast = settings.openai_model_fast if settings else "gpt-4.1"
         self._reasoning_effort = settings.openai_reasoning_effort if settings else "high"
     
@@ -258,27 +257,51 @@ class LLMClient:
             
             content, model_used = self._call_with_fallback(messages)
             
+            # Try multiple JSON extraction strategies
             json_match = None
+            
+            # Strategy 1: ```json code block
             if "```json" in content:
                 start = content.find("```json") + 7
                 end = content.find("```", start)
                 if end > start:
                     json_match = content[start:end].strip()
-            elif content.strip().startswith("{"):
-                json_match = content.strip()
+            
+            # Strategy 2: ``` code block (no language specified)
+            if not json_match and "```" in content:
+                import re
+                blocks = re.findall(r'```\s*\n?(.*?)```', content, re.DOTALL)
+                for block in blocks:
+                    block = block.strip()
+                    if block.startswith("{") and block.endswith("}"):
+                        json_match = block
+                        break
+            
+            # Strategy 3: Find JSON object anywhere in content
+            if not json_match:
+                # Find first { and last }
+                start = content.find("{")
+                end = content.rfind("}")
+                if start != -1 and end > start:
+                    json_match = content[start:end+1]
             
             if json_match:
-                data = json.loads(json_match)
-                result = LLMReviewResult.from_json(data, model=model_used)
-                result.raw_response = content
-                return result
-            else:
-                return LLMReviewResult(
-                    summary=["Review completed but response format was unexpected"],
-                    overall_severity="INFO",
-                    model_used=model_used,
-                    raw_response=content,
-                )
+                try:
+                    data = json.loads(json_match)
+                    result = LLMReviewResult.from_json(data, model=model_used)
+                    result.raw_response = content
+                    return result
+                except json.JSONDecodeError:
+                    logger.warning(f"JSON extraction found but failed to parse: {json_match[:200]}...")
+            
+            # Fallback: return raw content as summary
+            logger.warning(f"Could not extract JSON from LLM response (length={len(content)})")
+            return LLMReviewResult(
+                summary=[content[:500] if len(content) > 500 else content],
+                overall_severity="INFO",
+                model_used=model_used,
+                raw_response=content,
+            )
                 
         except json.JSONDecodeError as e:
             logger.warning(f"Failed to parse LLM response as JSON: {e}")
