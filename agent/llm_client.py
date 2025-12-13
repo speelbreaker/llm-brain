@@ -57,14 +57,13 @@ Return valid JSON with this structure:
 Be specific and actionable. Reference exact files and line numbers when possible."""
 
 
+# Chat Completions compatible models only (no Responses-only models like gpt-5.2-pro)
 MODEL_FALLBACK_CHAIN = [
-    "gpt-5.2-pro",
     "gpt-5.2",
     "gpt-5",
-    "o3",
-    "o3-mini",
     "gpt-4.1",
     "gpt-4o",
+    "gpt-4-turbo",
 ]
 
 
@@ -153,8 +152,8 @@ class LLMClient:
     def __init__(self, api_key: Optional[str] = None):
         self.api_key = api_key or (settings.openai_api_key if settings else None)
         self._client = None
-        self._model_review = settings.openai_model_review if settings else "gpt-5.2-pro"
-        self._model_fast = settings.openai_model_fast if settings else "gpt-5.2"
+        self._model_review = settings.openai_model_review if settings else "gpt-5.2"
+        self._model_fast = settings.openai_model_fast if settings else "gpt-4.1"
         self._reasoning_effort = settings.openai_reasoning_effort if settings else "high"
     
     def _get_client(self):
@@ -227,12 +226,15 @@ class LLMClient:
                 logger.warning(f"Model {model} failed: {e}")
                 last_error = e
                 
-                if "model" in error_msg and ("not found" in error_msg or "does not exist" in error_msg or "invalid" in error_msg):
-                    continue
-                elif "rate" in error_msg or "quota" in error_msg:
+                # Continue to next model on model-related errors
+                if any(kw in error_msg for kw in [
+                    "model", "not found", "does not exist", "invalid", 
+                    "unknown", "unsupported", "rate", "quota", "unavailable"
+                ]):
                     continue
                 else:
-                    raise
+                    # For other errors, still try fallback models
+                    continue
         
         raise last_error or RuntimeError("All models failed")
     
