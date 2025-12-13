@@ -20,3 +20,7 @@ sqlalchemy
 scikit-learn
 scipy
 python-telegram-bot
+bandit
+pip-audit
+pytest
+ruff

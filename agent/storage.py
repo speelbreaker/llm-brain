@@ -59,6 +59,31 @@ class ReviewRecord:
             return []
 
 
+@dataclass
+class Finding:
+    """A structured finding from code analysis."""
+    id: int
+    check_run_id: Optional[int]
+    severity: str
+    category: str
+    evidence: str
+    why_it_matters: str
+    recommended_fix: str
+    created_at: str
+
+
+@dataclass
+class CheckRun:
+    """A record of a check run (tests, security scan, etc.)."""
+    id: int
+    check_type: str
+    status: str
+    duration_seconds: float
+    artifact_path: Optional[str]
+    summary: str
+    created_at: str
+
+
 def _get_db_path() -> Path:
     """Get database path, creating parent directories if needed."""
     if settings:
@@ -118,6 +143,32 @@ def init_db() -> None:
             messages_json TEXT,
             context_json TEXT,
             updated_at TEXT NOT NULL
+        )
+    """)
+    
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS check_runs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            check_type TEXT NOT NULL,
+            status TEXT NOT NULL,
+            duration_seconds REAL,
+            artifact_path TEXT,
+            summary TEXT,
+            created_at TEXT NOT NULL
+        )
+    """)
+    
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS findings (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            check_run_id INTEGER,
+            severity TEXT NOT NULL,
+            category TEXT NOT NULL,
+            evidence TEXT,
+            why_it_matters TEXT,
+            recommended_fix TEXT,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY (check_run_id) REFERENCES check_runs(id)
         )
     """)
     
@@ -345,3 +396,168 @@ def clear_chat_session(chat_id: str) -> None:
     cur.execute("DELETE FROM chat_sessions WHERE chat_id = ?", (str(chat_id),))
     conn.commit()
     conn.close()
+
+
+def save_check_run(
+    check_type: str,
+    status: str,
+    duration_seconds: float,
+    summary: str,
+    artifact_path: Optional[str] = None,
+) -> int:
+    """Save a check run record and return its ID."""
+    conn = _get_conn()
+    cur = conn.cursor()
+    
+    now = datetime.now(timezone.utc).isoformat()
+    
+    cur.execute("""
+        INSERT INTO check_runs (check_type, status, duration_seconds, artifact_path, summary, created_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+    """, (check_type, status, duration_seconds, artifact_path, summary, now))
+    
+    check_run_id = cur.lastrowid or 0
+    conn.commit()
+    conn.close()
+    
+    return check_run_id
+
+
+def save_finding(
+    severity: str,
+    category: str,
+    evidence: str,
+    why_it_matters: str,
+    recommended_fix: str,
+    check_run_id: Optional[int] = None,
+) -> int:
+    """Save a finding record and return its ID."""
+    conn = _get_conn()
+    cur = conn.cursor()
+    
+    now = datetime.now(timezone.utc).isoformat()
+    
+    cur.execute("""
+        INSERT INTO findings (check_run_id, severity, category, evidence, why_it_matters, recommended_fix, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+    """, (check_run_id, severity, category, evidence, why_it_matters, recommended_fix, now))
+    
+    finding_id = cur.lastrowid or 0
+    conn.commit()
+    conn.close()
+    
+    return finding_id
+
+
+def get_recent_check_runs(limit: int = 10, check_type: Optional[str] = None) -> List[CheckRun]:
+    """Get recent check runs, optionally filtered by type."""
+    conn = _get_conn()
+    cur = conn.cursor()
+    
+    if check_type:
+        cur.execute("""
+            SELECT id, check_type, status, duration_seconds, artifact_path, summary, created_at
+            FROM check_runs
+            WHERE check_type = ?
+            ORDER BY id DESC
+            LIMIT ?
+        """, (check_type, limit))
+    else:
+        cur.execute("""
+            SELECT id, check_type, status, duration_seconds, artifact_path, summary, created_at
+            FROM check_runs
+            ORDER BY id DESC
+            LIMIT ?
+        """, (limit,))
+    
+    rows = cur.fetchall()
+    conn.close()
+    
+    return [
+        CheckRun(
+            id=row[0],
+            check_type=row[1],
+            status=row[2],
+            duration_seconds=row[3] or 0.0,
+            artifact_path=row[4],
+            summary=row[5] or "",
+            created_at=row[6],
+        )
+        for row in rows
+    ]
+
+
+def get_findings_for_check_run(check_run_id: int) -> List[Finding]:
+    """Get all findings for a specific check run."""
+    conn = _get_conn()
+    cur = conn.cursor()
+    
+    cur.execute("""
+        SELECT id, check_run_id, severity, category, evidence, why_it_matters, recommended_fix, created_at
+        FROM findings
+        WHERE check_run_id = ?
+        ORDER BY 
+            CASE severity 
+                WHEN 'Critical' THEN 1 
+                WHEN 'High' THEN 2 
+                WHEN 'Medium' THEN 3 
+                WHEN 'Low' THEN 4 
+                ELSE 5 
+            END
+    """, (check_run_id,))
+    
+    rows = cur.fetchall()
+    conn.close()
+    
+    return [
+        Finding(
+            id=row[0],
+            check_run_id=row[1],
+            severity=row[2],
+            category=row[3],
+            evidence=row[4] or "",
+            why_it_matters=row[5] or "",
+            recommended_fix=row[6] or "",
+            created_at=row[7],
+        )
+        for row in rows
+    ]
+
+
+def get_recent_findings(limit: int = 20, severity: Optional[str] = None) -> List[Finding]:
+    """Get recent findings, optionally filtered by severity."""
+    conn = _get_conn()
+    cur = conn.cursor()
+    
+    if severity:
+        cur.execute("""
+            SELECT id, check_run_id, severity, category, evidence, why_it_matters, recommended_fix, created_at
+            FROM findings
+            WHERE severity = ?
+            ORDER BY id DESC
+            LIMIT ?
+        """, (severity, limit))
+    else:
+        cur.execute("""
+            SELECT id, check_run_id, severity, category, evidence, why_it_matters, recommended_fix, created_at
+            FROM findings
+            ORDER BY id DESC
+            LIMIT ?
+        """, (limit,))
+    
+    rows = cur.fetchall()
+    conn.close()
+    
+    return [
+        Finding(
+            id=row[0],
+            check_run_id=row[1],
+            severity=row[2],
+            category=row[3],
+            evidence=row[4] or "",
+            why_it_matters=row[5] or "",
+            recommended_fix=row[6] or "",
+            created_at=row[7],
+        )
+        for row in rows
+    ]

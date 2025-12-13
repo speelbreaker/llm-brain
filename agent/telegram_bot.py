@@ -14,10 +14,10 @@ from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
 
 from agent.chat_controller import ChatController
-from agent.chat_tools import open_file, search_repo
+from agent.chat_tools import open_file, search_repo, run_pytest, run_health_checks, run_enhanced_security_scans
 from agent.config import settings
 from agent.review_service import ReviewService
-from agent.storage import init_db
+from agent.storage import init_db, get_recent_check_runs, save_check_run
 
 logger = logging.getLogger(__name__)
 
@@ -73,6 +73,10 @@ class TelegramBot:
         self.application.add_handler(CommandHandler("ask", self.cmd_ask))
         self.application.add_handler(CommandHandler("search", self.cmd_search))
         self.application.add_handler(CommandHandler("open", self.cmd_open))
+        self.application.add_handler(CommandHandler("smoke", self.cmd_smoke))
+        self.application.add_handler(CommandHandler("security", self.cmd_security))
+        self.application.add_handler(CommandHandler("health", self.cmd_health))
+        self.application.add_handler(CommandHandler("history", self.cmd_history))
         
         self.application.add_handler(MessageHandler(
             filters.TEXT & ~filters.COMMAND,
@@ -87,23 +91,28 @@ class TelegramBot:
             await update.message.reply_text(_unauthorized_response())
             return
         
-        text = """👋 *Code Review Agent + Repo Q&A*
+        text = """👋 *Code Review Agent + Auditor*
 
-I review code changes and answer questions about the codebase.
+I review code, run tests, scan for security issues, and answer questions.
 
 *Code Review:*
 /review — Review latest changes
 /diff — Show diff summary
 /risks — Show issues from last review
 /next — Recommended actions
-/status — System status
+
+*Auditor:*
+/smoke — Run pytest tests
+/security — Security scans
+/health — App health checks
+/history — Check run history
 
 *Repo Q&A:*
-/ask <question> — Ask about the codebase
-/search <query> — Search for code
-/open <path>:<lines> — View file excerpt
+/ask <question> — Ask about code
+/search <query> — Search code
+/open <path> — View file
 
-Or just type any question naturally!"""
+Or just type any question!"""
         
         await update.message.reply_text(text, parse_mode="Markdown")
     
@@ -121,6 +130,12 @@ Or just type any question naturally!"""
 /risks — Detailed issues from last review
 /next — Recommended next actions
 /status — System status and last review info
+
+*Auditor Commands:*
+/smoke [path] — Run pytest tests
+/security — Run security scans (pip-audit, bandit, ruff)
+/health — Run app health checks
+/history [type] — Show recent check runs
 
 *Repo Q&A Commands:*
 /ask <question> — Ask questions about the codebase
@@ -414,6 +429,139 @@ Just type any question! Examples:
             
         except Exception as e:
             logger.error(f"Error in /open: {e}")
+            await update.message.reply_text(f"Error: {str(e)[:200]}")
+    
+    async def cmd_smoke(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Handle /smoke command - run pytest tests."""
+        if not _is_authorized(update):
+            await update.message.reply_text(_unauthorized_response())
+            return
+        
+        await update.message.reply_text("🧪 Running pytest tests...")
+        
+        try:
+            import time
+            start_time = time.time()
+            
+            test_path = " ".join(context.args) if context.args else None
+            result = run_pytest(test_path=test_path)
+            
+            duration = time.time() - start_time
+            
+            save_check_run(
+                check_type="pytest",
+                status="passed" if result.success else "failed",
+                duration_seconds=duration,
+                summary=result.output[:500] if result.output else "No output",
+            )
+            
+            output = result.output
+            if len(output) > 4000:
+                output = output[:4000] + "\n\n... (truncated)"
+            
+            await update.message.reply_text(output)
+            
+        except Exception as e:
+            logger.error(f"Error in /smoke: {e}")
+            await update.message.reply_text(f"Error running tests: {str(e)[:200]}")
+    
+    async def cmd_security(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Handle /security command - run comprehensive security scans."""
+        if not _is_authorized(update):
+            await update.message.reply_text(_unauthorized_response())
+            return
+        
+        await update.message.reply_text("🔒 Running security scans (pip-audit, bandit, ruff)...")
+        
+        try:
+            import time
+            start_time = time.time()
+            
+            result = run_enhanced_security_scans()
+            
+            duration = time.time() - start_time
+            
+            save_check_run(
+                check_type="security",
+                status="passed" if result.success else "issues_found",
+                duration_seconds=duration,
+                summary=result.output[:500] if result.output else "No output",
+            )
+            
+            output = result.output
+            if len(output) > 4000:
+                output = output[:4000] + "\n\n... (truncated)"
+            
+            await update.message.reply_text(output)
+            
+        except Exception as e:
+            logger.error(f"Error in /security: {e}")
+            await update.message.reply_text(f"Error running security scan: {str(e)[:200]}")
+    
+    async def cmd_health(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Handle /health command - run in-process app health checks."""
+        if not _is_authorized(update):
+            await update.message.reply_text(_unauthorized_response())
+            return
+        
+        await update.message.reply_text("🏥 Running health checks...")
+        
+        try:
+            import time
+            start_time = time.time()
+            
+            result = run_health_checks()
+            
+            duration = time.time() - start_time
+            
+            save_check_run(
+                check_type="health",
+                status="passed" if result.success else "failed",
+                duration_seconds=duration,
+                summary=result.output[:500] if result.output else "No output",
+            )
+            
+            output = result.output
+            if len(output) > 4000:
+                output = output[:4000] + "\n\n... (truncated)"
+            
+            await update.message.reply_text(output)
+            
+        except Exception as e:
+            logger.error(f"Error in /health: {e}")
+            await update.message.reply_text(f"Error running health checks: {str(e)[:200]}")
+    
+    async def cmd_history(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Handle /history command - show recent check runs."""
+        if not _is_authorized(update):
+            await update.message.reply_text(_unauthorized_response())
+            return
+        
+        try:
+            check_type = context.args[0] if context.args else None
+            runs = get_recent_check_runs(limit=10, check_type=check_type)
+            
+            if not runs:
+                await update.message.reply_text("No check runs recorded yet. Try /smoke, /security, or /health first.")
+                return
+            
+            lines = ["*Recent Check Runs*", ""]
+            
+            for run in runs:
+                status_icon = "✅" if run.status in ("passed", "success") else "❌" if run.status == "failed" else "⚠️"
+                created = run.created_at[:16].replace("T", " ")
+                duration = f"{run.duration_seconds:.1f}s" if run.duration_seconds else "N/A"
+                lines.append(f"{status_icon} `{run.check_type}` — {created} ({duration})")
+            
+            if check_type:
+                lines.append(f"\n_Filtered by: {check_type}_")
+            else:
+                lines.append("\n_Use /history <type> to filter (pytest, security, health)_")
+            
+            await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+            
+        except Exception as e:
+            logger.error(f"Error in /history: {e}")
             await update.message.reply_text(f"Error: {str(e)[:200]}")
     
     async def handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

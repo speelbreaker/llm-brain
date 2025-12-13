@@ -7,6 +7,7 @@ Includes enhanced Repo Q&A capabilities with secret redaction.
 from __future__ import annotations
 
 import fnmatch
+import json
 import os
 import re
 import subprocess
@@ -620,6 +621,294 @@ def tail_logs(n_lines: int = 50) -> ToolResult:
         return ToolResult(success=False, output=f"Error reading logs: {e}")
 
 
+def run_pytest(test_path: Optional[str] = None, timeout: int = 120) -> ToolResult:
+    """
+    Run pytest with structured output capture.
+    
+    Args:
+        test_path: Optional path to specific test file or directory (default: run all tests)
+        timeout: Timeout in seconds (default 120, max 300)
+    """
+    try:
+        timeout = min(timeout, 300)
+        
+        test_dirs = ["tests", "test", "src/tests"]
+        test_dir = None
+        for d in test_dirs:
+            if Path(d).exists():
+                test_dir = d
+                break
+        
+        if test_path:
+            if not is_path_safe(test_path):
+                return ToolResult(success=False, output="⛔ Path traversal not allowed.")
+            cmd = ["python", "-m", "pytest", test_path, "-q", "--tb=short", "-v"]
+        elif test_dir:
+            cmd = ["python", "-m", "pytest", test_dir, "-q", "--tb=short", "-v"]
+        else:
+            cmd = ["python", "-m", "pytest", "-q", "--tb=short", "-v"]
+        
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            cwd=str(Path.cwd()),
+        )
+        
+        output = result.stdout + result.stderr
+        
+        passed = 0
+        failed = 0
+        errors = 0
+        skipped = 0
+        
+        for line in output.split("\n"):
+            if " passed" in line:
+                match = re.search(r"(\d+) passed", line)
+                if match:
+                    passed = int(match.group(1))
+            if " failed" in line:
+                match = re.search(r"(\d+) failed", line)
+                if match:
+                    failed = int(match.group(1))
+            if " error" in line:
+                match = re.search(r"(\d+) error", line)
+                if match:
+                    errors = int(match.group(1))
+            if " skipped" in line:
+                match = re.search(r"(\d+) skipped", line)
+                if match:
+                    skipped = int(match.group(1))
+        
+        status_icon = "✅" if result.returncode == 0 else "❌"
+        summary = f"{status_icon} Pytest Results: {passed} passed, {failed} failed, {errors} errors, {skipped} skipped"
+        
+        if len(output) > 3000:
+            output = output[:3000] + "\n... (truncated)"
+        
+        full_output = f"{summary}\n\n{redact_secrets(output)}"
+        
+        return ToolResult(
+            success=result.returncode == 0,
+            output=full_output,
+            data={
+                "passed": passed,
+                "failed": failed,
+                "errors": errors,
+                "skipped": skipped,
+                "return_code": result.returncode,
+            }
+        )
+    except subprocess.TimeoutExpired:
+        return ToolResult(success=False, output=f"⏱️ Pytest timed out after {timeout} seconds.")
+    except FileNotFoundError:
+        return ToolResult(success=False, output="❌ pytest not found. Install with: pip install pytest")
+    except Exception as e:
+        return ToolResult(success=False, output=f"Error running pytest: {e}")
+
+
+def run_health_checks() -> ToolResult:
+    """
+    Run in-process health checks on Flask and FastAPI apps using test clients.
+    Checks /health endpoints and basic app startup without external networking.
+    """
+    results = []
+    checks_passed = 0
+    checks_failed = 0
+    
+    try:
+        from starlette.testclient import TestClient
+        from src.web_app import app as fastapi_app
+        
+        with TestClient(fastapi_app, raise_server_exceptions=False) as client:
+            response = client.get("/health")
+            if response.status_code == 200:
+                results.append("✅ FastAPI /health: OK (200)")
+                checks_passed += 1
+            else:
+                results.append(f"⚠️ FastAPI /health: {response.status_code}")
+                checks_failed += 1
+            
+            response = client.get("/")
+            if response.status_code in (200, 301, 302, 307, 308):
+                results.append(f"✅ FastAPI /: OK ({response.status_code})")
+                checks_passed += 1
+            else:
+                results.append(f"⚠️ FastAPI /: {response.status_code}")
+                checks_failed += 1
+    except ImportError as e:
+        results.append(f"ℹ️ FastAPI: Could not import ({e})")
+    except Exception as e:
+        results.append(f"❌ FastAPI health check failed: {str(e)[:100]}")
+        checks_failed += 1
+    
+    try:
+        from server import app as flask_app
+        
+        with flask_app.test_client() as client:
+            response = client.get("/health")
+            if response.status_code == 200:
+                results.append("✅ Flask /health: OK (200)")
+                checks_passed += 1
+            else:
+                results.append(f"⚠️ Flask /health: {response.status_code}")
+                checks_failed += 1
+    except ImportError:
+        results.append("ℹ️ Flask: No server.py found")
+    except Exception as e:
+        results.append(f"❌ Flask health check failed: {str(e)[:100]}")
+        checks_failed += 1
+    
+    summary = f"Health Checks: {checks_passed} passed, {checks_failed} failed"
+    status_icon = "✅" if checks_failed == 0 and checks_passed > 0 else "⚠️" if checks_passed > 0 else "❌"
+    
+    return ToolResult(
+        success=checks_failed == 0,
+        output=f"{status_icon} {summary}\n\n" + "\n".join(results),
+        data={"passed": checks_passed, "failed": checks_failed}
+    )
+
+
+def run_enhanced_security_scans() -> ToolResult:
+    """
+    Run comprehensive security scans using pip-audit, bandit, and ruff.
+    Returns structured findings with severity levels.
+    """
+    findings = []
+    tools_run = []
+    
+    try:
+        result = subprocess.run(
+            ["pip-audit", "--format=json", "--strict"],
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+        tools_run.append("pip-audit")
+        
+        if result.stdout.strip():
+            try:
+                import json
+                vulns = json.loads(result.stdout)
+                for vuln in vulns[:10]:
+                    name = vuln.get("name", "unknown")
+                    version = vuln.get("version", "?")
+                    vuln_id = vuln.get("id", "")
+                    fix_versions = vuln.get("fix_versions", [])
+                    fix_str = f"→ {fix_versions[0]}" if fix_versions else "no fix available"
+                    findings.append(f"🔴 CRITICAL: {name}=={version} has vulnerability {vuln_id} ({fix_str})")
+            except json.JSONDecodeError:
+                if "No known vulnerabilities" not in result.stdout:
+                    findings.append(f"⚠️ pip-audit output: {result.stdout[:200]}")
+    except FileNotFoundError:
+        findings.append("ℹ️ pip-audit not installed (pip install pip-audit)")
+    except subprocess.TimeoutExpired:
+        findings.append("⏱️ pip-audit timed out")
+    except Exception as e:
+        findings.append(f"⚠️ pip-audit error: {str(e)[:100]}")
+    
+    src_dirs = [d for d in ["src", "agent", "scripts"] if Path(d).exists()]
+    if src_dirs:
+        try:
+            result = subprocess.run(
+                ["bandit", "-r"] + src_dirs + ["-f", "json", "-ll"],
+                capture_output=True,
+                text=True,
+                timeout=120,
+            )
+            tools_run.append("bandit")
+            
+            if result.stdout.strip():
+                try:
+                    import json
+                    data = json.loads(result.stdout)
+                    for issue in data.get("results", [])[:15]:
+                        severity = issue.get("issue_severity", "MEDIUM")
+                        confidence = issue.get("issue_confidence", "MEDIUM")
+                        text = issue.get("issue_text", "")
+                        filename = issue.get("filename", "")
+                        line = issue.get("line_number", 0)
+                        
+                        icon = "🔴" if severity == "HIGH" else "🟠" if severity == "MEDIUM" else "🟡"
+                        findings.append(f"{icon} {severity}: {text[:80]} ({filename}:{line})")
+                except json.JSONDecodeError:
+                    pass
+        except FileNotFoundError:
+            findings.append("ℹ️ bandit not installed (pip install bandit)")
+        except subprocess.TimeoutExpired:
+            findings.append("⏱️ bandit timed out")
+        except Exception as e:
+            findings.append(f"⚠️ bandit error: {str(e)[:100]}")
+    
+    try:
+        result = subprocess.run(
+            ["ruff", "check", ".", "--output-format=json", "--select=S,B"],
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        tools_run.append("ruff")
+        
+        if result.stdout.strip():
+            try:
+                import json
+                issues = json.loads(result.stdout)
+                for issue in issues[:10]:
+                    code = issue.get("code", "")
+                    message = issue.get("message", "")
+                    filename = issue.get("filename", "")
+                    location = issue.get("location", {})
+                    row = location.get("row", 0)
+                    
+                    if code.startswith("S"):
+                        icon = "🟠"
+                        category = "Security"
+                    else:
+                        icon = "🟡"
+                        category = "Bug risk"
+                    
+                    findings.append(f"{icon} {category} [{code}]: {message[:60]} ({filename}:{row})")
+            except json.JSONDecodeError:
+                pass
+    except FileNotFoundError:
+        findings.append("ℹ️ ruff not installed (pip install ruff)")
+    except subprocess.TimeoutExpired:
+        findings.append("⏱️ ruff timed out")
+    except Exception as e:
+        findings.append(f"⚠️ ruff error: {str(e)[:100]}")
+    
+    security_findings = [f for f in findings if any(icon in f for icon in ["🔴", "🟠", "🟡"])]
+    info_findings = [f for f in findings if "ℹ️" in f or "⏱️" in f]
+    
+    if not security_findings:
+        summary = f"✅ No security issues found (scanned with: {', '.join(tools_run)})"
+    else:
+        critical = len([f for f in security_findings if "🔴" in f])
+        high = len([f for f in security_findings if "🟠" in f])
+        medium = len([f for f in security_findings if "🟡" in f])
+        summary = f"🔍 Security Scan: {critical} critical, {high} high, {medium} medium (tools: {', '.join(tools_run)})"
+    
+    output_parts = [summary, ""]
+    if security_findings:
+        output_parts.extend(security_findings[:20])
+    if info_findings:
+        output_parts.append("")
+        output_parts.extend(info_findings)
+    
+    return ToolResult(
+        success=len([f for f in security_findings if "🔴" in f]) == 0,
+        output="\n".join(output_parts),
+        data={
+            "tools_run": tools_run,
+            "finding_count": len(security_findings),
+            "critical": len([f for f in security_findings if "🔴" in f]),
+            "high": len([f for f in security_findings if "🟠" in f]),
+            "medium": len([f for f in security_findings if "🟡" in f]),
+        }
+    )
+
+
 AVAILABLE_TOOLS = {
     "get_status": {
         "function": get_status,
@@ -681,6 +970,24 @@ AVAILABLE_TOOLS = {
         "parameters": {
             "n_lines": {"type": "integer", "description": "Number of lines to show (max 100)", "required": False}
         },
+    },
+    "run_pytest": {
+        "function": run_pytest,
+        "description": "Run pytest with structured output. Returns pass/fail counts and detailed test output.",
+        "parameters": {
+            "test_path": {"type": "string", "description": "Optional path to specific test file or directory", "required": False},
+            "timeout": {"type": "integer", "description": "Timeout in seconds (default 120, max 300)", "required": False},
+        },
+    },
+    "run_health_checks": {
+        "function": run_health_checks,
+        "description": "Run in-process health checks on FastAPI and Flask apps using test clients. Checks /health endpoints.",
+        "parameters": {},
+    },
+    "run_enhanced_security_scans": {
+        "function": run_enhanced_security_scans,
+        "description": "Run comprehensive security scans using pip-audit, bandit, and ruff. Returns structured findings with severity levels.",
+        "parameters": {},
     },
 }
 
