@@ -1,0 +1,109 @@
+AI BUILDER PROMPT — Install Node + Codex CLI in Replit and wire it into our Telegram bot (optional)
+Role
+
+You are a senior Replit engineer. Set up Node.js/npm and install the OpenAI Codex CLI in this Replit project, using secrets/env vars for auth. Keep it safe and optional.
+
+Goals
+
+Install and persist Node.js/npm dependencies in the project.
+
+Install Codex CLI (via npm) and authenticate using OPENAI_API_KEY from Replit Secrets (no filesystem-based login).
+
+Add an optional integration so our Telegram bot can run a Codex CLI task on demand without GitHub.
+
+Requirements
+A) Node/npm setup
+
+Ensure Node.js is available in this Replit project.
+
+Create/verify package.json at repo root.
+
+Add the Codex CLI dependency (choose one):
+
+Prefer local dev dependency: npm i -D @openai/codex (or the official codex-cli package name you find is correct)
+
+If it must be global: npm i -g ... but prefer local.
+
+Add npm scripts:
+
+"codex:version": "codex --version"
+
+"codex:help": "codex --help"
+
+B) Authentication via env vars
+
+Use OPENAI_API_KEY from Replit Secrets. Do not store tokens in files.
+
+Ensure the Codex CLI can run with env-based auth.
+
+If Codex needs additional env vars, document them.
+
+C) Safe wrapper script
+
+Add a safe Python wrapper that calls Codex CLI with allowlist + timeouts:
+
+New file: agent/codex_cli_runner.py
+
+Implement:
+
+async def codex_exec(task: str, timeout_sec: int = 180) -> str
+
+Calls npx codex exec "<task>" (or the correct CLI invocation)
+
+Captures stdout/stderr
+
+Enforces max output size
+
+Redacts secrets patterns
+
+Never allows arbitrary flags that could read secrets/files outside repo root
+
+D) Telegram bot commands (optional, guarded)
+
+Add commands:
+
+/codex <task> → runs codex via wrapper and returns output (plain text, no Markdown)
+
+/codex_status → prints whether codex is installed and current version
+
+Restrict to TELEGRAM_ALLOWED_USER_IDS.
+
+E) Verification
+
+Add a minimal check script:
+
+scripts/check_codex_cli.sh (or python) that prints:
+
+node version
+
+npm version
+
+codex version
+
+Confirm it runs in Replit shell.
+
+Constraints / Safety
+
+Do not log or print OPENAI_API_KEY.
+
+Do not rely on filesystem login persistence.
+
+Keep Codex usage optional: if not installed or missing key, bot should return a friendly error.
+
+Keep changes small and reversible.
+
+Acceptance Criteria
+
+node -v and npm -v work in Replit.
+
+npx codex --version works using OPENAI_API_KEY from Secrets.
+
+Telegram /codex_status returns installed version.
+
+Telegram /codex "explain how backtesting lab works" returns an answer (plain text).
+
+No secrets are leaked in logs or chat.
+
+Note
+
+If you are unsure of the exact npm package name for Codex CLI, search the official OpenAI docs or npm registry inside your implementation and use the correct package, then lock it into package.json.

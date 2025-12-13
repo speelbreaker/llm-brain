@@ -1,0 +1,16 @@
+{
+  "name": "options-trading-agent",
+  "version": "1.0.0",
+  "description": "Options Trading Agent with Deribit integration and Codex CLI support",
+  "private": true,
+  "scripts": {
+    "codex:version": "npx @openai/codex --version",
+    "codex:help": "npx @openai/codex --help"
+  },
+  "devDependencies": {
+    "@openai/codex": "^0.63.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

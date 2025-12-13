@@ -16,6 +16,7 @@ from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandl
 
 from agent.chat_controller import ChatController
 from agent.chat_tools import open_file, search_repo, run_pytest, run_health_checks, run_enhanced_security_scans
+from agent.codex_cli_runner import get_codex_status, codex_exec, codex_via_api
 from agent.config import settings
 from agent.review_service import ReviewService
 from agent.storage import init_db, get_recent_check_runs, save_check_run
@@ -134,6 +135,8 @@ class TelegramBot:
         self.application.add_handler(CommandHandler("security", self.cmd_security))
         self.application.add_handler(CommandHandler("health", self.cmd_health))
         self.application.add_handler(CommandHandler("history", self.cmd_history))
+        self.application.add_handler(CommandHandler("codex", self.cmd_codex))
+        self.application.add_handler(CommandHandler("codex_status", self.cmd_codex_status))
         
         self.application.add_handler(MessageHandler(
             filters.TEXT & ~filters.COMMAND,
@@ -168,6 +171,10 @@ Repo Q&A:
 /ask <question> - Ask about code
 /search <query> - Search code
 /open <path> - View file
+
+Codex CLI:
+/codex <task> - Run Codex AI task
+/codex_status - Check Codex CLI status
 
 Or just type any question!"""
         
@@ -205,6 +212,10 @@ Just type any question! Examples:
 - Where is the Telegram bot created?
 - How does search_repo work?
 - Show me the config file
+
+Codex CLI Commands:
+/codex <task> - Run Codex AI for coding tasks
+/codex_status - Check Codex CLI installation status
 
 Severity Levels:
 CRITICAL - Must fix before deploy
@@ -622,6 +633,51 @@ INFO - Observations"""
             
         except Exception as e:
             logger.error(f"Error in /history: {e}")
+            await reply_safe(update, f"Error: {str(e)[:200]}", context)
+    
+    async def cmd_codex_status(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Handle /codex_status command - show Codex CLI installation status."""
+        if not _is_authorized(update):
+            await reply_safe(update, _unauthorized_response(), context)
+            return
+        
+        try:
+            status = get_codex_status()
+            await reply_safe(update, status, context)
+        except Exception as e:
+            logger.error(f"Error in /codex_status: {e}")
+            await reply_safe(update, f"Error: {str(e)[:200]}", context)
+    
+    async def cmd_codex(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Handle /codex command - run Codex AI task."""
+        if not _is_authorized(update):
+            await reply_safe(update, _unauthorized_response(), context)
+            return
+        
+        if not context.args:
+            await reply_safe(update,
+                "Usage: /codex <task>\n\n"
+                "Examples:\n"
+                "- /codex explain this function\n"
+                "- /codex write a test for UserService\n"
+                "- /codex how do I add authentication?",
+                context
+            )
+            return
+        
+        task = " ".join(context.args)
+        await reply_safe(update, f"Running Codex: {task[:50]}...", context)
+        
+        try:
+            result = await codex_via_api(task)
+            
+            if len(result) > 4000:
+                result = result[:4000] + "\n\n... (truncated)"
+            
+            await reply_safe(update, result, context)
+            
+        except Exception as e:
+            logger.error(f"Error in /codex: {e}")
             await reply_safe(update, f"Error: {str(e)[:200]}", context)
     
     async def handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
