@@ -40,6 +40,30 @@ class OptionSnapshot:
 
 
 @dataclass
+class LiveChainDebugSample:
+    """
+    Debug sample comparing Deribit mark price vs engine-calculated price.
+    Used to verify that Live Chain + Live IV mode correctly preserves exchange marks.
+    """
+    instrument_name: str
+    dte_days: float
+    strike: float
+    deribit_mark_price: float
+    engine_price: float
+    abs_diff_pct: float
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "instrument_name": self.instrument_name,
+            "dte_days": round(self.dte_days, 2),
+            "strike": self.strike,
+            "deribit_mark_price": round(self.deribit_mark_price, 6),
+            "engine_price": round(self.engine_price, 6),
+            "abs_diff_pct": round(self.abs_diff_pct, 4),
+        }
+
+
+@dataclass
 class CallSimulationConfig:
     """
     Configuration for a simple covered-call simulation on a single underlying.

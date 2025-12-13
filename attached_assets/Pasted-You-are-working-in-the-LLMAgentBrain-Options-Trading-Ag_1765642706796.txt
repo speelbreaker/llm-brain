@@ -1,0 +1,64 @@
+You are working in the LLMAgentBrain / Options Trading Agent repo.
+
+Goal
+
+Add a small debug sample to the backtest results so I can visually confirm that, in “Live Chain + Live IV” mode, the internal engine’s prices match the original Deribit marks (especially when IV multiplier = 1.0).
+
+Requirements
+
+Backend: add debug sample to backtest result
+
+In the backtest runner / state builder path used by the Backtesting Lab:
+
+When synthetic_mode == "live_chain_live_iv" (or the enum equivalent), collect up to 5 sample options from the first decision step where a live chain is present.
+
+For each sample row, include:
+
+instrument_name
+
+dte_days
+
+strike
+
+deribit_mark_price (raw mark from Deribit / harvester input)
+
+engine_price (what the backtest is actually using for pricing after applying the current mode + multipliers)
+
+abs_diff_pct (|engine_price - deribit_mark_price| / deribit_mark_price * 100)
+
+Add this list to the backtest result payload as live_chain_debug_sample (max length 5).
+
+For all other synthetic modes, either omit the field or return an empty list.
+
+UI: render a tiny debug table
+
+In the Backtesting Lab results view (where we show equity curve and summary stats):
+
+If live_chain_debug_sample is non-empty, render a small table titled:
+“Live Chain Debug Sample (first snapshot)”
+
+Columns: Instrument, DTE (d), Strike, Deribit Mark, Engine Price, Diff %.
+
+Format prices as decimals; format Diff % with 2 decimals and a % sign.
+
+If the field is missing or empty, hide this section completely (no UI clutter).
+
+Behavior constraints
+
+Do not change any trading or pricing logic; this is purely a diagnostic / debug feature.
+
+In “Live Chain + Live IV” with IV multiplier = 1.0, engine_price should normally match deribit_mark_price (Diff % ≈ 0). With multipliers ≠ 1.0, the diff should reflect the scaled IV.
+
+Tests
+
+Add a small test (or extend tests/test_synthetic_modes.py) that:
+
+Runs a minimal backtest in live_chain_live_iv mode on a tiny live-chain fixture.
+
+Asserts that live_chain_debug_sample is populated with at most 5 rows and that:
+
+instrument_name / strike are present.
+
+When multiplier = 1.0, abs_diff_pct is very close to 0 for at least one sample.
+
+When you’re done, tell me where in the code you added the debug sample and which test covers it, so I can run a quick backtest and inspect the table in the UI.

@@ -1,0 +1,120 @@
+AI BUILDER PROMPT — Fix Telegram parse errors + harden reply_safe + stop committing big data artifacts
+Role
+
+You are a senior Python engineer. Make our Telegram bot messaging robust (no more “can’t parse entities”), improve observability, and prevent repo bloat from committed data artifacts.
+
+Goal
+
+Harden reply_safe() so Telegram message sends never fail due to Markdown parsing.
+
+Ensure handlers use reply_safe() consistently and safely across update types.
+
+Reduce repository size growth by ignoring large data/ artifacts.
+
+Context
+
+We use python-telegram-bot v20+ async.
+
+Current pattern is: await update.message.reply_text(text, parse_mode="Markdown")
+
+We already introduced reply_safe(), but it only falls back for one error string and assumes update.message always exists.
+
+Repo now contains large data artifacts under data/ (parquet, backtest JSON, training candidates) that should not be committed.
+
+Requirements
+1) Make reply_safe fallback broader + safer
+
+In agent/telegram_bot.py (or wherever reply_safe lives):
+
+Use update.effective_message instead of update.message.
+
+Catch telegram.error.BadRequest and always retry once with parse_mode=None (plain text), regardless of the error string.
+
+Add a warning log when fallback triggers (do not log secrets or huge messages; truncate logged content).
+
+If there’s no effective message, send via context.bot.send_message(chat_id=update.effective_chat.id, ...) as a fallback.
+
+Behavior
+
+First attempt: use requested parse_mode (if any).
+
+On any BadRequest: log warning and resend as plain text.
+
+Do not raise for parse issues; only raise for unexpected errors.
+
+2) Stop using Markdown for dynamic/LLM-generated content
+
+Keep Markdown only for static headers (short, controlled strings).
+
+Send LLM output fields like result.summary_md, diffs, logs, JSON excerpts as plain text (parse_mode=None) to avoid formatting errors.
+
+Update the code so:
+
+reply_safe(update, header, parse_mode="Markdown") is allowed for a short header
+
+reply_safe(update, dynamic_text, parse_mode=None) is used for anything generated or variable
+
+3) Update handlers consistently
+
+Replace direct calls like:
+
+await update.message.reply_text(...)
+
+await update.message.reply_text(..., parse_mode="Markdown")
+with await reply_safe(update, ..., parse_mode=...) following the policy above.
+
+4) Add .gitignore rules for large data artifacts
+
+Update .gitignore to exclude common large artifacts under data/:
+
+data/**/*.parquet
+
+data/**/backtest*.json
+
+data/**/training*
+
+data/**/candidates*
+
+data/**/market_data*
+
+data/**/live_deribit*
+
+data/**/index.jsonl (if this is generated)
+
+Keep small metadata files only if truly needed.
+
+Also add a short note in README (or DATA.md) explaining:
+
+data/ is runtime/generated and not committed
+
+how to regenerate/download if needed (brief)
+
+5) (Optional but recommended) Clean the current repo state
+
+Provide commands/instructions (in comments or a short doc snippet) to remove already-committed artifacts from git while keeping them locally, e.g.:
+
+git rm --cached ...
+
+Do not delete user data automatically; just document the cleanup steps.
+
+Acceptance Criteria
+
+Telegram bot no longer throws “Can’t parse entities…” during /review, /risks, /diff, /next, etc.
+
+Any BadRequest during send triggers a plain-text resend and logs a warning.
+
+Handlers do not assume update.message exists; they work using effective_message.
+
+LLM/diff/log outputs are sent as plain text reliably.
+
+.gitignore prevents future large data/ artifacts (parquet/backtest/training) from being committed.
+
+Files to modify
+
+agent/telegram_bot.py (reply_safe + handler updates)
+
+.gitignore
+
+README.md or a new DATA.md (very short)
+
+Implement this with small, targeted diffs and no new heavy dependencies.

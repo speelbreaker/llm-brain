@@ -307,6 +307,7 @@ class BacktestStatus:
     run_id: Optional[str] = None
     timeframe: Optional[str] = None
     config: Dict[str, Any] = field(default_factory=dict)
+    live_chain_debug_samples: List[Dict[str, Any]] = field(default_factory=list)
 
 
 class BacktestManager:
@@ -382,6 +383,7 @@ class BacktestManager:
                 "equity_curve": equity_curve_json,
                 "error": self._status.error,
                 "run_id": self._status.run_id,
+                "live_chain_debug_samples": self._status.live_chain_debug_samples,
             }
             return status_dict
     
@@ -813,6 +815,9 @@ class BacktestManager:
                 from .types import DecisionStepData
                 decision_step_data: Dict[datetime, DecisionStepData] = {}
                 
+                live_chain_debug_samples: List[Dict[str, Any]] = []
+                collected_debug_samples = False
+                
                 for phase_idx, current_exit_style in enumerate(styles_to_run):
                     steps_buffer: List[BacktestProgressStep] = []
                     trades: List[Any] = []
@@ -835,7 +840,17 @@ class BacktestManager:
                                 return
 
                         try:
-                            state = build_historical_state(ds, config, t)
+                            should_collect = (
+                                not collected_debug_samples 
+                                and chain_mode == "live_chain" 
+                                and sigma_mode == "mark_iv_x_multiplier"
+                            )
+                            state = build_historical_state(ds, config, t, collect_debug_samples=should_collect)
+                            
+                            if should_collect and "live_chain_debug_samples" in state:
+                                for sample in state["live_chain_debug_samples"]:
+                                    live_chain_debug_samples.append(sample.to_dict())
+                                collected_debug_samples = True
                         except Exception:
                             state = {}
 
@@ -1041,6 +1056,7 @@ class BacktestManager:
                     self._status.finished_at = datetime.utcnow()
                     self._status.current_phase = None
                     self._all_equity_curves = all_equity_curves
+                    self._status.live_chain_debug_samples = live_chain_debug_samples
                     self._save_run_to_store()
 
             except Exception as e:

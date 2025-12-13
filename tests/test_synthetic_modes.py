@@ -266,3 +266,91 @@ class TestLiveChainMarkPreservation:
         t_years = dte / 365.0
         expected_price = bs_call_price(spot, 70000, t_years, expected_scaled_iv, cfg.risk_free_rate)
         assert abs(result[0].mark_price - expected_price) < 0.01
+
+
+class TestLiveChainDebugSamples:
+    """Test that debug sample collection captures Deribit mark vs BS price comparison."""
+
+    def test_debug_sample_collects_comparison_data(self):
+        """Debug samples should capture Deribit mark price and BS-calculated price."""
+        from src.backtest.state_builder import _generate_live_chain_candidates
+        from src.backtest.types import LiveChainDebugSample
+        from src.backtest.pricing import bs_call_price
+        from unittest.mock import MagicMock
+        
+        cfg = make_config(
+            sigma_mode="mark_iv_x_multiplier",
+            chain_mode="live_chain",
+            synthetic_iv_multiplier=1.0,
+            delta_min=0.10,
+            delta_max=0.50,
+            min_dte=1,
+            max_dte=30,
+        )
+        
+        t = datetime(2024, 6, 1, 12, 0, 0, tzinfo=timezone.utc)
+        expiry = t + timedelta(days=7)
+        original_mark_price = 1500.0
+        original_iv = 0.55
+        original_delta = 0.35
+        spot = 68000
+        
+        mock_option = OptionSnapshot(
+            instrument_name="BTC-8JUN24-70000-C",
+            underlying="BTC",
+            kind="call",
+            strike=70000,
+            expiry=expiry,
+            delta=original_delta,
+            iv=original_iv,
+            mark_price=original_mark_price,
+            settlement_ccy="BTC",
+            margin_type="inverse",
+        )
+        
+        ds = MagicMock()
+        ds.list_option_chain.return_value = [mock_option]
+        
+        spot_history = [(t - timedelta(days=i), 67000 + i * 100) for i in range(30)]
+        
+        candidates, debug_samples = _generate_live_chain_candidates(
+            ds, spot, t, cfg, spot_history, collect_debug_samples=True
+        )
+        
+        assert len(candidates) == 1
+        assert candidates[0].mark_price == original_mark_price
+        
+        assert len(debug_samples) >= 1
+        sample = debug_samples[0]
+        assert isinstance(sample, LiveChainDebugSample)
+        assert sample.instrument_name == "BTC-8JUN24-70000-C"
+        assert sample.deribit_mark_price == original_mark_price
+        assert sample.dte_days == 7.0
+        assert sample.strike == 70000
+        
+        expected_bs_price = bs_call_price(spot, 70000, 7.0 / 365.0, original_iv, cfg.risk_free_rate)
+        assert abs(sample.engine_price - expected_bs_price) < 0.01
+        
+        expected_diff_pct = abs(expected_bs_price - original_mark_price) / original_mark_price * 100.0
+        assert abs(sample.abs_diff_pct - expected_diff_pct) < 0.01
+
+    def test_debug_sample_to_dict(self):
+        """Test that LiveChainDebugSample.to_dict() returns correct format."""
+        from src.backtest.types import LiveChainDebugSample
+        
+        sample = LiveChainDebugSample(
+            instrument_name="BTC-TEST-70000-C",
+            dte_days=7.123456,
+            strike=70000,
+            deribit_mark_price=1500.123456,
+            engine_price=1450.654321,
+            abs_diff_pct=3.295,
+        )
+        
+        d = sample.to_dict()
+        assert d["instrument_name"] == "BTC-TEST-70000-C"
+        assert d["dte_days"] == 7.12
+        assert d["strike"] == 70000
+        assert d["deribit_mark_price"] == 1500.123456
+        assert d["engine_price"] == 1450.654321
+        assert d["abs_diff_pct"] == 3.295

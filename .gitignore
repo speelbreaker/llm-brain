@@ -57,6 +57,15 @@ data/*.csv
 data/*.json
 data/*.db
 
+# Data artifacts (generated files - do not commit)
+data/**/*.parquet
+data/**/backtest*.json
+data/**/training*
+data/**/candidates*
+data/**/market_data*
+data/**/live_deribit*
+data/**/positions.json
+
 # OS
 .DS_Store
 Thumbs.db

@@ -29,19 +29,60 @@ def escape_markdown(text: str) -> str:
     return re.sub(f'([{re.escape(escape_chars)}])', r'\\\1', text)
 
 
-async def reply_safe(update: Update, text: str, parse_mode: str | None = None):
-    """Send a reply with automatic fallback from Markdown to plain text.
+async def reply_safe(
+    update: Update,
+    text: str,
+    context: ContextTypes.DEFAULT_TYPE | None = None,
+    parse_mode: str | None = None,
+):
+    """Send a reply with automatic fallback for robustness.
     
-    Prevents Telegram from rejecting messages when AI output contains
-    unescaped Markdown characters.
+    Handles:
+    - Markdown parse errors -> falls back to plain text
+    - Missing message object -> uses context.bot.send_message
+    - Any BadRequest -> logs warning and retries without parse_mode
+    
+    Args:
+        update: Telegram Update object
+        text: Message text to send
+        context: Optional context for fallback send_message
+        parse_mode: Optional parse mode (Markdown, HTML, etc.)
     """
+    chat_id = update.effective_chat.id if update.effective_chat else None
+    message = update.effective_message
+    
+    async def _send_plain(chat_id_: int, text_: str) -> bool:
+        """Last resort: send via context.bot.send_message without parse_mode."""
+        if context and chat_id_:
+            try:
+                await context.bot.send_message(chat_id=chat_id_, text=text_)
+                return True
+            except Exception as e2:
+                logger.error(f"reply_safe: context.bot.send_message failed: {e2}")
+        return False
+    
     try:
-        await update.message.reply_text(text, parse_mode=parse_mode)
-    except BadRequest as e:
-        if "can't parse entities" in str(e).lower():
-            await update.message.reply_text(text, parse_mode=None)
+        if message:
+            await message.reply_text(text, parse_mode=parse_mode)
+        elif chat_id and context:
+            await context.bot.send_message(chat_id=chat_id, text=text, parse_mode=parse_mode)
         else:
-            raise
+            logger.error("reply_safe: No message or chat_id available")
+    except BadRequest as e:
+        logger.warning(f"reply_safe: BadRequest with parse_mode={parse_mode}: {e}")
+        try:
+            if message:
+                await message.reply_text(text, parse_mode=None)
+            elif chat_id:
+                await _send_plain(chat_id, text)
+        except Exception as e2:
+            logger.error(f"reply_safe: plain text fallback failed: {e2}")
+            if chat_id:
+                await _send_plain(chat_id, text[:500] + "... [truncated due to error]")
+    except Exception as e:
+        logger.error(f"reply_safe: Unexpected error: {e}")
+        if chat_id:
+            await _send_plain(chat_id, text[:500] + "... [error occurred]")
 
 
 def _is_authorized(update: Update) -> bool:
@@ -104,238 +145,239 @@ class TelegramBot:
     async def cmd_start(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle /start command."""
         if not _is_authorized(update):
-            await update.message.reply_text(_unauthorized_response())
+            await reply_safe(update, _unauthorized_response(), context)
             return
         
-        text = """👋 *Code Review Agent + Auditor*
+        text = """Code Review Agent + Auditor
 
 I review code, run tests, scan for security issues, and answer questions.
 
-*Code Review:*
-/review — Review latest changes
-/diff — Show diff summary
-/risks — Show issues from last review
-/next — Recommended actions
+Code Review:
+/review - Review latest changes
+/diff - Show diff summary
+/risks - Show issues from last review
+/next - Recommended actions
 
-*Auditor:*
-/smoke — Run pytest tests
-/security — Security scans
-/health — App health checks
-/history — Check run history
+Auditor:
+/smoke - Run pytest tests
+/security - Security scans
+/health - App health checks
+/history - Check run history
 
-*Repo Q&A:*
-/ask <question> — Ask about code
-/search <query> — Search code
-/open <path> — View file
+Repo Q&A:
+/ask <question> - Ask about code
+/search <query> - Search code
+/open <path> - View file
 
 Or just type any question!"""
         
-        await update.message.reply_text(text, parse_mode="Markdown")
+        await reply_safe(update, text, context)
     
     async def cmd_help(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle /help command."""
         if not _is_authorized(update):
-            await update.message.reply_text(_unauthorized_response())
+            await reply_safe(update, _unauthorized_response(), context)
             return
         
-        text = """*Code Review Agent + Repo Q&A*
+        text = """Code Review Agent + Repo Q&A
 
-*Code Review Commands:*
-/review — Analyze changes since last review
-/diff — Summary of changed files
-/risks — Detailed issues from last review
-/next — Recommended next actions
-/status — System status and last review info
+Code Review Commands:
+/review - Analyze changes since last review
+/diff - Summary of changed files
+/risks - Detailed issues from last review
+/next - Recommended next actions
+/status - System status and last review info
 
-*Auditor Commands:*
-/smoke [path] — Run pytest tests
-/security — Run security scans (pip-audit, bandit, ruff)
-/health — Run app health checks
-/history [type] — Show recent check runs
+Auditor Commands:
+/smoke [path] - Run pytest tests
+/security - Run security scans (pip-audit, bandit, ruff)
+/health - Run app health checks
+/history [type] - Show recent check runs
 
-*Repo Q&A Commands:*
-/ask <question> — Ask questions about the codebase
-/search <query> — Search for code patterns
-/open <path>:<start>-<end> — View file excerpt
-/clear — Clear chat session
+Repo Q&A Commands:
+/ask <question> - Ask questions about the codebase
+/search <query> - Search for code patterns
+/open <path>:<start>-<end> - View file excerpt
+/clear - Clear chat session
 
-*Natural Language:*
+Natural Language:
 Just type any question! Examples:
-• "Where is the Telegram bot created?"
-• "How does search_repo work?"
-• "Show me the config file"
+- Where is the Telegram bot created?
+- How does search_repo work?
+- Show me the config file
 
-*Severity Levels:*
-🔴 CRITICAL — Must fix before deploy
-🟠 HIGH — Strongly recommended
-🟡 MEDIUM — Fix soon
-🟢 LOW — Nice to have
-ℹ️ INFO — Observations"""
+Severity Levels:
+CRITICAL - Must fix before deploy
+HIGH - Strongly recommended
+MEDIUM - Fix soon
+LOW - Nice to have
+INFO - Observations"""
         
-        await update.message.reply_text(text, parse_mode="Markdown")
+        await reply_safe(update, text, context)
     
     async def cmd_status(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle /status command."""
         if not _is_authorized(update):
-            await update.message.reply_text(_unauthorized_response())
+            await reply_safe(update, _unauthorized_response(), context)
             return
         
         try:
             status = self.review_service.get_status()
             
-            parts = ["*Status*", ""]
+            parts = ["Status", ""]
             
             last_review = status.get("last_review")
             if last_review and last_review.get("id"):
                 severity = last_review.get("severity", "INFO")
                 created = last_review.get("created_at", "unknown")[:16]
                 target = last_review.get("target_ref", "unknown")
-                parts.append(f"• Last review: {created} on `{target}` ({severity})")
+                parts.append(f"- Last review: {created} on {target} ({severity})")
             else:
-                parts.append("• Last review: None yet")
+                parts.append("- Last review: None yet")
             
             mode = status.get("change_detection_mode", "unknown")
-            git_ok = "✅" if status.get("git_available") else "❌"
-            parts.append(f"• Change detection: {mode} (git: {git_ok})")
+            git_ok = "OK" if status.get("git_available") else "N/A"
+            parts.append(f"- Change detection: {mode} (git: {git_ok})")
             
-            parts.append(f"• Reviews stored: {status.get('review_count', 0)}")
+            parts.append(f"- Reviews stored: {status.get('review_count', 0)}")
             
-            llm_ok = "✅" if status.get("llm_available") else "❌"
-            parts.append(f"• LLM backend: {llm_ok}")
+            llm_ok = "OK" if status.get("llm_available") else "N/A"
+            parts.append(f"- LLM backend: {llm_ok}")
             
             if status.get("current_head"):
-                parts.append(f"• Current HEAD: `{status['current_head']}`")
+                parts.append(f"- Current HEAD: {status['current_head']}")
             
             if status.get("last_reviewed_commit"):
-                parts.append(f"• Last reviewed: `{status['last_reviewed_commit']}`")
+                parts.append(f"- Last reviewed: {status['last_reviewed_commit']}")
             
-            await update.message.reply_text("\n".join(parts), parse_mode="Markdown")
+            await reply_safe(update, "\n".join(parts), context)
             
         except Exception as e:
             logger.error(f"Error in /status: {e}")
-            await update.message.reply_text(f"Error getting status: {str(e)[:200]}")
+            await reply_safe(update, f"Error getting status: {str(e)[:200]}", context)
     
     async def cmd_review(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle /review command."""
         if not _is_authorized(update):
-            await update.message.reply_text(_unauthorized_response())
+            await reply_safe(update, _unauthorized_response(), context)
             return
         
-        await update.message.reply_text("🔍 Analyzing changes...")
+        await reply_safe(update, "Analyzing changes...", context)
         
         try:
             user_id = update.effective_user.id
             result = self.review_service.review_latest_changes(user_id)
             
             if not result.has_changes:
-                await update.message.reply_text("✅ No new changes since last review.")
+                await reply_safe(update, "No new changes since last review.", context)
                 return
             
-            await reply_safe(update, result.summary_md, parse_mode="Markdown")
+            await reply_safe(update, result.summary_md, context)
             
         except Exception as e:
             logger.error(f"Error in /review: {e}")
-            await update.message.reply_text(f"Error during review: {str(e)[:200]}")
+            await reply_safe(update, f"Error during review: {str(e)[:200]}", context)
     
     async def cmd_diff(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle /diff command."""
         if not _is_authorized(update):
-            await update.message.reply_text(_unauthorized_response())
+            await reply_safe(update, _unauthorized_response(), context)
             return
         
         try:
             summary = self.review_service.get_diff_summary_for_last_review()
             
             if not summary:
-                await update.message.reply_text("No reviews yet. Run /review first.")
+                await reply_safe(update, "No reviews yet. Run /review first.", context)
                 return
             
-            await reply_safe(update, summary, parse_mode="Markdown")
+            await reply_safe(update, summary, context)
             
         except Exception as e:
             logger.error(f"Error in /diff: {e}")
-            await update.message.reply_text(f"Error getting diff: {str(e)[:200]}")
+            await reply_safe(update, f"Error getting diff: {str(e)[:200]}", context)
     
     async def cmd_risks(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle /risks command."""
         if not _is_authorized(update):
-            await update.message.reply_text(_unauthorized_response())
+            await reply_safe(update, _unauthorized_response(), context)
             return
         
         try:
             risks = self.review_service.get_risks_for_last_review()
             
             if not risks:
-                await update.message.reply_text("No reviews yet. Run /review first.")
+                await reply_safe(update, "No reviews yet. Run /review first.", context)
                 return
             
             if len(risks) > 4000:
                 risks = risks[:4000] + "\n...(truncated)"
             
-            await reply_safe(update, risks, parse_mode="Markdown")
+            await reply_safe(update, risks, context)
             
         except Exception as e:
             logger.error(f"Error in /risks: {e}")
-            await update.message.reply_text(f"Error getting risks: {str(e)[:200]}")
+            await reply_safe(update, f"Error getting risks: {str(e)[:200]}", context)
     
     async def cmd_next(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle /next command."""
         if not _is_authorized(update):
-            await update.message.reply_text(_unauthorized_response())
+            await reply_safe(update, _unauthorized_response(), context)
             return
         
         try:
             actions = self.review_service.get_next_actions_for_last_review()
             
             if not actions:
-                await update.message.reply_text("No reviews yet. Run /review first.")
+                await reply_safe(update, "No reviews yet. Run /review first.", context)
                 return
             
-            await reply_safe(update, actions, parse_mode="Markdown")
+            await reply_safe(update, actions, context)
             
         except Exception as e:
             logger.error(f"Error in /next: {e}")
-            await update.message.reply_text(f"Error getting actions: {str(e)[:200]}")
+            await reply_safe(update, f"Error getting actions: {str(e)[:200]}", context)
     
     async def cmd_clear(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle /clear command - clears chat session."""
         if not _is_authorized(update):
-            await update.message.reply_text(_unauthorized_response())
+            await reply_safe(update, _unauthorized_response(), context)
             return
         
         try:
             chat_id = str(update.effective_chat.id)
             self.chat_controller.clear_session(chat_id)
-            await update.message.reply_text("🧹 Chat session cleared. Starting fresh!")
+            await reply_safe(update, "Chat session cleared. Starting fresh!", context)
         except Exception as e:
             logger.error(f"Error in /clear: {e}")
-            await update.message.reply_text(f"Error: {str(e)[:100]}")
+            await reply_safe(update, f"Error: {str(e)[:100]}", context)
     
     async def cmd_ask(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle /ask <question> - forces Repo Q&A flow."""
         if not _is_authorized(update):
-            await update.message.reply_text(_unauthorized_response())
+            await reply_safe(update, _unauthorized_response(), context)
             return
         
         question = " ".join(context.args) if context.args else ""
         if not question:
-            await update.message.reply_text(
+            await reply_safe(update,
                 "Usage: /ask <question>\n\n"
                 "Examples:\n"
-                "• /ask where is the Telegram bot created?\n"
-                "• /ask how does search_repo work?\n"
-                "• /ask what files handle authentication?"
+                "- /ask where is the Telegram bot created?\n"
+                "- /ask how does search_repo work?\n"
+                "- /ask what files handle authentication?",
+                context
             )
             return
         
         chat_id = str(update.effective_chat.id)
-        await update.message.reply_text("🔍 Searching the codebase...")
+        await reply_safe(update, "Searching the codebase...", context)
         
         try:
             response = self.chat_controller.process_message(chat_id, question)
             
             if response.tools_used:
-                tools_info = f"🔧 Used: {', '.join(response.tools_used)}\n\n"
+                tools_info = f"Used: {', '.join(response.tools_used)}\n\n"
             else:
                 tools_info = ""
             
@@ -344,63 +386,65 @@ Just type any question! Examples:
             if len(reply_text) > 4000:
                 reply_text = reply_text[:4000] + "\n\n... (truncated)"
             
-            await reply_safe(update, reply_text)
+            await reply_safe(update, reply_text, context)
             
         except Exception as e:
             logger.error(f"Error in /ask: {e}")
-            await update.message.reply_text(f"Error: {str(e)[:200]}")
+            await reply_safe(update, f"Error: {str(e)[:200]}", context)
     
     async def cmd_search(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle /search <query> - direct search without LLM routing."""
         if not _is_authorized(update):
-            await update.message.reply_text(_unauthorized_response())
+            await reply_safe(update, _unauthorized_response(), context)
             return
         
         query = " ".join(context.args) if context.args else ""
         if not query:
-            await update.message.reply_text(
+            await reply_safe(update,
                 "Usage: /search <query>\n\n"
                 "Examples:\n"
-                "• /search TelegramBot\n"
-                "• /search def process_message\n"
-                "• /search async def cmd_"
+                "- /search TelegramBot\n"
+                "- /search def process_message\n"
+                "- /search async def cmd_",
+                context
             )
             return
         
-        await update.message.reply_text(f"🔍 Searching for: {query}...")
+        await reply_safe(update, f"Searching for: {query}...", context)
         
         try:
             result = search_repo(query, limit=15)
             
             if not result.success:
-                await update.message.reply_text(f"Search failed: {result.output}")
+                await reply_safe(update, f"Search failed: {result.output}", context)
                 return
             
-            output = f"🔎 Search results for '{query}':\n\n{result.output}"
+            output = f"Search results for '{query}':\n\n{result.output}"
             
             if len(output) > 4000:
                 output = output[:4000] + "\n\n... (truncated)"
             
-            await update.message.reply_text(output)
+            await reply_safe(update, output, context)
             
         except Exception as e:
             logger.error(f"Error in /search: {e}")
-            await update.message.reply_text(f"Error: {str(e)[:200]}")
+            await reply_safe(update, f"Error: {str(e)[:200]}", context)
     
     async def cmd_open(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle /open <path>:<start>-<end> - open file excerpt."""
         if not _is_authorized(update):
-            await update.message.reply_text(_unauthorized_response())
+            await reply_safe(update, _unauthorized_response(), context)
             return
         
         args = " ".join(context.args) if context.args else ""
         if not args:
-            await update.message.reply_text(
+            await reply_safe(update,
                 "Usage: /open <path>:<start>-<end>\n\n"
                 "Examples:\n"
-                "• /open agent/telegram_bot.py:1-50\n"
-                "• /open src/config.py:100-150\n"
-                "• /open agent/chat_tools.py (shows lines 1-50)"
+                "- /open agent/telegram_bot.py:1-50\n"
+                "- /open src/config.py:100-150\n"
+                "- /open agent/chat_tools.py (shows lines 1-50)",
+                context
             )
             return
         
@@ -427,13 +471,13 @@ Just type any question! Examples:
                 except ValueError:
                     pass
         
-        await update.message.reply_text(f"📄 Opening {path}...")
+        await reply_safe(update, f"Opening {path}...", context)
         
         try:
             result = open_file(path, start_line, end_line)
             
             if not result.success:
-                await update.message.reply_text(f"Error: {result.output}")
+                await reply_safe(update, f"Error: {result.output}", context)
                 return
             
             output = result.output
@@ -441,19 +485,19 @@ Just type any question! Examples:
             if len(output) > 4000:
                 output = output[:4000] + "\n\n... (truncated)"
             
-            await update.message.reply_text(output)
+            await reply_safe(update, output, context)
             
         except Exception as e:
             logger.error(f"Error in /open: {e}")
-            await update.message.reply_text(f"Error: {str(e)[:200]}")
+            await reply_safe(update, f"Error: {str(e)[:200]}", context)
     
     async def cmd_smoke(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle /smoke command - run pytest tests."""
         if not _is_authorized(update):
-            await update.message.reply_text(_unauthorized_response())
+            await reply_safe(update, _unauthorized_response(), context)
             return
         
-        await update.message.reply_text("🧪 Running pytest tests...")
+        await reply_safe(update, "Running pytest tests...", context)
         
         try:
             import time
@@ -475,19 +519,19 @@ Just type any question! Examples:
             if len(output) > 4000:
                 output = output[:4000] + "\n\n... (truncated)"
             
-            await update.message.reply_text(output)
+            await reply_safe(update, output, context)
             
         except Exception as e:
             logger.error(f"Error in /smoke: {e}")
-            await update.message.reply_text(f"Error running tests: {str(e)[:200]}")
+            await reply_safe(update, f"Error running tests: {str(e)[:200]}", context)
     
     async def cmd_security(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle /security command - run comprehensive security scans."""
         if not _is_authorized(update):
-            await update.message.reply_text(_unauthorized_response())
+            await reply_safe(update, _unauthorized_response(), context)
             return
         
-        await update.message.reply_text("🔒 Running security scans (pip-audit, bandit, ruff)...")
+        await reply_safe(update, "Running security scans (pip-audit, bandit, ruff)...", context)
         
         try:
             import time
@@ -508,19 +552,19 @@ Just type any question! Examples:
             if len(output) > 4000:
                 output = output[:4000] + "\n\n... (truncated)"
             
-            await update.message.reply_text(output)
+            await reply_safe(update, output, context)
             
         except Exception as e:
             logger.error(f"Error in /security: {e}")
-            await update.message.reply_text(f"Error running security scan: {str(e)[:200]}")
+            await reply_safe(update, f"Error running security scan: {str(e)[:200]}", context)
     
     async def cmd_health(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle /health command - run in-process app health checks."""
         if not _is_authorized(update):
-            await update.message.reply_text(_unauthorized_response())
+            await reply_safe(update, _unauthorized_response(), context)
             return
         
-        await update.message.reply_text("🏥 Running health checks...")
+        await reply_safe(update, "Running health checks...", context)
         
         try:
             import time
@@ -541,16 +585,16 @@ Just type any question! Examples:
             if len(output) > 4000:
                 output = output[:4000] + "\n\n... (truncated)"
             
-            await update.message.reply_text(output)
+            await reply_safe(update, output, context)
             
         except Exception as e:
             logger.error(f"Error in /health: {e}")
-            await update.message.reply_text(f"Error running health checks: {str(e)[:200]}")
+            await reply_safe(update, f"Error running health checks: {str(e)[:200]}", context)
     
     async def cmd_history(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle /history command - show recent check runs."""
         if not _is_authorized(update):
-            await update.message.reply_text(_unauthorized_response())
+            await reply_safe(update, _unauthorized_response(), context)
             return
         
         try:
@@ -558,47 +602,48 @@ Just type any question! Examples:
             runs = get_recent_check_runs(limit=10, check_type=check_type)
             
             if not runs:
-                await update.message.reply_text("No check runs recorded yet. Try /smoke, /security, or /health first.")
+                await reply_safe(update, "No check runs recorded yet. Try /smoke, /security, or /health first.", context)
                 return
             
-            lines = ["*Recent Check Runs*", ""]
+            lines = ["Recent Check Runs", ""]
             
             for run in runs:
-                status_icon = "✅" if run.status in ("passed", "success") else "❌" if run.status == "failed" else "⚠️"
+                status_icon = "[OK]" if run.status in ("passed", "success") else "[FAIL]" if run.status == "failed" else "[WARN]"
                 created = run.created_at[:16].replace("T", " ")
                 duration = f"{run.duration_seconds:.1f}s" if run.duration_seconds else "N/A"
-                lines.append(f"{status_icon} `{run.check_type}` — {created} ({duration})")
+                lines.append(f"{status_icon} {run.check_type} - {created} ({duration})")
             
             if check_type:
-                lines.append(f"\n_Filtered by: {check_type}_")
+                lines.append(f"\nFiltered by: {check_type}")
             else:
-                lines.append("\n_Use /history <type> to filter (pytest, security, health)_")
+                lines.append("\nUse /history <type> to filter (pytest, security, health)")
             
-            await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+            await reply_safe(update, "\n".join(lines), context)
             
         except Exception as e:
             logger.error(f"Error in /history: {e}")
-            await update.message.reply_text(f"Error: {str(e)[:200]}")
+            await reply_safe(update, f"Error: {str(e)[:200]}", context)
     
     async def handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle non-command text messages via chat controller."""
         if not _is_authorized(update):
-            await update.message.reply_text(_unauthorized_response())
+            await reply_safe(update, _unauthorized_response(), context)
             return
         
-        user_message = update.message.text
+        message = update.effective_message
+        user_message = message.text if message else None
         if not user_message:
             return
         
         chat_id = str(update.effective_chat.id)
         
-        await update.message.reply_text("💭 Thinking...")
+        await reply_safe(update, "Thinking...", context)
         
         try:
             response = self.chat_controller.process_message(chat_id, user_message)
             
             if response.tools_used:
-                tools_info = f"🔧 Used: {', '.join(response.tools_used)}\n\n"
+                tools_info = f"Used: {', '.join(response.tools_used)}\n\n"
             else:
                 tools_info = ""
             
@@ -607,11 +652,11 @@ Just type any question! Examples:
             if len(reply_text) > 4000:
                 reply_text = reply_text[:4000] + "\n\n... (truncated)"
             
-            await reply_safe(update, reply_text)
+            await reply_safe(update, reply_text, context)
             
         except Exception as e:
             logger.error(f"Error in chat: {e}")
-            await update.message.reply_text(f"Error: {str(e)[:200]}")
+            await reply_safe(update, f"Error: {str(e)[:200]}", context)
     
     def run_polling(self) -> None:
         """Run the bot with polling (blocking)."""

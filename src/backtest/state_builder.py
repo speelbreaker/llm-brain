@@ -17,11 +17,11 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timezone, timedelta
 from dataclasses import replace
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Tuple
 
 from .deribit_data_source import DeribitDataSource
 from .market_context_backtest import compute_market_context_from_ds, market_context_to_dict
-from .types import OptionSnapshot, CallSimulationConfig
+from .types import OptionSnapshot, CallSimulationConfig, LiveChainDebugSample
 from .pricing import bs_call_delta, get_synthetic_iv, get_sigma_for_option, bs_call_price
 from src.utils.expiry import parse_deribit_expiry
 from src.models import AgentState, MarketContext
@@ -120,7 +120,8 @@ def _generate_live_chain_candidates(
     t: datetime,
     cfg: CallSimulationConfig,
     spot_history: List[tuple],
-) -> List[OptionSnapshot]:
+    collect_debug_samples: bool = False,
+) -> Tuple[List[OptionSnapshot], List[LiveChainDebugSample]]:
     """
     Generate option candidates from live Deribit chain.
     
@@ -133,10 +134,14 @@ def _generate_live_chain_candidates(
         t: Decision time
         cfg: Simulation configuration with chain_mode and sigma_mode
         spot_history: List of (datetime, price) tuples for RV calculation
+        collect_debug_samples: If True, collect debug samples comparing Deribit marks
+                               vs BS-calculated prices (only for mark_iv_x_multiplier mode)
         
     Returns:
-        List of OptionSnapshot candidates from live chain, filtered and priced
+        Tuple of (candidates list, debug samples list)
     """
+    debug_samples: List[LiveChainDebugSample] = []
+    
     all_options: List[OptionSnapshot] = ds.list_option_chain(
         underlying=cfg.underlying,
         as_of=t,
@@ -146,7 +151,7 @@ def _generate_live_chain_candidates(
     
     if not all_options:
         logger.warning(f"No live options available for {cfg.underlying} at {t}")
-        return []
+        return [], []
     
     # Filter by DTE and delta
     filtered = _filter_option_chain(
@@ -174,6 +179,26 @@ def _generate_live_chain_candidates(
                 if abs(multiplier - 1.0) < 1e-6:
                     # Preserve original Deribit mark values - no recalculation
                     result.append(opt)
+                    
+                    # Collect debug samples: compare Deribit mark vs BS-calculated price
+                    if collect_debug_samples and len(debug_samples) < 5:
+                        if opt.mark_price is not None and opt.mark_price > 0:
+                            dte = (opt.expiry - t).total_seconds() / (24 * 3600)
+                            t_years = max(dte / 365.0, 1e-6)
+                            bs_price = bs_call_price(spot, opt.strike, t_years, opt.iv, cfg.risk_free_rate)
+                            deribit_mark = opt.mark_price
+                            if deribit_mark > 0:
+                                abs_diff_pct = abs(bs_price - deribit_mark) / deribit_mark * 100.0
+                            else:
+                                abs_diff_pct = 0.0
+                            debug_samples.append(LiveChainDebugSample(
+                                instrument_name=opt.instrument_name,
+                                dte_days=dte,
+                                strike=opt.strike,
+                                deribit_mark_price=deribit_mark,
+                                engine_price=bs_price,
+                                abs_diff_pct=abs_diff_pct,
+                            ))
                 else:
                     # Only recalculate when applying a stress multiplier
                     scaled_iv = opt.iv * multiplier
@@ -197,7 +222,7 @@ def _generate_live_chain_candidates(
             else:
                 # No valid IV - pass through as-is (will fall back to RV in scoring)
                 result.append(opt)
-        return result
+        return result, debug_samples
     else:
         # For atm_iv or rv modes, get sigma and recalculate
         sigma = get_sigma_for_option(
@@ -240,7 +265,7 @@ def _generate_live_chain_candidates(
                 settlement_ccy=opt.settlement_ccy,
                 margin_type=opt.margin_type,
             ))
-        return result
+        return result, []
 
 
 def _filter_option_chain(
@@ -302,6 +327,7 @@ def build_historical_state(
     ds: DeribitDataSource,
     cfg: CallSimulationConfig,
     t: datetime,
+    collect_debug_samples: bool = False,
 ) -> Dict[str, Any]:
     """
     Build a historical state dict at time t for simulate_policy.
@@ -312,13 +338,15 @@ def build_historical_state(
         "spot": <float>,
         "market_context": { ... },
         "candidate_options": [OptionSnapshot, ...],
-        "portfolio": { ... optional ... }
+        "portfolio": { ... optional ... },
+        "live_chain_debug_samples": [LiveChainDebugSample, ...] (if collect_debug_samples=True)
       }
       
     Args:
         ds: DeribitDataSource instance
         cfg: CallSimulationConfig with target parameters
         t: Decision time for state construction
+        collect_debug_samples: If True and using live_chain + mark_iv mode, collect debug samples
         
     Returns:
         State dict suitable for scoring and policy evaluation
@@ -358,6 +386,7 @@ def build_historical_state(
     
     # Get chain_mode from config (defaults to synthetic_grid for backward compatibility)
     chain_mode = getattr(cfg, 'chain_mode', 'synthetic_grid')
+    debug_samples: List[LiveChainDebugSample] = []
     
     if cfg.pricing_mode == "deribit_live":
         # Full live mode - use Deribit chain directly
@@ -379,7 +408,10 @@ def build_historical_state(
     elif chain_mode == "live_chain":
         # Hybrid mode: live chain with configurable sigma mode
         if spot is not None and spot > 0:
-            candidates = _generate_live_chain_candidates(ds, spot, t, cfg, spot_history)
+            candidates, debug_samples = _generate_live_chain_candidates(
+                ds, spot, t, cfg, spot_history, 
+                collect_debug_samples=collect_debug_samples
+            )
     else:
         # Default: synthetic_grid mode
         if spot is not None and spot > 0:
@@ -400,7 +432,7 @@ def build_historical_state(
         "equity_usd": None,
     }
 
-    return {
+    result: Dict[str, Any] = {
         "time": t,
         "spot": spot,
         "underlying": underlying,
@@ -408,6 +440,11 @@ def build_historical_state(
         "candidate_options": candidates,
         "portfolio": portfolio,
     }
+    
+    if debug_samples:
+        result["live_chain_debug_samples"] = debug_samples
+    
+    return result
 
 
 def create_state_builder(
@@ -555,7 +592,7 @@ def build_historical_agent_state(
     elif chain_mode == "live_chain":
         # Hybrid mode: live chain with configurable sigma mode
         if spot > 0:
-            options = _generate_live_chain_candidates(ds, spot, t, cfg, spot_history)
+            options, _ = _generate_live_chain_candidates(ds, spot, t, cfg, spot_history)
     else:
         # Default: synthetic_grid mode
         if spot > 0:

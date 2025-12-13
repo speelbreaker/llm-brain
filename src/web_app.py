@@ -4539,6 +4539,29 @@ def index() -> str:
         <button class="secondary" onclick="getInsights()">Get AI Insights</button>
       </div>
       <div class="insights-box" id="insights-box" style="display:none;"></div>
+      
+      <!-- Live Chain Debug Samples -->
+      <div id="debug-samples-section" style="display:none; margin-top:1.5rem;">
+        <h3>Live Chain Debug Samples</h3>
+        <p style="color:#666;font-size:0.9rem;margin-bottom:0.5rem;">
+          Compares Deribit mark prices vs engine-calculated prices. When multiplier=1.0, abs_diff_pct should be ~0.
+        </p>
+        <div style="overflow-x: auto;">
+          <table class="decisions-table" id="debug-samples-table">
+            <thead>
+              <tr>
+                <th>Instrument</th>
+                <th>DTE</th>
+                <th>Strike</th>
+                <th>Deribit Mark</th>
+                <th>Engine Price</th>
+                <th>Diff %</th>
+              </tr>
+            </thead>
+            <tbody id="debug-samples-tbody"></tbody>
+          </table>
+        </div>
+      </div>
     </div>
     
     <!-- SELECTOR FREQUENCY SCAN -->
@@ -9926,6 +9949,27 @@ def index() -> str:
               <td><button class="view-btn" onclick="showChainDetails(${{realIdx}})">View</button></td>
             </tr>`;
           }}).join('');
+        }}
+        
+        // Render debug samples if available
+        const debugSamplesSection = document.getElementById('debug-samples-section');
+        const debugSamplesTbody = document.getElementById('debug-samples-tbody');
+        const debugSamples = st.live_chain_debug_samples || [];
+        if (debugSamples.length > 0) {{
+          debugSamplesSection.style.display = 'block';
+          debugSamplesTbody.innerHTML = debugSamples.map(sample => {{
+            const diffClass = Math.abs(sample.abs_diff_pct) < 0.1 ? 'traded-yes' : (Math.abs(sample.abs_diff_pct) < 1 ? '' : 'traded-no');
+            return `<tr>
+              <td>${{sample.instrument_name}}</td>
+              <td>${{sample.dte_days}}</td>
+              <td>${{sample.strike.toLocaleString()}}</td>
+              <td>${{sample.deribit_mark_price.toFixed(6)}}</td>
+              <td>${{sample.engine_price.toFixed(6)}}</td>
+              <td class="${{diffClass}}">${{sample.abs_diff_pct.toFixed(4)}}%</td>
+            </tr>`;
+          }}).join('');
+        }} else {{
+          debugSamplesSection.style.display = 'none';
         }}
       }} catch (err) {{
         console.error('Backtest status fetch error:', err);
