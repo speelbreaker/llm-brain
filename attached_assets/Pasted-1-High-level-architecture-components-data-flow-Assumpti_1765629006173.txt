@@ -1,0 +1,1253 @@
+1. High-level architecture (components + data flow)
+
+Assumptions:
+
+Replit app is Python + FastAPI (or similar ASGI app).
+
+LLM access via OpenAI (or compatible) using an API key in env vars.
+
+The app already has a long-running process (web server) suitable for running a Telegram bot worker in the same process.
+
+Components
+
+Telegram I/O Layer (agent/telegram_bot.py)
+
+Implements a Telegram bot (via long polling or webhook) that:
+
+Receives commands (/status, /review, /diff, /risks, /next).
+
+Authenticates the Telegram user.
+
+Delegates work to the Review Orchestrator.
+
+Formats responses (Markdown) for Telegram.
+
+Review Orchestrator (agent/review_service.py)
+
+Single entry point for “review something”:
+
+review_latest_changes()
+
+review_target(commit_hash | tag | timestamp | file_path)
+
+get_diff_summary(...)
+
+get_risks_summary(...)
+
+get_next_actions(...)
+
+Coordinates:
+
+Change Detector → gather changed files/diffs.
+
+Context Collectors → gather logs, config changes.
+
+LLM Reasoner → generate structured review.
+
+Storage → persist review records.
+
+Change Detector (agent/change_detector.py)
+
+Encapsulates all logic for “what changed?”:
+
+Primary: git log/diff.
+
+Fallback: file snapshot comparison (hash/timestamps).
+
+Exposes:
+
+get_recent_changes_since_last_review()
+
+get_diff_for_commit(commit_hash)
+
+get_diff_for_file(file_path)
+
+Context Collectors / Analyzers (agent/analyzers.py)
+
+Lightweight static analyzers (no heavy tools required):
+
+Diff analyzer: categorize changes by file type (API, config, tests, infra).
+
+Log analyzer: tail build/test logs (if present).
+
+Config analyzer: detect env/config changes, suspicious patterns (secrets in code, new external URLs).
+
+Produces structured “facts” to feed the LLM.
+
+LLM Reasoner (agent/llm_client.py)
+
+Builds prompts using:
+
+Diff chunks.
+
+Analyzer summaries.
+
+Project conventions (e.g., FastAPI endpoints, test layout).
+
+Calls LLM backend (OpenAI or compatible).
+
+Returns structured JSON + human-readable Markdown:
+
+Summary, risk list with severities, suggested tests/patches.
+
+Storage Layer (agent/storage.py)
+
+Simple SQLite (or JSON file) for:
+
+Review history log.
+
+Mapping from review_id → target commit/file.
+
+Last reviewed commit hash.
+
+Cached LLM responses (for /history, /status).
+
+Config Layer (agent/config.py)
+
+Central settings:
+
+TELEGRAM_BOT_TOKEN
+
+TELEGRAM_ALLOWED_USER_IDS (comma-separated)
+
+OPENAI_API_KEY
+
+Optional paths for logs, config files.
+
+Loaded from environment variables (Replit “Secrets”).
+
+Data Flow (example: /review)
+
+You send /review in Telegram.
+
+Telegram I/O Layer:
+
+Authenticates your Telegram user ID.
+
+Calls ReviewService.review_latest_changes().
+
+Review Orchestrator:
+
+Asks ChangeDetector.get_recent_changes_since_last_review().
+
+Runs analyzers on those diffs and logs.
+
+Builds prompt and calls LLMClient.review_changes(...).
+
+Receives structured review (summary + issues + next steps).
+
+Saves to reviews table in SQLite.
+
+Orchestrator returns a ReviewResult model.
+
+Telegram I/O Layer formats it into:
+
+Markdown summary.
+
+Collapsed sections for details.
+
+You see the review, with clear severity levels and next actions.
+
+2. Change-detection strategy (recommended approach + fallback options)
+Recommended: git-based detection
+
+Prerequisite: Replit project is a git repo (default) and you periodically commit builder changes.
+
+Core ideas:
+
+Maintain in SQLite:
+
+last_reviewed_commit (string hash).
+
+For “most recent changes”:
+
+Resolve HEAD via git rev-parse HEAD.
+
+If last_reviewed_commit exists:
+
+git diff --name-status last_reviewed_commit..HEAD
+
+git diff --unified=3 last_reviewed_commit..HEAD for actual diff hunks.
+
+If none (first run):
+
+Use git show --name-status HEAD and full diff for HEAD.
+
+For specific targets:
+
+/review <commit> → git diff <commit>^! (single commit).
+
+/review <tag> → resolve tag to commit, then diff vs parent.
+
+/review <timestamp> → find commit by git log --since=<timestamp>.
+
+/review <file> → git diff last_reviewed_commit..HEAD -- <file>.
+
+Advantages:
+
+Compact diffs.
+
+Natural mapping to commit messages (intent signal).
+
+Works nicely with Replit Builder if you commit after builder runs.
+
+Fallback 1: Working tree diff (no commits)
+
+If you/Builder don’t commit regularly, but git is available:
+
+Use git diff against the last stored snapshot commit (e.g. initial clone or manual baseline).
+
+Or simply diff against HEAD without requiring new commits:
+
+git diff HEAD – detects uncommitted changes.
+
+Store a pseudo “snapshot ID” in DB, representing the last successful review:
+
+On review, update last_reviewed_snapshot with a full file list and hashes.
+
+Fallback 2: File snapshot comparison (no git)
+
+If git is unavailable/unreliable:
+
+On each review, compute a snapshot:
+
+Traverse project root (excluding .git, .venv, __pycache__, etc.).
+
+For each file: store (path, size, mtime, optional hash) in snapshots table.
+
+To detect changes:
+
+Compare current snapshot to last snapshot:
+
+New files → added.
+
+Missing files → deleted.
+
+Changed size/mtime (and hash if used) → modified.
+
+For modified files:
+
+Compute line-by-line diff with difflib.unified_diff or similar.
+
+Logs & config changes
+
+Logs:
+
+Look into logs/app.log, logs/tests.log or whatever is configured.
+
+For each review, capture last N lines (e.g. 200) since previous review time.
+
+Config:
+
+Watch specific files: .env.example, config.py, settings.yaml, pyproject.toml, replit.nix.
+
+Any change in these gets a “config changes” section.
+
+3. Telegram bot command design (commands + expected responses)
+
+All responses are Markdown. All commands verify the Telegram user ID against an allowed list.
+
+/start and /help
+
+Purpose: onboarding + quick help.
+
+Response:
+
+Short intro:
+
+“I review Replit Builder changes and report correctness, risks, and next steps.”
+
+List of commands and brief explanation.
+
+/status
+
+Purpose: show health + monitoring state.
+
+Behavior:
+
+Reads:
+
+DB connectivity.
+
+Last review timestamp + target commit.
+
+Whether git is available.
+
+Response:
+
+Example:
+
+Status
+• Last review: 2025-12-13 03:42 UTC on commit abc1234 (CLEAN)
+• Change detection: git (fallback: snapshots ACTIVE)
+• Reviews stored: 12
+• LLM backend: reachable ✅
+
+/review
+
+Purpose: review “most recent changes” since last review.
+
+Behavior:
+
+Calls ReviewService.review_latest_changes().
+
+If no changes: reply with “No new changes since last review.”
+
+Response:
+
+Short summary + issue table:
+
+Summary paragraph.
+
+Overall risk rating.
+
+Top issues (ID, severity, title).
+
+“Use /risks for details, /diff for full diff, /next for actions.”
+
+/review <target>
+
+Targets:
+
+commit hash (e.g., /review abc1234)
+
+tag (e.g., /review v0.3.2)
+
+timestamp (e.g., /review 2025-12-13T03:00)
+
+file path (e.g., /review app/api/routes.py)
+
+Behavior:
+
+Parse target type.
+
+Call ReviewService.review_target(...).
+
+Respond same format as /review.
+
+/diff
+
+Purpose: show a summarized view of what changed for the last reviewed target.
+
+Behavior:
+
+Load last review_id from DB.
+
+Return:
+
+List of changed files grouped by type (API, tests, config, infra).
+
+For each: +X / -Y lines summary.
+
+Response:
+
+Diff summary (review #12, commit abc1234)
+• app/api/orders.py — +34 / −5 (new endpoint, error handling updated)
+• tests/test_orders.py — +20 / −0 (new tests)
+• config/settings.py — +3 / −1 (timeout increased to 60s)
+
+/risks
+
+Purpose: show detailed security/reliability/performance risks for the last review.
+
+Behavior:
+
+Load issues JSON for last review.
+
+Filter and group by category & severity.
+
+Response:
+
+For each issue: show severity, category, description, and file/line hints.
+
+Example:
+
+Risks (review #12)
+🔴 CRITICAL – Auth bypass risk
+• app/api/admin.py: New admin endpoint doesn’t check is_admin flag.
+• Suggested fix: enforce current_user.is_admin in dependency.
+
+🟠 HIGH – Secrets in code
+• config/settings.py: Looks like an API key is hardcoded. Move to env var.
+
+/next
+
+Purpose: show recommended next actions and suggested patches.
+
+Behavior:
+
+Load last review.
+
+Extract next_steps and patch_suggestions from LLM result.
+
+Response:
+
+Ordered list of actions, including references to files and test commands.
+
+Example:
+
+Next actions
+
+Add auth check to app/api/admin.py (see snippet #1 below).
+
+Move PAYMENTS_API_KEY into PAYMENTS_API_KEY env var and read via Settings.
+
+Add tests in tests/test_admin_auth.py for unauthorized access.
+
+(Optional future) /apply <action_id> could mark a specific suggested patch for manual application, but the agent should never auto-apply without explicit confirmation.
+
+4. Agent review rubric (checks performed + severity levels)
+Severity levels
+
+CRITICAL – Must fix before deploy. Examples:
+
+Security vulnerabilities (auth bypass, injection).
+
+Changes that can crash startup / break all requests.
+
+Secret keys checked into repo.
+
+HIGH – Strongly recommended to fix before deploy:
+
+Major correctness issues in core flows.
+
+Unhandled exceptions in common endpoints.
+
+Removing important validations.
+
+MEDIUM – Fix soon:
+
+Edge cases lacking checks (None/empty, boundary conditions).
+
+Performance issues on moderately hot paths.
+
+Inconsistent logging, fragile assumptions.
+
+LOW – Nice to have:
+
+Minor maintainability concerns.
+
+Code smells, confusing naming, minor duplication.
+
+INFO – Observations / suggestions:
+
+Refactoring ideas.
+
+Documentation suggestions.
+
+Non-blocking improvements.
+
+Rubric checks
+
+For each review, the agent (via analyzers + LLM) should address:
+
+Summary
+
+“What changed?” in 3–8 bullet points.
+
+Intended behavior inferred from:
+
+Diff structure.
+
+File names.
+
+Commit message (if available).
+
+Intent vs implementation
+
+Does the change match its apparent intent?
+
+Look for:
+
+New endpoint but no tests.
+
+Added feature missing UI hook.
+
+Config change inconsistent with code expectations.
+
+Correctness / bugs / edge cases
+
+Common gotchas:
+
+Missing error handling on external calls.
+
+Assumptions on non-null data.
+
+Off-by-one or boundary issues.
+
+Incomplete async handling (await missing).
+
+Security concerns
+
+Any of:
+
+Hardcoded credentials, tokens, or keys.
+
+New endpoints with no auth / weak auth checks.
+
+Building SQL queries with string concatenation.
+
+Exposing stack traces or sensitive logs.
+
+Reliability concerns
+
+Susceptible to:
+
+Unhandled exceptions.
+
+Lack of retries/timeouts in external calls.
+
+Tight loops without backoff.
+
+Changes to global settings (like timeouts) that could degrade reliability.
+
+Performance concerns
+
+Especially in:
+
+Hot paths (request handlers, loops over large datasets).
+
+Repeated I/O or network calls inside loops.
+
+Unnecessary queries or computations.
+
+Test coverage recommendations
+
+What specific tests to add:
+
+Files and test names.
+
+Input/output scenarios.
+
+Edge cases (invalid inputs, failure paths, concurrency).
+
+Concrete next steps / suggested patches
+
+Small, self-contained patch suggestions:
+
+Inline code snippets.
+
+Example test skeletons.
+
+Each with severity + “why this matters.”
+
+LLM response format (internal) should be structured JSON like:
+
+{
+  "summary": [...],
+  "overall_severity": "HIGH",
+  "issues": [
+    {
+      "id": "ISSUE-1",
+      "severity": "CRITICAL",
+      "category": "security",
+      "title": "Hardcoded API key",
+      "description": "...",
+      "file": "config/settings.py",
+      "lines": "42-56",
+      "suggested_fix": "..."
+    }
+  ],
+  "next_steps": [...]
+}
+
+5. Data/storage model (review history schema)
+
+Use SQLite via Python’s sqlite3 or a small ORM. Single DB file: agent_data.db.
+
+Tables
+
+reviews
+
+id INTEGER PRIMARY KEY AUTOINCREMENT
+
+created_at TEXT (ISO timestamp)
+
+initiator_telegram_id TEXT
+
+target_type TEXT ('commit' | 'file' | 'timestamp' | 'working_tree')
+
+target_ref TEXT (commit hash, file path, timestamp string)
+
+git_head TEXT (current HEAD commit hash, if available)
+
+change_detector_mode TEXT ('git' | 'working_tree' | 'snapshot')
+
+overall_severity TEXT
+
+summary_md TEXT (Markdown summary returned to Telegram)
+
+issues_json TEXT (stringified JSON with issues array)
+
+next_steps_json TEXT
+
+raw_prompt_tokens INTEGER (optional, for cost awareness)
+
+raw_completion_tokens INTEGER (optional)
+
+snapshots (for fallback detection)
+
+id INTEGER PRIMARY KEY AUTOINCREMENT
+
+created_at TEXT
+
+label TEXT ('last_review', etc.)
+
+data_json TEXT (map of path -> {size, mtime, hash})
+
+meta
+
+key TEXT PRIMARY KEY
+
+value TEXT
+(Used for e.g. last_reviewed_commit, db_version.)
+
+6. Security model (secrets, auth, threat considerations)
+Secrets handling
+
+Env vars only, never committed:
+
+TELEGRAM_BOT_TOKEN
+
+TELEGRAM_ALLOWED_USER_IDS (comma-separated list of numeric IDs)
+
+OPENAI_API_KEY
+
+Stored via Replit “Secrets” UI.
+
+config.py reads env vars and validates presence on startup; fails fast if missing.
+
+Telegram auth
+
+On every incoming update:
+
+Extract user_id from update.effective_user.id.
+
+Check against ALLOWED_USER_IDS set.
+
+If not allowed:
+
+Respond with “Unauthorized. This bot is private.” (or silently ignore).
+
+Do not reveal any internal details.
+
+LLM usage & prompt safety
+
+LLM only receives:
+
+Code diffs.
+
+Logs (sanitized to avoid secrets where possible).
+
+Config snippets.
+
+LLM results are:
+
+Stored as text/JSON.
+
+Not automatically executed.
+
+If implementing “apply patch” in the future:
+
+Treat LLM output as untrusted.
+
+Require explicit human confirmation and constraints (e.g., file whitelist).
+
+Apply patches via safe editing functions, not via shell commands.
+
+Threat considerations
+
+Abuse via Telegram:
+Only allowed IDs can trigger heavy operations; consider rate-limiting as needed.
+
+Exposure of secrets via logs/diffs:
+
+Encourage you to avoid storing secrets in code at all.
+
+Optionally add a secrets-spotting heuristic in analyzers (regex for keys).
+
+Denial of service:
+
+Limit diff size passed to LLM (cap by lines / chars).
+
+Truncate or summarize large diffs before sending.
+
+7. Step-by-step implementation plan for Replit Builder (tasks + file list)
+
+This is what Replit Builder should implement.
+
+Dependencies
+
+Add to your Python dependencies (e.g., requirements.txt or pyproject.toml):
+
+python-telegram-bot (v20+ preferred)
+
+openai (or compatible client)
+
+(Optional) pydantic for typed models if not already present
+
+File list
+
+Create a new agent package:
+
+agent/__init__.py
+
+agent/config.py
+
+agent/storage.py
+
+agent/change_detector.py
+
+agent/analyzers.py
+
+agent/llm_client.py
+
+agent/review_service.py
+
+agent/telegram_bot.py
+
+Modify existing entrypoint:
+
+main.py (or app/main.py) – integrate Telegram bot startup.
+
+Task 1 – Config & settings (agent/config.py)
+
+Implement Settings class that:
+
+Reads env vars.
+
+Parses TELEGRAM_ALLOWED_USER_IDS into a Set[int].
+
+Expose a global settings instance.
+
+Task 2 – Storage layer (agent/storage.py)
+
+Implement:
+
+init_db() to create tables if not exist.
+
+Functions:
+
+save_review(review_result) -> int
+
+get_last_review() -> ReviewRecord | None
+
+set_meta(key, value)
+
+get_meta(key, default=None)
+
+save_snapshot(label, data_dict)
+
+get_last_snapshot(label)
+
+Task 3 – Change detector (agent/change_detector.py)
+
+Implement ChangeDetector with:
+
+mode detection (check if git works).
+
+get_recent_changes_since_last_review(last_reviewed_commit: str | None).
+
+get_diff_for_target(...).
+
+Use subprocess.run(["git", ...]) for git operations.
+
+Fallback to snapshot based on file traversal and snapshots table when git unavailable.
+
+Task 4 – Analyzers (agent/analyzers.py)
+
+Implement helper functions:
+
+classify_files(changed_files) -> dict[file, category]
+
+build_diff_summary(diff_text) -> list[FileSummary]
+
+collect_logs() -> str (tail a configured log file if exists)
+
+detect_config_changes(...)
+
+Return python data structures ready for LLM prompt building.
+
+Task 5 – LLM client (agent/llm_client.py)
+
+Implement LLMClient with:
+
+review_changes(context: ReviewContext) -> LLMReviewResult
+
+Use openai (or compatible) with:
+
+Prompt template including rubric & examples.
+
+Tokens limit & truncation for very large diffs.
+
+Task 6 – Review service (agent/review_service.py)
+
+Implement ReviewService that:
+
+Injects ChangeDetector, Storage, LLMClient.
+
+Methods:
+
+review_latest_changes(initiator_id: int) -> ReviewResult
+
+review_target(target_str: str, initiator_id: int) -> ReviewResult
+
+get_diff_summary_for_last_review()
+
+get_risks_for_last_review()
+
+get_next_actions_for_last_review()
+
+Handles:
+
+Getting last reviewed commit from meta.
+
+Updating last_reviewed_commit once review succeeds.
+
+Task 7 – Telegram bot (agent/telegram_bot.py)
+
+Implement Telegram bot using python-telegram-bot:
+
+On startup:
+
+Build Application with token from settings.
+
+Register handlers:
+
+/start /help /status /review /diff /risks /next.
+
+Each handler:
+
+Checks user_id in settings.allowed_user_ids.
+
+Calls corresponding ReviewService method.
+
+Sends Markdown reply.
+
+Task 8 – Integrate with app entrypoint (main.py)
+
+Make sure init_db() is called on startup.
+
+Start Telegram bot in the same process, e.g.:
+
+If using FastAPI with uvicorn, start the bot in a background task.
+
+Or, if app is “agent only”, main may be agent/telegram_bot.py.
+
+Example (FastAPI):
+
+In main.py, define startup_event that:
+
+Calls init_db().
+
+Creates ReviewService and TelegramApp.
+
+Starts Telegram bot with application.run_polling() in a separate thread.
+
+8. Minimal example skeleton (pseudo-code / concise outline)
+
+Note: This is illustrative; Replit Builder should flesh out error handling, types, etc.
+
+# agent/config.py
+import os
+from dataclasses import dataclass
+
+@dataclass
+class Settings:
+    telegram_bot_token: str
+    allowed_user_ids: set[int]
+    openai_api_key: str | None = None
+
+def _parse_ids(s: str | None) -> set[int]:
+    if not s:
+        return set()
+    return {int(x.strip()) for x in s.split(",") if x.strip()}
+
+settings = Settings(
+    telegram_bot_token=os.environ["TELEGRAM_BOT_TOKEN"],
+    allowed_user_ids=_parse_ids(os.getenv("TELEGRAM_ALLOWED_USER_IDS")),
+    openai_api_key=os.getenv("OPENAI_API_KEY"),
+)
+
+# agent/storage.py
+import sqlite3
+from pathlib import Path
+from datetime import datetime
+import json
+
+DB_PATH = Path("agent_data.db")
+
+def _get_conn():
+    return sqlite3.connect(DB_PATH)
+
+def init_db():
+    conn = _get_conn()
+    cur = conn.cursor()
+    cur.execute("""
+      CREATE TABLE IF NOT EXISTS reviews (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        created_at TEXT,
+        initiator_telegram_id TEXT,
+        target_type TEXT,
+        target_ref TEXT,
+        git_head TEXT,
+        change_detector_mode TEXT,
+        overall_severity TEXT,
+        summary_md TEXT,
+        issues_json TEXT,
+        next_steps_json TEXT
+      )
+    """)
+    cur.execute("""
+      CREATE TABLE IF NOT EXISTS meta (
+        key TEXT PRIMARY KEY,
+        value TEXT
+      )
+    """)
+    cur.execute("""
+      CREATE TABLE IF NOT EXISTS snapshots (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        created_at TEXT,
+        label TEXT,
+        data_json TEXT
+      )
+    """)
+    conn.commit()
+    conn.close()
+
+def set_meta(key: str, value: str):
+    conn = _get_conn()
+    cur = conn.cursor()
+    cur.execute("INSERT OR REPLACE INTO meta(key,value) VALUES(?,?)", (key, value))
+    conn.commit()
+    conn.close()
+
+def get_meta(key: str, default=None):
+    conn = _get_conn()
+    cur = conn.cursor()
+    cur.execute("SELECT value FROM meta WHERE key = ?", (key,))
+    row = cur.fetchone()
+    conn.close()
+    return row[0] if row else default
+
+def save_review(result, initiator_id: int, target_type: str, target_ref: str,
+                git_head: str, mode: str) -> int:
+    conn = _get_conn()
+    cur = conn.cursor()
+    cur.execute("""
+      INSERT INTO reviews (
+        created_at, initiator_telegram_id, target_type, target_ref,
+        git_head, change_detector_mode, overall_severity,
+        summary_md, issues_json, next_steps_json
+      ) VALUES (?,?,?,?,?,?,?,?,?,?)
+    """, (
+      datetime.utcnow().isoformat(),
+      str(initiator_id),
+      target_type, target_ref,
+      git_head,
+      mode,
+      result.overall_severity,
+      result.summary_md,
+      json.dumps(result.issues),
+      json.dumps(result.next_steps),
+    ))
+    review_id = cur.lastrowid
+    conn.commit()
+    conn.close()
+    return review_id
+
+# agent/change_detector.py
+import subprocess
+from pathlib import Path
+import os
+
+class ChangeDetector:
+    def __init__(self, repo_root: Path):
+        self.repo_root = repo_root
+        self.mode = self._detect_mode()
+
+    def _detect_mode(self) -> str:
+        try:
+            subprocess.run(["git", "status"], cwd=self.repo_root,
+                           check=True, capture_output=True)
+            return "git"
+        except Exception:
+            return "snapshot"
+
+    def _git(self, *args: str) -> str:
+        res = subprocess.run(["git", *args], cwd=self.repo_root,
+                             check=True, capture_output=True, text=True)
+        return res.stdout
+
+    def get_head_commit(self) -> str | None:
+        if self.mode != "git":
+            return None
+        return self._git("rev-parse", "HEAD").strip()
+
+    def diff_since(self, base: str | None):
+        if self.mode == "git":
+            head = self.get_head_commit()
+            if not base:
+                # first review, just show HEAD changes
+                diff_text = self._git("show", "--unified=3", "HEAD")
+                return {"mode": "git", "head": head, "base": None, "diff": diff_text}
+            diff_text = self._git("diff", "--unified=3", f"{base}..HEAD")
+            return {"mode": "git", "head": head, "base": base, "diff": diff_text}
+        else:
+            # TODO: implement snapshot-based diff
+            raise NotImplementedError("snapshot diff not yet implemented")
+
+# agent/llm_client.py
+import openai
+from .config import settings
+
+class LLMClient:
+    def __init__(self):
+        if settings.openai_api_key:
+            openai.api_key = settings.openai_api_key
+
+    def review_changes(self, context) -> "LLMReviewResult":
+        # Build prompt from context (diff, summaries, rubric)
+        prompt = context.build_prompt()
+        # Pseudo-call
+        completion = openai.ChatCompletion.create(
+            model="gpt-4.1-mini",
+            messages=[{"role": "system", "content": "You are a rigorous code reviewer..."}, 
+                      {"role": "user", "content": prompt}],
+        )
+        # Parse JSON from completion
+        data = context.parse_llm_response(completion.choices[0].message["content"])
+        return data
+
+# agent/review_service.py
+from .storage import get_meta, set_meta, save_review
+from .change_detector import ChangeDetector
+from .llm_client import LLMClient
+
+class ReviewService:
+    def __init__(self, repo_root):
+        self.detector = ChangeDetector(repo_root)
+        self.llm = LLMClient()
+
+    def review_latest_changes(self, initiator_id: int):
+        last_commit = get_meta("last_reviewed_commit", None)
+        diff_info = self.detector.diff_since(last_commit)
+        if not diff_info["diff"].strip():
+            # No changes
+            # Return a simple result object
+            return SimpleReviewResult(summary_md="No changes detected.",
+                                      overall_severity="INFO",
+                                      issues=[], next_steps=[])
+
+        # Build context object from diff_info + analyzers (omitted here)
+        context = build_review_context(diff_info)
+        result = self.llm.review_changes(context)
+        # Persist
+        head = diff_info["head"] or ""
+        review_id = save_review(result, initiator_id,
+                                target_type="commit",
+                                target_ref=head,
+                                git_head=head,
+                                mode=diff_info["mode"])
+        if head:
+            set_meta("last_reviewed_commit", head)
+        return result
+
+# agent/telegram_bot.py
+from telegram import Update
+from telegram.ext import (
+    ApplicationBuilder, CommandHandler, ContextTypes
+)
+from pathlib import Path
+from .config import settings
+from .storage import init_db, get_meta
+from .review_service import ReviewService
+
+repo_root = Path(".")
+review_service = ReviewService(repo_root)
+
+def _is_allowed(update: Update) -> bool:
+    user = update.effective_user
+    return user and user.id in settings.allowed_user_ids
+
+async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not _is_allowed(update):
+        return
+    await update.message.reply_text(
+        "Hi, I'm your internal review agent. Use /review to check recent changes."
+    )
+
+async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not _is_allowed(update):
+        return
+    last_review = get_meta("last_reviewed_commit", "none")
+    await update.message.reply_text(f"Status: last reviewed commit: `{last_review}`", parse_mode="Markdown")
+
+async def review_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not _is_allowed(update):
+        return
+    user_id = update.effective_user.id
+    await update.message.reply_text("Running review, please wait...")
+    result = review_service.review_latest_changes(user_id)
+    await update.message.reply_text(result.summary_md, parse_mode="Markdown")
+
+def run_bot():
+    init_db()
+    app = ApplicationBuilder().token(settings.telegram_bot_token).build()
+    app.add_handler(CommandHandler("start", start_cmd))
+    app.add_handler(CommandHandler("help", start_cmd))
+    app.add_handler(CommandHandler("status", status_cmd))
+    app.add_handler(CommandHandler("review", review_cmd))
+    # TODO: add /diff, /risks, /next handlers
+    app.run_polling()
+
+# main.py (example entrypoint)
+from agent.telegram_bot import run_bot
+
+if __name__ == "__main__":
+    run_bot()
+
+9. Testing plan (what to test, how to validate in Replit)
+1. Unit tests (can be minimal at first)
+
+ChangeDetector tests
+
+Mock subprocess.run to simulate git being present/not present.
+
+Test:
+
+mode detection.
+
+diff_since(None) returns non-empty diff when git output is mocked.
+
+Fallback path not crashing.
+
+Storage tests
+
+Use a temporary DB file.
+
+Test:
+
+init_db() creates tables.
+
+set_meta/get_meta.
+
+save_review returns valid review_id.
+
+Config tests
+
+With env vars set/unset:
+
+Ensure Settings loads correctly.
+
+Ensure missing required envs causes a clear error.
+
+LLMClient tests
+
+Stub/mock openai call:
+
+Provide a fake JSON string as response.
+
+Ensure review_changes parses it into LLMReviewResult.
+
+2. Manual integration tests in Replit
+
+Setup secrets
+
+Add:
+
+TELEGRAM_BOT_TOKEN
+
+TELEGRAM_ALLOWED_USER_IDS (your Telegram numeric ID)
+
+OPENAI_API_KEY
+
+Restart app.
+
+Verify Telegram bot connectivity
+
+Start Replit app.
+
+In Telegram:
+
+/start → expect welcome message.
+
+/status → see current last_reviewed_commit.
+
+Simple change review
+
+Modify a small file (e.g., add comment in main.py).
+
+Commit (optional but recommended).
+
+Send /review:
+
+Expect a message like “Reviewing latest changes…”
+
+Then a summary with INFO/LOW severity.
+
+Confirm a new row appears in reviews (optional via SQLite viewer).
+
+Risk detection sanity check
+
+Intentionally introduce a “bad” change (e.g., hardcode fake API key).
+
+Run /review.
+
+Verify:
+
+It flags at least one issue under “security”.
+
+Severity is HIGH or CRITICAL.
+
+No-changes behavior
+
+Run /review twice without editing files.
+
+Second call should say “No changes detected” or equivalent.
+
+Auth check
+
+Access bot from a different Telegram account (or temporarily clear ALLOWED_USER_IDS).
+
+Ensure bot does not respond with sensitive info.
+
+Fallback path test (if possible)
+
+Temporarily make git fail (e.g., rename .git directory for a moment in a test branch).
+
+Confirm:
+
+ChangeDetector.mode switches to snapshot.
+
+/status reports change_detector_mode = snapshot or similar.
+
+Snapshot diff path doesn’t crash (even if minimal functionality).
+
+3. Acceptance criteria validation
+
+Interact via Telegram:
+
+You can send /status and /review and receive responses from Replit-hosted bot.
+
+Identify recent changes:
+
+Editing and committing code results in /review describing those changes.
+
+Structured report with severity:
+
+LLM output includes severity levels.
+
+/risks (once implemented) lists issues with severity tags.
+
+Secrets from env vars:
+
+No tokens/keys appear in repo.
+
+config.py only reads from os.environ.
+
+Fallback works:
+
+If git is unavailable, ChangeDetector switches to snapshot mode and still detects some file changes without crashing.
+
+You can now paste this spec into your Replit Builder and have it implement the internal Telegram-connected review agent step by step.
