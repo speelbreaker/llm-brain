@@ -765,7 +765,7 @@ INFO - Observations"""
             return
         
         task = " ".join(context.args) if context.args else "the latest changes"
-        await reply_safe(update, "Starting async code review via Codex (may take up to 10 min)...", context, parse_mode=None)
+        await reply_safe(update, "Starting async code review job...", context, parse_mode=None)
         
         try:
             result, job_id = await run_codex_job_async(task, mode="review")
@@ -781,7 +781,7 @@ INFO - Observations"""
             return
         
         task = " ".join(context.args) if context.args else "the codebase for security issues"
-        await reply_safe(update, "Starting async security audit via Codex (may take up to 10 min)...", context, parse_mode=None)
+        await reply_safe(update, "Starting async security audit job...", context, parse_mode=None)
         
         try:
             result, job_id = await run_codex_job_async(task, mode="audit")

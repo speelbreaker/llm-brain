@@ -149,25 +149,39 @@ def _format_debug(data: dict) -> str:
     return "\n".join(parts)
 
 
-def _format_review(data: dict) -> str:
-    """Format response for review mode - includes sync_status if present."""
+def _format_review(data: dict, job_id: Optional[str] = None) -> str:
+    """Format response for review mode - includes sync_status, exit_code, duration if present."""
     stdout = data.get("stdout", "").strip()
+    stderr = data.get("stderr", "").strip()
     sync_status = data.get("sync_status")
+    exit_code = data.get("exit_code")
+    duration_ms = data.get("duration_ms")
     
     parts = []
+    
+    if job_id:
+        parts.append(f"JOB: {job_id}")
+    
     if sync_status:
         parts.append(f"SYNC: {sync_status}")
+    
+    if exit_code is not None:
+        parts.append(f"EXIT_CODE: {exit_code}")
+    
+    if duration_ms is not None:
+        parts.append(f"DURATION_MS: {duration_ms}")
+    
+    if parts:
         parts.append("")
     
     if stdout:
         parts.append(_truncate(stdout, MAX_STDOUT_NORMAL))
+    elif stderr:
+        parts.append(_truncate(stderr, 2000))
     else:
-        stderr = data.get("stderr", "").strip()
         ok = data.get("ok", True)
-        exit_code = data.get("exit_code", 0)
-        if not ok or exit_code != 0:
-            snippet = _truncate(stderr, MAX_STDERR_NORMAL) if stderr else "No details available"
-            parts.append(f"Codex failed (exit_code={exit_code}).\n{snippet}")
+        if not ok or (exit_code is not None and exit_code != 0):
+            parts.append(f"Codex failed (exit_code={exit_code}). No output available.")
         else:
             parts.append("No output.")
     
@@ -389,8 +403,21 @@ async def poll_codex_job(job_id: str) -> CodexJobResult:
                     error=f"Remote runner returned status {response.status_code}"
                 )
             
-            data = response.json()
-            status = data.get("status", "unknown")
+            payload = response.json()
+            status = payload.get("status", "unknown")
+            
+            if status in ("done", "completed", "complete", "finished"):
+                res = payload.get("result") or {}
+                data = {
+                    "stdout": res.get("stdout", ""),
+                    "stderr": res.get("stderr", ""),
+                    "exit_code": res.get("exit_code"),
+                    "duration_ms": res.get("duration_ms"),
+                    "ok": res.get("ok", True),
+                    "sync_status": res.get("sync_status") or payload.get("sync_status"),
+                }
+            else:
+                data = payload
             
             return CodexJobResult(job_id=job_id, status=status, data=data)
             
@@ -463,15 +490,15 @@ async def run_codex_job_async(
                 data["sync_status"] = sync_status
             
             if mode == "debug":
-                return _format_debug(data), None
+                return _format_debug(data), job_id
             elif mode == "short":
-                return _format_short(data), None
+                return _format_short(data), job_id
             elif mode == "review":
-                return _format_review(data), None
+                return _format_review(data, job_id=job_id), job_id
             elif mode == "audit":
-                return _format_review(data), None
+                return _format_review(data, job_id=job_id), job_id
             else:
-                return _format_normal(data), None
+                return _format_normal(data), job_id
         
         if result.status in ("failed", "error"):
             data = result.data or {}
@@ -511,17 +538,17 @@ async def fetch_codex_job(job_id: str, mode: OutputMode = "normal") -> str:
         elif mode == "short":
             return _format_short(data)
         elif mode in ("review", "audit"):
-            return _format_review(data)
+            return _format_review(data, job_id=job_id)
         else:
             return _format_normal(data)
     
     if result.status in ("failed", "error"):
         data = result.data or {}
         error_msg = data.get("error") or data.get("stderr") or "Unknown error"
-        return f"Job failed: {error_msg[:500]}"
+        return f"Job {job_id} failed: {error_msg[:500]}"
     
     if result.status in ("cancelled", "canceled"):
-        return "Job was cancelled."
+        return f"Job {job_id} was cancelled."
     
     if result.status in ("pending", "queued", "running", "in_progress"):
         return f"Job {job_id} is still {result.status}. Try again later."
