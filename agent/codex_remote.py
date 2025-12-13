@@ -26,17 +26,15 @@ OutputMode = Literal["normal", "short", "debug", "review", "audit", "fix_prompt"
 REVIEW_TASK_PREFIX = """You are a code reviewer. Perform these checks:
 
 1. Print source: echo "SOURCE: github/main"
-2. Print workdir: echo "WORKDIR: $(pwd)"
-3. Get current commit: echo "HEAD: $(git rev-parse --short HEAD)"
-4. Get origin/main: echo "ORIGIN_MAIN: $(git rev-parse --short origin/main)"
-5. Run smoke tests: python -m pytest -q --tb=no 2>&1 | head -30
-6. Scan for issues: grep -rn "TODO\\|FIXME\\|XXX" src/ agent/ --include="*.py" 2>/dev/null | head -10
-7. Check for missing imports or obvious errors
+2. Get current commit: echo "COMMIT: $(git rev-parse --short HEAD)"
+3. Get origin/main: echo "ORIGIN_MAIN: $(git rev-parse --short origin/main)"
+4. Run smoke tests: python -m pytest -q --tb=no 2>&1 | head -30
+5. Scan for issues: grep -rn "TODO\\|FIXME\\|XXX" src/ agent/ --include="*.py" 2>/dev/null | head -10
+6. Check for missing imports or obvious errors
 
 Return a CONCISE summary in this format:
 SOURCE: github/main
-WORKDIR: <pwd>
-HEAD: <hash>
+COMMIT: <hash>
 ORIGIN_MAIN: <hash>
 TEST STATUS: PASS/FAIL (X passed, Y failed)
 TOP ISSUES:
@@ -143,6 +141,31 @@ def _format_debug(data: dict) -> str:
     return "\n".join(parts)
 
 
+def _format_review(data: dict) -> str:
+    """Format response for review mode - includes sync_status if present."""
+    stdout = data.get("stdout", "").strip()
+    sync_status = data.get("sync_status")
+    
+    parts = []
+    if sync_status:
+        parts.append(f"SYNC: {sync_status}")
+        parts.append("")
+    
+    if stdout:
+        parts.append(_truncate(stdout, MAX_STDOUT_NORMAL))
+    else:
+        stderr = data.get("stderr", "").strip()
+        ok = data.get("ok", True)
+        exit_code = data.get("exit_code", 0)
+        if not ok or exit_code != 0:
+            snippet = _truncate(stderr, MAX_STDERR_NORMAL) if stderr else "No details available"
+            parts.append(f"Codex failed (exit_code={exit_code}).\n{snippet}")
+        else:
+            parts.append("No output.")
+    
+    return "\n".join(parts)
+
+
 async def run_codex_remote(task: str, *, mode: OutputMode = "normal") -> str:
     """
     Run a Codex task on the remote runner service.
@@ -197,6 +220,8 @@ async def run_codex_remote(task: str, *, mode: OutputMode = "normal") -> str:
                 return _format_debug(data)
             elif mode == "short":
                 return _format_short(data)
+            elif mode == "review":
+                return _format_review(data)
             else:
                 return _format_normal(data)
             
