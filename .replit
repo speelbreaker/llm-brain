@@ -23,6 +23,10 @@ args = "Options Trading Agent"
 task = "workflow.run"
 args = "Deribit Data Harvester"
 
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "Telegram Review Bot"
+
 [[workflows.workflow]]
 name = "Options Trading Agent"
 author = "agent"
@@ -42,6 +46,17 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "python -m scripts.data_harvester"
+
+[workflows.workflow.metadata]
+outputType = "console"
+
+[[workflows.workflow]]
+name = "Telegram Review Bot"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "python -m agent.telegram_bot"
 
 [workflows.workflow.metadata]
 outputType = "console"

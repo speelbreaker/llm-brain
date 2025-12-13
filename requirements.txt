@@ -19,3 +19,4 @@ psycopg2-binary
 sqlalchemy
 scikit-learn
 scipy
+python-telegram-bot
