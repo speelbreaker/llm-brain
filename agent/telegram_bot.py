@@ -136,6 +136,8 @@ class TelegramBot:
         self.application.add_handler(CommandHandler("health", self.cmd_health))
         self.application.add_handler(CommandHandler("history", self.cmd_history))
         self.application.add_handler(CommandHandler("codex", self.cmd_codex))
+        self.application.add_handler(CommandHandler("codex_short", self.cmd_codex_short))
+        self.application.add_handler(CommandHandler("codex_debug", self.cmd_codex_debug))
         self.application.add_handler(CommandHandler("codex_status", self.cmd_codex_status))
         
         self.application.add_handler(MessageHandler(
@@ -174,6 +176,8 @@ Repo Q&A:
 
 Codex CLI:
 /codex <task> - Run Codex AI task
+/codex_short <task> - Concise answer
+/codex_debug <task> - Full debug output
 /codex_status - Check Codex CLI status
 
 Or just type any question!"""
@@ -215,6 +219,8 @@ Just type any question! Examples:
 
 Codex CLI Commands:
 /codex <task> - Run Codex AI for coding tasks
+/codex_short <task> - Concise answer (brief, limited quotes)
+/codex_debug <task> - Full debug output (stdout+stderr+metadata)
 /codex_status - Check Codex CLI installation status
 
 Severity Levels:
@@ -648,15 +654,37 @@ INFO - Observations"""
             logger.error(f"Error in /codex_status: {e}")
             await reply_safe(update, f"Error: {str(e)[:200]}", context, parse_mode=None)
     
-    async def cmd_codex(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Handle /codex command - run Codex AI task on remote runner."""
+    async def _reply_long_text(self, update: Update, context: ContextTypes.DEFAULT_TYPE, text: str, chunk_size: int = 3500) -> None:
+        """Split long text into chunks and send sequentially."""
+        if len(text) <= chunk_size:
+            await reply_safe(update, text, context, parse_mode=None)
+            return
+        
+        chunks = []
+        while text:
+            if len(text) <= chunk_size:
+                chunks.append(text)
+                break
+            split_pos = text.rfind("\n", 0, chunk_size)
+            if split_pos == -1:
+                split_pos = chunk_size
+            chunks.append(text[:split_pos])
+            text = text[split_pos:].lstrip()
+        
+        for i, chunk in enumerate(chunks):
+            if len(chunks) > 1:
+                chunk = f"[{i+1}/{len(chunks)}]\n{chunk}"
+            await reply_safe(update, chunk, context, parse_mode=None)
+    
+    async def _run_codex_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE, mode: str) -> None:
+        """Common handler for codex commands."""
         if not _is_authorized(update):
             await reply_safe(update, _unauthorized_response(), context)
             return
         
         if not context.args:
             await reply_safe(update,
-                "Usage: /codex <task>\n\n"
+                f"Usage: /codex{'_' + mode if mode != 'normal' else ''} <task>\n\n"
                 "Examples:\n"
                 "- /codex explain this function\n"
                 "- /codex write a test for UserService\n"
@@ -667,19 +695,27 @@ INFO - Observations"""
             return
         
         task = " ".join(context.args)
-        await reply_safe(update, f"Running Codex: {task[:50]}...", context, parse_mode=None)
+        mode_label = f" ({mode})" if mode != "normal" else ""
+        await reply_safe(update, f"Running Codex{mode_label}: {task[:50]}...", context, parse_mode=None)
         
         try:
-            result = await run_codex_remote(task)
-            
-            if len(result) > 4000:
-                result = result[:4000] + "\n\n... (truncated)"
-            
-            await reply_safe(update, result, context, parse_mode=None)
-            
+            result = await run_codex_remote(task, mode=mode)
+            await self._reply_long_text(update, context, result)
         except Exception as e:
-            logger.error(f"Error in /codex: {e}")
+            logger.error(f"Error in /codex ({mode}): {e}")
             await reply_safe(update, f"Error: {str(e)[:200]}", context, parse_mode=None)
+    
+    async def cmd_codex(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Handle /codex command - run Codex AI task on remote runner."""
+        await self._run_codex_command(update, context, mode="normal")
+    
+    async def cmd_codex_short(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Handle /codex_short command - concise Codex output."""
+        await self._run_codex_command(update, context, mode="short")
+    
+    async def cmd_codex_debug(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Handle /codex_debug command - full debug output."""
+        await self._run_codex_command(update, context, mode="debug")
     
     async def handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle non-command text messages via chat controller."""

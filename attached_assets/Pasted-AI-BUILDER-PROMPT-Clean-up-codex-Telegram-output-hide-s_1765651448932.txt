@@ -1,0 +1,119 @@
+AI BUILDER PROMPT — Clean up /codex Telegram output (hide stderr by default) + add /codex_short + /codex_debug
+Role
+
+You are a senior Python engineer working in our Replit repo. Improve the Telegram /codex UX by suppressing Codex CLI stderr/trace output by default, while keeping a debug path when needed.
+
+Goal
+
+/codex returns only the useful answer (stdout) and does not spam Telegram with Codex CLI session logs (stderr).
+
+Add /codex_short for concise answers (brief + limited quotes).
+
+Add /codex_debug to show full debug output (stdout + stderr + exit code + duration).
+
+Ensure Telegram message length limits are respected (split long replies).
+
+Context
+
+We already have agent/codex_remote.py that POSTs to ${CODEX_RUNNER_URL}/v1/codex with header X-RUNNER-TOKEN.
+
+Runner returns JSON like: { ok, exit_code, duration_ms, stdout, stderr }.
+
+Telegram bot has /codex and /codex_status and uses reply_safe().
+
+Requirements
+A) Update agent/codex_remote.py to support output modes
+
+Refactor run_codex_remote() to accept a mode flag:
+
+async def run_codex_remote(task: str, *, mode: str = "normal") -> str:
+    ...
+
+
+Implement formatting rules:
+
+mode="normal" (default for /codex)
+
+If stdout.strip() is non-empty → return stdout only.
+
+If stdout is empty:
+
+If ok is False → return a short failure summary + stderr snippet:
+
+Codex failed (exit_code=X). then the first N chars of stderr.
+
+Else → return "No output."
+
+mode="short" (for /codex_short)
+
+Prefix the task sent to the runner with a “be brief” instruction, e.g.:
+
+“Answer in <=10 lines. Quote at most 2 snippets (<=20 lines each). No extra commentary.”
+
+Same display rules as normal (stdout only; stderr only on empty stdout + error).
+
+Also hard-truncate final returned text to e.g. 2500–3000 chars.
+
+mode="debug" (for /codex_debug)
+
+Return a debug block including:
+
+ok, exit_code, duration_ms
+
+STDOUT: (truncated)
+
+STDERR: (truncated)
+
+Also:
+
+Implement safe truncation (e.g. stdout max 12k, stderr max 6k in debug; smaller in normal).
+
+Make sure network errors still return friendly messages.
+
+B) Add message splitting helper (Telegram limit)
+
+Add a helper in agent/telegram_bot.py (or reusable module) to split long text into chunks (e.g. 3500 chars) and send sequentially using reply_safe(update, chunk, parse_mode=None).
+
+Example behavior:
+
+/codex results > 3500 chars → split into multiple messages.
+
+Keep it plain text.
+
+C) Update Telegram commands in agent/telegram_bot.py
+
+/codex <task> → run_codex_remote(task, mode="normal")
+
+/codex_short <task> → run_codex_remote(task, mode="short")
+
+/codex_debug <task> → run_codex_remote(task, mode="debug")
+
+All responses must be plain text (no Markdown).
+
+D) Acceptance Criteria
+
+/codex explain /health endpoint... returns the clean answer without the long stderr trace.
+
+/codex_short ... returns a concise answer with limited quotes.
+
+/codex_debug ... shows stdout+stderr+metadata for troubleshooting.
+
+Long outputs are split and delivered without Telegram errors.
+
+Constraints
+
+Do not log or expose secrets.
+
+Keep changes minimal and localized to agent/codex_remote.py and agent/telegram_bot.py.
+
+Don’t change runner API.
+
+After implementing, run a quick manual test via Telegram:
+
+/codex_status
+
+/codex Say hello in one sentence
+
+/codex_short Explain /health endpoint and quote it
+
+/codex_debug Say hello

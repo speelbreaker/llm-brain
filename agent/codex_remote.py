@@ -2,18 +2,26 @@
 Codex Remote Runner for Telegram Bot integration.
 
 Calls a remote Codex runner service via HTTP POST.
+Supports multiple output modes: normal, short, debug.
 """
 from __future__ import annotations
 
 import logging
 import os
-from typing import Optional
+from typing import Literal, Optional
 
 import httpx
 
 logger = logging.getLogger(__name__)
 
 TIMEOUT_SECONDS = 180
+MAX_STDOUT_NORMAL = 12000
+MAX_STDERR_NORMAL = 1000
+MAX_STDOUT_DEBUG = 12000
+MAX_STDERR_DEBUG = 6000
+MAX_SHORT_OUTPUT = 3000
+
+OutputMode = Literal["normal", "short", "debug"]
 
 
 def _get_runner_url() -> Optional[str]:
@@ -26,15 +34,68 @@ def _get_runner_token() -> Optional[str]:
     return os.environ.get("CODEX_RUNNER_TOKEN")
 
 
-async def run_codex_remote(task: str) -> str:
+def _truncate(text: str, max_len: int) -> str:
+    """Truncate text with ellipsis if too long."""
+    if len(text) <= max_len:
+        return text
+    return text[:max_len - 20] + "\n... [truncated]"
+
+
+def _format_normal(data: dict) -> str:
+    """Format response for normal mode - stdout only, stderr on error."""
+    stdout = data.get("stdout", "").strip()
+    stderr = data.get("stderr", "").strip()
+    ok = data.get("ok", True)
+    exit_code = data.get("exit_code", 0)
+    
+    if stdout:
+        return _truncate(stdout, MAX_STDOUT_NORMAL)
+    
+    if not ok or exit_code != 0:
+        snippet = _truncate(stderr, MAX_STDERR_NORMAL) if stderr else "No details available"
+        return f"Codex failed (exit_code={exit_code}).\n{snippet}"
+    
+    return "No output."
+
+
+def _format_short(data: dict) -> str:
+    """Format response for short mode - concise output."""
+    result = _format_normal(data)
+    return _truncate(result, MAX_SHORT_OUTPUT)
+
+
+def _format_debug(data: dict) -> str:
+    """Format response for debug mode - full details."""
+    ok = data.get("ok", False)
+    exit_code = data.get("exit_code", -1)
+    duration_ms = data.get("duration_ms", 0)
+    stdout = data.get("stdout", "").strip()
+    stderr = data.get("stderr", "").strip()
+    
+    parts = [
+        f"ok: {ok}",
+        f"exit_code: {exit_code}",
+        f"duration_ms: {duration_ms}",
+        "",
+        "=== STDOUT ===",
+        _truncate(stdout, MAX_STDOUT_DEBUG) if stdout else "(empty)",
+        "",
+        "=== STDERR ===",
+        _truncate(stderr, MAX_STDERR_DEBUG) if stderr else "(empty)",
+    ]
+    return "\n".join(parts)
+
+
+async def run_codex_remote(task: str, *, mode: OutputMode = "normal") -> str:
     """
     Run a Codex task on the remote runner service.
     
     Args:
         task: The task description to send to Codex
+        mode: Output mode - "normal", "short", or "debug"
         
     Returns:
-        Formatted plain-text result (stdout first, then stderr if present)
+        Formatted plain-text result based on mode
     """
     runner_url = _get_runner_url()
     runner_token = _get_runner_token()
@@ -52,6 +113,12 @@ async def run_codex_remote(task: str) -> str:
         "X-RUNNER-TOKEN": runner_token,
     }
     
+    if mode == "short":
+        task = (
+            "Answer in <=10 lines. Quote at most 2 snippets (<=20 lines each). "
+            "No extra commentary.\n\n" + task
+        )
+    
     payload = {"task": task}
     
     try:
@@ -63,19 +130,12 @@ async def run_codex_remote(task: str) -> str:
             
             data = response.json()
             
-            stdout = data.get("stdout", "")
-            stderr = data.get("stderr", "")
-            
-            result_parts = []
-            if stdout:
-                result_parts.append(stdout)
-            if stderr:
-                result_parts.append(f"\n--- stderr ---\n{stderr}")
-            
-            if not result_parts:
-                return "Codex completed with no output."
-            
-            return "".join(result_parts)
+            if mode == "debug":
+                return _format_debug(data)
+            elif mode == "short":
+                return _format_short(data)
+            else:
+                return _format_normal(data)
             
     except httpx.TimeoutException:
         return "Error: Request timed out after 180 seconds"
