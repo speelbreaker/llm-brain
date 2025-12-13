@@ -11,6 +11,7 @@ import re
 from typing import Optional
 
 from telegram import Update
+from telegram.error import BadRequest
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
 
 from agent.chat_controller import ChatController
@@ -26,6 +27,21 @@ def escape_markdown(text: str) -> str:
     """Escape special characters for Telegram Markdown."""
     escape_chars = r'_*[]()~`>#+-=|{}.!'
     return re.sub(f'([{re.escape(escape_chars)}])', r'\\\1', text)
+
+
+async def reply_safe(update: Update, text: str, parse_mode: str | None = None):
+    """Send a reply with automatic fallback from Markdown to plain text.
+    
+    Prevents Telegram from rejecting messages when AI output contains
+    unescaped Markdown characters.
+    """
+    try:
+        await update.message.reply_text(text, parse_mode=parse_mode)
+    except BadRequest as e:
+        if "can't parse entities" in str(e).lower():
+            await update.message.reply_text(text, parse_mode=None)
+        else:
+            raise
 
 
 def _is_authorized(update: Update) -> bool:
@@ -215,7 +231,7 @@ Just type any question! Examples:
                 await update.message.reply_text("✅ No new changes since last review.")
                 return
             
-            await update.message.reply_text(result.summary_md, parse_mode="Markdown")
+            await reply_safe(update, result.summary_md, parse_mode="Markdown")
             
         except Exception as e:
             logger.error(f"Error in /review: {e}")
@@ -234,7 +250,7 @@ Just type any question! Examples:
                 await update.message.reply_text("No reviews yet. Run /review first.")
                 return
             
-            await update.message.reply_text(summary, parse_mode="Markdown")
+            await reply_safe(update, summary, parse_mode="Markdown")
             
         except Exception as e:
             logger.error(f"Error in /diff: {e}")
@@ -256,7 +272,7 @@ Just type any question! Examples:
             if len(risks) > 4000:
                 risks = risks[:4000] + "\n...(truncated)"
             
-            await update.message.reply_text(risks, parse_mode="Markdown")
+            await reply_safe(update, risks, parse_mode="Markdown")
             
         except Exception as e:
             logger.error(f"Error in /risks: {e}")
@@ -275,7 +291,7 @@ Just type any question! Examples:
                 await update.message.reply_text("No reviews yet. Run /review first.")
                 return
             
-            await update.message.reply_text(actions, parse_mode="Markdown")
+            await reply_safe(update, actions, parse_mode="Markdown")
             
         except Exception as e:
             logger.error(f"Error in /next: {e}")
@@ -328,7 +344,7 @@ Just type any question! Examples:
             if len(reply_text) > 4000:
                 reply_text = reply_text[:4000] + "\n\n... (truncated)"
             
-            await update.message.reply_text(reply_text)
+            await reply_safe(update, reply_text)
             
         except Exception as e:
             logger.error(f"Error in /ask: {e}")
@@ -591,7 +607,7 @@ Just type any question! Examples:
             if len(reply_text) > 4000:
                 reply_text = reply_text[:4000] + "\n\n... (truncated)"
             
-            await update.message.reply_text(reply_text)
+            await reply_safe(update, reply_text)
             
         except Exception as e:
             logger.error(f"Error in chat: {e}")
