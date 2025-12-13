@@ -26,14 +26,18 @@ OutputMode = Literal["normal", "short", "debug", "review", "audit", "fix_prompt"
 REVIEW_TASK_PREFIX = """You are a code reviewer. Perform these checks:
 
 1. Print source: echo "SOURCE: github/main"
-2. Get current commit: git rev-parse --short HEAD
-3. Run smoke tests: python -m pytest -q --tb=no 2>&1 | head -30
-4. Scan for issues: grep -rn "TODO\\|FIXME\\|XXX" src/ agent/ --include="*.py" 2>/dev/null | head -10
-5. Check for missing imports or obvious errors
+2. Print workdir: echo "WORKDIR: $(pwd)"
+3. Get current commit: echo "HEAD: $(git rev-parse --short HEAD)"
+4. Get origin/main: echo "ORIGIN_MAIN: $(git rev-parse --short origin/main)"
+5. Run smoke tests: python -m pytest -q --tb=no 2>&1 | head -30
+6. Scan for issues: grep -rn "TODO\\|FIXME\\|XXX" src/ agent/ --include="*.py" 2>/dev/null | head -10
+7. Check for missing imports or obvious errors
 
 Return a CONCISE summary in this format:
 SOURCE: github/main
-COMMIT: <hash>
+WORKDIR: <pwd>
+HEAD: <hash>
+ORIGIN_MAIN: <hash>
 TEST STATUS: PASS/FAIL (X passed, Y failed)
 TOP ISSUES:
 - issue 1

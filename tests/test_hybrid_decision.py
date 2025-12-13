@@ -217,7 +217,7 @@ class TestDecisionEntryContainsBothActions:
         decision_mode = "hybrid_shadow"
         
         decision_entry = {
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
             "decision_source": decision_source,
             "decision_mode": decision_mode,
             "proposed_action": proposed_action,
@@ -250,7 +250,7 @@ class TestDecisionEntryContainsBothActions:
         llm_action = None
         
         decision_entry = {
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
             "decision_source": "rule_based",
             "decision_mode": "rule_only",
             "rule_action": rule_action,
