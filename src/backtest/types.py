@@ -16,6 +16,10 @@ ExitStyle = Literal["hold_to_expiry", "tp_and_roll"]
 PricingMode = Literal["deribit_live", "synthetic_bs"]
 SyntheticIVMode = Literal["fixed", "rv_window", "historical_replay"]
 
+# Hybrid synthetic mode enums
+SigmaMode = Literal["rv_x_multiplier", "atm_iv_x_multiplier", "mark_iv_x_multiplier"]
+ChainMode = Literal["synthetic_grid", "live_chain"]
+
 
 @dataclass
 class OptionSnapshot:
@@ -83,6 +87,10 @@ class CallSimulationConfig:
     synthetic_fixed_iv: float = 0.70
     synthetic_rv_window_days: int = 30
     synthetic_iv_multiplier: float = 1.0
+    
+    # Hybrid synthetic mode settings
+    sigma_mode: SigmaMode = "rv_x_multiplier"
+    chain_mode: ChainMode = "synthetic_grid"
 
 
 RollTrigger = Literal["tp_roll", "defensive_roll", "expiry", "none"]

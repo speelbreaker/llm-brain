@@ -1,0 +1,111 @@
+Prompt for AI Builder – Add hybrid “Deribit-driven synthetic” mode
+
+We’ve already implemented:
+
+A synthetic universe using:
+
+synthetic_fixed_iv or RV×synthetic_iv_multiplier,
+
+Synthetic expiry at target_dte,
+
+Synthetic strike ladders with static steps,
+
+Live skew from Deribit (anchor ratios vs ATM).
+
+A live Deribit mode that uses real instruments & marks.
+
+I want a hybrid mode that keeps the same backtest pipeline (Greg sensors, selectors, etc.) but swaps in more live Deribit data for the synthetic universe, in a controlled way.
+
+Please implement:
+
+New config enums for synthetic mode:
+
+In the synthetic config and/or CallSimulationConfig, add:
+
+sigma_mode: "rv_x_multiplier" | "atm_iv_x_multiplier" | "mark_iv_x_multiplier"
+
+chain_mode: "synthetic_grid" | "live_chain"
+
+Default:
+
+sigma_mode = "rv_x_multiplier" (current behavior).
+
+chain_mode = "synthetic_grid" (current behavior).
+
+Sigma selection logic:
+
+When sigma_mode = "rv_x_multiplier":
+
+Use the current behavior: realized vol over synthetic_rv_window_days, scaled by synthetic_iv_multiplier, then skew.
+
+When sigma_mode = "atm_iv_x_multiplier":
+
+Pull the current chain via Deribit.
+
+Find the near-ATM call IV for the relevant DTE band.
+
+Use that ATM IV as the base sigma, scaled by the same DTE-band multipliers we already calibrate.
+
+Apply skew as we do today.
+
+When sigma_mode = "mark_iv_x_multiplier":
+
+For each candidate option:
+
+Use that instrument’s live mark_iv as the base sigma.
+
+Optionally scale by a DTE-band multiplier for stress scenarios.
+
+This mode should bypass RV completely (no RV fallback).
+
+Chain construction logic (expiries + strikes):
+
+When chain_mode = "synthetic_grid":
+
+Keep the current behavior: synthetic expiry at target_dte and static strike ladder, filtered by delta.
+
+When chain_mode = "live_chain":
+
+Pull the full call chain from Deribit (or harvester equivalent for backtests).
+
+Filter instruments by:
+
+DTE within [min_dte, max_dte],
+
+Delta within [delta_min, delta_max],
+
+Settlement/margin type as configured.
+
+Use the real expiries and strikes from Deribit instead of a synthetic grid.
+
+Use the chosen sigma_mode to set sigma (RV vs ATM IV vs mark IV) before pricing.
+
+UI toggle & visibility:
+
+In the synthetic/backtest config UI:
+
+Expose a simple set of presets:
+
+“Pure Synthetic (RV-based)” → sigma_mode="rv_x_multiplier", chain_mode="synthetic_grid".
+
+“Live IV, Synthetic Grid” → sigma_mode="atm_iv_x_multiplier", chain_mode="synthetic_grid".
+
+“Live Chain + Live IV” → sigma_mode="mark_iv_x_multiplier", chain_mode="live_chain".
+
+Show the current mode in the synthetic universe card so I can see at a glance how “real” the synthetic universe is.
+
+Safety & tests:
+
+Add unit tests to cover:
+
+Sigma selection for each sigma_mode.
+
+Candidate generation for chain_mode="live_chain" vs "synthetic_grid".
+
+Ensure that:
+
+Existing behavior is unchanged when I keep the defaults.
+
+New modes use the same filters (DTE, delta, margin type) so sensors and selectors don’t break.
+
+After implementing, please add a short note in the docs (e.g., SYNTHETIC_UNIVERSE.md) explaining the three modes and when to use each.
