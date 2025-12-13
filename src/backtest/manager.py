@@ -677,6 +677,8 @@ class BacktestManager:
         delta_max: float = 0.45,
         margin_type: MarginType = "inverse",
         settlement_ccy: SettlementCcy = "ANY",
+        sigma_mode: str = "rv_x_multiplier",
+        chain_mode: str = "live_chain",
     ) -> bool:
         from src.backtest.run_store import create_run, update_run_status
         
@@ -701,6 +703,8 @@ class BacktestManager:
                 "delta_max": delta_max,
                 "margin_type": margin_type,
                 "settlement_ccy": settlement_ccy,
+                "sigma_mode": sigma_mode,
+                "chain_mode": chain_mode,
             }
             
             run_result = create_run(config_dict)
@@ -747,6 +751,10 @@ class BacktestManager:
                 
                 interval_bars = max(1, int(decision_interval_hours / bar_duration_hours))
                 
+                from src.backtest.types import SigmaMode, ChainMode
+                sigma_mode_typed: SigmaMode = sigma_mode  # type: ignore
+                chain_mode_typed: ChainMode = chain_mode  # type: ignore
+                
                 config = CallSimulationConfig(
                     underlying=underlying,
                     start=start_date,
@@ -766,6 +774,8 @@ class BacktestManager:
                     delta_max=delta_max,
                     option_margin_type=margin_type,
                     option_settlement_ccy=settlement_ccy,
+                    sigma_mode=sigma_mode_typed,
+                    chain_mode=chain_mode_typed,
                 )
 
                 ds = DeribitDataSource()

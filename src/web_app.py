@@ -972,6 +972,9 @@ class BacktestRequest(BaseModel):
     dte_tolerance: int = 2
     delta_tolerance: float = 0.05
     initial_position: float = 1.0
+    # Hybrid synthetic mode settings
+    sigma_mode: str = "rv_x_multiplier"
+    chain_mode: str = "synthetic_grid"
 
 
 from typing import Literal as TypingLiteral
@@ -991,6 +994,9 @@ class BacktestStartRequest(BaseModel):
     delta_max: float = 0.35
     margin_type: TypingLiteral["inverse", "linear"] = "inverse"
     settlement_ccy: TypingLiteral["ANY", "USDC", "BTC", "ETH"] = "ANY"
+    # Hybrid synthetic mode settings
+    sigma_mode: str = "rv_x_multiplier"
+    chain_mode: str = "synthetic_grid"
 
 
 @app.post("/api/backtest/start")
@@ -1031,6 +1037,8 @@ def start_backtest(req: BacktestStartRequest) -> JSONResponse:
         delta_max=req.delta_max,
         margin_type=req.margin_type,
         settlement_ccy=req.settlement_ccy,
+        sigma_mode=req.sigma_mode,
+        chain_mode=req.chain_mode,
     )
     
     if not started:
@@ -1127,6 +1135,10 @@ def run_backtest(req: BacktestRequest) -> JSONResponse:
         run.status = "running"
         db.commit()
     
+    from src.backtest.types import SigmaMode, ChainMode
+    sigma_mode_typed: SigmaMode = req.sigma_mode  # type: ignore
+    chain_mode_typed: ChainMode = req.chain_mode  # type: ignore
+    
     config = CallSimulationConfig(
         underlying=req.underlying,
         start=start_dt,
@@ -1140,6 +1152,8 @@ def run_backtest(req: BacktestRequest) -> JSONResponse:
         dte_tolerance=req.dte_tolerance,
         target_delta=req.target_delta,
         delta_tolerance=req.delta_tolerance,
+        sigma_mode=sigma_mode_typed,
+        chain_mode=chain_mode_typed,
     )
     
     ds = DeribitDataSource()
@@ -4306,6 +4320,17 @@ def index() -> str:
         <div class="form-group">
           <label>Target Delta</label>
           <input type="number" id="bt-delta" value="0.25" min="0.05" max="0.5" step="0.05">
+        </div>
+      </div>
+      <div class="form-row">
+        <div class="form-group" style="flex:2;">
+          <label>Synthetic Mode</label>
+          <select id="bt-synthetic-mode" onchange="updateSyntheticModeDescription()">
+            <option value="pure_synthetic" selected>Pure Synthetic (RV-based)</option>
+            <option value="live_iv_synthetic">Live IV, Synthetic Grid</option>
+            <option value="live_chain">Live Chain + Live IV</option>
+          </select>
+          <small id="bt-synthetic-mode-desc" style="display:block;margin-top:4px;color:#888;font-size:0.8rem;">Uses realized volatility with multiplier to price synthetic options on a generated strike grid.</small>
         </div>
       </div>
       <div style="display:flex;gap:0.5rem;">
@@ -9691,6 +9716,27 @@ def index() -> str:
       }});
     }}
     
+    function getSyntheticModeParams() {{
+      const mode = document.getElementById('bt-synthetic-mode').value;
+      const presets = {{
+        'pure_synthetic': {{ sigma_mode: 'rv_x_multiplier', chain_mode: 'synthetic_grid' }},
+        'live_iv_synthetic': {{ sigma_mode: 'atm_iv_x_multiplier', chain_mode: 'synthetic_grid' }},
+        'live_chain': {{ sigma_mode: 'mark_iv_x_multiplier', chain_mode: 'live_chain' }},
+      }};
+      return presets[mode] || presets['pure_synthetic'];
+    }}
+    
+    function updateSyntheticModeDescription() {{
+      const mode = document.getElementById('bt-synthetic-mode').value;
+      const desc = document.getElementById('bt-synthetic-mode-desc');
+      const descriptions = {{
+        'pure_synthetic': 'Uses realized volatility with multiplier to price synthetic options on a generated strike grid.',
+        'live_iv_synthetic': 'Uses live ATM IV from Deribit with multiplier to price synthetic options on a generated strike grid.',
+        'live_chain': 'Uses actual Deribit option chains with live mark IV for each strike. Most realistic backtesting.',
+      }};
+      desc.textContent = descriptions[mode] || descriptions['pure_synthetic'];
+    }}
+    
     async function startBacktest() {{
       const underlying = document.getElementById('bt-underlying').value;
       const start = document.getElementById('bt-start').value;
@@ -9706,6 +9752,7 @@ def index() -> str:
       const deltaMax = parseFloat(document.getElementById('bt-delta-max').value);
       const marginType = document.getElementById('bt-margin-type').value;
       const settlementCcy = document.getElementById('bt-settlement-ccy').value;
+      const syntheticParams = getSyntheticModeParams();
       
       const payload = {{
         underlying,
@@ -9722,6 +9769,8 @@ def index() -> str:
         delta_max: deltaMax,
         margin_type: marginType,
         settlement_ccy: settlementCcy,
+        sigma_mode: syntheticParams.sigma_mode,
+        chain_mode: syntheticParams.chain_mode,
       }};
       
       document.getElementById('bt-error').style.display = 'none';

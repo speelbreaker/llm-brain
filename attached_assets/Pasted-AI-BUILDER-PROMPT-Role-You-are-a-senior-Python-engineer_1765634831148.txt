@@ -1,0 +1,127 @@
+AI BUILDER PROMPT
+Role
+
+You are a senior Python engineer. Update our LLM review client so the reviewer can use gpt-5.2-pro reliably.
+
+Goal
+
+Make gpt-5.2-pro work (no more unknown_model) by calling it using the OpenAI Responses API (not Chat Completions).
+
+Fix the “empty Summary” issue by enforcing structured JSON output and adding a safe retry when the model returns no visible text.
+
+Keep a fallback chain to other models (e.g., gpt-5.2, gpt-5) if gpt-5.2-pro fails.
+
+Context
+
+Current code uses client.chat.completions.create(...) in agent/llm_client.py (_call_with_fallback).
+
+gpt-5.2-pro fails with unknown_model when called through Chat Completions.
+
+Sometimes gpt-5* returns empty message.content, producing an empty Summary.
+
+Required Changes
+1) Update agent/llm_client.py to use Responses API for gpt-5.2-pro
+
+In _call_with_fallback, if the model is gpt-5.2-pro:
+
+Call: client.responses.create(...)
+
+Use:
+
+model="gpt-5.2-pro"
+
+input=messages (same list of {role, content})
+
+reasoning={"effort": self._reasoning_effort} (e.g., "high"/"xhigh")
+
+max_output_tokens=max_tokens (note: Responses uses max_output_tokens, not max_completion_tokens)
+
+Extract text using: resp.output_text (not choices[0].message.content)
+
+For non-pro models, keep existing Chat Completions call or migrate them to Responses too (either is fine). But ensure gpt-5.2-pro never goes through chat.completions.
+
+2) Make JSON output guaranteed (no more “JSON scraping”)
+
+Update the review prompt/system prompt to demand:
+
+Return ONE JSON object only
+
+No code fences
+
+Must include at least:
+
+overall_severity
+
+summary (array of strings, minimum 1 item)
+
+risks (array, can be empty)
+
+next_actions (array, can be empty)
+
+Then change parsing logic:
+
+Prefer json.loads(content) directly.
+
+Only fall back to “extract JSON from text” as a last resort.
+
+3) Fix empty-content responses for gpt-5*
+
+After receiving output, if content.strip() is empty:
+
+Retry once with:
+
+higher max_output_tokens (e.g., 12000–20000 for reviews)
+
+and/or reduced reasoning effort (e.g., from xhigh → high)
+
+If still empty, return an LLMReviewResult error with a clear message and store artifacts.
+
+4) Always store raw output artifacts when parsing fails
+
+If JSON parsing fails, write the raw model output to:
+
+.auditor/artifacts/<run_id>/llm_raw.txt (or .json if applicable)
+
+Also store a short preview into summary so Telegram never shows a blank Summary.
+
+5) Model config + base_url safety
+
+Add env support (if not already):
+
+OPENAI_MODEL_REVIEW default: gpt-5.2-pro
+
+OPENAI_MODEL_FALLBACKS default: gpt-5.2,gpt-5
+
+Keep AI_INTEGRATIONS_OPENAI_BASE_URL support, but:
+
+If a custom base_url is set and Responses API/model isn’t supported, log a clear warning and fall back to the next model.
+
+Acceptance Criteria
+
+With OPENAI_MODEL_REVIEW=gpt-5.2-pro, reviews work (no unknown_model error).
+
+The Telegram review output never has an empty Summary.
+
+If the model returns non-JSON or empty output, the system:
+
+retries once (for empty),
+
+stores raw artifacts,
+
+returns a non-empty fallback summary (or a clear error review result).
+
+Files to modify
+
+agent/llm_client.py
+
+Any prompt constants used for the review JSON format (e.g., REVIEW_SYSTEM_PROMPT / _build_review_prompt)
+
+(Optional) docs/README section for env vars
+
+If you implement this, keep the diff small and targeted, and include a quick unit test (or minimal script) that simulates:
+
+valid JSON response,
+
+empty content response (forces retry),
+
+invalid JSON response (stores artifact + fallback summary).

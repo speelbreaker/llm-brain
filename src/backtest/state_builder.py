@@ -22,7 +22,7 @@ from typing import Dict, Any, List, Optional
 from .deribit_data_source import DeribitDataSource
 from .market_context_backtest import compute_market_context_from_ds, market_context_to_dict
 from .types import OptionSnapshot, CallSimulationConfig
-from .pricing import bs_call_delta, get_synthetic_iv
+from .pricing import bs_call_delta, get_synthetic_iv, get_sigma_for_option, bs_call_price
 from src.utils.expiry import parse_deribit_expiry
 from src.models import AgentState, MarketContext
 from src.state_core import (
@@ -112,6 +112,135 @@ def _generate_synthetic_candidates(
         candidates.append(candidate)
     
     return candidates
+
+
+def _generate_live_chain_candidates(
+    ds: DeribitDataSource,
+    spot: float,
+    t: datetime,
+    cfg: CallSimulationConfig,
+    spot_history: List[tuple],
+) -> List[OptionSnapshot]:
+    """
+    Generate option candidates from live Deribit chain.
+    
+    Fetches real expiries and strikes from Deribit, filters by DTE/delta/margin,
+    and uses the configured sigma_mode to set IV for each option.
+    
+    Args:
+        ds: DeribitDataSource instance
+        spot: Current spot price
+        t: Decision time
+        cfg: Simulation configuration with chain_mode and sigma_mode
+        spot_history: List of (datetime, price) tuples for RV calculation
+        
+    Returns:
+        List of OptionSnapshot candidates from live chain, filtered and priced
+    """
+    all_options: List[OptionSnapshot] = ds.list_option_chain(
+        underlying=cfg.underlying,
+        as_of=t,
+        settlement_ccy=cfg.option_settlement_ccy,
+        margin_type=cfg.option_margin_type,
+    )
+    
+    if not all_options:
+        logger.warning(f"No live options available for {cfg.underlying} at {t}")
+        return []
+    
+    # Filter by DTE and delta
+    filtered = _filter_option_chain(
+        all_options=all_options,
+        t=t,
+        min_dte=cfg.min_dte,
+        max_dte=cfg.max_dte,
+        delta_min=cfg.delta_min,
+        delta_max=cfg.delta_max,
+    )
+    
+    # For mark_iv_x_multiplier mode, use each option's own mark_iv
+    # For other modes, we may want to recalculate sigma
+    sigma_mode = getattr(cfg, 'sigma_mode', 'rv_x_multiplier')
+    
+    if sigma_mode == "mark_iv_x_multiplier":
+        # Use each option's live mark_iv directly, scaled by multiplier
+        result = []
+        multiplier = cfg.synthetic_iv_multiplier
+        
+        for opt in filtered:
+            if opt.iv is not None and opt.iv > 0:
+                # If multiplier is 1.0 (or very close), preserve Deribit's actual data
+                # This ensures "Live Chain + Live IV" mode uses real exchange marks
+                if abs(multiplier - 1.0) < 1e-6:
+                    # Preserve original Deribit mark values - no recalculation
+                    result.append(opt)
+                else:
+                    # Only recalculate when applying a stress multiplier
+                    scaled_iv = opt.iv * multiplier
+                    dte = (opt.expiry - t).total_seconds() / (24 * 3600)
+                    t_years = max(dte / 365.0, 1e-6)
+                    mark_price = bs_call_price(spot, opt.strike, t_years, scaled_iv, cfg.risk_free_rate)
+                    delta = bs_call_delta(spot, opt.strike, t_years, scaled_iv, cfg.risk_free_rate)
+                    
+                    result.append(OptionSnapshot(
+                        instrument_name=opt.instrument_name,
+                        underlying=opt.underlying,
+                        kind=opt.kind,
+                        strike=opt.strike,
+                        expiry=opt.expiry,
+                        delta=delta,
+                        iv=scaled_iv,
+                        mark_price=mark_price,
+                        settlement_ccy=opt.settlement_ccy,
+                        margin_type=opt.margin_type,
+                    ))
+            else:
+                # No valid IV - pass through as-is (will fall back to RV in scoring)
+                result.append(opt)
+        return result
+    else:
+        # For atm_iv or rv modes, get sigma and recalculate
+        sigma = get_sigma_for_option(
+            config=cfg,
+            spot_history=spot_history,
+            as_of=t,
+            option_chain=all_options,
+            option_mark_iv=None,
+            abs_delta=0.25,  # Use target delta for base sigma
+            regime_state=None,
+        )
+        
+        result = []
+        for opt in filtered:
+            abs_delta = abs(opt.delta) if opt.delta else 0.25
+            opt_sigma = get_sigma_for_option(
+                config=cfg,
+                spot_history=spot_history,
+                as_of=t,
+                option_chain=all_options,
+                option_mark_iv=opt.iv,
+                abs_delta=abs_delta,
+                regime_state=None,
+            )
+            
+            dte = (opt.expiry - t).total_seconds() / (24 * 3600)
+            t_years = max(dte / 365.0, 1e-6)
+            mark_price = bs_call_price(spot, opt.strike, t_years, opt_sigma, cfg.risk_free_rate)
+            delta = bs_call_delta(spot, opt.strike, t_years, opt_sigma, cfg.risk_free_rate)
+            
+            result.append(OptionSnapshot(
+                instrument_name=opt.instrument_name,
+                underlying=opt.underlying,
+                kind=opt.kind,
+                strike=opt.strike,
+                expiry=opt.expiry,
+                delta=delta,
+                iv=opt_sigma,
+                mark_price=mark_price,
+                settlement_ccy=opt.settlement_ccy,
+                margin_type=opt.margin_type,
+            ))
+        return result
 
 
 def _filter_option_chain(
@@ -214,23 +343,24 @@ def build_historical_state(
 
     candidates: List[OptionSnapshot] = []
     
-    if cfg.pricing_mode == "synthetic_bs":
-        if spot is not None and spot > 0:
-            rv_lookback = t - timedelta(days=cfg.synthetic_rv_window_days + 7)
-            rv_df = ds.get_spot_ohlc(
-                underlying=underlying,
-                start=rv_lookback,
-                end=t,
-                timeframe="1d",
-            )
-            spot_history = []
-            if not rv_df.empty:
-                for idx, row in rv_df.iterrows():
-                    spot_history.append((idx, float(row["close"])))
-            
-            sigma = get_synthetic_iv(cfg, spot_history, t)
-            candidates = _generate_synthetic_candidates(spot, t, cfg, sigma)
-    else:
+    # Get spot history for RV calculation (needed for sigma modes)
+    rv_lookback = t - timedelta(days=cfg.synthetic_rv_window_days + 7)
+    rv_df = ds.get_spot_ohlc(
+        underlying=underlying,
+        start=rv_lookback,
+        end=t,
+        timeframe="1d",
+    )
+    spot_history = []
+    if not rv_df.empty:
+        for idx, row in rv_df.iterrows():
+            spot_history.append((idx, float(row["close"])))
+    
+    # Get chain_mode from config (defaults to synthetic_grid for backward compatibility)
+    chain_mode = getattr(cfg, 'chain_mode', 'synthetic_grid')
+    
+    if cfg.pricing_mode == "deribit_live":
+        # Full live mode - use Deribit chain directly
         all_options: List[OptionSnapshot] = ds.list_option_chain(
             underlying=underlying,
             as_of=t,
@@ -246,6 +376,24 @@ def build_historical_state(
             delta_min=cfg.delta_min,
             delta_max=cfg.delta_max,
         )
+    elif chain_mode == "live_chain":
+        # Hybrid mode: live chain with configurable sigma mode
+        if spot is not None and spot > 0:
+            candidates = _generate_live_chain_candidates(ds, spot, t, cfg, spot_history)
+    else:
+        # Default: synthetic_grid mode
+        if spot is not None and spot > 0:
+            # Use new sigma selection logic
+            sigma = get_sigma_for_option(
+                config=cfg,
+                spot_history=spot_history,
+                as_of=t,
+                option_chain=None,  # No chain for pure synthetic
+                option_mark_iv=None,
+                abs_delta=cfg.target_delta,
+                regime_state=None,
+            )
+            candidates = _generate_synthetic_candidates(spot, t, cfg, sigma)
 
     portfolio = {
         "spot_position": cfg.initial_spot_position,
@@ -372,14 +520,24 @@ def build_historical_agent_state(
         for idx, row in rv_df.iterrows():
             spot_history.append((idx, float(row["close"])))
     
-    sigma = get_synthetic_iv(cfg, spot_history, t)
+    # Use new sigma selection logic
+    sigma = get_sigma_for_option(
+        config=cfg,
+        spot_history=spot_history,
+        as_of=t,
+        option_chain=None,
+        option_mark_iv=None,
+        abs_delta=cfg.target_delta,
+        regime_state=None,
+    )
     rv = sigma * 0.8
     
+    # Get chain_mode from config
+    chain_mode = getattr(cfg, 'chain_mode', 'synthetic_grid')
+    
     options: List[OptionSnapshot] = []
-    if cfg.pricing_mode == "synthetic_bs":
-        if spot > 0:
-            options = _generate_synthetic_candidates(spot, t, cfg, sigma)
-    else:
+    if cfg.pricing_mode == "deribit_live":
+        # Full live mode
         all_options = ds.list_option_chain(
             underlying=underlying,
             as_of=t,
@@ -394,6 +552,14 @@ def build_historical_agent_state(
             delta_min=cfg.delta_min,
             delta_max=cfg.delta_max,
         )
+    elif chain_mode == "live_chain":
+        # Hybrid mode: live chain with configurable sigma mode
+        if spot > 0:
+            options = _generate_live_chain_candidates(ds, spot, t, cfg, spot_history)
+    else:
+        # Default: synthetic_grid mode
+        if spot > 0:
+            options = _generate_synthetic_candidates(spot, t, cfg, sigma)
     
     raw_options = [
         _option_snapshot_to_raw_option(opt, spot, underlying, rv, t)

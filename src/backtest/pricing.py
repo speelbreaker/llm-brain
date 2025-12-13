@@ -15,7 +15,7 @@ from typing import List, Optional, Tuple, Dict, TYPE_CHECKING
 
 import numpy as np
 
-from .types import CallSimulationConfig
+from .types import CallSimulationConfig, OptionSnapshot
 
 if TYPE_CHECKING:
     from src.synthetic.regimes import RegimeParams, RegimeModel
@@ -307,6 +307,168 @@ def get_synthetic_iv(
         return regime_state.iv_atm / 100.0
     
     return rv * config.synthetic_iv_multiplier
+
+
+def get_atm_iv_from_chain(
+    option_chain: List[OptionSnapshot],
+    spot: float,
+    target_dte: int,
+    dte_tolerance: int = 2,
+    as_of: Optional[datetime] = None,
+) -> Optional[float]:
+    """
+    Extract ATM IV from an option chain for a specific DTE band.
+    
+    Finds the near-ATM call (delta closest to 0.5) within the DTE range
+    and returns its IV.
+    
+    Args:
+        option_chain: List of OptionSnapshot objects with iv and delta
+        spot: Current spot price
+        target_dte: Target days to expiry
+        dte_tolerance: Tolerance around target DTE
+        as_of: Reference timestamp for DTE calculation (uses now if None)
+        
+    Returns:
+        ATM IV as decimal (e.g., 0.50 for 50%), or None if not found
+    """
+    from datetime import timezone
+    
+    if not option_chain:
+        return None
+    
+    # Filter to calls in the DTE range
+    candidates = []
+    # Use provided timestamp or fall back to now (for live trading)
+    reference_time = as_of if as_of is not None else datetime.now(timezone.utc)
+    if reference_time.tzinfo is None:
+        reference_time = reference_time.replace(tzinfo=timezone.utc)
+    
+    for opt in option_chain:
+        if opt.kind != "call":
+            continue
+        if opt.iv is None or opt.delta is None:
+            continue
+        
+        dte = (opt.expiry - reference_time).total_seconds() / (24 * 3600)
+        if abs(dte - target_dte) <= dte_tolerance:
+            candidates.append((opt, abs(opt.delta - 0.5)))
+    
+    if not candidates:
+        # Fall back to any call with valid IV
+        for opt in option_chain:
+            if opt.kind == "call" and opt.iv is not None and opt.delta is not None:
+                candidates.append((opt, abs(opt.delta - 0.5)))
+    
+    if not candidates:
+        return None
+    
+    # Find closest to ATM (delta = 0.5)
+    candidates.sort(key=lambda x: x[1])
+    best_opt = candidates[0][0]
+    
+    return best_opt.iv
+
+
+def get_sigma_for_option(
+    config: CallSimulationConfig,
+    spot_history: List[Tuple[datetime, float]],
+    as_of: datetime,
+    option_chain: Optional[List[OptionSnapshot]] = None,
+    option_mark_iv: Optional[float] = None,
+    abs_delta: Optional[float] = None,
+    regime_state: Optional[RegimeState] = None,
+) -> float:
+    """
+    Get the sigma (IV) to use for option pricing based on sigma_mode.
+    
+    This is the main entry point for hybrid synthetic mode sigma selection.
+    
+    Args:
+        config: Simulation configuration with sigma_mode
+        spot_history: List of (datetime, price) tuples for RV calculation
+        as_of: Current decision time
+        option_chain: Optional option chain for atm_iv_x_multiplier mode
+        option_mark_iv: Optional mark IV for mark_iv_x_multiplier mode
+        abs_delta: Optional absolute delta for skew adjustment
+        regime_state: Optional regime state for AR(1) dynamics
+        
+    Returns:
+        Sigma (IV) as decimal for Black-Scholes pricing
+    """
+    from src.synthetic_skew import get_skew_factor
+    
+    sigma_mode = getattr(config, 'sigma_mode', 'rv_x_multiplier')
+    
+    if sigma_mode == "mark_iv_x_multiplier":
+        # Use the option's live mark_iv directly, bypass RV completely
+        if option_mark_iv is not None and option_mark_iv > 0:
+            base_iv = option_mark_iv
+            # Optionally scale by multiplier for stress scenarios
+            scaled_iv = base_iv * config.synthetic_iv_multiplier
+            return max(0.01, min(scaled_iv, 5.0))
+        else:
+            # Fall back to rv_x_multiplier if mark_iv not available
+            sigma_mode = "rv_x_multiplier"
+    
+    if sigma_mode == "atm_iv_x_multiplier":
+        # Pull ATM IV from chain and use as base, apply skew
+        atm_iv = None
+        if option_chain:
+            atm_iv = get_atm_iv_from_chain(
+                option_chain,
+                spot_history[-1][1] if spot_history else 0,
+                config.target_dte,
+                config.dte_tolerance,
+                as_of=as_of,
+            )
+        
+        if atm_iv is not None:
+            base_iv = atm_iv * config.synthetic_iv_multiplier
+            
+            # Apply skew if delta is provided
+            if abs_delta is not None:
+                skew_factor = get_skew_factor(
+                    underlying=config.underlying,
+                    option_type="call",
+                    abs_delta=abs_delta,
+                    skew_enabled=True,
+                    min_dte=float(config.min_dte),
+                    max_dte=float(config.max_dte),
+                )
+                base_iv = base_iv * skew_factor
+            
+            return max(0.01, min(base_iv, 5.0))
+        else:
+            # Fall back to rv_x_multiplier if ATM IV not available
+            sigma_mode = "rv_x_multiplier"
+    
+    # Default: rv_x_multiplier - use existing behavior
+    rv = compute_realized_volatility(
+        spot_history,
+        as_of,
+        config.synthetic_rv_window_days
+    )
+    
+    # Check for regime state
+    if regime_state is not None and regime_state.regime is not None:
+        base_iv = regime_state.iv_atm / 100.0
+    else:
+        base_iv = rv * config.synthetic_iv_multiplier
+    
+    # Apply skew if delta is provided
+    if abs_delta is not None:
+        skew_factor = get_skew_factor(
+            underlying=config.underlying,
+            option_type="call",
+            abs_delta=abs_delta,
+            skew_enabled=True,
+            min_dte=float(config.min_dte),
+            max_dte=float(config.max_dte),
+        )
+        base_iv = base_iv * skew_factor
+    
+    return max(0.01, min(base_iv, 5.0))
 
 
 def price_option_synthetic(
