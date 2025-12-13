@@ -112,6 +112,15 @@ def init_db() -> None:
         )
     """)
     
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS chat_sessions (
+            chat_id TEXT PRIMARY KEY,
+            messages_json TEXT,
+            context_json TEXT,
+            updated_at TEXT NOT NULL
+        )
+    """)
+    
     conn.commit()
     conn.close()
 
@@ -263,3 +272,76 @@ def get_last_snapshot(label: str) -> Optional[Dict[str, Any]]:
         return json.loads(row[0])
     except json.JSONDecodeError:
         return None
+
+
+@dataclass
+class ChatSession:
+    """A chat session with message history."""
+    chat_id: str
+    messages: List[Dict[str, str]]
+    context: Dict[str, Any]
+    updated_at: str
+
+
+def get_chat_session(chat_id: str) -> Optional[ChatSession]:
+    """Get a chat session by ID."""
+    conn = _get_conn()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT chat_id, messages_json, context_json, updated_at
+        FROM chat_sessions
+        WHERE chat_id = ?
+    """, (str(chat_id),))
+    row = cur.fetchone()
+    conn.close()
+    
+    if not row:
+        return None
+    
+    try:
+        messages = json.loads(row[1]) if row[1] else []
+        context = json.loads(row[2]) if row[2] else {}
+    except json.JSONDecodeError:
+        messages = []
+        context = {}
+    
+    return ChatSession(
+        chat_id=row[0],
+        messages=messages,
+        context=context,
+        updated_at=row[3],
+    )
+
+
+def save_chat_session(
+    chat_id: str,
+    messages: List[Dict[str, str]],
+    context: Optional[Dict[str, Any]] = None,
+) -> None:
+    """Save or update a chat session."""
+    conn = _get_conn()
+    cur = conn.cursor()
+    
+    now = datetime.now(timezone.utc).isoformat()
+    
+    cur.execute("""
+        INSERT OR REPLACE INTO chat_sessions (chat_id, messages_json, context_json, updated_at)
+        VALUES (?, ?, ?, ?)
+    """, (
+        str(chat_id),
+        json.dumps(messages[-20:]),
+        json.dumps(context or {}),
+        now,
+    ))
+    
+    conn.commit()
+    conn.close()
+
+
+def clear_chat_session(chat_id: str) -> None:
+    """Clear a chat session."""
+    conn = _get_conn()
+    cur = conn.cursor()
+    cur.execute("DELETE FROM chat_sessions WHERE chat_id = ?", (str(chat_id),))
+    conn.commit()
+    conn.close()
