@@ -31,7 +31,7 @@ INVERSE_ASSETS = ["BTC", "ETH"]
 
 LINEAR_CURRENCY = "USDC"
 
-INTERVAL_MINUTES = int(os.getenv("HARVESTER_INTERVAL_MINUTES", "15"))
+INTERVAL_SECONDS = int(os.getenv("HARVESTER_INTERVAL_SECONDS", "901"))
 
 DERIBIT_BASE_URL = os.getenv("DERIBIT_BASE_URL", "https://www.deribit.com")
 
@@ -294,7 +294,7 @@ def run_harvester() -> None:
     logger.info("Starting Deribit Data Harvester")
     logger.info(f"Inverse assets: {', '.join(INVERSE_ASSETS)}")
     logger.info(f"Linear currency: {LINEAR_CURRENCY}")
-    logger.info(f"Polling interval: {INTERVAL_MINUTES} minutes")
+    logger.info(f"Polling interval: {INTERVAL_SECONDS} seconds ({INTERVAL_SECONDS/60:.1f} min)")
     logger.info(f"Data directory: {DATA_ROOT}")
     logger.info(f"Deribit URL: {DERIBIT_BASE_URL}")
     logger.info("=" * 60)
@@ -325,7 +325,7 @@ def run_harvester() -> None:
             logger.exception(f"Unexpected error processing linear options: {e}")
         
         elapsed = time.time() - loop_start
-        sleep_sec = INTERVAL_MINUTES * 60 - elapsed
+        sleep_sec = INTERVAL_SECONDS - elapsed
         
         if sleep_sec > 0:
             sleep_min = sleep_sec / 60
@@ -334,7 +334,7 @@ def run_harvester() -> None:
         else:
             logger.warning(
                 f"Harvesting took {elapsed:.1f}s, exceeding interval of "
-                f"{INTERVAL_MINUTES * 60}s. Continuing immediately."
+                f"{INTERVAL_SECONDS}s. Continuing immediately."
             )
 
 
