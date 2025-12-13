@@ -1,0 +1,175 @@
+{
+  "run_id": "2025-12-13T17-52-51Z_BTC_5bba8b87",
+  "created_at": "2025-12-13T17:52:51.691846",
+  "status": "finished",
+  "config": {
+    "underlying": "BTC",
+    "start_date": "2025-12-01T00:00:00+00:00",
+    "end_date": "2025-12-10T00:00:00+00:00",
+    "timeframe": "1h",
+    "decision_interval_hours": 24,
+    "exit_style": "hold_to_expiry",
+    "target_dte": 7,
+    "target_delta": 0.25,
+    "min_dte": 3,
+    "max_dte": 21,
+    "delta_min": 0.15,
+    "delta_max": 0.35,
+    "margin_type": "inverse",
+    "settlement_ccy": "ANY",
+    "sigma_mode": "rv_x_multiplier",
+    "chain_mode": "synthetic_grid",
+    "synthetic_iv_multiplier": 2.0,
+    "selector_name": "generic_covered_call"
+  },
+  "metrics": {
+    "initial_equity": 87003.5,
+    "final_equity": 95934.67,
+    "net_profit_usd": 8931.17,
+    "net_profit_pct": 10.27,
+    "hodl_profit_usd": 5157.0,
+    "hodl_profit_pct": 5.93,
+    "max_drawdown_pct": 0.0,
+    "max_drawdown_usd": 0.0,
+    "num_trades": 10,
+    "win_rate": 70.0,
+    "avg_trade_usd": 796.32,
+    "profit_factor": 3.35,
+    "gross_profit": 11358.96,
+    "gross_loss": 3395.79,
+    "avg_winner": 1622.71,
+    "avg_loser": 1131.93,
+    "sharpe_ratio": 0.74,
+    "sortino_ratio": 0.0,
+    "final_pnl": 7963.171,
+    "final_pnl_vs_hodl": 3774.171,
+    "avg_pnl": 796.3171
+  },
+  "recent_steps": {
+    "hold_to_expiry": [
+      {
+        "time": "2025-12-01T00:00:00+00:00",
+        "candidates": 11,
+        "best_score": 6.36,
+        "traded": true
+      },
+      {
+        "time": "2025-12-02T00:00:00+00:00",
+        "candidates": 10,
+        "best_score": 6.38,
+        "traded": true
+      },
+      {
+        "time": "2025-12-03T00:00:00+00:00",
+        "candidates": 12,
+        "best_score": 6.46,
+        "traded": true
+      },
+      {
+        "time": "2025-12-04T00:00:00+00:00",
+        "candidates": 12,
+        "best_score": 6.37,
+        "traded": true
+      },
+      {
+        "time": "2025-12-05T00:00:00+00:00",
+        "candidates": 12,
+        "best_score": 6.33,
+        "traded": true
+      },
+      {
+        "time": "2025-12-06T00:00:00+00:00",
+        "candidates": 12,
+        "best_score": 6.39,
+        "traded": true
+      },
+      {
+        "time": "2025-12-07T00:00:00+00:00",
+        "candidates": 12,
+        "best_score": 6.4,
+        "traded": true
+      },
+      {
+        "time": "2025-12-08T00:00:00+00:00",
+        "candidates": 12,
+        "best_score": 6.35,
+        "traded": true
+      },
+      {
+        "time": "2025-12-09T00:00:00+00:00",
+        "candidates": 11,
+        "best_score": 6.5,
+        "traded": true
+      },
+      {
+        "time": "2025-12-10T00:00:00+00:00",
+        "candidates": 12,
+        "best_score": 6.43,
+        "traded": true
+      }
+    ]
+  },
+  "recent_chains": {},
+  "equity_curves": {
+    "hold_to_expiry": [
+      [
+        "2025-12-01T00:00:00+00:00",
+        87003.5,
+        87003.5
+      ],
+      [
+        "2025-12-08T00:00:00+00:00",
+        90830.36893049149,
+        90356.5
+      ],
+      [
+        "2025-12-09T00:00:00+00:00",
+        91293.97116915473,
+        90400.0
+      ],
+      [
+        "2025-12-10T00:00:00+00:00",
+        93404.7775812997,
+        92160.5
+      ],
+      [
+        "2025-12-11T00:00:00+00:00",
+        93807.1099393106,
+        92160.5
+      ],
+      [
+        "2025-12-12T00:00:00+00:00",
+        94141.35917063098,
+        92160.5
+      ],
+      [
+        "2025-12-13T00:00:00+00:00",
+        94513.16018507635,
+        92160.5
+      ],
+      [
+        "2025-12-14T00:00:00+00:00",
+        94885.58024901261,
+        92160.5
+      ],
+      [
+        "2025-12-15T00:00:00+00:00",
+        95192.91474460685,
+        92160.5
+      ],
+      [
+        "2025-12-16T00:00:00+00:00",
+        95564.54031559477,
+        92160.5
+      ],
+      [
+        "2025-12-17T00:00:00+00:00",
+        95934.6709851735,
+        92160.5
+      ]
+    ]
+  },
+  "error": null,
+  "finished_at": "2025-12-13T17:53:01.795689",
+  "duration_seconds": 10.103843
+}

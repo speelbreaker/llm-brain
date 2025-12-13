@@ -682,6 +682,7 @@ class BacktestManager:
         settlement_ccy: SettlementCcy = "ANY",
         sigma_mode: str = "rv_x_multiplier",
         chain_mode: str = "live_chain",
+        synthetic_iv_multiplier: float = 1.0,
         selector_name: str = "generic_covered_call",
     ) -> bool:
         from src.backtest.run_store import create_run, update_run_status
@@ -709,6 +710,7 @@ class BacktestManager:
                 "settlement_ccy": settlement_ccy,
                 "sigma_mode": sigma_mode,
                 "chain_mode": chain_mode,
+                "synthetic_iv_multiplier": synthetic_iv_multiplier,
                 "selector_name": selector_name,
             }
             
@@ -782,6 +784,7 @@ class BacktestManager:
                     option_settlement_ccy=settlement_ccy,
                     sigma_mode=sigma_mode_typed,
                     chain_mode=chain_mode_typed,
+                    synthetic_iv_multiplier=synthetic_iv_multiplier,
                 )
 
                 now_utc = datetime.utcnow()

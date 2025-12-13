@@ -997,6 +997,7 @@ class BacktestStartRequest(BaseModel):
     # Hybrid synthetic mode settings
     sigma_mode: str = "rv_x_multiplier"
     chain_mode: str = "synthetic_grid"
+    synthetic_iv_multiplier: float = 1.0
     # Selector/strategy for decision making
     selector_name: str = "generic_covered_call"
 
@@ -1041,6 +1042,7 @@ def start_backtest(req: BacktestStartRequest) -> JSONResponse:
         settlement_ccy=req.settlement_ccy,
         sigma_mode=req.sigma_mode,
         chain_mode=req.chain_mode,
+        synthetic_iv_multiplier=req.synthetic_iv_multiplier,
         selector_name=req.selector_name,
     )
     
