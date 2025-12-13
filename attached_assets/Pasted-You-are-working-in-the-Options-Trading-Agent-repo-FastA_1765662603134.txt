@@ -1,0 +1,168 @@
+You are working in the Options Trading Agent repo (FastAPI app + backtester + Deribit integration).
+Goal: Automate daily IV calibration and system health checks, and surface the results clearly in the UI so a non-coder can see what’s going on.
+
+Context
+
+We already have:
+
+scripts/auto_calibrate_iv.py and the calibration engine with:
+
+calibration_history table,
+
+status flags (ok / degraded / failed),
+
+and a 14-day smoothing / update policy (min_delta, min_samples, min_vega).
+
+A System Health module in src/healthcheck.py with:
+
+run_agent_healthcheck(cfg) – runs config, risk, LLM, Deribit public/private, and build_agent_state checks.
+
+run_and_cache_healthcheck(cfg=None) and get_cached_health_status().
+
+get_health_status_for_api() – returns a JSON-friendly snapshot (overall_status, summary, worst_severity, last_run_at, agent_paused_due_to_health).
+
+set_agent_paused_due_to_health() and is_agent_paused_due_to_health() to support health-based agent pausing.
+
+Part 1 – Daily auto IV calibration (BTC + ETH)
+
+Add a small Python module, e.g. scripts/auto_calibrate_daily.py, that:
+
+For each underlying in ["BTC", "ETH"]:
+
+Invokes the same calibration engine used by scripts/auto_calibrate_iv.py (reuse the internal helper rather than shelling out).
+
+Records each run in calibration_history.
+
+Applies the existing IV update policy (min_delta, min_samples, min_vega, smoothing) to decide whether to update:
+
+the global multiplier,
+
+and any configured tenor band multipliers (weekly / monthly / quarterly), exactly as the UI does when I click "Run Calibration (With Policy)".
+
+Logs a short summary per underlying: status, recommended vs smoothed multiplier, MAE%, samples, vega.
+
+Exits with a non-zero code if all runs for an underlying are failed or degraded so we can hook alerts later.
+
+Add a tiny shell script scripts/cron_auto_calibrate.sh:
+
+Activates the venv (if needed).
+
+Runs python -m scripts.auto_calibrate_daily.
+
+Writes logs to logs/cron_auto_calibrate.log.
+
+Update README.md (or replit.md) with a “Daily Auto Calibration” section:
+
+Example cron entry to run once per day (e.g. 03:00 UTC).
+
+Explain how to:
+
+enable/disable auto calibration,
+
+and where to see results (Calibration UI → Calibration History).
+
+UI enhancements in the Calibration tab:
+
+Show a small "Auto Calibration" panel:
+
+Last auto run time per underlying.
+
+Last auto run status (OK / Degraded / Failed).
+
+Last applied smoothed multiplier (global).
+
+A note if the last auto run did not update anything (e.g. "No update: change below threshold" or "No update: sample size too small").
+
+If the last auto run for an underlying is failed or MAE% > a safe threshold (e.g. 20–25%), show a yellow or red warning banner:
+
+Example: “Last auto IV calibration for BTC = FAILED (MAE 54%, multiplier 4.97). Synthetic universe may be unreliable – please review Calibration History.”
+
+Part 2 – Automated System Health checks
+
+Add a small scheduler around run_and_cache_healthcheck:
+
+On app startup (web app and/or agent runner), immediately call run_and_cache_healthcheck().
+
+Then schedule it to run every N minutes (make N configurable via settings, e.g. HEALTHCHECK_INTERVAL_MINUTES, default 15).
+
+Use a background thread / FastAPI background task so it doesn’t block the main event loop.
+
+Ensure the System Health API uses the cached result:
+
+The existing /api/health (or equivalent) should call get_health_status_for_api(), not rerun the healthcheck each time.
+
+That gives us:
+
+last_run_at,
+
+overall_status,
+
+worst_severity,
+
+summary,
+
+agent_paused_due_to_health.
+
+Extend the System Health UI:
+
+Show:
+
+Last auto run timestamp,
+
+Overall status (OK / WARN / FAIL),
+
+Worst severity (transient / degraded / fatal),
+
+Whether the agent is currently paused due to health.
+
+Keep the "Run healthcheck now" button to manually trigger a fresh run (call a new POST endpoint that runs run_and_cache_healthcheck() once, updates the cache, and returns the new status).
+
+Wire health into the agent safety guard:
+
+In the main agent loop (where live trading decisions are made), before making any decision:
+
+Call get_cached_health_status() (or get_health_status_for_api()).
+
+If overall_status == "FAIL":
+
+Call set_agent_paused_due_to_health(True).
+
+Skip trading decisions, and log a clear message (e.g. “Trading paused: healthcheck FAIL – see System Health tab.”).
+
+If status recovers to OK, allow trading again and set agent_paused_due_to_health(False).
+
+Make sure this is reflected in the UI (e.g., a red “Agent paused due to health failure” badge in the main dashboard).
+
+Part 3 – Minimal tests / smoke checks
+
+Add a few minimal tests, e.g. under tests/test_health_and_calibration_automation.py:
+
+A test that run_and_cache_healthcheck() populates the cache and get_health_status_for_api() returns a non-null status.
+
+A test that the daily auto calibration helper:
+
+records a new row in calibration_history,
+
+and respects the update policy (e.g. doesn’t update multipliers when samples is below the threshold).
+
+Add a short section in README.md explaining how a non-coder can:
+
+see the last auto calibration run,
+
+see the last system health run,
+
+and understand why the agent is paused (if it is).
+
+Please:
+
+Reuse existing helpers and config models wherever possible.
+
+Keep knobs (intervals, thresholds) driven by settings so we can tune them later.
+
+Make sure the UI clearly shows:
+
+what is automatic,
+
+when it last ran,
+
+and whether it is currently blocking trading.

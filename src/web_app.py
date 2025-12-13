@@ -49,6 +49,39 @@ def _agent_thread_target() -> None:
     run_agent_loop_forever(status_callback=status_callback)
 
 
+def _healthcheck_scheduler_target() -> None:
+    """Background thread that runs periodic healthchecks.
+    
+    Always runs an initial healthcheck on startup to populate the cache.
+    Then runs periodic checks if interval > 0.
+    """
+    import time
+    from src.healthcheck import run_and_cache_healthcheck
+    
+    interval = settings.health_recheck_interval_seconds
+    
+    print("[Healthcheck] Running initial healthcheck on startup...")
+    try:
+        result = run_and_cache_healthcheck()
+        print(f"[Healthcheck] Initial check: {result.overall_status} - {result.summary}")
+    except Exception as e:
+        print(f"[Healthcheck] Initial check failed: {e}")
+    
+    if interval <= 0:
+        print("[Healthcheck] Periodic checks disabled (interval <= 0)")
+        return
+    
+    print(f"[Healthcheck] Periodic scheduler running (interval={interval}s)")
+    
+    while True:
+        time.sleep(interval)
+        try:
+            result = run_and_cache_healthcheck()
+            print(f"[Healthcheck] Periodic check: {result.overall_status} - {result.summary}")
+        except Exception as e:
+            print(f"[Healthcheck] Periodic check failed: {e}")
+
+
 @app.on_event("startup")
 def start_background_agent() -> None:
     """Start the agent loop in a background thread on FastAPI startup."""
@@ -61,6 +94,10 @@ def start_background_agent() -> None:
     thread = threading.Thread(target=_agent_thread_target, daemon=True)
     thread.start()
     print("Agent loop started in background thread")
+    
+    healthcheck_thread = threading.Thread(target=_healthcheck_scheduler_target, daemon=True)
+    healthcheck_thread.start()
+    print("Healthcheck scheduler started in background thread")
 
 
 @app.get("/status")
@@ -929,6 +966,62 @@ def apply_skew_ratios(request: dict) -> JSONResponse:
         return JSONResponse(
             status_code=500,
             content={"error": "failed_to_apply_skew", "message": str(e)},
+        )
+
+
+@app.get("/api/calibration/auto_status")
+def get_auto_calibration_status() -> JSONResponse:
+    """
+    Get the status of the most recent auto-calibrations for BTC and ETH.
+    Returns the latest calibration_history entries for each underlying.
+    """
+    try:
+        from src.db.models_calibration import list_recent_calibrations
+        
+        underlyings = ["BTC", "ETH"]
+        results = {}
+        
+        for underlying in underlyings:
+            entries = list_recent_calibrations(underlying=underlying, limit=1)
+            if entries:
+                e = entries[0]
+                results[underlying] = {
+                    "id": e.id,
+                    "created_at": e.created_at.isoformat() if e.created_at else None,
+                    "dte_range": f"{e.dte_min}-{e.dte_max}",
+                    "lookback_days": e.lookback_days,
+                    "multiplier": e.multiplier,
+                    "mae_pct": e.mae_pct,
+                    "vega_weighted_mae_pct": e.vega_weighted_mae_pct,
+                    "num_samples": e.num_samples,
+                    "source": e.source,
+                    "status": e.status,
+                    "reason": e.reason,
+                }
+            else:
+                results[underlying] = None
+        
+        any_recent = any(r is not None for r in results.values())
+        overall_status = "ok"
+        if any_recent:
+            statuses = [r.get("status", "ok") for r in results.values() if r]
+            if all(s == "failed" for s in statuses):
+                overall_status = "failed"
+            elif any(s == "failed" for s in statuses):
+                overall_status = "degraded"
+            elif any(s == "degraded" for s in statuses):
+                overall_status = "degraded"
+        else:
+            overall_status = "no_data"
+        
+        return JSONResponse(content={
+            "overall_status": overall_status,
+            "underlyings": results,
+        })
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={"error": "failed_to_fetch_auto_status", "message": str(e)},
         )
 
 
@@ -5363,6 +5456,21 @@ def index() -> str:
           </table>
         </div>
       </div>
+      
+      <!-- Auto-Calibration Status Panel -->
+      <div class="card" style="margin-top:1rem;">
+        <h3 style="margin-top:0;">Auto-Calibration Status</h3>
+        <p style="color:#666;font-size:0.9rem;margin-bottom:12px;">
+          Shows the status of the last auto-calibration run for each underlying.
+          Auto-calibrations run via <code>scripts/auto_calibrate_daily.py</code> (daily cron recommended).
+        </p>
+        <div style="display:flex;gap:8px;margin-bottom:12px;">
+          <button onclick="fetchAutoCalibStatus()" style="background:#2196f3;color:#fff;border:none;padding:6px 12px;border-radius:4px;cursor:pointer;">Refresh Status</button>
+        </div>
+        <div id="auto-calib-status" style="display:grid;grid-template-columns:repeat(auto-fit, minmax(280px, 1fr));gap:12px;">
+          <div style="text-align:center;color:#666;grid-column:1/-1;">Loading auto-calibration status...</div>
+        </div>
+      </div>
     </div>
   </div>
 
@@ -6206,6 +6314,9 @@ def index() -> str:
       }}
       if (name === 'greglab') {{
         loadGregPositions();
+      }}
+      if (name === 'calibration') {{
+        fetchAutoCalibStatus();
       }}
     }}
     
@@ -9451,6 +9562,68 @@ def index() -> str:
       }} catch (err) {{
         console.error('Failed to fetch calibration history:', err);
         tbody.innerHTML = '<tr><td colspan="9" style="text-align:center;color:#c00;">Error loading history</td></tr>';
+      }}
+    }}
+    
+    async function fetchAutoCalibStatus() {{
+      const container = document.getElementById('auto-calib-status');
+      container.innerHTML = '<div style="text-align:center;color:#666;grid-column:1/-1;">Loading...</div>';
+      
+      try {{
+        const res = await fetch('/api/calibration/auto_status');
+        if (!res.ok) throw new Error(`HTTP ${{res.status}}`);
+        const data = await res.json();
+        
+        const underlyings = data.underlyings || {{}};
+        const overall = data.overall_status || 'no_data';
+        
+        let html = '';
+        
+        for (const [sym, info] of Object.entries(underlyings)) {{
+          if (!info) {{
+            html += `
+              <div style="background:#f5f5f5;padding:12px;border-radius:6px;border-left:4px solid #9e9e9e;">
+                <h4 style="margin:0 0 8px 0;color:#666;">${{sym}}</h4>
+                <p style="color:#999;font-size:0.85rem;margin:0;">No auto-calibration data yet</p>
+              </div>`;
+            continue;
+          }}
+          
+          const status = info.status || 'ok';
+          const borderColor = status === 'ok' ? '#4caf50' : (status === 'degraded' ? '#ff9800' : '#f44336');
+          const statusBg = status === 'ok' ? '#e8f5e9' : (status === 'degraded' ? '#fff3e0' : '#ffebee');
+          const statusBadge = `<span style="background:${{borderColor}};color:#fff;padding:2px 8px;border-radius:3px;font-size:0.75rem;text-transform:uppercase;">${{status}}</span>`;
+          
+          const dt = info.created_at ? new Date(info.created_at).toLocaleString() : 'N/A';
+          const mult = info.multiplier != null ? info.multiplier.toFixed(4) : 'N/A';
+          const vMAE = info.vega_weighted_mae_pct != null ? info.vega_weighted_mae_pct.toFixed(2) + '%' : '-';
+          const samples = info.num_samples != null ? info.num_samples.toLocaleString() : '-';
+          
+          html += `
+            <div style="background:${{statusBg}};padding:12px;border-radius:6px;border-left:4px solid ${{borderColor}};">
+              <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+                <h4 style="margin:0;color:#333;">${{sym}}</h4>
+                ${{statusBadge}}
+              </div>
+              <div style="font-size:0.85rem;color:#555;">
+                <p style="margin:4px 0;"><strong>Last Run:</strong> ${{dt}}</p>
+                <p style="margin:4px 0;"><strong>Multiplier:</strong> ${{mult}}</p>
+                <p style="margin:4px 0;"><strong>vMAE:</strong> ${{vMAE}}</p>
+                <p style="margin:4px 0;"><strong>Samples:</strong> ${{samples}}</p>
+                <p style="margin:4px 0;"><strong>DTE Range:</strong> ${{info.dte_range || '-'}}</p>
+                ${{info.reason ? `<p style="margin:4px 0;font-size:0.8rem;color:#888;"><strong>Reason:</strong> ${{info.reason}}</p>` : ''}}
+              </div>
+            </div>`;
+        }}
+        
+        if (!html) {{
+          html = '<div style="text-align:center;color:#666;grid-column:1/-1;">No auto-calibration data available. Run scripts/auto_calibrate_daily.py to add entries.</div>';
+        }}
+        
+        container.innerHTML = html;
+      }} catch (err) {{
+        console.error('Failed to fetch auto-calibration status:', err);
+        container.innerHTML = '<div style="text-align:center;color:#c00;grid-column:1/-1;">Error loading auto-calibration status</div>';
       }}
     }}
     
