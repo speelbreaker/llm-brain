@@ -3321,6 +3321,29 @@ def get_llm_readiness_endpoint() -> JSONResponse:
         return JSONResponse(content={"ok": False, "error": str(e)})
 
 
+@app.get("/api/health/iv_sanity")
+def get_iv_sanity_check() -> JSONResponse:
+    """
+    Run IV sanity check to validate synthetic IV pricing layer.
+    
+    This runs backtests with different IV multipliers and verifies that
+    results differ meaningfully (not stuck/broken). May take several seconds.
+    """
+    try:
+        from scripts.iv_sanity_check import run_iv_sanity_check
+        
+        result = run_iv_sanity_check()
+        return JSONResponse(content={"ok": result.get("status") == "ok", **result})
+    except Exception as e:
+        return JSONResponse(content={
+            "ok": False, 
+            "status": "error",
+            "error": str(e),
+            "selectors": [],
+            "summary": f"Error running IV sanity check: {e}",
+        })
+
+
 @app.post("/api/steward/run")
 def run_steward() -> JSONResponse:
     """

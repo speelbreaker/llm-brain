@@ -493,6 +493,47 @@ def check_state_builder(client: DeribitClient, cfg: Settings) -> HealthCheckResu
         )
 
 
+def check_iv_sanity() -> HealthCheckResult:
+    """
+    Run IV sanity check to validate synthetic IV pricing layer.
+    
+    This is a heavier check that runs actual backtests, so it may take
+    several seconds to complete. It validates that different IV multipliers
+    produce meaningfully different results.
+    """
+    try:
+        from scripts.iv_sanity_check import run_iv_sanity_check
+        
+        result = run_iv_sanity_check()
+        status_str = result.get("status", "failed")
+        summary = result.get("summary", "Unknown result")
+        
+        if status_str == "ok":
+            return HealthCheckResult(
+                name="iv_sanity",
+                status=CheckStatus.OK,
+                detail=summary
+            )
+        elif status_str == "degraded":
+            return HealthCheckResult(
+                name="iv_sanity",
+                status=CheckStatus.WARN,
+                detail=summary
+            )
+        else:
+            return HealthCheckResult(
+                name="iv_sanity",
+                status=CheckStatus.FAIL,
+                detail=summary
+            )
+    except Exception as e:
+        return HealthCheckResult(
+            name="iv_sanity",
+            status=CheckStatus.FAIL,
+            detail=f"IV sanity check error: {str(e)}"
+        )
+
+
 def run_agent_healthcheck(cfg: Settings | None = None) -> dict[str, Any]:
     """
     Run all health checks and return aggregated results.

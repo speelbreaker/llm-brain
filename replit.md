@@ -22,6 +22,7 @@ The web dashboard offers a user-friendly interface with sections for "Live Agent
 - **State Management**: Aggregates market data and manages thread-safe status updates.
 - **Structured Logging**: Uses JSONL for logging decisions and actions.
 - **Health Guard System**: Runtime health guard with severity-based decision making (TRANSIENT, DEGRADED, FATAL) for intelligent recovery, including startup checks and runtime re-checks.
+- **IV Sanity Check**: Validates that the synthetic IV pricing layer responds correctly to parameter changes. Runs backtests with different IV multipliers (generic: 0.8/1.2, gregbot: 0.9/1.1) and verifies results differ meaningfully. Available via `/api/health/iv_sanity` endpoint and integrated into the healthcheck system (`scripts/iv_sanity_check.py`).
 - **Decision Policies**: Supports rule-based strategies with scoring and epsilon-greedy exploration, and an LLM-powered decision mode validated by a risk engine. Decision modes include `rule_only`, `llm_only`, and `hybrid_shadow`.
 - **Risk Management**: A `risk_engine` performs pre-trade validation, checking margin, delta, exposure limits, liquidity guards, and hard safety rails.
 - **Backtesting Framework**: Includes `CoveredCallSimulator` for historical analysis, supporting various exit styles, training data generation, and TradingView-style metrics. Persistent backtest runs are stored in PostgreSQL.

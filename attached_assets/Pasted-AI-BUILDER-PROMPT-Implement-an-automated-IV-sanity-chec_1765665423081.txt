@@ -1,0 +1,310 @@
+AI BUILDER PROMPT
+
+Implement an automated “IV sanity check” and expose it via health APIs so my environment bot can call a single endpoint.
+
+Goal
+
+I want a small, fast health check that proves the IV calibration pipeline is actually wired:
+
+Calibration → IV multiplier → synthetic prices → selector decisions
+
+It should:
+
+Run two tiny backtests for each of:
+
+the generic covered call selector
+
+the GregBot – VRP Harvester selector
+
+Compare low vs high IV multiplier behavior.
+
+Return a compact JSON summary with an overall status = ok | degraded | failed.
+
+Plug into:
+
+the existing healthcheck module
+
+the System Controls & Health UI
+
+a new /api/health/iv_sanity endpoint (for the Telegram env-bot).
+
+Use whatever internal backtest manager / state builder we already have; do not shell out or hit HTTP from this script.
+
+Part A – New script: scripts/iv_sanity_check.py
+
+Create a new module scripts/iv_sanity_check.py with:
+
+@dataclass
+class IVSanitySelectorResult:
+    selector: str
+    iv_low: float
+    iv_high: float
+    low_metrics: dict   # trades, net_profit_pct, sharpe_ratio, etc.
+    high_metrics: dict
+    status: str         # "ok" | "failed"
+    reason: str         # short explanation
+
+
+and a public function:
+
+def run_iv_sanity_check() -> dict:
+    """
+    Run IV sanity checks for generic covered call and GregBot VRP Harvester,
+    return a JSON-serializable dict with overall status and per-selector details.
+    """
+
+Fixed backtest configuration
+
+Use the BTC_USDC December window where we already know data exists:
+
+underlying: "BTC_USDC"
+
+start: "2025-12-07"
+
+end: "2025-12-13"
+
+exit_style: "hold_to_expiry"
+
+target_dte: 7
+
+target_delta: 0.25
+
+min_dte: 3
+
+max_dte: 21
+
+delta_min: 0.15
+
+delta_max: 0.35
+
+decision_interval_hours: 24
+
+chain_mode: "synthetic_grid"
+
+Put these into module-level constants so they’re easy to tweak later.
+
+Selectors:
+
+“Generic” selector: use the same selector name we currently use for the generic covered-call backtests (the one I used earlier for calibration verification).
+
+“Greg” selector: use the selector backing the “GregBot – VRP Harvester” row in the Selector Frequency Scan UI.
+
+If the selector registry uses internal names (e.g. generic_covered_call, greg_vrp_harvester), use those; the human-facing labels in the UI are “Generic Covered Call” and “GregBot – VRP Harvester”.
+
+IV multiplier scenarios
+
+For each selector, run two backtests with:
+
+Common fields: config above, sigma_mode="rv_x_multiplier".
+
+IV multipliers:
+
+Generic covered call
+
+Low IV: synthetic_iv_multiplier = 0.8
+
+High IV: synthetic_iv_multiplier = 1.2
+
+GregBot VRP Harvester
+
+Low IV: synthetic_iv_multiplier = 0.9
+
+High IV: synthetic_iv_multiplier = 1.1
+
+Use the normal backtest pipeline (same as the Backtesting Lab) but with a very small date window as above so this runs fast.
+
+For each backtest, extract at least:
+
+num_trades
+
+net_profit_pct
+
+sharpe_ratio (if available)
+
+optionally win_rate / avg_trade_usd (nice to have for the JSON).
+
+Pass / fail logic
+
+Implement simple, deterministic rules:
+
+Generic covered call
+
+Expectation: high IV should give more trading opportunity and/or better net PnL.
+
+Mark selector status = "failed" if both:
+
+num_trades_low == num_trades_high
+
+abs(net_profit_pct_high - net_profit_pct_low) < 0.5
+
+Otherwise status = "ok".
+
+GregBot – VRP Harvester
+
+Expectation: high IV should usually unlock more trades and/or higher net PnL.
+
+Mark selector status = "failed" if:
+
+num_trades_high <= num_trades_low
+
+and net_profit_pct_high <= net_profit_pct_low + 0.5
+
+Otherwise status = "ok".
+
+The top-level run_iv_sanity_check() should return a JSON-serializable dict:
+
+{
+    "status": "ok" | "degraded" | "failed",
+    "summary": "Short human summary sentence",
+    "selectors": [
+        {
+            "selector": "...",
+            "iv_low": 0.9,
+            "iv_high": 1.1,
+            "status": "ok",
+            "reason": "High IV produced more trades and higher PnL.",
+            "low":  { "num_trades": ..., "net_profit_pct": ..., "sharpe_ratio": ... },
+            "high": { "num_trades": ..., "net_profit_pct": ..., "sharpe_ratio": ... }
+        },
+        ...
+    ],
+}
+
+
+Overall status logic:
+
+If all selectors are "ok" → status = "ok".
+
+If at least one "failed" → status = "failed".
+
+Otherwise (e.g. one ok, one borderline) → status = "degraded".
+
+Make sure errors (no data, exceptions) are caught and returned as status="failed" with a clear reason.
+
+Part B – Integrate with healthcheck.py & System Health
+
+We already have a consolidated healthcheck system and UI (System Controls & Health).
+
+Import and register the check
+
+In healthcheck.py (or the main health aggregator module):
+
+Import run_iv_sanity_check.
+
+Add a new check entry, e.g. "iv_sanity", to whatever structure holds the named checks.
+
+Example (pseudo-code – adapt to the existing patterns):
+
+def check_iv_sanity() -> HealthCheckResult:
+    payload = iv_sanity_check.run_iv_sanity_check()
+    status = payload.get("status", "failed")
+    severity = "warn" if status in ("degraded", "failed") else "ok"
+    return HealthCheckResult(
+        name="iv_sanity",
+        status=status,
+        severity=severity,
+        details=payload,
+    )
+
+
+And include check_iv_sanity in the “full agent healthcheck” that powers the Run Full Agent Healthcheck button.
+
+Include in cached / background health
+
+Wherever the background health scheduler runs periodic checks:
+
+Ensure iv_sanity is included in the set of checks that get cached and surfaced in the Agent Healthcheck summary.
+
+It’s fine if it only runs once per day, similar to auto-calibration; just make sure the scheduler won’t accidentally run a heavy test every few minutes.
+
+System Health UI
+
+Update the System Controls & Health UI (System Health tab) so that:
+
+The “Agent Healthcheck” details list includes an entry like iv_sanity=ok|degraded|failed.
+
+If the underlying JSON for iv_sanity is available, allow the “Show details” section to render:
+
+selectors
+
+IV multipliers
+
+num_trades and net_profit_pct for low/high
+
+and the top-level summary string.
+
+Follow the same UI patterns already used for other per-check details (e.g. risk_config, deribit_public, etc.).
+
+Part C – New endpoint: /api/health/iv_sanity
+
+In src/web_app.py (or wherever FastAPI routes are defined):
+
+Add a new GET endpoint:
+
+@app.get("/api/health/iv_sanity")
+async def api_iv_sanity() -> dict:
+    """
+    Run the IV sanity check and return the JSON result.
+
+    Designed for the environment bot / Telegram bot to call once per day.
+    """
+    return run_iv_sanity_check()
+
+
+Import run_iv_sanity_check from scripts.iv_sanity_check (or appropriate path).
+
+Make sure the endpoint is read-only, fast, and safe to call even if a backtest is already running:
+
+If needed, you can serialize access to the backtest manager or run these mini backtests via a separate, light-weight code path that doesn’t interfere with the main Backtesting Lab.
+
+Part D – Tests
+
+Add a small, isolated test module tests/test_iv_sanity_check.py:
+
+Do not run real backtests in unit tests.
+
+Instead, structure iv_sanity_check.py so the actual backtest runner is in a helper function, e.g.:
+
+def _run_single_backtest(selector: str, iv_mult: float) -> dict:
+    ...
+
+
+In tests, monkeypatch _run_single_backtest to return controlled metrics so we can verify the classification logic:
+
+Happy path – high IV clearly better than low IV:
+
+low: num_trades=1, net_profit_pct=1.0
+
+high: num_trades=5, net_profit_pct=6.0
+
+Expect selector status="ok" and global status="ok".
+
+Failure path – IV multiplier has no effect:
+
+low/high with same num_trades and nearly identical net_profit_pct.
+
+Expect selector status="failed" and global status="failed".
+
+Also add a lightweight test for the /api/health/iv_sanity route (using FastAPI’s TestClient) that checks:
+
+HTTP 200
+
+response has status and selectors keys.
+
+All tests (existing + new) must pass.
+
+Part E – Docs
+
+In replit.md (or the main project README):
+
+Under the System Health / Automation section, add a short note:
+
+That we now have an IV sanity check.
+
+How it works at a high level (low vs high IV multipliers on small backtests).
+
+That it is available via:
+
+the Agent Healthcheck UI, and
+
+GET /api/health/iv_sanity for the environment/Telegram bot.
