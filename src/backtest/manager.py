@@ -383,6 +383,7 @@ class BacktestManager:
                 "equity_curve": equity_curve_json,
                 "error": self._status.error,
                 "run_id": self._status.run_id,
+                "config": self._status.config,
                 "live_chain_debug_samples": self._status.live_chain_debug_samples,
             }
             return status_dict

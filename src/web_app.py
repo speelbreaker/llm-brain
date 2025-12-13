@@ -4368,6 +4368,7 @@ def index() -> str:
       
       <div id="bt-metrics-live" style="margin-top:1rem;display:none;">
         <h3>Results</h3>
+        <div id="bt-selector-display" style="margin-bottom:0.5rem;font-size:0.9rem;color:#666;"></div>
         <pre id="bt-metrics-json" style="background:#f1f3f4;padding:1rem;border-radius:6px;font-size:0.85rem;"></pre>
       </div>
       
@@ -9919,9 +9920,16 @@ def index() -> str:
         
         const metricsLive = document.getElementById('bt-metrics-live');
         const metricsJson = document.getElementById('bt-metrics-json');
+        const selectorDisplay = document.getElementById('bt-selector-display');
         if (st.metrics && Object.keys(st.metrics).length > 0) {{
           metricsLive.style.display = 'block';
           metricsJson.textContent = JSON.stringify(st.metrics, null, 2);
+          const selectorName = st.config?.selector_name || 'generic_covered_call';
+          const selectorLabels = {{
+            'generic_covered_call': 'Generic - Covered Call Agent',
+            'greg_vrp_harvester': 'GregBot - VRP Harvester'
+          }};
+          selectorDisplay.textContent = 'Selector: ' + (selectorLabels[selectorName] || selectorName);
         }} else {{
           metricsLive.style.display = 'none';
         }}
