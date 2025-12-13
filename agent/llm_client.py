@@ -2,12 +2,17 @@
 LLM client module for the Telegram Code Review Agent.
 
 Builds prompts and calls the OpenAI API for code review.
+Supports both Chat Completions and Responses API (for gpt-5.2-pro).
 """
 from __future__ import annotations
 
 import json
 import logging
+import os
+import uuid
 from dataclasses import dataclass, field
+from datetime import datetime
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from agent.analyzers import AnalysisContext
@@ -34,14 +39,19 @@ REVIEW_SYSTEM_PROMPT = """You are an expert code reviewer for a Python/FastAPI p
 6. Performance: Hot paths, unnecessary queries, loops over large data
 7. Test coverage: What tests should be added
 
-## Response Format
-Return valid JSON with this structure:
+## CRITICAL OUTPUT RULES
+1. Return ONLY a single JSON object - no markdown, no code fences, no extra text
+2. The response MUST start with { and end with }
+3. Do NOT wrap in ```json or any code blocks
+4. ALL fields below are REQUIRED
+
+## Required JSON Structure
 {
-  "summary": ["bullet point 1", "bullet point 2", ...],
   "overall_severity": "CRITICAL|HIGH|MEDIUM|LOW|INFO",
-  "issues": [
+  "summary": ["bullet point 1", "bullet point 2"],
+  "risks": [
     {
-      "id": "ISSUE-1",
+      "id": "RISK-1",
       "severity": "CRITICAL|HIGH|MEDIUM|LOW|INFO",
       "category": "security|correctness|reliability|performance|maintainability",
       "title": "Short title",
@@ -50,20 +60,24 @@ Return valid JSON with this structure:
       "suggested_fix": "How to fix this"
     }
   ],
-  "next_steps": ["Action 1", "Action 2", ...],
-  "reasoning_summary": "A concise 2-3 sentence summary of your reasoning process and key insights."
+  "next_actions": ["Action 1", "Action 2"],
+  "reasoning_summary": "A concise 2-3 sentence summary of your reasoning process."
 }
 
-Be specific and actionable. Reference exact files and line numbers when possible."""
+Be specific and actionable. Reference exact files and line numbers when possible.
+The summary array MUST have at least 1 item. risks and next_actions can be empty arrays."""
 
 
-# Chat Completions compatible models (Replit proxy)
 MODEL_FALLBACK_CHAIN = [
+    "gpt-5.2",
     "gpt-5",
     "gpt-4.1",
     "gpt-4o",
-    "gpt-4-turbo",
 ]
+
+RESPONSES_API_MODELS = {"gpt-5.2-pro", "o3", "o3-pro"}
+
+ARTIFACTS_DIR = Path(".auditor/artifacts")
 
 
 @dataclass
@@ -80,21 +94,29 @@ class LLMReviewResult:
     
     @classmethod
     def from_json(cls, data: Dict[str, Any], model: str = "") -> "LLMReviewResult":
+        summary = data.get("summary", [])
+        if not summary:
+            summary = ["No summary provided by model"]
+        
+        issues = data.get("issues", []) or data.get("risks", [])
+        next_steps = data.get("next_steps", []) or data.get("next_actions", [])
+        
         return cls(
-            summary=data.get("summary", []),
+            summary=summary,
             overall_severity=data.get("overall_severity", "INFO"),
-            issues=data.get("issues", []),
-            next_steps=data.get("next_steps", []),
+            issues=issues,
+            next_steps=next_steps,
             reasoning_summary=data.get("reasoning_summary", ""),
             model_used=model,
         )
     
     @classmethod
-    def error_result(cls, error: str) -> "LLMReviewResult":
+    def error_result(cls, error: str, raw_response: str = "") -> "LLMReviewResult":
         return cls(
-            summary=["Error during review"],
+            summary=[f"Review error: {error[:200]}"] if error else ["Error during review"],
             overall_severity="INFO",
             error=error,
+            raw_response=raw_response,
         )
 
 
@@ -140,9 +162,64 @@ def _build_review_prompt(
         truncated = _truncate_diff(diff_text)
         parts.append(f"\n## Diff\n```diff\n{truncated}\n```")
     
-    parts.append("\n## Task\nReview these changes and return a JSON response following the format specified.")
+    parts.append("\n## Task\nReview these changes. Return ONLY a valid JSON object (no code fences, no markdown). Start with { and end with }.")
     
     return "\n".join(parts)
+
+
+def _save_artifact(run_id: str, filename: str, content: str) -> Path:
+    """Save raw output artifact for debugging."""
+    artifact_dir = ARTIFACTS_DIR / run_id
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+    
+    filepath = artifact_dir / filename
+    filepath.write_text(content, encoding="utf-8")
+    logger.info(f"Saved artifact: {filepath}")
+    return filepath
+
+
+def _extract_json(content: str) -> Optional[Dict[str, Any]]:
+    """Extract JSON from LLM response using multiple strategies."""
+    if not content or not content.strip():
+        return None
+    
+    content = content.strip()
+    
+    if content.startswith("{") and content.endswith("}"):
+        try:
+            return json.loads(content)
+        except json.JSONDecodeError:
+            pass
+    
+    if "```json" in content:
+        start = content.find("```json") + 7
+        end = content.find("```", start)
+        if end > start:
+            try:
+                return json.loads(content[start:end].strip())
+            except json.JSONDecodeError:
+                pass
+    
+    if "```" in content:
+        import re
+        blocks = re.findall(r'```\s*\n?(.*?)```', content, re.DOTALL)
+        for block in blocks:
+            block = block.strip()
+            if block.startswith("{") and block.endswith("}"):
+                try:
+                    return json.loads(block)
+                except json.JSONDecodeError:
+                    continue
+    
+    start = content.find("{")
+    end = content.rfind("}")
+    if start != -1 and end > start:
+        try:
+            return json.loads(content[start:end+1])
+        except json.JSONDecodeError:
+            pass
+    
+    return None
 
 
 class LLMClient:
@@ -151,15 +228,28 @@ class LLMClient:
     def __init__(self, api_key: Optional[str] = None):
         self.api_key = api_key or (settings.openai_api_key if settings else None)
         self._client = None
-        self._model_review = settings.openai_model_review if settings else "gpt-5"
-        self._model_fast = settings.openai_model_fast if settings else "gpt-4.1"
-        self._reasoning_effort = settings.openai_reasoning_effort if settings else "high"
+        self._model_review = os.environ.get("OPENAI_MODEL_REVIEW") or (
+            settings.openai_model_review if settings else "gpt-5.2-pro"
+        )
+        self._model_fast = os.environ.get("OPENAI_MODEL_FAST") or (
+            settings.openai_model_fast if settings else "gpt-4.1"
+        )
+        self._reasoning_effort = os.environ.get("OPENAI_REASONING_EFFORT") or (
+            settings.openai_reasoning_effort if settings else "high"
+        )
+        self._fallback_models = self._parse_fallbacks()
+    
+    def _parse_fallbacks(self) -> List[str]:
+        """Parse fallback models from env or use defaults."""
+        fallbacks_env = os.environ.get("OPENAI_MODEL_FALLBACKS", "")
+        if fallbacks_env:
+            return [m.strip() for m in fallbacks_env.split(",") if m.strip()]
+        return MODEL_FALLBACK_CHAIN
     
     def _get_client(self):
         """Get or create OpenAI client."""
         if self._client is None:
             try:
-                import os
                 from openai import OpenAI
                 base_url = os.environ.get("AI_INTEGRATIONS_OPENAI_BASE_URL")
                 self._client = OpenAI(
@@ -173,7 +263,7 @@ class LLMClient:
     def _get_fallback_models(self) -> List[str]:
         """Get ordered list of models to try."""
         models = [self._model_review]
-        for m in MODEL_FALLBACK_CHAIN:
+        for m in self._fallback_models:
             if m not in models:
                 models.append(m)
         return models
@@ -190,34 +280,106 @@ class LLMClient:
         except Exception:
             return False
     
+    def _call_responses_api(
+        self,
+        client,
+        model: str,
+        messages: List[Dict[str, str]],
+        max_tokens: int,
+        reasoning_effort: str,
+    ) -> str:
+        """Call OpenAI Responses API for models like gpt-5.2-pro."""
+        logger.info(f"Using Responses API for model: {model}")
+        
+        response = client.responses.create(
+            model=model,
+            input=messages,
+            reasoning={"effort": reasoning_effort},
+            max_output_tokens=max_tokens,
+        )
+        
+        content = response.output_text or ""
+        return content
+    
+    def _call_chat_completions_api(
+        self,
+        client,
+        model: str,
+        messages: List[Dict[str, str]],
+        max_tokens: int,
+        reasoning_effort: str,
+    ) -> str:
+        """Call OpenAI Chat Completions API."""
+        logger.info(f"Using Chat Completions API for model: {model}")
+        
+        kwargs: Dict[str, Any] = {
+            "model": model,
+            "messages": messages,
+            "max_completion_tokens": max_tokens,
+        }
+        
+        if model.startswith(("o1", "o3", "gpt-5")):
+            kwargs["reasoning_effort"] = reasoning_effort
+        else:
+            kwargs["temperature"] = 0.3
+        
+        response = client.chat.completions.create(**kwargs)
+        content = response.choices[0].message.content or ""
+        return content
+    
     def _call_with_fallback(
         self,
         messages: List[Dict[str, str]],
-        max_tokens: int = 4000,
+        max_tokens: int = 8000,
+        retry_on_empty: bool = True,
     ) -> tuple[str, str]:
         """Call API with model fallback chain. Returns (content, model_used)."""
         client = self._get_client()
         models = self._get_fallback_models()
         last_error = None
+        base_url = os.environ.get("AI_INTEGRATIONS_OPENAI_BASE_URL")
         
         for model in models:
             try:
                 logger.info(f"Trying model: {model}")
                 
-                kwargs: Dict[str, Any] = {
-                    "model": model,
-                    "messages": messages,
-                    "max_completion_tokens": max_tokens,
-                }
+                use_responses_api = model in RESPONSES_API_MODELS
                 
-                if model.startswith(("o1", "o3", "gpt-5")):
-                    kwargs["reasoning_effort"] = self._reasoning_effort
+                if use_responses_api and base_url:
+                    logger.warning(
+                        f"Custom base_url set ({base_url}), Responses API may not be supported. "
+                        f"Falling back to Chat Completions for {model}."
+                    )
+                    use_responses_api = False
+                
+                if use_responses_api:
+                    content = self._call_responses_api(
+                        client, model, messages, max_tokens, self._reasoning_effort
+                    )
                 else:
-                    kwargs["temperature"] = 0.3
+                    content = self._call_chat_completions_api(
+                        client, model, messages, max_tokens, self._reasoning_effort
+                    )
                 
-                response = client.chat.completions.create(**kwargs)
-                content = response.choices[0].message.content or ""
-                logger.info(f"Success with model: {model}")
+                if not content.strip() and retry_on_empty:
+                    logger.warning(f"Empty response from {model}, retrying with higher tokens...")
+                    retry_tokens = min(max_tokens * 2, 20000)
+                    retry_effort = "high" if self._reasoning_effort == "xhigh" else self._reasoning_effort
+                    
+                    if use_responses_api:
+                        content = self._call_responses_api(
+                            client, model, messages, retry_tokens, retry_effort
+                        )
+                    else:
+                        content = self._call_chat_completions_api(
+                            client, model, messages, retry_tokens, retry_effort
+                        )
+                    
+                    if not content.strip():
+                        logger.warning(f"Still empty after retry, trying next model...")
+                        continue
+                
+                logger.info(f"Success with model: {model} (length={len(content)})")
                 return content, model
                 
             except Exception as e:
@@ -225,14 +387,13 @@ class LLMClient:
                 logger.warning(f"Model {model} failed: {e}")
                 last_error = e
                 
-                # Continue to next model on model-related errors
                 if any(kw in error_msg for kw in [
                     "model", "not found", "does not exist", "invalid", 
-                    "unknown", "unsupported", "rate", "quota", "unavailable"
+                    "unknown", "unsupported", "rate", "quota", "unavailable",
+                    "responses", "not supported"
                 ]):
                     continue
                 else:
-                    # For other errors, still try fallback models
                     continue
         
         raise last_error or RuntimeError("All models failed")
@@ -247,6 +408,8 @@ class LLMClient:
         if not self.api_key:
             return self._fallback_review(analysis)
         
+        run_id = datetime.now().strftime("%Y%m%d_%H%M%S") + "_" + uuid.uuid4().hex[:8]
+        
         try:
             user_prompt = _build_review_prompt(analysis, diff_text, commit_message)
             
@@ -255,52 +418,39 @@ class LLMClient:
                 {"role": "user", "content": user_prompt},
             ]
             
-            content, model_used = self._call_with_fallback(messages)
+            content, model_used = self._call_with_fallback(messages, max_tokens=12000)
             
-            # Try multiple JSON extraction strategies
-            json_match = None
+            if not content.strip():
+                _save_artifact(run_id, "llm_empty.txt", f"Model: {model_used}\nResponse was empty")
+                return LLMReviewResult(
+                    summary=["Model returned empty response - no issues detected or review failed"],
+                    overall_severity="INFO",
+                    model_used=model_used,
+                    raw_response="",
+                    error="Empty response from model after retry",
+                )
             
-            # Strategy 1: ```json code block
-            if "```json" in content:
-                start = content.find("```json") + 7
-                end = content.find("```", start)
-                if end > start:
-                    json_match = content[start:end].strip()
+            data = _extract_json(content)
             
-            # Strategy 2: ``` code block (no language specified)
-            if not json_match and "```" in content:
-                import re
-                blocks = re.findall(r'```\s*\n?(.*?)```', content, re.DOTALL)
-                for block in blocks:
-                    block = block.strip()
-                    if block.startswith("{") and block.endswith("}"):
-                        json_match = block
-                        break
+            if data:
+                result = LLMReviewResult.from_json(data, model=model_used)
+                result.raw_response = content
+                
+                if not result.summary:
+                    result.summary = ["Review completed (no summary provided)"]
+                
+                return result
             
-            # Strategy 3: Find JSON object anywhere in content
-            if not json_match:
-                # Find first { and last }
-                start = content.find("{")
-                end = content.rfind("}")
-                if start != -1 and end > start:
-                    json_match = content[start:end+1]
-            
-            if json_match:
-                try:
-                    data = json.loads(json_match)
-                    result = LLMReviewResult.from_json(data, model=model_used)
-                    result.raw_response = content
-                    return result
-                except json.JSONDecodeError:
-                    logger.warning(f"JSON extraction found but failed to parse: {json_match[:200]}...")
-            
-            # Fallback: return raw content as summary
+            _save_artifact(run_id, "llm_raw.txt", content)
             logger.warning(f"Could not extract JSON from LLM response (length={len(content)})")
+            
+            preview = content[:500] if len(content) > 500 else content
             return LLMReviewResult(
-                summary=[content[:500] if len(content) > 500 else content],
+                summary=[f"Review output (non-JSON): {preview}"],
                 overall_severity="INFO",
                 model_used=model_used,
                 raw_response=content,
+                error="Failed to parse JSON from model response",
             )
                 
         except json.JSONDecodeError as e:
@@ -308,6 +458,7 @@ class LLMClient:
             return self._fallback_review(analysis)
         except Exception as e:
             logger.error(f"LLM review failed: {e}")
+            _save_artifact(run_id, "llm_error.txt", str(e))
             return LLMReviewResult.error_result(str(e))
     
     def _fallback_review(self, analysis: AnalysisContext) -> LLMReviewResult:
@@ -354,6 +505,9 @@ class LLMClient:
             })
             if overall_severity == "INFO":
                 overall_severity = "MEDIUM"
+        
+        if not summary:
+            summary = ["No changes detected"]
         
         return LLMReviewResult(
             summary=summary,
