@@ -324,7 +324,7 @@ def _filter_option_chain(
 
 
 def build_historical_state(
-    ds: DeribitDataSource,
+    ds: Any,
     cfg: CallSimulationConfig,
     t: datetime,
     collect_debug_samples: bool = False,
@@ -448,7 +448,7 @@ def build_historical_state(
 
 
 def create_state_builder(
-    ds: DeribitDataSource,
+    ds: Any,
     cfg: CallSimulationConfig,
 ):
     """

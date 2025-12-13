@@ -740,6 +740,7 @@ class BacktestManager:
             try:
                 from src.backtest.types import CallSimulationConfig
                 from src.backtest.deribit_data_source import DeribitDataSource
+                from src.backtest.live_deribit_data_source import LiveDeribitDataSource
                 from src.backtest.covered_call_simulator import CoveredCallSimulator
                 from src.backtest.state_builder import build_historical_state
                 from datetime import timedelta
@@ -780,7 +781,29 @@ class BacktestManager:
                     chain_mode=chain_mode_typed,
                 )
 
-                ds = DeribitDataSource()
+                use_live_deribit_source = (
+                    chain_mode == "live_chain" and
+                    end_date < datetime.utcnow()
+                )
+                
+                if use_live_deribit_source:
+                    underlying_dir = f"{underlying}_USDC" if "_USDC" not in underlying else underlying
+                    ds = LiveDeribitDataSource(
+                        underlying=underlying_dir,
+                        start_date=start_date.date(),
+                        end_date=end_date.date(),
+                        canonical_underlying=underlying,
+                    )
+                    summary = ds.get_summary()
+                    snapshot_count = summary.get("total_rows", 0)
+                    if snapshot_count == 0:
+                        print(f"[BacktestManager] WARNING: No harvested data found for {underlying_dir} in date range")
+                    else:
+                        print(f"[BacktestManager] Using LiveDeribitDataSource with {snapshot_count} rows ({underlying_dir})")
+                else:
+                    ds = DeribitDataSource()
+                    print(f"[BacktestManager] Using DeribitDataSource (real-time API)")
+                    
                 sim = CoveredCallSimulator(data_source=ds, config=config)
 
                 decision_times: List[datetime] = []

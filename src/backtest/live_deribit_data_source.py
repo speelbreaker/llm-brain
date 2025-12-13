@@ -34,20 +34,28 @@ class LiveDeribitDataSource:
         start_date: date,
         end_date: date,
         base_dir: str | Path = "data/live_deribit",
+        canonical_underlying: Optional[str] = None,
     ):
         """
         Initialize the data source.
         
         Args:
-            underlying: Asset symbol (e.g., "BTC", "ETH")
+            underlying: Asset symbol for directory lookup (e.g., "BTC_USDC", "ETH_USDC")
             start_date: Start date for data
             end_date: End date for data
             base_dir: Root directory for harvester data
+            canonical_underlying: The canonical underlying symbol (e.g., "BTC", "ETH") 
+                                  used in OptionSnapshots. If None, derived from underlying.
         """
         self.underlying = underlying.upper()
         self.start_date = start_date
         self.end_date = end_date
         self.base_dir = Path(base_dir)
+        
+        if canonical_underlying:
+            self._canonical_underlying = canonical_underlying.upper()
+        else:
+            self._canonical_underlying = self.underlying.replace("_USDC", "").upper()
         
         self._df: Optional[pd.DataFrame] = None
         self._summary: Optional[Dict[str, Any]] = None
@@ -155,9 +163,15 @@ class LiveDeribitDataSource:
         self,
         underlying: str,
         as_of: datetime,
+        settlement_ccy: str = "USDC",
+        margin_type: str = "linear",
     ) -> List[OptionSnapshot]:
         """
         Return option chain snapshot for underlying at (or near) 'as_of'.
+        
+        Note: settlement_ccy and margin_type parameters are accepted for interface
+        compatibility but not used for filtering since harvested data is already
+        filtered to USDC linear options.
         """
         self._ensure_loaded()
         
@@ -216,7 +230,7 @@ class LiveDeribitDataSource:
                 
                 opt = OptionSnapshot(
                     instrument_name=str(row["instrument_name"]),
-                    underlying=underlying.upper(),
+                    underlying=self._canonical_underlying,
                     kind=kind,
                     strike=float(row["strike"]),
                     expiry=expiry_dt,
@@ -287,3 +301,7 @@ class LiveDeribitDataSource:
         """Return the full DataFrame."""
         self._ensure_loaded()
         return self._df if self._df is not None else pd.DataFrame()
+    
+    def close(self) -> None:
+        """Close/cleanup resources (no-op for file-based source)."""
+        pass
