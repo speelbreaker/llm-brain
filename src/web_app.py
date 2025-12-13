@@ -1748,12 +1748,12 @@ def get_risk_limits() -> JSONResponse:
 
 class RiskLimitsUpdate(BaseModel):
     """Request model for updating risk limits."""
-    max_margin_used_pct: Optional[float] = Field(default=None, ge=0.0, le=100.0)
-    max_net_delta_abs: Optional[float] = Field(default=None, ge=0.0)
-    daily_drawdown_limit_pct: Optional[float] = Field(default=None, ge=0.0, le=100.0)
+    max_margin_used_pct: Optional[float] = None
+    max_net_delta_abs: Optional[float] = None
+    daily_drawdown_limit_pct: Optional[float] = None
     kill_switch_enabled: Optional[bool] = None
-    liquidity_max_spread_pct: Optional[float] = Field(default=None, ge=0.0, le=100.0)
-    liquidity_min_open_interest: Optional[int] = Field(default=None, ge=0)
+    liquidity_max_spread_pct: Optional[float] = None
+    liquidity_min_open_interest: Optional[int] = None
 
 
 @app.post("/api/risk_limits")

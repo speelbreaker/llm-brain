@@ -1,0 +1,73 @@
+Fix 1 — live_chain candidates tuple bug (P0)
+
+AI BUILDER PROMPT
+
+In src/backtest/state_builder.py, fix build_candidates() / the live-chain candidate builder so callers get the expected type.
+
+Problem:
+
+src/backtest/state_builder.py:117 returns (candidates, debug_samples) even when debug is off.
+
+Tests expect the function to return only candidates unless debug samples are explicitly requested.
+
+Requirements:
+
+If collect_debug_samples (or equivalent flag) is False: return only candidates (list).
+
+If debug is True: return (candidates, debug_samples) OR return an object/dict that includes both but then update all callers/tests accordingly.
+
+Update the function signature, docstring, and all call sites (including _generate_live_chain_candidates and synthetic-mode paths).
+
+Run python -m pytest -q and ensure tests/test_synthetic_modes.py no longer fails at the referenced lines.
+
+Acceptance:
+
+No code path returns a 2-tuple when debug is off.
+
+All tests pass for synthetic modes.
+
+Fix 2 — 422 vs 400 for RiskLimitsUpdate (P0)
+
+AI BUILDER PROMPT
+
+In src/web_app.py risk-limits update endpoint, make invalid payloads return 400 with the app’s custom error message (not FastAPI/Pydantic 422).
+
+Problem:
+
+RiskLimitsUpdate uses Pydantic ge/le validators, causing FastAPI to reject invalid inputs with 422 before our logic runs.
+
+Tests expect 400 with detailed error content for max_margin_used_pct and max_net_delta_abs.
+
+Requirements (choose one clean approach):
+Option A (preferred): Remove ge/le constraints from the Pydantic model fields and perform range checks inside update_risk_limits(), returning HTTPException(status_code=400, detail=...) exactly as tests expect.
+Option B: Keep validators but catch the validation error at the endpoint level and translate it into a 400 with our expected detail format.
+
+Run python -m pytest -q and ensure tests/test_strategy_tuning_endpoints.py passes (lines referenced).
+
+Fix 3 — offline fallback for Deribit-dependent sensors/backtests (P1)
+
+AI BUILDER PROMPT
+
+Make Deribit/network failures non-fatal for endpoints and tests.
+
+Problems:
+
+ETH OHLC sensors return None when OHLC fetch fails/empty (tests/test_bots_endpoints.py:237).
+
+skew_25d and VRP backtest raise DeribitAPIError on network error (tests/test_bots_endpoints.py:299, tests/test_synthetic_modes.py:450).
+
+Requirements:
+
+Catch DeribitAPIError, timeout, and “empty data” conditions in OHLC/skew/VRP fetch paths.
+
+Provide a deterministic offline fallback:
+
+Prefer cached data if available.
+
+Else return an empty DataFrame and have the computation return a safe default (or “unavailable”) without raising.
+
+Endpoints should still respond 200 with a meaningful payload indicating fallback/unavailable (not crash).
+
+Update tests if they assume strict values, but prefer keeping existing expectations.
+
+Run python -m pytest -q until these tests pass.

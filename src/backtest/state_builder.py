@@ -121,7 +121,7 @@ def _generate_live_chain_candidates(
     cfg: CallSimulationConfig,
     spot_history: List[tuple],
     collect_debug_samples: bool = False,
-) -> Tuple[List[OptionSnapshot], List[LiveChainDebugSample]]:
+):
     """
     Generate option candidates from live Deribit chain.
     
@@ -138,7 +138,8 @@ def _generate_live_chain_candidates(
                                vs BS-calculated prices (only for mark_iv_x_multiplier mode)
         
     Returns:
-        Tuple of (candidates list, debug samples list)
+        If collect_debug_samples is False: List[OptionSnapshot] (candidates only)
+        If collect_debug_samples is True: Tuple of (candidates list, debug samples list)
     """
     debug_samples: List[LiveChainDebugSample] = []
     
@@ -151,7 +152,9 @@ def _generate_live_chain_candidates(
     
     if not all_options:
         logger.warning(f"No live options available for {cfg.underlying} at {t}")
-        return [], []
+        if collect_debug_samples:
+            return [], []
+        return []
     
     # Filter by DTE and delta
     filtered = _filter_option_chain(
@@ -222,7 +225,9 @@ def _generate_live_chain_candidates(
             else:
                 # No valid IV - pass through as-is (will fall back to RV in scoring)
                 result.append(opt)
-        return result, debug_samples
+        if collect_debug_samples:
+            return result, debug_samples
+        return result
     else:
         # For atm_iv or rv modes, get sigma and recalculate
         sigma = get_sigma_for_option(
@@ -265,7 +270,9 @@ def _generate_live_chain_candidates(
                 settlement_ccy=opt.settlement_ccy,
                 margin_type=opt.margin_type,
             ))
-        return result, []
+        if collect_debug_samples:
+            return result, []
+        return result
 
 
 def _filter_option_chain(
@@ -408,10 +415,16 @@ def build_historical_state(
     elif chain_mode == "live_chain":
         # Hybrid mode: live chain with configurable sigma mode
         if spot is not None and spot > 0:
-            candidates, debug_samples = _generate_live_chain_candidates(
-                ds, spot, t, cfg, spot_history, 
-                collect_debug_samples=collect_debug_samples
-            )
+            if collect_debug_samples:
+                candidates, debug_samples = _generate_live_chain_candidates(
+                    ds, spot, t, cfg, spot_history, 
+                    collect_debug_samples=True
+                )
+            else:
+                candidates = _generate_live_chain_candidates(
+                    ds, spot, t, cfg, spot_history, 
+                    collect_debug_samples=False
+                )
     else:
         # Default: synthetic_grid mode
         if spot is not None and spot > 0:
@@ -592,7 +605,7 @@ def build_historical_agent_state(
     elif chain_mode == "live_chain":
         # Hybrid mode: live chain with configurable sigma mode
         if spot > 0:
-            options, _ = _generate_live_chain_candidates(ds, spot, t, cfg, spot_history)
+            options = _generate_live_chain_candidates(ds, spot, t, cfg, spot_history)
     else:
         # Default: synthetic_grid mode
         if spot > 0:

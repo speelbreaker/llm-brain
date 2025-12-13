@@ -63,10 +63,16 @@ def _fetch_ohlc_cached(underlying: str, cache_key: str) -> pd.DataFrame:
 
 
 def get_ohlc_data(underlying: str) -> pd.DataFrame:
-    """Get OHLC data with hourly cache invalidation."""
-    now = datetime.now(timezone.utc)
-    cache_key = f"{now.year}-{now.month}-{now.day}-{now.hour}"
-    return _fetch_ohlc_cached(underlying, cache_key)
+    """Get OHLC data with hourly cache invalidation.
+    
+    Returns empty DataFrame on network/API errors for offline resilience.
+    """
+    try:
+        now = datetime.now(timezone.utc)
+        cache_key = f"{now.year}-{now.month}-{now.day}-{now.hour}"
+        return _fetch_ohlc_cached(underlying, cache_key)
+    except Exception:
+        return pd.DataFrame()
 
 
 @lru_cache(maxsize=2)
@@ -115,10 +121,16 @@ def _fetch_hourly_ohlc_cached(underlying: str, cache_key: str) -> pd.DataFrame:
 
 
 def get_hourly_ohlc_data(underlying: str) -> pd.DataFrame:
-    """Get hourly OHLC data with 10-minute cache invalidation."""
-    now = datetime.now(timezone.utc)
-    cache_key = f"{now.year}-{now.month}-{now.day}-{now.hour}-{now.minute // 10}"
-    return _fetch_hourly_ohlc_cached(underlying, cache_key)
+    """Get hourly OHLC data with 10-minute cache invalidation.
+    
+    Returns empty DataFrame on network/API errors for offline resilience.
+    """
+    try:
+        now = datetime.now(timezone.utc)
+        cache_key = f"{now.year}-{now.month}-{now.day}-{now.hour}-{now.minute // 10}"
+        return _fetch_hourly_ohlc_cached(underlying, cache_key)
+    except Exception:
+        return pd.DataFrame()
 
 
 @lru_cache(maxsize=2)
