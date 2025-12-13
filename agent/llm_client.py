@@ -58,11 +58,12 @@ Be specific and actionable. Reference exact files and line numbers when possible
 
 
 MODEL_FALLBACK_CHAIN = [
-    "gpt-5.2-pro",
-    "gpt-5.2",
-    "gpt-5.2-thinking",
+    "gpt-5",
+    "gpt-5.1",
+    "gpt-5-mini",
+    "gpt-5-nano",
     "o3",
-    "o1",
+    "o3-mini",
     "gpt-4.1",
     "gpt-4o",
 ]

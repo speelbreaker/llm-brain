@@ -31,8 +31,8 @@ class Settings:
     allowed_user_ids: Set[int] = field(default_factory=set)
     openai_api_key: Optional[str] = None
     
-    openai_model_review: str = "gpt-5.2-pro"
-    openai_model_fast: str = "gpt-5.2"
+    openai_model_review: str = "gpt-5"
+    openai_model_fast: str = "gpt-5-mini"
     openai_reasoning_effort: str = "high"
     
     db_path: Path = field(default_factory=lambda: Path("data/agent_data.db"))
@@ -58,8 +58,8 @@ class Settings:
         allowed_ids = _parse_allowed_ids(os.environ.get("TELEGRAM_ALLOWED_USER_IDS"))
         openai_key = os.environ.get("AI_INTEGRATIONS_OPENAI_API_KEY") or os.environ.get("OPENAI_API_KEY")
         
-        model_review = os.environ.get("OPENAI_MODEL_REVIEW", "gpt-5.2-pro")
-        model_fast = os.environ.get("OPENAI_MODEL_FAST", "gpt-5.2")
+        model_review = os.environ.get("OPENAI_MODEL_REVIEW", "gpt-5")
+        model_fast = os.environ.get("OPENAI_MODEL_FAST", "gpt-5-mini")
         reasoning_effort = os.environ.get("OPENAI_REASONING_EFFORT", "high")
         
         return cls(
