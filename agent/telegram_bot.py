@@ -16,7 +16,7 @@ from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandl
 
 from agent.chat_controller import ChatController
 from agent.chat_tools import open_file, search_repo, run_pytest, run_health_checks, run_enhanced_security_scans
-from agent.codex_cli_runner import get_codex_status, codex_exec, codex_via_api
+from agent.codex_remote import run_codex_remote, check_runner_health
 from agent.config import settings
 from agent.review_service import ReviewService
 from agent.storage import init_db, get_recent_check_runs, save_check_run
@@ -636,20 +636,20 @@ INFO - Observations"""
             await reply_safe(update, f"Error: {str(e)[:200]}", context)
     
     async def cmd_codex_status(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Handle /codex_status command - show Codex CLI installation status."""
+        """Handle /codex_status command - check remote Codex runner health."""
         if not _is_authorized(update):
             await reply_safe(update, _unauthorized_response(), context)
             return
         
         try:
-            status = get_codex_status()
-            await reply_safe(update, status, context)
+            status = await check_runner_health()
+            await reply_safe(update, f"Codex Runner: {status}", context, parse_mode=None)
         except Exception as e:
             logger.error(f"Error in /codex_status: {e}")
-            await reply_safe(update, f"Error: {str(e)[:200]}", context)
+            await reply_safe(update, f"Error: {str(e)[:200]}", context, parse_mode=None)
     
     async def cmd_codex(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Handle /codex command - run Codex AI task."""
+        """Handle /codex command - run Codex AI task on remote runner."""
         if not _is_authorized(update):
             await reply_safe(update, _unauthorized_response(), context)
             return
@@ -661,24 +661,25 @@ INFO - Observations"""
                 "- /codex explain this function\n"
                 "- /codex write a test for UserService\n"
                 "- /codex how do I add authentication?",
-                context
+                context,
+                parse_mode=None
             )
             return
         
         task = " ".join(context.args)
-        await reply_safe(update, f"Running Codex: {task[:50]}...", context)
+        await reply_safe(update, f"Running Codex: {task[:50]}...", context, parse_mode=None)
         
         try:
-            result = await codex_via_api(task)
+            result = await run_codex_remote(task)
             
             if len(result) > 4000:
                 result = result[:4000] + "\n\n... (truncated)"
             
-            await reply_safe(update, result, context)
+            await reply_safe(update, result, context, parse_mode=None)
             
         except Exception as e:
             logger.error(f"Error in /codex: {e}")
-            await reply_safe(update, f"Error: {str(e)[:200]}", context)
+            await reply_safe(update, f"Error: {str(e)[:200]}", context, parse_mode=None)
     
     async def handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle non-command text messages via chat controller."""
