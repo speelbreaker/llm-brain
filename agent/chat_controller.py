@@ -86,8 +86,13 @@ class ChatController:
         """Get or create OpenAI client."""
         if self._client is None:
             try:
+                import os
                 from openai import OpenAI
-                self._client = OpenAI(api_key=self.api_key)
+                base_url = os.environ.get("AI_INTEGRATIONS_OPENAI_BASE_URL")
+                self._client = OpenAI(
+                    api_key=self.api_key,
+                    base_url=base_url,
+                )
             except ImportError:
                 raise RuntimeError("openai package not installed")
         return self._client
