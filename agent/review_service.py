@@ -5,6 +5,7 @@ Coordinates change detection, analysis, LLM review, and storage.
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
@@ -19,6 +20,12 @@ from agent.storage import (
     save_review,
     set_meta,
 )
+
+
+def _escape_markdown(text: str) -> str:
+    """Escape special characters for Telegram Markdown."""
+    escape_chars = r'_*[]()~`>#+-=|{}.!'
+    return re.sub(f'([{re.escape(escape_chars)}])', r'\\\1', text)
 
 
 @dataclass
@@ -122,7 +129,8 @@ class ReviewService:
         parts.append(f"*Review Result: {emoji} {llm_result.overall_severity}*")
         
         if llm_result.error:
-            parts.append(f"⚠️ _AI review failed: {llm_result.error[:100]}_")
+            escaped_error = _escape_markdown(llm_result.error[:100])
+            parts.append(f"⚠️ AI review failed: {escaped_error}")
         
         if llm_result.model_used:
             parts.append(f"🤖 _Model: {llm_result.model_used}_")

@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from typing import Optional
 
 from telegram import Update
@@ -17,6 +18,12 @@ from agent.review_service import ReviewService
 from agent.storage import init_db
 
 logger = logging.getLogger(__name__)
+
+
+def escape_markdown(text: str) -> str:
+    """Escape special characters for Telegram Markdown."""
+    escape_chars = r'_*[]()~`>#+-=|{}.!'
+    return re.sub(f'([{re.escape(escape_chars)}])', r'\\\1', text)
 
 
 def _is_authorized(update: Update) -> bool:
@@ -153,7 +160,7 @@ Start with /review to analyze recent changes!"""
             
         except Exception as e:
             logger.error(f"Error in /status: {e}")
-            await update.message.reply_text(f"Error getting status: {e}")
+            await update.message.reply_text(f"Error getting status: {str(e)[:200]}")
     
     async def cmd_review(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle /review command."""
@@ -175,7 +182,7 @@ Start with /review to analyze recent changes!"""
             
         except Exception as e:
             logger.error(f"Error in /review: {e}")
-            await update.message.reply_text(f"Error during review: {e}")
+            await update.message.reply_text(f"Error during review: {str(e)[:200]}")
     
     async def cmd_diff(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle /diff command."""
@@ -194,7 +201,7 @@ Start with /review to analyze recent changes!"""
             
         except Exception as e:
             logger.error(f"Error in /diff: {e}")
-            await update.message.reply_text(f"Error getting diff: {e}")
+            await update.message.reply_text(f"Error getting diff: {str(e)[:200]}")
     
     async def cmd_risks(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle /risks command."""
@@ -216,7 +223,7 @@ Start with /review to analyze recent changes!"""
             
         except Exception as e:
             logger.error(f"Error in /risks: {e}")
-            await update.message.reply_text(f"Error getting risks: {e}")
+            await update.message.reply_text(f"Error getting risks: {str(e)[:200]}")
     
     async def cmd_next(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle /next command."""
@@ -235,7 +242,7 @@ Start with /review to analyze recent changes!"""
             
         except Exception as e:
             logger.error(f"Error in /next: {e}")
-            await update.message.reply_text(f"Error getting actions: {e}")
+            await update.message.reply_text(f"Error getting actions: {str(e)[:200]}")
     
     def run_polling(self) -> None:
         """Run the bot with polling (blocking)."""
