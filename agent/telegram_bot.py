@@ -18,7 +18,7 @@ from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandl
 
 from agent.chat_controller import ChatController
 from agent.chat_tools import open_file, search_repo, run_pytest, run_health_checks, run_enhanced_security_scans
-from agent.codex_remote import run_codex_remote, check_runner_health
+from agent.codex_remote import run_codex_remote, check_runner_health, run_codex_job_async, fetch_codex_job
 from agent.config import settings
 from agent.review_service import ReviewService
 from agent.storage import init_db, get_recent_check_runs, save_check_run
@@ -144,6 +144,7 @@ class TelegramBot:
         self.application.add_handler(CommandHandler("review_latest", self.cmd_review_latest))
         self.application.add_handler(CommandHandler("audit_latest", self.cmd_audit_latest))
         self.application.add_handler(CommandHandler("fix_prompt", self.cmd_fix_prompt))
+        self.application.add_handler(CommandHandler("codex_job", self.cmd_codex_job))
         
         self.application.add_handler(MessageHandler(
             filters.TEXT & ~filters.COMMAND,
@@ -758,32 +759,32 @@ INFO - Observations"""
         await self._run_codex_command(update, context, mode="debug")
     
     async def cmd_review_latest(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Handle /review_latest command - code review with tests via remote Codex."""
+        """Handle /review_latest command - code review with tests via remote Codex (async job)."""
         if not _is_authorized(update):
             await reply_safe(update, _unauthorized_response(), context)
             return
         
         task = " ".join(context.args) if context.args else "the latest changes"
-        await reply_safe(update, "Running code review via Codex...", context, parse_mode=None)
+        await reply_safe(update, "Starting async code review via Codex (may take up to 10 min)...", context, parse_mode=None)
         
         try:
-            result = await run_codex_remote(task, mode="review")
+            result, job_id = await run_codex_job_async(task, mode="review")
             await self._reply_long_text(update, context, result)
         except Exception as e:
             logger.error(f"Error in /review_latest: {e}")
             await reply_safe(update, f"Error: {str(e)[:200]}\nTry /codex_debug for details.", context, parse_mode=None)
     
     async def cmd_audit_latest(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Handle /audit_latest command - security audit via remote Codex."""
+        """Handle /audit_latest command - security audit via remote Codex (async job)."""
         if not _is_authorized(update):
             await reply_safe(update, _unauthorized_response(), context)
             return
         
         task = " ".join(context.args) if context.args else "the codebase for security issues"
-        await reply_safe(update, "Running security audit via Codex...", context, parse_mode=None)
+        await reply_safe(update, "Starting async security audit via Codex (may take up to 10 min)...", context, parse_mode=None)
         
         try:
-            result = await run_codex_remote(task, mode="audit")
+            result, job_id = await run_codex_job_async(task, mode="audit")
             await self._reply_long_text(update, context, result)
         except Exception as e:
             logger.error(f"Error in /audit_latest: {e}")
@@ -811,6 +812,30 @@ INFO - Observations"""
         except Exception as e:
             logger.error(f"Error in /fix_prompt: {e}")
             await reply_safe(update, f"Error: {str(e)[:200]}\nTry /codex_debug for details.", context, parse_mode=None)
+    
+    async def cmd_codex_job(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Handle /codex_job <id> - fetch status or result of an async Codex job."""
+        if not _is_authorized(update):
+            await reply_safe(update, _unauthorized_response(), context)
+            return
+        
+        if not context.args:
+            await reply_safe(update,
+                "Usage: /codex_job <job_id>\n\n"
+                "Fetch the status or result of an async Codex job.\n"
+                "Job IDs are returned when /review_latest or /audit_latest times out.",
+                context, parse_mode=None)
+            return
+        
+        job_id = context.args[0]
+        await reply_safe(update, f"Fetching job {job_id}...", context, parse_mode=None)
+        
+        try:
+            result = await fetch_codex_job(job_id)
+            await self._reply_long_text(update, context, result)
+        except Exception as e:
+            logger.error(f"Error in /codex_job: {e}")
+            await reply_safe(update, f"Error: {str(e)[:200]}", context, parse_mode=None)
     
     async def handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle non-command text messages via chat controller."""
