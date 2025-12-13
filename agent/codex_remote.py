@@ -86,7 +86,8 @@ def _get_runner_url() -> Optional[str]:
 
 def _get_runner_token() -> Optional[str]:
     """Get the Codex runner token from environment."""
-    return os.environ.get("CODEX_RUNNER_TOKEN")
+    token = (os.getenv("CODEX_RUNNER_TOKEN") or "").strip()
+    return token if token else None
 
 
 def _truncate(text: str, max_len: int) -> str:
@@ -188,10 +189,9 @@ async def run_codex_remote(task: str, *, mode: OutputMode = "normal") -> str:
     
     endpoint = f"{runner_url.rstrip('/')}/v1/codex"
     
-    headers = {
-        "Content-Type": "application/json",
-        "X-RUNNER-TOKEN": runner_token,
-    }
+    headers = {"Content-Type": "application/json"}
+    if runner_token:
+        headers["X-RUNNER-TOKEN"] = runner_token
     
     if mode == "short":
         task = (
@@ -208,8 +208,13 @@ async def run_codex_remote(task: str, *, mode: OutputMode = "normal") -> str:
     payload = {"task": task}
     
     try:
+        logger.info(
+            "codex_remote: url=%s token_set=%s token_len=%s",
+            endpoint, bool(runner_token), len(runner_token or "")
+        )
         async with httpx.AsyncClient(timeout=TIMEOUT_SECONDS) as client:
             response = await client.post(endpoint, json=payload, headers=headers)
+            logger.info("codex_remote: status=%s", response.status_code)
             
             if response.status_code != 200:
                 return f"Error: Remote runner returned status {response.status_code}"
