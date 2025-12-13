@@ -23,16 +23,16 @@ MAX_SHORT_OUTPUT = 3000
 
 OutputMode = Literal["normal", "short", "debug", "review", "audit", "fix_prompt"]
 
-REVIEW_TASK_PREFIX = """You are a code reviewer. First sync the repo:
-git fetch origin && git reset --hard origin/main 2>/dev/null || git reset --hard origin/master
+REVIEW_TASK_PREFIX = """You are a code reviewer. Perform these checks:
 
-Then perform these checks:
-1. Get current commit: git rev-parse --short HEAD
-2. Run smoke tests: pytest -q --tb=no 2>&1 | head -30
-3. Scan for issues: grep -rn "TODO\\|FIXME\\|XXX" src/ agent/ --include="*.py" 2>/dev/null | head -10
-4. Check for missing imports or obvious errors
+1. Print source: echo "SOURCE: github/main"
+2. Get current commit: git rev-parse --short HEAD
+3. Run smoke tests: python -m pytest -q --tb=no 2>&1 | head -30
+4. Scan for issues: grep -rn "TODO\\|FIXME\\|XXX" src/ agent/ --include="*.py" 2>/dev/null | head -10
+5. Check for missing imports or obvious errors
 
 Return a CONCISE summary in this format:
+SOURCE: github/main
 COMMIT: <hash>
 TEST STATUS: PASS/FAIL (X passed, Y failed)
 TOP ISSUES:
@@ -44,34 +44,33 @@ SUGGESTED FIXES:
 
 Now review: """
 
-AUDIT_TASK_PREFIX = """You are a security auditor. First sync:
-git fetch origin && git reset --hard origin/main 2>/dev/null || git reset --hard origin/master
+AUDIT_TASK_PREFIX = """You are a security auditor. Perform these checks:
 
-Perform review checks plus security scans:
-1. Get commit: git rev-parse --short HEAD
-2. Run tests: pytest -q --tb=no 2>&1 | head -20
-3. Run pip-audit: pip-audit -r requirements.txt 2>&1 | head -20 (if requirements.txt exists)
-4. Run bandit: bandit -r src agent -q 2>&1 | head -30 (if dirs exist)
-5. Check for hardcoded secrets, exposed keys, SQL injection risks
+1. Print source: echo "SOURCE: github/main"
+2. Get commit: git rev-parse --short HEAD
+3. Run tests: python -m pytest -q --tb=no 2>&1 | head -20
+4. Run pip-audit: python -m pip_audit -r requirements.txt 2>&1 | head -20 (if pip_audit is installed and requirements.txt exists, otherwise note "pip-audit not available")
+5. Run bandit: python -m bandit -r src agent -q 2>&1 | head -30 (if bandit is installed, otherwise note "bandit not available")
+6. Check for hardcoded secrets, exposed keys, SQL injection risks
 
 Return CONCISE format:
+SOURCE: github/main
 COMMIT: <hash>
 TEST STATUS: PASS/FAIL
 SECURITY FINDINGS:
-- [SEVERITY] finding
+- [SEVERITY] finding (or "pip-audit/bandit not available" if tools missing)
 RECOMMENDATIONS:
 - action
 
 Now audit: """
 
 FIX_PROMPT_PREFIX = """You are a senior engineer creating a handoff prompt for a junior developer.
-First sync: git fetch origin && git reset --hard origin/main 2>/dev/null || git reset --hard origin/master
 
 Analyze the codebase and produce a SINGLE, COMPLETE Builder-ready prompt that:
 1. Lists exact files to edit (full paths)
 2. Shows precise code changes (before/after or patch-style)
 3. Includes acceptance criteria
-4. Shows how to verify (test commands)
+4. Shows how to verify (test commands using python -m pytest)
 
 Format as a clean, paste-ready prompt starting with "BUILDER PROMPT:".
 

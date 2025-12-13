@@ -758,62 +758,29 @@ INFO - Observations"""
         await self._run_codex_command(update, context, mode="debug")
     
     async def cmd_review_latest(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Handle /review_latest command - code review with tests."""
+        """Handle /review_latest command - code review with tests via remote Codex."""
         if not _is_authorized(update):
             await reply_safe(update, _unauthorized_response(), context)
             return
         
         task = " ".join(context.args) if context.args else "the latest changes"
-        await reply_safe(update, "Running code review...", context, parse_mode=None)
+        await reply_safe(update, "Running code review via Codex...", context, parse_mode=None)
         
         try:
-            import subprocess
-            source = "workspace"
-            commit = "unknown"
-            workdir = os.getcwd()
-            
-            try:
-                remote_result = subprocess.run(
-                    ["git", "remote", "get-url", "origin"],
-                    capture_output=True, text=True, timeout=5
-                )
-                if remote_result.returncode == 0:
-                    remote_url = remote_result.stdout.strip()
-                    if "github.com" in remote_url:
-                        source = "github/main"
-                    else:
-                        source = remote_url.split("/")[-1].replace(".git", "")
-            except Exception:
-                pass
-            
-            try:
-                commit_result = subprocess.run(
-                    ["git", "rev-parse", "--short", "HEAD"],
-                    capture_output=True, text=True, timeout=5
-                )
-                if commit_result.returncode == 0:
-                    commit = commit_result.stdout.strip()
-            except Exception:
-                pass
-            
             result = await run_codex_remote(task, mode="review")
-            
-            header = f"SOURCE: {source}\nCOMMIT: {commit}\nWORKDIR: {workdir}\n\n"
-            result_with_header = header + result
-            
-            await self._reply_long_text(update, context, result_with_header)
+            await self._reply_long_text(update, context, result)
         except Exception as e:
             logger.error(f"Error in /review_latest: {e}")
             await reply_safe(update, f"Error: {str(e)[:200]}\nTry /codex_debug for details.", context, parse_mode=None)
     
     async def cmd_audit_latest(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Handle /audit_latest command - security audit."""
+        """Handle /audit_latest command - security audit via remote Codex."""
         if not _is_authorized(update):
             await reply_safe(update, _unauthorized_response(), context)
             return
         
         task = " ".join(context.args) if context.args else "the codebase for security issues"
-        await reply_safe(update, "Running security audit...", context, parse_mode=None)
+        await reply_safe(update, "Running security audit via Codex...", context, parse_mode=None)
         
         try:
             result = await run_codex_remote(task, mode="audit")
