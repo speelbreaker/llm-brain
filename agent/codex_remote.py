@@ -476,10 +476,10 @@ async def run_codex_job_async(
         if result.status in ("failed", "error"):
             data = result.data or {}
             error_msg = data.get("error") or data.get("stderr") or "Unknown error"
-            return f"Job failed: {error_msg[:500]}", None
+            return f"Job {job_id} failed: {error_msg[:500]}\nUse /codex_job {job_id} to check logs.", job_id
         
         if result.status in ("cancelled", "canceled"):
-            return "Job was cancelled.", None
+            return f"Job {job_id} was cancelled.", job_id
     
     msg = f"Still running. JOB: {job_id}\nTry /codex_job {job_id} to check status later."
     if sync_status:
