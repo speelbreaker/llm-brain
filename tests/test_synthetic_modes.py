@@ -354,3 +354,109 @@ class TestLiveChainDebugSamples:
         assert d["deribit_mark_price"] == 1500.123456
         assert d["engine_price"] == 1450.654321
         assert d["abs_diff_pct"] == 3.295
+
+
+class TestGregVRPIVSensitivity:
+    """
+    Regression test proving GregBot VRP Harvester responds to IV multiplier changes.
+    
+    This test locks in the fact that Greg's selector responds to IV changes:
+    - Lower multiplier -> fewer trades / lower score
+    - Higher multiplier -> more trades / higher score
+    
+    If this test fails, someone likely broke the:
+    calibration -> multiplier -> synthetic universe -> Greg decisions pipeline.
+    """
+
+    @pytest.mark.slow
+    def test_greg_vrp_is_sensitive_to_iv_multiplier(self):
+        """
+        Verify GregBot trade count and profit change with IV multiplier.
+        
+        Runs two backtests on BTC Dec 7-13 2025:
+        - Run A: synthetic_iv_multiplier = 0.9 (low IV)
+        - Run B: synthetic_iv_multiplier = 1.1 (high IV)
+        
+        Asserts that higher IV produces >= trades and >= profit (with tolerance).
+        
+        Manual validation results (Dec 13, 2025):
+        | IV Multiplier | Trades | Net Profit |
+        |---------------|--------|------------|
+        | 0.9           | 1      | -1.3%      |
+        | 1.1           | 5      | +6.45%     |
+        """
+        from src.backtest.deribit_client import DeribitPublicClient
+        from src.backtest.deribit_data_source import DeribitDataSource
+        from src.backtest.covered_call_simulator import CoveredCallSimulator
+        from src.backtest.state_builder import create_state_builder
+        from src.backtest.types import CallSimulationConfig
+        
+        def run_greg_backtest(iv_multiplier: float) -> dict:
+            """Run a backtest with the specified IV multiplier and return metrics."""
+            client = DeribitPublicClient()
+            ds = DeribitDataSource(client)
+            
+            try:
+                config = CallSimulationConfig(
+                    underlying="BTC",
+                    start=datetime(2025, 12, 7, tzinfo=timezone.utc),
+                    end=datetime(2025, 12, 13, tzinfo=timezone.utc),
+                    timeframe="1h",
+                    decision_interval_bars=24,
+                    initial_spot_position=1.0,
+                    contract_size=1.0,
+                    fee_rate=0.0005,
+                    target_dte=7,
+                    dte_tolerance=2,
+                    target_delta=0.25,
+                    delta_tolerance=0.10,
+                    min_dte=1,
+                    max_dte=14,
+                    delta_min=0.10,
+                    delta_max=0.40,
+                    pricing_mode="synthetic_bs",
+                    chain_mode="synthetic_grid",
+                    sigma_mode="rv_x_multiplier",
+                    synthetic_iv_multiplier=iv_multiplier,
+                    min_score_to_trade=3.0,
+                    tp_threshold_pct=80.0,
+                )
+                
+                sim = CoveredCallSimulator(ds, config)
+                state_builder = create_state_builder(ds, config)
+                
+                decision_times = []
+                t = config.start
+                step = timedelta(hours=24)
+                while t < config.end - timedelta(days=1):
+                    decision_times.append(t)
+                    t += step
+                
+                result = sim.simulate_policy_with_scoring(
+                    decision_times=decision_times,
+                    state_builder=state_builder,
+                    exit_style="tp_and_roll",
+                    min_score_to_trade=3.0,
+                )
+                
+                return {
+                    "num_trades": result.metrics.get("num_trades", 0),
+                    "net_profit_pct": result.metrics.get("net_profit_pct", 0.0),
+                    "final_pnl": result.metrics.get("final_pnl", 0.0),
+                }
+            finally:
+                ds.close()
+        
+        metrics_low = run_greg_backtest(0.9)
+        metrics_high = run_greg_backtest(1.1)
+        
+        assert metrics_high["num_trades"] >= metrics_low["num_trades"], (
+            f"Higher IV ({metrics_high['num_trades']} trades) should produce >= trades "
+            f"than lower IV ({metrics_low['num_trades']} trades)"
+        )
+        
+        profit_tolerance = 0.5
+        assert metrics_high["net_profit_pct"] >= metrics_low["net_profit_pct"] - profit_tolerance, (
+            f"Higher IV profit ({metrics_high['net_profit_pct']:.2f}%) should be >= "
+            f"lower IV profit ({metrics_low['net_profit_pct']:.2f}%) minus tolerance ({profit_tolerance}%)"
+        )

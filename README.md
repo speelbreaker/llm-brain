@@ -198,6 +198,60 @@ The agent gracefully falls back to `DO_NOTHING` when LLM mode encounters errors,
 4. Enable trading permissions
 5. Copy the client ID and secret to your `.env` file
 
+## IV Calibration & Synthetic Universe Policy
+
+### Why This Matters
+
+The synthetic universe uses an **IV multiplier** (`synthetic_iv_multiplier`) to scale implied volatility when pricing options. This single parameter cascades through the entire decision pipeline:
+
+```
+IV Multiplier → Synthetic Option Prices → Premium Estimates → Greg VRP Signals → Trade Decisions
+```
+
+**Getting this wrong means your backtests are meaningless.**
+
+### The Calibration Problem
+
+- **Too low (e.g., 0.8)**: Synthetic premiums undervalue options → fewer trades trigger → backtests look overly conservative
+- **Too high (e.g., 1.3)**: Synthetic premiums overvalue options → too many trades trigger → backtests show false profits
+- **Just right (~1.0-1.05)**: Matches live Deribit marks → backtest results approximate real trading
+
+### How to Calibrate
+
+1. **Run Extended Calibration** (UI: Calibration tab → Run Extended Calibration)
+   - Compares Black-Scholes synthetic prices vs. live Deribit marks
+   - Returns recommended `vol_surface` multipliers per DTE band
+
+2. **Use Auto-Calibration** (daily cron or manual)
+   ```bash
+   python -m scripts.auto_calibrate_iv --underlying BTC
+   ```
+   - Writes to `calibration_history` table
+   - Does NOT auto-apply—you must review and enable via Update Policy
+
+3. **Apply via Update Policy** (UI: Calibration → Update Policy)
+   - EWMA smoothing prevents sudden jumps
+   - Threshold gates prevent applying bad calibrations
+   - File-based history for audit trail
+
+### Regression Test
+
+The test `TestGregVRPIVSensitivity.test_greg_vrp_is_sensitive_to_iv_multiplier` in `tests/test_synthetic_modes.py` proves that Greg's VRP decisions respond correctly to IV multiplier changes:
+
+| IV Multiplier | Expected Behavior |
+|---------------|-------------------|
+| 0.9 (low)     | Fewer trades, lower/negative profit |
+| 1.1 (high)    | More trades, higher profit |
+
+If this test fails, the calibration → synthetic pricing → Greg decisions pipeline is broken.
+
+### Best Practices
+
+1. **Never run backtests without calibrating first** — uncalibrated results are fiction
+2. **Re-calibrate weekly** — vol surface dynamics shift over time
+3. **Compare synthetic vs. live** before any major backtest campaign
+4. **Document your multiplier** when sharing backtest results
+
 ## License
 
 This project is for educational and research purposes only.

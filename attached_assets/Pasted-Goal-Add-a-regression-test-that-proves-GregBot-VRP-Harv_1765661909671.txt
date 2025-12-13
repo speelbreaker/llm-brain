@@ -1,0 +1,115 @@
+Goal
+Add a regression test that proves GregBot – VRP Harvester actually responds to the IV multiplier in the synthetic universe: lower multiplier → fewer trades / lower score; higher multiplier → more trades / higher score. This protects us from accidentally breaking the synthetic_iv_multiplier wiring in the future.
+
+Context
+
+We already validated manually that, on BTC_USDC for Dec 7–13 2025, changing synthetic_iv_multiplier between 0.9 and 1.1 changes Greg’s trade count and PnL.
+
+The backtest system now correctly passes synthetic_iv_multiplier all the way through to the simulator.
+
+Greg’s selector is GregBot – VRP Harvester in the UI; in code, use whatever selector name / config we already use for Greg in backtests (don’t invent a new one).
+
+What to implement
+
+New test file (or add to existing)
+
+If tests/test_synthetic_modes.py already exists, add the new test there.
+
+Otherwise, create a new file tests/test_greg_vrp_iv_sensitivity.py.
+
+Test helper
+
+Write a small helper inside the test file that can run a single backtest for Greg and return metrics.
+
+Prefer calling the same Python API the tests already use (e.g. the backtest manager / simulation config), not the HTTP/REST layer, so the test stays fast and doesn’t depend on a running web server.
+
+Use the same config Greg uses in the app, but with these overrides:
+
+underlying = "BTC_USDC"
+
+start_date = "2025-12-07"
+
+end_date = "2025-12-13"
+
+exit_style = "hold_to_expiry"
+
+decision_interval = 1 day
+
+synthetic_mode / chain_mode = the standard synthetic universe Greg uses today (do not switch to Live Chain).
+
+sigma_mode = whatever Greg already uses (don’t change it; just reuse the default from the code).
+
+Parameter to vary: synthetic_iv_multiplier.
+
+The actual regression test
+
+Implement test_greg_vrp_is_sensitive_to_iv_multiplier() that:
+
+Runs Run A with synthetic_iv_multiplier = 0.9.
+
+Runs Run B with synthetic_iv_multiplier = 1.1.
+
+Extracts at least: num_trades and net_profit_pct from the backtest results.
+
+Assertions (be slightly tolerant, not ultra strict):
+
+num_trades_high_iv >= num_trades_low_iv
+
+net_profit_pct_high_iv >= net_profit_pct_low_iv - 0.5 (allow a small 0.5% wiggle room so the test isn’t flaky).
+
+Add a short docstring explaining that this test locks in the fact that Greg’s selector responds to IV changes and will fail if someone accidentally disconnects the calibration → synthetic universe → Greg pipeline.
+
+Test flags & speed
+
+Keep the window short (Dec 7–13 only) so the test runs quickly.
+
+If we already use @pytest.mark.slow in this repo, add that marker if runtime is more than a few seconds; otherwise keep it unmarked but optimized.
+
+Acceptance criteria
+
+New test file (or updated existing one) is committed.
+
+pytest passes, including the new test.
+
+The test fails if you temporarily hard-code synthetic_iv_multiplier=1.0 inside the simulator (you don’t need to commit that, just verify locally that the test would catch such a bug).
+
+2) README snippet – IV Calibration & Synthetic Universe Policy
+
+Here’s a short Markdown block you can paste into README.md under a section like “Calibration & Synthetic Universe”:
+
+## IV Calibration & Synthetic Universe Policy
+
+The bot no longer uses hard-coded IV knobs. Instead, we run a full **calibration → multiplier → synthetic universe → decisions** pipeline:
+
+1. **Data sources**
+   - **Live mode:** Uses Deribit public APIs for spot, realized vol (7d RV from TradingView candles), and near-dated options (marks, IVs, deltas).
+   - **Harvested mode:** Uses our intraday harvester Parquet snapshots under `data/live_deribit/**` so we can replay historical states.
+
+2. **Calibration**
+   - The **Calibration** tab (and `scripts/auto_calibrate_iv.py`) compare synthetic Black–Scholes prices to Deribit marks for near-dated calls.
+   - For each underlying and DTE band we compute:
+     - Error metrics (MAE %, bias %, vega-weighted MAE %)
+     - Recommended `iv_multiplier`
+     - Recommended skew anchor ratios (15/25/35-delta OTM IV / ATM IV)
+   - Results are stored in `calibration_history` (DB) plus a small in-memory calibration store used by the app.
+
+3. **Update policy**
+   - A smoothing policy looks back 14 days and only updates multipliers when:
+     - `|Δ multiplier| ≥ 0.03`
+     - `samples ≥ 50`
+     - `total vega ≥ 100`
+   - This prevents reacting to noisy days or tiny changes. The “IV Calibration Update Policy” box in the UI shows the current smoothed multipliers and the latest run.
+
+4. **How it affects the synthetic universe**
+   - The **Global / weekly / monthly / quarterly** multipliers are fed into the synthetic universe config as `synthetic_iv_multiplier` per tenor.
+   - Backtests and selector scans then:
+     - Use **RV × multiplier** or **Mark IV × multiplier** depending on `sigma_mode`.
+     - Apply skew using the **calibrated skew anchor ratios** instead of hard-coded 1.0/flat skew.
+   - GregBot’s VRP scores and trade decisions depend directly on these synthetic prices, so changes in IV calibration change how often he trades.
+
+5. **Operational notes**
+   - A small cron job runs `scripts/auto_calibrate_iv.py --underlying BTC/ETH` once per day and records the results; only “OK” runs with sane multipliers are eligible for promotion.
+   - The Calibration UI flags **failed / degraded** runs (schema issues, insane MAE, or crazy multipliers), and these are **never** used to update the live synthetic universe.
+   - For research, the recommended workflow is:
+     - Use **“Use Latest Recommended”** (smoothed) multipliers for most backtests.
+     - Occasionally stress-test Greg by nudging the multiplier (e.g. 0.9 vs 1.1) to see how sensitive his edge is.
