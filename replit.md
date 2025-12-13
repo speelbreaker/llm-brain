@@ -63,13 +63,22 @@ The web dashboard offers a user-friendly interface with sections for "Live Agent
 - **Decision Logging System**: Comprehensive audit trail for Greg decisions stored in a `greg_decision_log` database table, with API for history and statistics, and a "What-If Report Script" for analysis.
 - **UI Enhancements**: Priority coloring, demo vs live badges, mode badges, and view hedge links.
 - **Greg Lab UI**: Dedicated dashboard tab for viewing and managing Greg strategy positions. Features mode banner (ADVICE ONLY / LIVE EXECUTION), sandbox summary, underlying/sandbox filters, positions table with badges (SANDBOX, DEMO, LIVE), PnL tracking, DTE display, suggested actions, and per-position log timelines. Includes Observer Notes stub for future LLM summaries. API endpoints: `/api/greg/positions`, `/api/greg/positions/{position_id}/logs`.
-- **Telegram Code Review Agent** (`agent/` module): A Telegram bot for automated code review:
-    - **Architecture**: Modular design with config, storage (SQLite), change detection (git-based with snapshot fallback), diff analysis, LLM-powered review, and Telegram bot interface.
-    - **Commands**: `/start`, `/help` (onboarding), `/status` (system health), `/review` (analyze latest changes), `/diff` (changed files summary), `/risks` (detailed issues with severity), `/next` (recommended actions).
-    - **LLM Integration**: Uses configurable OpenAI models with automatic fallback chain. Default: `gpt-5.2-pro` (smartest) with fallback to `gpt-5.2`, `o3`, `o1`, `gpt-4.1`, `gpt-4o`. Maximum reasoning effort enabled for deep analysis. Produces concise reasoning summaries in reports.
+- **Telegram Code Review Agent** (`agent/` module): A Telegram bot for automated code review and Repo Q&A:
+    - **Architecture**: Modular design with config, storage (SQLite), change detection (git-based with snapshot fallback), diff analysis, LLM-powered review, chat tools, and Telegram bot interface.
+    - **Code Review Commands**: `/start`, `/help` (onboarding), `/status` (system health), `/review` (analyze latest changes), `/diff` (changed files summary), `/risks` (detailed issues with severity), `/next` (recommended actions).
+    - **Repo Q&A Commands**: `/ask <question>` (ask about codebase), `/search <query>` (search code patterns), `/open <path>:<lines>` (view file excerpt), `/clear` (clear chat session).
+    - **Natural Language Chat**: Type any question to get answers about the codebase. The LLM routes queries to appropriate tools.
+    - **Chat Tools** (`agent/chat_tools.py`):
+        - `search_repo`: Case-insensitive grep with context, directory prioritization (src, agent, app, etc.), exclusions (.git, node_modules, __pycache__), and limit controls.
+        - `open_file`: Read file sections (max 200 lines) with line numbers, secret redaction, path traversal protection, and sensitive file blocking.
+        - `list_files`: Directory exploration with optional glob pattern and file size display.
+        - `get_project_map`: High-level project structure overview.
+        - `get_status`, `get_latest_diff`, `run_smoke_tests`, `run_security_scans`, `tail_logs`: Supporting tools.
+    - **Secret Redaction**: Automatic redaction of API keys (sk-*, sk_live_*, sk_test_*), passwords, tokens, authorization headers, PEM blocks, and long base64 strings.
+    - **LLM Integration**: Uses configurable OpenAI models with automatic fallback chain. Default: `gpt-5.2-pro` (smartest) with fallback to `gpt-5.2`, `o3`, `o1`, `gpt-4.1`, `gpt-4o`. Maximum reasoning effort enabled for deep analysis.
     - **Model Configuration** (via environment variables):
         - `OPENAI_MODEL_REVIEW`: Primary model for reviews (default: `gpt-5.2-pro`)
-        - `OPENAI_MODEL_FAST`: Fast model for quick summaries (default: `gpt-5.2`)
+        - `OPENAI_MODEL_FAST`: Fast model for quick summaries and chat (default: `gpt-5.2`)
         - `OPENAI_REASONING_EFFORT`: Reasoning effort level - `low`, `medium`, `high` (default: `high`)
     - **Severity Levels**: CRITICAL (must fix), HIGH (strongly recommended), MEDIUM (fix soon), LOW (nice to have), INFO (observations).
     - **Security**: User authorization via `TELEGRAM_ALLOWED_USER_IDS` secret. Bot token via `TELEGRAM_BOT_TOKEN` secret.

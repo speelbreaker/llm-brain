@@ -1,0 +1,202 @@
+Role
+You are a senior Python engineer + DevSecOps reviewer. Implement an in-app “Auditor Agent” that runs inside this Replit project and can be chatted with via Telegram (not just slash commands). The agent must execute smoke tests and security scans itself, then use an LLM to interpret results and recommend fixes.
+
+Goal
+Build a two-phase (Plan → Act → Review) Auditor Agent that is maximally aware (via instrumentation) of:
+
+what the app is and how it works (project map),
+
+what changed recently (git diff or snapshots),
+
+whether the app is healthy (smoke tests),
+
+security posture (dependency + SAST + secret scan),
+
+and what to fix next (actionable findings + patches).
+
+Context
+
+Pytest is already present and configured via pytest.ini, using the tests/ directory and test_* conventions.
+
+The repo already contains pytest tests (e.g., tests/test_healthcheck_basic.py) that mock network calls.
+
+There are existing health endpoints in two places:
+
+server.py (Flask) exposes / and /health returning JSON health status.
+
+src/web_app.py (FastAPI) exposes GET /health returning {"status":"healthy","service":"options-trading-agent"}.
+
+I want Telegram chat experience like ChatGPT: free-text questions + safe tool execution.
+
+Requirements
+
+Telegram Chat Interface (commands + natural language)
+
+Add a Telegram bot with allowlisted user IDs.
+
+Support commands: /status, /review, /scan, /smoke, /security, /diff, /history, /search, /open, /ask.
+
+Any message not starting with / must be treated as natural-language chat and routed by the agent.
+
+Two-phase LLM operation (Plan → Act → Final Review)
+
+Plan phase (LLM): given user request + latest diff summary + last run results, decide which allowlisted tools to run (smoke, security, diff, repo search/open, logs). Output a structured plan (tool calls + rationale).
+
+Act phase (controller): execute the allowlisted tools with strict timeouts and output caps; store artifacts.
+
+Final Review (LLM): interpret tool outputs + diffs + project map and return structured findings + recommended fixes (optionally propose patches, but no auto-apply without explicit confirmation).
+
+Tool Runner (the “hands” that actually executes checks)
+Implement allowlisted tool functions (no arbitrary shell). At minimum:
+
+run_pytest() → executes pytest -q with timeout; stores stdout/stderr.
+
+run_smoke_health_checks() → verifies health endpoints without requiring public networking:
+
+Prefer in-process checks using framework test clients:
+
+Flask: import app from server.py (or construct it) and call /health using app.test_client().
+
+FastAPI: import FastAPI app from src/web_app.py and call /health using fastapi.testclient.TestClient.
+
+If the app is already running as a server in Replit, optionally also perform GET http://127.0.0.1:<port>/health (port from env or .replit), but do not depend on it.
+
+Validate: HTTP 200 and JSON includes expected “healthy” status/service fields where applicable.
+
+run_security_scans():
+
+pip-audit dependency vulnerability scan
+
+bandit -r . -q (or focus on src/ + server code)
+
+secret scan (internal Python scanner) + aggressive redaction
+
+run_static_checks():
+
+ruff check . (add if missing)
+
+Repo Q&A tools:
+
+search_repo(query, limit=20) (ignore heavy dirs; redaction)
+
+open_file(path, start_line, end_line) (max 200 lines; redaction; prevent path traversal)
+
+Optional:
+
+tail_logs(n_lines) (from known log file locations)
+
+Change detection + review history
+
+Primary: use git if available (latest commit, diff vs previous).
+
+Fallback: snapshot hashing of tracked files; store in .auditor/snapshots/.
+
+Persist history in SQLite .auditor/auditor.db:
+
+reviews (change_id, timestamp, summary, severity counts)
+
+check_runs (type, status, duration, artifact paths)
+
+findings (severity, category, evidence, recommendation)
+
+chat_sessions (telegram chat_id, short rolling summary, last change reviewed)
+
+Project map (awareness index)
+
+Generate/update .auditor/PROJECT_MAP.md and .auditor/project_map.json capturing:
+
+entrypoints (Flask server vs FastAPI app), routes, key modules/services
+
+env vars used, external APIs, storage, background jobs
+
+where health checks live and how to run tests/scans locally
+
+Structured findings + evidence
+Each finding must include:
+
+severity: Critical | High | Medium | Low
+
+category: Bug | Security | Reliability | Performance | DX/Tests
+
+evidence: file:line-range or log excerpt (≤20 lines)
+
+why_it_matters: 1–2 sentences
+
+recommended_fix: concrete next step (and a small patch suggestion if easy)
+
+Safety guardrails
+
+No arbitrary shell execution; only allowlisted tools.
+
+Redact secrets everywhere (search results, opened files, logs, Telegram messages).
+
+Default to read-only review. If “apply patch” exists, require explicit confirmation and show diff first.
+
+LLM configuration (smartest model possible)
+
+Use OpenAI Responses API.
+
+Default review model: gpt-5.2-pro (deep review); fallback: gpt-5.2 for fast summaries.
+
+Make model configurable via env vars:
+
+OPENAI_MODEL_REVIEW=gpt-5.2-pro
+
+OPENAI_MODEL_FAST=gpt-5.2
+
+Use highest supported reasoning effort for deep reviews.
+
+Constraints
+
+Must run reliably inside Replit with strict timeouts and output caps.
+
+Smoke health checks must work even if the HTTP server isn’t publicly reachable (use in-process clients).
+
+Do not leak secrets; keep tokens only in env vars.
+
+Keep dependencies minimal; add only what is needed (ruff, bandit, pip-audit, telegram library, openai client).
+
+Output Format
+Return the following in order:
+
+Architecture overview (components + Plan/Act/Review flow)
+
+Exact file plan (paths to add/modify)
+
+Step-by-step implementation checklist (Replit Builder friendly)
+
+Telegram commands + chat-mode behavior (example inputs/outputs)
+
+Tool runner details (commands, timeouts, artifact storage)
+
+In-process smoke health check implementation approach for Flask + FastAPI
+
+SQLite schema (tables + key fields)
+
+Redaction rules (patterns + behavior)
+
+Minimal runnable code skeleton (enough for /status, chat routing, /smoke, /security, /review, /search, /open)
+
+Acceptance test plan (how to validate end-to-end in Replit + Telegram)
+
+Acceptance Criteria
+
+Telegram bot supports both commands and free-text chat.
+
+/smoke runs pytest and also runs in-process /health checks for Flask and/or FastAPI without requiring external networking.
+
+/security executes pip-audit + bandit + secret scan and reports structured findings.
+
+/review performs Plan → Act → Final Review and includes evidence + recommendations.
+
+Repo Q&A works: /search and /open return redacted, limited snippets with path+line references.
+
+Review history persists across restarts.
+
+Clarifying Questions (max 3; ask only if truly needed)
+
+What is the Replit run command / entrypoint (from .replit)—does it start Flask (server.py) or FastAPI (src/web_app.py)?
+
+Should /health checks validate only status=healthy, or also verify dependencies (DB/Deribit connectivity) in a “shallow vs deep” mode?
+
+Do you want the agent to create GitHub issues automatically for High/Critical findings, or only report via Telegram?
