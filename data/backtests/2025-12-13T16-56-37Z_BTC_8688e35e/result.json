@@ -1,0 +1,30 @@
+{
+  "run_id": "2025-12-13T16-56-37Z_BTC_8688e35e",
+  "created_at": "2025-12-13T16:56:37.872233+00:00",
+  "status": "failed",
+  "config": {
+    "underlying": "BTC",
+    "start_date": "2024-09-01T00:00:00+00:00",
+    "end_date": "2024-11-01T00:00:00+00:00",
+    "timeframe": "1d",
+    "decision_interval_hours": 24,
+    "exit_style": "hold_to_expiry",
+    "target_dte": 7,
+    "target_delta": 0.25,
+    "min_dte": 3,
+    "max_dte": 21,
+    "delta_min": 0.15,
+    "delta_max": 0.35,
+    "margin_type": "inverse",
+    "settlement_ccy": "ANY",
+    "sigma_mode": "mark_iv_x_multiplier",
+    "chain_mode": "live_chain"
+  },
+  "metrics": {},
+  "recent_steps": {},
+  "recent_chains": {},
+  "equity_curves": {},
+  "error": "can't compare offset-naive and offset-aware datetimes",
+  "finished_at": "2025-12-13T16:56:37.880914+00:00",
+  "duration_seconds": 0.008681
+}

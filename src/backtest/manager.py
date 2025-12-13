@@ -781,9 +781,11 @@ class BacktestManager:
                     chain_mode=chain_mode_typed,
                 )
 
+                now_utc = datetime.utcnow()
+                end_date_naive = end_date.replace(tzinfo=None) if end_date.tzinfo else end_date
                 use_live_deribit_source = (
                     chain_mode == "live_chain" and
-                    end_date < datetime.utcnow()
+                    end_date_naive < now_utc
                 )
                 
                 if use_live_deribit_source:
