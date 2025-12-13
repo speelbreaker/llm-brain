@@ -997,6 +997,8 @@ class BacktestStartRequest(BaseModel):
     # Hybrid synthetic mode settings
     sigma_mode: str = "rv_x_multiplier"
     chain_mode: str = "synthetic_grid"
+    # Selector/strategy for decision making
+    selector_name: str = "generic_covered_call"
 
 
 @app.post("/api/backtest/start")
@@ -1039,6 +1041,7 @@ def start_backtest(req: BacktestStartRequest) -> JSONResponse:
         settlement_ccy=req.settlement_ccy,
         sigma_mode=req.sigma_mode,
         chain_mode=req.chain_mode,
+        selector_name=req.selector_name,
     )
     
     if not started:
@@ -4331,6 +4334,15 @@ def index() -> str:
             <option value="live_chain">Live Chain + Live IV</option>
           </select>
           <small id="bt-synthetic-mode-desc" style="display:block;margin-top:4px;color:#888;font-size:0.8rem;">Uses realized volatility with multiplier to price synthetic options on a generated strike grid.</small>
+        </div>
+      </div>
+      <div class="form-row">
+        <div class="form-group" style="flex:2;">
+          <label>Selector / Strategy</label>
+          <select id="bt-selector-name">
+            <option value="generic_covered_call" selected>Generic - Covered Call Agent</option>
+            <option value="greg_vrp_harvester">GregBot - VRP Harvester</option>
+          </select>
         </div>
       </div>
       <div style="display:flex;gap:0.5rem;">
@@ -9777,6 +9789,8 @@ def index() -> str:
       const settlementCcy = document.getElementById('bt-settlement-ccy').value;
       const syntheticParams = getSyntheticModeParams();
       
+      const selectorName = document.getElementById('bt-selector-name').value;
+      
       const payload = {{
         underlying,
         start: start + 'T00:00:00Z',
@@ -9794,6 +9808,7 @@ def index() -> str:
         settlement_ccy: settlementCcy,
         sigma_mode: syntheticParams.sigma_mode,
         chain_mode: syntheticParams.chain_mode,
+        selector_name: selectorName,
       }};
       
       document.getElementById('bt-error').style.display = 'none';

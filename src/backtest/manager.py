@@ -681,6 +681,7 @@ class BacktestManager:
         settlement_ccy: SettlementCcy = "ANY",
         sigma_mode: str = "rv_x_multiplier",
         chain_mode: str = "live_chain",
+        selector_name: str = "generic_covered_call",
     ) -> bool:
         from src.backtest.run_store import create_run, update_run_status
         
@@ -707,6 +708,7 @@ class BacktestManager:
                 "settlement_ccy": settlement_ccy,
                 "sigma_mode": sigma_mode,
                 "chain_mode": chain_mode,
+                "selector_name": selector_name,
             }
             
             run_result = create_run(config_dict)
