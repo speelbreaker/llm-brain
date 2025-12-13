@@ -1009,7 +1009,7 @@ def execute_tool(tool_name: str, arguments: Dict[str, Any]) -> ToolResult:
 
 
 def get_tools_for_openai() -> List[Dict[str, Any]]:
-    """Get tool definitions in OpenAI function calling format."""
+    """Get tool definitions in OpenAI Chat Completions function calling format."""
     tools = []
     for name, info in AVAILABLE_TOOLS.items():
         properties = {}
@@ -1032,6 +1032,37 @@ def get_tools_for_openai() -> List[Dict[str, Any]]:
                     "properties": properties,
                     "required": required,
                 },
+            },
+        })
+    return tools
+
+
+def get_tools_for_responses_api() -> List[Dict[str, Any]]:
+    """Get tool definitions in OpenAI Responses API format.
+    
+    Responses API uses a flatter structure:
+    { "type": "function", "name": ..., "description": ..., "parameters": ... }
+    """
+    tools = []
+    for name, info in AVAILABLE_TOOLS.items():
+        properties = {}
+        required = []
+        for param_name, param_info in info["parameters"].items():
+            properties[param_name] = {
+                "type": param_info["type"],
+                "description": param_info["description"],
+            }
+            if param_info.get("required", False):
+                required.append(param_name)
+        
+        tools.append({
+            "type": "function",
+            "name": name,
+            "description": info["description"],
+            "parameters": {
+                "type": "object",
+                "properties": properties,
+                "required": required,
             },
         })
     return tools

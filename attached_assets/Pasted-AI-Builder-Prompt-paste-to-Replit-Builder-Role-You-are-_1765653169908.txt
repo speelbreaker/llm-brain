@@ -1,0 +1,122 @@
+AI Builder Prompt (paste to Replit Builder)
+
+Role
+You are a senior Python engineer. Update our Replit Telegram “Code Review Agent + Auditor” so:
+
+Repo Q&A uses gpt-5.2-pro (Responses API),
+
+Telegram voice notes are supported (speech-to-text),
+
+/start and /help accurately show which model is being used,
+
+/review_latest clearly reports the review “source of truth” (GitHub main) and commit hash.
+
+Goal
+Make the bot behave like “high autonomy review” even when Replit Builder is set to Low: the bot should (a) answer repo questions using gpt-5.2-pro, (b) accept voice messages, and (c) remove confusion about which model and which repo state is being reviewed.
+
+Context
+
+Repo Q&A entry: agent/telegram_bot.py → ChatController.process_message() → agent/chat_controller.py
+
+Current OpenAI call uses client.chat.completions.create(...) and defaults to gpt-4o or settings.openai_model_fast.
+
+We already have the Telegram bot wired with python-telegram-bot v20+ async.
+
+We already have secrets in Replit for OpenAI and for Codex runner; keep existing behavior unless specified below.
+
+Requirements
+
+Repo Q&A: switch to gpt-5.2-pro via Responses API
+
+Add config/env support:
+
+OPENAI_MODEL_FAST (default to "gpt-5.2-pro").
+
+In agent/chat_controller.py, update _call_with_tools():
+
+If model starts with "gpt-5" (especially "gpt-5.2-pro"), call Responses API instead of Chat Completions. 
+OpenAI Platform
++1
+
+Convert existing tool definitions from Chat-Completions shape to Responses shape (Responses function tools look like { "type":"function", "name":..., "description":..., "parameters":... }). 
+OpenAI Platform
++1
+
+Implement the function-call loop:
+
+Call client.responses.create(model=..., input=[{"role":"system",...},{"role":"user",...}], tools=[...])
+
+If response includes function calls, execute them with existing execute_tool() and send tool outputs back using input=[..., {"type":"function_call_output","call_id":..., "output": "..."}] until a final text is produced. 
+OpenAI Platform
++1
+
+Preserve current behavior for non-gpt-5 models (keep chat.completions.create path as fallback).
+
+Update /start + /help strings
+
+Remove hardcoded “powered by GPT-4”.
+
+Display:
+
+“Repo Q&A model: <current model>”
+
+“Review model: <whatever review path uses>”
+
+“Codex model: <if applicable>”
+
+Ensure these strings are safe for Telegram (no Markdown parse failures).
+
+Voice-to-text support
+
+Add a Telegram handler for voice notes (filters.VOICE).
+
+Implementation:
+
+Download voice file to memory (BytesIO).
+
+Transcribe using OpenAI Audio Transcriptions API with model default "gpt-4o-mini-transcribe" (configurable via env OPENAI_TRANSCRIBE_MODEL). 
+OpenAI Platform
++1
+
+Feed transcript into the same flow as if the user typed it (so it supports /ask-style questions naturally).
+
+Reply with: Heard: "<transcript>" then the assistant answer (using reply_safe fallback if you have it).
+
+/review_latest “what was reviewed” clarity
+
+In the /review_latest output, always include:
+
+SOURCE: github/main (or SOURCE: workspace if not possible),
+
+COMMIT: <hash>,
+
+WORKDIR: <path> (or repo identifier).
+
+If you can’t sync GitHub in Replit, still print what you did review (to remove ambiguity).
+
+Constraints
+
+Keep changes minimal and localized to agent/chat_controller.py, agent/telegram_bot.py, and config files.
+
+Do not break existing command handlers.
+
+Do not introduce new paid services.
+
+Avoid Telegram Markdown pitfalls (prefer plain text unless safely escaped).
+
+Output Format
+
+Modify code directly in the repo.
+
+Add/adjust any needed env vars in .env.example (do not print secret values).
+
+Acceptance Criteria
+
+/start no longer claims GPT-4; it shows the real configured model.
+
+Sending a voice note results in a transcript + a normal repo-aware answer.
+
+Repo Q&A answers come from gpt-5.2-pro (confirm by logging model= and displaying in /start). 
+OpenAI Platform
+
+/review_latest output explicitly states what repo state was reviewed (source + commit).

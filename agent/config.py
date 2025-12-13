@@ -32,8 +32,9 @@ class Settings:
     openai_api_key: Optional[str] = None
     
     openai_model_review: str = "gpt-5.2-pro"
-    openai_model_fast: str = "gpt-4.1"
+    openai_model_fast: str = "gpt-5.2-pro"
     openai_reasoning_effort: str = "high"
+    openai_transcribe_model: str = "gpt-4o-mini-transcribe"
     
     db_path: Path = field(default_factory=lambda: Path("data/agent_data.db"))
     log_paths: list[str] = field(default_factory=lambda: ["logs/app.log", "logs/tests.log"])
@@ -59,8 +60,9 @@ class Settings:
         openai_key = os.environ.get("AI_INTEGRATIONS_OPENAI_API_KEY") or os.environ.get("OPENAI_API_KEY")
         
         model_review = os.environ.get("OPENAI_MODEL_REVIEW", "gpt-5.2-pro")
-        model_fast = os.environ.get("OPENAI_MODEL_FAST", "gpt-4.1")
+        model_fast = os.environ.get("OPENAI_MODEL_FAST", "gpt-5.2-pro")
         reasoning_effort = os.environ.get("OPENAI_REASONING_EFFORT", "high")
+        transcribe_model = os.environ.get("OPENAI_TRANSCRIBE_MODEL", "gpt-4o-mini-transcribe")
         
         return cls(
             telegram_bot_token=token,
@@ -69,6 +71,7 @@ class Settings:
             openai_model_review=model_review,
             openai_model_fast=model_fast,
             openai_reasoning_effort=reasoning_effort,
+            openai_transcribe_model=transcribe_model,
         )
     
     def is_user_allowed(self, user_id: int) -> bool:

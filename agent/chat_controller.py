@@ -10,7 +10,7 @@ import logging
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
-from agent.chat_tools import AVAILABLE_TOOLS, execute_tool, get_tools_for_openai
+from agent.chat_tools import AVAILABLE_TOOLS, execute_tool, get_tools_for_openai, get_tools_for_responses_api
 from agent.config import settings
 from agent.storage import (
     clear_chat_session,
@@ -130,18 +130,107 @@ class ChatController:
             )
     
     def _call_with_tools(self, messages: List[Dict[str, str]]) -> ChatResponse:
-        """Call OpenAI with tool support and execute any tool calls."""
+        """Call OpenAI with tool support and execute any tool calls.
+        
+        Uses Responses API for gpt-5 models, Chat Completions for others.
+        """
         client = self._get_client()
-        tools = get_tools_for_openai()
         tools_used = []
         
         full_messages = [{"role": "system", "content": CHAT_SYSTEM_PROMPT}] + messages[-10:]
         
-        model = settings.openai_model_fast if settings else "gpt-4o"
+        model = settings.openai_model_fast if settings else "gpt-5.2-pro"
+        
+        use_responses_api = model.startswith("gpt-5")
+        
+        if use_responses_api:
+            return self._call_responses_api_with_tools(client, model, full_messages, tools_used)
+        else:
+            return self._call_chat_completions_with_tools(client, model, full_messages, tools_used)
+    
+    def _call_responses_api_with_tools(
+        self,
+        client,
+        model: str,
+        messages: List[Dict[str, str]],
+        tools_used: List[str],
+    ) -> ChatResponse:
+        """Call OpenAI Responses API with function calling loop."""
+        tools = get_tools_for_responses_api()
+        
+        input_messages = messages.copy()
+        
+        max_iterations = 5
+        for iteration in range(max_iterations):
+            logger.info(f"Responses API call {iteration + 1} with model={model}")
+            
+            response = client.responses.create(
+                model=model,
+                input=input_messages,
+                tools=tools if tools else None,
+            )
+            
+            output_text = getattr(response, 'output_text', None) or ""
+            
+            tool_calls = []
+            if hasattr(response, 'output') and response.output:
+                for item in response.output:
+                    item_type = getattr(item, 'type', None)
+                    if item_type == 'function_call':
+                        tool_calls.append(item)
+                    elif item_type == 'tool_call':
+                        tool_calls.append(item)
+            
+            if not tool_calls:
+                final_text = output_text
+                if len(final_text) > 3500:
+                    final_text = final_text[:3500] + "\n\n... (truncated, ask for more details)"
+                return ChatResponse(text=final_text, tools_used=tools_used)
+            
+            for tc in tool_calls:
+                if hasattr(tc, 'tool'):
+                    tool_name = tc.tool.name
+                    tool_args = tc.tool.arguments
+                    call_id = getattr(tc, 'id', getattr(tc, 'call_id', 'unknown'))
+                else:
+                    tool_name = getattr(tc, 'name', 'unknown')
+                    tool_args = getattr(tc, 'arguments', '{}')
+                    call_id = getattr(tc, 'call_id', getattr(tc, 'id', 'unknown'))
+                
+                tools_used.append(tool_name)
+                
+                try:
+                    arguments = json.loads(tool_args) if isinstance(tool_args, str) else tool_args
+                except json.JSONDecodeError:
+                    arguments = {}
+                
+                logger.info(f"Executing tool: {tool_name} with args: {arguments}")
+                result = execute_tool(tool_name, arguments)
+                
+                input_messages.append({
+                    "type": "function_call_output",
+                    "call_id": call_id,
+                    "output": result.output[:3000],
+                })
+        
+        return ChatResponse(
+            text="I reached the maximum number of tool calls. Please try a simpler question.",
+            tools_used=tools_used,
+        )
+    
+    def _call_chat_completions_with_tools(
+        self,
+        client,
+        model: str,
+        messages: List[Dict[str, str]],
+        tools_used: List[str],
+    ) -> ChatResponse:
+        """Call OpenAI Chat Completions API with function calling."""
+        tools = get_tools_for_openai()
         
         response = client.chat.completions.create(
             model=model,
-            messages=full_messages,
+            messages=messages,
             tools=tools if tools else None,
             tool_choice="auto" if tools else None,
             max_tokens=1500,
@@ -171,7 +260,7 @@ class ChatController:
                     "content": result.output[:3000],
                 })
             
-            followup_messages = full_messages + [
+            followup_messages = messages + [
                 {"role": "assistant", "tool_calls": [
                     {
                         "id": tc.id,

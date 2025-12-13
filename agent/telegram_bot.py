@@ -6,7 +6,9 @@ Handles commands and delegates to ReviewService.
 from __future__ import annotations
 
 import asyncio
+import io
 import logging
+import os
 import re
 from typing import Optional
 
@@ -148,6 +150,11 @@ class TelegramBot:
             self.handle_message
         ))
         
+        self.application.add_handler(MessageHandler(
+            filters.VOICE,
+            self.handle_voice
+        ))
+        
         return self.application
     
     async def cmd_start(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -156,9 +163,18 @@ class TelegramBot:
             await reply_safe(update, _unauthorized_response(), context)
             return
         
-        text = """Code Review Agent + Auditor
+        model_fast = settings.openai_model_fast if settings else "gpt-5.2-pro"
+        model_review = settings.openai_model_review if settings else "gpt-5.2-pro"
+        model_transcribe = settings.openai_transcribe_model if settings else "gpt-4o-mini-transcribe"
+        
+        text = f"""Code Review Agent + Auditor
 
 I review code, run tests, scan for security issues, and answer questions.
+
+Models:
+  Repo Q&A: {model_fast}
+  Review: {model_review}
+  Voice: {model_transcribe}
 
 Code Review:
 /review - Review latest changes
@@ -176,6 +192,7 @@ Repo Q&A:
 /ask <question> - Ask about code
 /search <query> - Search code
 /open <path> - View file
+(Voice notes supported)
 
 Codex CLI:
 /codex <task> - Run Codex AI task
@@ -188,7 +205,7 @@ High-Autonomy Review:
 /audit_latest - Security audit
 /fix_prompt <issue> - Get Builder prompt
 
-Or just type any question!"""
+Or just type any question (or send a voice note)!"""
         
         await reply_safe(update, text, context)
     
@@ -198,7 +215,16 @@ Or just type any question!"""
             await reply_safe(update, _unauthorized_response(), context)
             return
         
-        text = """Code Review Agent + Repo Q&A
+        model_fast = settings.openai_model_fast if settings else "gpt-5.2-pro"
+        model_review = settings.openai_model_review if settings else "gpt-5.2-pro"
+        model_transcribe = settings.openai_transcribe_model if settings else "gpt-4o-mini-transcribe"
+        
+        text = f"""Code Review Agent + Repo Q&A
+
+Models:
+  Repo Q&A: {model_fast}
+  Review: {model_review}
+  Voice transcription: {model_transcribe}
 
 Code Review Commands:
 /review - Analyze changes since last review
@@ -218,6 +244,7 @@ Repo Q&A Commands:
 /search <query> - Search for code patterns
 /open <path>:<start>-<end> - View file excerpt
 /clear - Clear chat session
+(Voice notes: just send a voice message!)
 
 Natural Language:
 Just type any question! Examples:
@@ -230,6 +257,11 @@ Codex CLI Commands:
 /codex_short <task> - Concise answer (brief, limited quotes)
 /codex_debug <task> - Full debug output (stdout+stderr+metadata)
 /codex_status - Check Codex CLI installation status
+
+High-Autonomy Review:
+/review_latest - Review code + tests (shows source + commit)
+/audit_latest - Security audit
+/fix_prompt <issue> - Get Builder prompt
 
 Severity Levels:
 CRITICAL - Must fix before deploy
@@ -735,8 +767,41 @@ INFO - Observations"""
         await reply_safe(update, "Running code review...", context, parse_mode=None)
         
         try:
+            import subprocess
+            source = "workspace"
+            commit = "unknown"
+            workdir = os.getcwd()
+            
+            try:
+                remote_result = subprocess.run(
+                    ["git", "remote", "get-url", "origin"],
+                    capture_output=True, text=True, timeout=5
+                )
+                if remote_result.returncode == 0:
+                    remote_url = remote_result.stdout.strip()
+                    if "github.com" in remote_url:
+                        source = "github/main"
+                    else:
+                        source = remote_url.split("/")[-1].replace(".git", "")
+            except Exception:
+                pass
+            
+            try:
+                commit_result = subprocess.run(
+                    ["git", "rev-parse", "--short", "HEAD"],
+                    capture_output=True, text=True, timeout=5
+                )
+                if commit_result.returncode == 0:
+                    commit = commit_result.stdout.strip()
+            except Exception:
+                pass
+            
             result = await run_codex_remote(task, mode="review")
-            await self._reply_long_text(update, context, result)
+            
+            header = f"SOURCE: {source}\nCOMMIT: {commit}\nWORKDIR: {workdir}\n\n"
+            result_with_header = header + result
+            
+            await self._reply_long_text(update, context, result_with_header)
         except Exception as e:
             logger.error(f"Error in /review_latest: {e}")
             await reply_safe(update, f"Error: {str(e)[:200]}\nTry /codex_debug for details.", context, parse_mode=None)
@@ -813,6 +878,65 @@ INFO - Observations"""
         except Exception as e:
             logger.error(f"Error in chat: {e}")
             await reply_safe(update, f"Error: {str(e)[:200]}", context)
+    
+    async def handle_voice(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Handle voice messages - transcribe and process as text."""
+        if not _is_authorized(update):
+            await reply_safe(update, _unauthorized_response(), context)
+            return
+        
+        voice = update.message.voice if update.message else None
+        if not voice:
+            return
+        
+        await reply_safe(update, "Transcribing voice...", context)
+        
+        try:
+            file = await context.bot.get_file(voice.file_id)
+            
+            voice_data = io.BytesIO()
+            await file.download_to_memory(voice_data)
+            voice_data.seek(0)
+            voice_data.name = "voice.ogg"
+            
+            from openai import OpenAI
+            api_key = settings.openai_api_key if settings else None
+            base_url = os.environ.get("AI_INTEGRATIONS_OPENAI_BASE_URL")
+            client = OpenAI(api_key=api_key, base_url=base_url)
+            
+            transcribe_model = settings.openai_transcribe_model if settings else "gpt-4o-mini-transcribe"
+            
+            transcription = client.audio.transcriptions.create(
+                model=transcribe_model,
+                file=voice_data,
+            )
+            
+            transcript = transcription.text.strip()
+            
+            if not transcript:
+                await reply_safe(update, "Could not transcribe voice message.", context)
+                return
+            
+            await reply_safe(update, f'Heard: "{transcript}"\n\nProcessing...', context)
+            
+            chat_id = str(update.effective_chat.id)
+            response = self.chat_controller.process_message(chat_id, transcript)
+            
+            if response.tools_used:
+                tools_info = f"Used: {', '.join(response.tools_used)}\n\n"
+            else:
+                tools_info = ""
+            
+            reply_text = tools_info + response.text
+            
+            if len(reply_text) > 4000:
+                reply_text = reply_text[:4000] + "\n\n... (truncated)"
+            
+            await reply_safe(update, reply_text, context)
+            
+        except Exception as e:
+            logger.error(f"Error processing voice: {e}")
+            await reply_safe(update, f"Error processing voice: {str(e)[:200]}", context)
     
     def run_polling(self) -> None:
         """Run the bot with polling (blocking)."""
