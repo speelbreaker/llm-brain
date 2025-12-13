@@ -3,11 +3,18 @@ Codex Remote Runner for Telegram Bot integration.
 
 Calls a remote Codex runner service via HTTP POST.
 Supports multiple output modes: normal, short, debug.
+
+Async job support:
+- start_codex_job: Start a long-running job
+- poll_codex_job: Check job status
+- run_codex_job_async: Start and poll with timeout
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
+from dataclasses import dataclass
 from typing import Literal, Optional
 
 import httpx
@@ -274,3 +281,243 @@ async def check_runner_health() -> str:
     except Exception as e:
         logger.error(f"Health check error: {e}")
         return "Not reachable (error)"
+
+
+@dataclass
+class CodexJobResult:
+    """Result from polling a Codex job."""
+    job_id: str
+    status: str
+    data: Optional[dict] = None
+    error: Optional[str] = None
+
+
+async def start_codex_job(task: str) -> tuple[Optional[str], Optional[str]]:
+    """
+    Start a Codex job on the remote runner service.
+    
+    Args:
+        task: The task description to send to Codex
+        
+    Returns:
+        Tuple of (job_id, error). If successful, error is None.
+    """
+    runner_url = _get_runner_url()
+    runner_token = _get_runner_token()
+    
+    if not runner_url:
+        return None, "CODEX_RUNNER_URL not configured"
+    
+    if not runner_token:
+        return None, "CODEX_RUNNER_TOKEN not configured"
+    
+    endpoint = f"{runner_url.rstrip('/')}/v1/codex_jobs"
+    
+    headers = {"Content-Type": "application/json"}
+    if runner_token:
+        headers["X-RUNNER-TOKEN"] = runner_token
+    
+    payload = {"task": task}
+    
+    try:
+        logger.info(
+            "codex_job_start: url=%s token_set=%s token_len=%s",
+            endpoint, bool(runner_token), len(runner_token or "")
+        )
+        async with httpx.AsyncClient(timeout=30) as client:
+            response = await client.post(endpoint, json=payload, headers=headers)
+            logger.info("codex_job_start: status=%s", response.status_code)
+            
+            if response.status_code not in (200, 201, 202):
+                return None, f"Remote runner returned status {response.status_code}"
+            
+            data = response.json()
+            job_id = data.get("job_id") or data.get("id")
+            
+            if not job_id:
+                return None, "No job_id in response"
+            
+            return job_id, None
+            
+    except httpx.TimeoutException:
+        return None, "Request timed out"
+    except httpx.ConnectError:
+        return None, "Could not connect to remote runner"
+    except httpx.RequestError as e:
+        logger.error(f"Codex job start error: {e}")
+        return None, f"Network error - {type(e).__name__}"
+    except Exception as e:
+        logger.error(f"Codex job start unexpected error: {e}")
+        return None, str(e)[:200]
+
+
+async def poll_codex_job(job_id: str) -> CodexJobResult:
+    """
+    Poll a Codex job for status/results.
+    
+    Args:
+        job_id: The job ID to poll
+        
+    Returns:
+        CodexJobResult with status and data
+    """
+    runner_url = _get_runner_url()
+    runner_token = _get_runner_token()
+    
+    if not runner_url:
+        return CodexJobResult(job_id=job_id, status="error", error="CODEX_RUNNER_URL not configured")
+    
+    endpoint = f"{runner_url.rstrip('/')}/v1/codex_jobs/{job_id}"
+    
+    headers = {}
+    if runner_token:
+        headers["X-RUNNER-TOKEN"] = runner_token
+    
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            response = await client.get(endpoint, headers=headers)
+            logger.info("codex_job_poll: job_id=%s status=%s", job_id, response.status_code)
+            
+            if response.status_code == 404:
+                return CodexJobResult(job_id=job_id, status="not_found", error="Job not found")
+            
+            if response.status_code != 200:
+                return CodexJobResult(
+                    job_id=job_id, 
+                    status="error", 
+                    error=f"Remote runner returned status {response.status_code}"
+                )
+            
+            data = response.json()
+            status = data.get("status", "unknown")
+            
+            return CodexJobResult(job_id=job_id, status=status, data=data)
+            
+    except httpx.TimeoutException:
+        return CodexJobResult(job_id=job_id, status="error", error="Poll request timed out")
+    except httpx.ConnectError:
+        return CodexJobResult(job_id=job_id, status="error", error="Could not connect to remote runner")
+    except httpx.RequestError as e:
+        logger.error(f"Codex job poll error: {e}")
+        return CodexJobResult(job_id=job_id, status="error", error=f"Network error - {type(e).__name__}")
+    except Exception as e:
+        logger.error(f"Codex job poll unexpected error: {e}")
+        return CodexJobResult(job_id=job_id, status="error", error=str(e)[:200])
+
+
+async def run_codex_job_async(
+    task: str,
+    *,
+    mode: OutputMode = "normal",
+    poll_interval: float = 2.0,
+    timeout_seconds: float = 600.0,
+) -> tuple[str, Optional[str]]:
+    """
+    Start a Codex job and poll until completion or timeout.
+    
+    Args:
+        task: The task description to send to Codex
+        mode: Output mode for formatting the result
+        poll_interval: Seconds between polls (default 2.0)
+        timeout_seconds: Max wait time in seconds (default 600 = 10 minutes)
+        
+    Returns:
+        Tuple of (formatted_result, job_id). job_id is included if still running.
+    """
+    if mode == "short":
+        task = (
+            "Answer in <=10 lines. Quote at most 2 snippets (<=20 lines each). "
+            "No extra commentary.\n\n" + task
+        )
+    elif mode == "review":
+        task = REVIEW_TASK_PREFIX + task
+    elif mode == "audit":
+        task = AUDIT_TASK_PREFIX + task
+    elif mode == "fix_prompt":
+        task = FIX_PROMPT_PREFIX + task
+    
+    job_id, error = await start_codex_job(task)
+    
+    if error:
+        return f"Error starting job: {error}", None
+    
+    if not job_id:
+        return "Error: No job ID returned", None
+    
+    logger.info("codex_job_async: started job_id=%s", job_id)
+    
+    elapsed = 0.0
+    while elapsed < timeout_seconds:
+        await asyncio.sleep(poll_interval)
+        elapsed += poll_interval
+        
+        result = await poll_codex_job(job_id)
+        
+        if result.error:
+            return f"Error polling job: {result.error}", job_id
+        
+        if result.status in ("completed", "complete", "done", "finished"):
+            data = result.data or {}
+            
+            if mode == "debug":
+                return _format_debug(data), None
+            elif mode == "short":
+                return _format_short(data), None
+            elif mode == "review":
+                return _format_review(data), None
+            elif mode == "audit":
+                return _format_review(data), None
+            else:
+                return _format_normal(data), None
+        
+        if result.status in ("failed", "error"):
+            data = result.data or {}
+            error_msg = data.get("error") or data.get("stderr") or "Unknown error"
+            return f"Job failed: {error_msg[:500]}", None
+        
+        if result.status in ("cancelled", "canceled"):
+            return "Job was cancelled.", None
+    
+    return f"Still running. Job: {job_id}. Use /codex_job {job_id} to fetch results.", job_id
+
+
+async def fetch_codex_job(job_id: str, mode: OutputMode = "normal") -> str:
+    """
+    Fetch the current status or result of a Codex job.
+    
+    Args:
+        job_id: The job ID to fetch
+        mode: Output mode for formatting
+        
+    Returns:
+        Formatted result or status message
+    """
+    result = await poll_codex_job(job_id)
+    
+    if result.error:
+        return f"Error: {result.error}"
+    
+    if result.status in ("completed", "complete", "done", "finished"):
+        data = result.data or {}
+        
+        if mode == "debug":
+            return _format_debug(data)
+        elif mode == "short":
+            return _format_short(data)
+        elif mode in ("review", "audit"):
+            return _format_review(data)
+        else:
+            return _format_normal(data)
+    
+    if result.status in ("failed", "error"):
+        data = result.data or {}
+        error_msg = data.get("error") or data.get("stderr") or "Unknown error"
+        return f"Job failed: {error_msg[:500]}"
+    
+    if result.status in ("cancelled", "canceled"):
+        return "Job was cancelled."
+    
+    if result.status in ("pending", "queued", "running", "in_progress"):
+        return f"Job {job_id} is still {result.status}. Try again later."
+    
+    return f"Job {job_id} status: {result.status}"
