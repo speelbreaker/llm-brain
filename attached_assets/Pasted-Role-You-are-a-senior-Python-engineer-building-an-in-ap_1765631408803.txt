@@ -1,0 +1,154 @@
+Role
+You are a senior Python engineer building an in-app “Auditor Agent” with a Telegram chat interface. Extend it with Repo Q&A so it can search the codebase, open files by line range, quote relevant snippets, and explain them conversationally.
+
+Goal
+Add a safe, high-utility Repo Q&A capability to the existing Telegram-based agent so I can ask natural-language questions about the repo (architecture, flows, where something is implemented, why a bug happens) and get answers grounded in real code snippets and file references.
+
+Context
+
+The agent already supports Telegram commands + chat-mode routing.
+
+The agent must remain safe: no arbitrary shell execution; only allowlisted tool functions.
+
+Repo Q&A should be based on: search_repo(query) + open_file(path, start_line, end_line) + optional list_files(path) and get_project_map().
+
+Requirements
+
+New tools: Repo Q&A primitives (allowlisted)
+
+Implement these tool functions in the app (Python), callable by the controller:
+
+search_repo(query: str, limit: int = 20) -> List[SearchHit]
+
+Returns matches across the repo with: path, line_no, line_text, and a short surrounding context window.
+
+Must support case-insensitive search and treat query as plain text by default.
+
+Should prioritize common code locations (src/, app/, server.py, services/, etc.) when ranking.
+
+open_file(path: str, start_line: int, end_line: int) -> FileExcerpt
+
+Returns exact lines from the file with line numbers preserved.
+
+Enforce limits: max 200 lines per request; clamp ranges.
+
+Optional but recommended:
+
+list_files(root: str, pattern: str | None = None, limit: int = 200)
+
+read_project_map() (loads .auditor/project_map.json + .auditor/PROJECT_MAP.md)
+
+Implementation approach for search_repo
+
+Use one of these (choose the simplest available in Replit):
+
+Preferred: Python-based file walker + substring/regex matching (no external deps).
+
+Optional: ripgrep (rg) if available, but only invoked via fixed allowlist.
+
+Must skip large/binary/vendor directories by default (configurable ignore list):
+
+.git/, .venv/, node_modules/, dist/, build/, .auditor/, __pycache__/, *.png, *.jpg, *.pdf, etc.
+
+Must redact secrets in returned lines (see redaction rules).
+
+Quoted snippet policy
+
+When answering a repo question, the agent must:
+
+quote only the minimum necessary lines (typically 5–30 lines)
+
+include the file path + line range
+
+explain what the snippet does in plain English
+
+connect it back to the user’s question explicitly
+
+Provide follow-ups like “Want me to open the next function?” instead of dumping whole files.
+
+Security / privacy guardrails
+
+Implement redaction in all repo outputs (search + open_file):
+
+Detect and mask tokens/keys/passwords (common patterns like sk-, api_key=, token=, Authorization:, PEM blocks, long base64-ish strings).
+
+Always redact values, keep key names visible.
+
+Disallow reading environment variables via Repo Q&A.
+
+Never open files outside the repo root (prevent path traversal).
+
+Enforce output limits (max characters) to avoid Telegram overflow.
+
+Chat-mode behavior (Repo Q&A routing)
+
+In non-command chat messages, the LLM router should be able to choose Repo Q&A tools.
+
+Suggested routing logic:
+
+If user asks “where is X implemented?”, “show me the code for…”, “why does Y happen?”, “search for…” → call search_repo.
+
+If search yields relevant hits → call open_file for the best hit(s).
+
+Then produce a grounded explanation with citations (path + lines).
+
+If no search hits, respond with:
+
+best guess based on PROJECT_MAP
+
+and a suggestion of alternative search terms.
+
+Telegram UX
+
+Add a command shortcut:
+
+/ask <question> → forces Repo Q&A flow
+
+/open <path>:<start>-<end> → opens file excerpt (still redacted/limited)
+
+/search <query> → returns top hits (paths + line numbers)
+
+In chat mode, user should be able to just ask normally without /ask.
+
+Constraints
+
+No arbitrary shell. Repo Q&A must use only the allowlisted tool functions.
+
+Must be fast and safe on Replit: ignore heavy dirs, cap results, timeouts.
+
+Must not leak secrets or huge chunks of code in Telegram.
+
+Output Format
+Return:
+
+Exact file changes (paths to add/modify)
+
+Tool function specs (inputs/outputs + limits)
+
+Router prompt/tool schema used for LLM tool-calling (concise)
+
+Redaction rules (patterns + behavior)
+
+Example conversations (3 examples: “where is X”, “why bug Y”, “show flow Z”)
+
+Acceptance tests (how to validate in Replit + Telegram)
+
+Acceptance Criteria
+
+I can ask: “Where do we create the Telegram bot?” and the agent returns a short answer with a quoted snippet and file:line references.
+
+/search returns relevant hits with paths + line numbers.
+
+/open returns exact lines with line numbers, redacted, and within limits.
+
+The agent refuses or safely handles path traversal attempts.
+
+No secrets are exposed in Telegram messages or stored artifacts.
+
+Clarifying Questions (ask only if truly needed; max 3)
+
+Should Repo Q&A search include configuration/docs (*.md, *.yml) or only code by default?
+
+Do you want the agent to also search inside .auditor/ artifacts, or exclude them always?
+
+What’s your preferred default snippet size: 10–20 lines or 20–40 lines?
