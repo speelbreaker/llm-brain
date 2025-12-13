@@ -11,8 +11,9 @@ import re
 from typing import Optional
 
 from telegram import Update
-from telegram.ext import Application, CommandHandler, ContextTypes
+from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
 
+from agent.chat_controller import ChatController
 from agent.config import settings
 from agent.review_service import ReviewService
 from agent.storage import init_db
@@ -49,6 +50,7 @@ class TelegramBot:
             raise ValueError("TELEGRAM_BOT_TOKEN is required")
         
         self.review_service = ReviewService()
+        self.chat_controller = ChatController()
         self.application: Optional[Application] = None
     
     def build_application(self) -> Application:
@@ -66,6 +68,12 @@ class TelegramBot:
         self.application.add_handler(CommandHandler("diff", self.cmd_diff))
         self.application.add_handler(CommandHandler("risks", self.cmd_risks))
         self.application.add_handler(CommandHandler("next", self.cmd_next))
+        self.application.add_handler(CommandHandler("clear", self.cmd_clear))
+        
+        self.application.add_handler(MessageHandler(
+            filters.TEXT & ~filters.COMMAND,
+            self.handle_message
+        ))
         
         return self.application
     
@@ -243,6 +251,53 @@ Start with /review to analyze recent changes!"""
         except Exception as e:
             logger.error(f"Error in /next: {e}")
             await update.message.reply_text(f"Error getting actions: {str(e)[:200]}")
+    
+    async def cmd_clear(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Handle /clear command - clears chat session."""
+        if not _is_authorized(update):
+            await update.message.reply_text(_unauthorized_response())
+            return
+        
+        try:
+            chat_id = str(update.effective_chat.id)
+            self.chat_controller.clear_session(chat_id)
+            await update.message.reply_text("🧹 Chat session cleared. Starting fresh!")
+        except Exception as e:
+            logger.error(f"Error in /clear: {e}")
+            await update.message.reply_text(f"Error: {str(e)[:100]}")
+    
+    async def handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Handle non-command text messages via chat controller."""
+        if not _is_authorized(update):
+            await update.message.reply_text(_unauthorized_response())
+            return
+        
+        user_message = update.message.text
+        if not user_message:
+            return
+        
+        chat_id = str(update.effective_chat.id)
+        
+        await update.message.reply_text("💭 Thinking...")
+        
+        try:
+            response = self.chat_controller.process_message(chat_id, user_message)
+            
+            if response.tools_used:
+                tools_info = f"🔧 Used: {', '.join(response.tools_used)}\n\n"
+            else:
+                tools_info = ""
+            
+            reply_text = tools_info + response.text
+            
+            if len(reply_text) > 4000:
+                reply_text = reply_text[:4000] + "\n\n... (truncated)"
+            
+            await update.message.reply_text(reply_text)
+            
+        except Exception as e:
+            logger.error(f"Error in chat: {e}")
+            await update.message.reply_text(f"Error: {str(e)[:200]}")
     
     def run_polling(self) -> None:
         """Run the bot with polling (blocking)."""
