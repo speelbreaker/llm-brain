@@ -1,0 +1,119 @@
+AI BUILDER PROMPT — Switch /review_latest + /audit_latest to async runner jobs + polling
+Role
+
+You are a senior Python engineer. Update our Replit Telegram bot to avoid Cloudflare 524 timeouts by using the iMac runner’s new async job API (/v1/codex_jobs + /v1/codex_jobs/{job_id}).
+
+Goal
+
+/review_latest and /audit_latest should start a job on the remote runner and poll until done (or return a job id if still running).
+
+Add /codex_job <job_id> command to check job status and fetch results later.
+
+Keep /codex as-is (synchronous) for quick tasks.
+
+Context
+
+Runner now supports:
+
+POST {CODEX_RUNNER_URL}/v1/codex_jobs → {"job_id","status","sync_status"}
+
+GET {CODEX_RUNNER_URL}/v1/codex_jobs/{job_id} → {"status": "queued|running|done|error", ...}
+
+Auth header: X-RUNNER-TOKEN: <CODEX_RUNNER_TOKEN>
+
+Replit has CODEX_RUNNER_URL + CODEX_RUNNER_TOKEN secrets already working (Replit shell test returns 200).
+
+Requirements
+1) Implement async job helpers in agent/codex_remote.py
+
+Add functions:
+
+start_codex_job(task: str) -> tuple[str, str]
+
+POST /v1/codex_jobs
+
+returns (job_id, sync_status) (sync_status may be empty)
+
+Use token .strip() and include header only if token is non-empty.
+
+Timeout: 60s.
+
+get_codex_job(job_id: str) -> dict
+
+GET /v1/codex_jobs/{job_id}
+
+Timeout: 30s.
+
+run_codex_job_and_wait(task: str, *, poll_seconds: float = 2.0, max_wait_seconds: int = 600) -> tuple[str, dict]
+
+starts job, polls until:
+
+done → return (job_id, result_dict)
+
+error → return (job_id, {"error":...})
+
+timeout → return (job_id, {"status":"running"})
+
+Poll loop should sleep poll_seconds between GETs.
+
+2) Wire /review_latest and /audit_latest to job flow
+
+In agent/telegram_bot.py:
+
+/review_latest:
+
+build the task prompt exactly as now (no git fetch/reset inside task)
+
+call run_codex_job_and_wait(...)
+
+If done → format with your existing _format_review() (ensure it shows SYNC: if sync_status is present in the runner response)
+
+If still running at timeout → reply:
+
+Still running. JOB: <job_id> (try /codex_job <job_id>)
+
+/audit_latest:
+
+same approach with your audit task prompt
+
+If done → show summary; if tools missing, keep current fallback messaging
+
+3) Add /codex_job <job_id>
+
+Calls get_codex_job(job_id)
+
+If done → prints stdout (or formatted review/audit if it matches those templates)
+
+If queued/running → prints status + any sync_status
+
+If error → prints error text
+
+Always plain text, split into <=3500 char chunks
+
+4) Keep /codex synchronous
+
+No change needed other than keeping your token .strip() and logs.
+
+Constraints
+
+Do NOT print secrets.
+
+Keep responses plain text (avoid Telegram Markdown parse problems).
+
+Keep changes localized to agent/codex_remote.py + agent/telegram_bot.py.
+
+Acceptance Criteria
+
+/review_latest no longer returns 524 even when tests take >2 minutes.
+
+If a review runs long, bot returns a job id and /codex_job <id> later returns the result.
+
+/review_latest output includes:
+
+SYNC: (from runner sync_status, if present)
+
+SOURCE: github/main
+
+COMMIT: + ORIGIN_MAIN:
+
+TEST STATUS: ...

@@ -292,7 +292,7 @@ class CodexJobResult:
     error: Optional[str] = None
 
 
-async def start_codex_job(task: str) -> tuple[Optional[str], Optional[str]]:
+async def start_codex_job(task: str) -> tuple[Optional[str], Optional[str], Optional[str]]:
     """
     Start a Codex job on the remote runner service.
     
@@ -300,16 +300,16 @@ async def start_codex_job(task: str) -> tuple[Optional[str], Optional[str]]:
         task: The task description to send to Codex
         
     Returns:
-        Tuple of (job_id, error). If successful, error is None.
+        Tuple of (job_id, sync_status, error). If successful, error is None.
     """
     runner_url = _get_runner_url()
     runner_token = _get_runner_token()
     
     if not runner_url:
-        return None, "CODEX_RUNNER_URL not configured"
+        return None, None, "CODEX_RUNNER_URL not configured"
     
     if not runner_token:
-        return None, "CODEX_RUNNER_TOKEN not configured"
+        return None, None, "CODEX_RUNNER_TOKEN not configured"
     
     endpoint = f"{runner_url.rstrip('/')}/v1/codex_jobs"
     
@@ -324,31 +324,32 @@ async def start_codex_job(task: str) -> tuple[Optional[str], Optional[str]]:
             "codex_job_start: url=%s token_set=%s token_len=%s",
             endpoint, bool(runner_token), len(runner_token or "")
         )
-        async with httpx.AsyncClient(timeout=30) as client:
+        async with httpx.AsyncClient(timeout=60) as client:
             response = await client.post(endpoint, json=payload, headers=headers)
             logger.info("codex_job_start: status=%s", response.status_code)
             
             if response.status_code not in (200, 201, 202):
-                return None, f"Remote runner returned status {response.status_code}"
+                return None, None, f"Remote runner returned status {response.status_code}"
             
             data = response.json()
             job_id = data.get("job_id") or data.get("id")
+            sync_status = data.get("sync_status")
             
             if not job_id:
-                return None, "No job_id in response"
+                return None, None, "No job_id in response"
             
-            return job_id, None
+            return job_id, sync_status, None
             
     except httpx.TimeoutException:
-        return None, "Request timed out"
+        return None, None, "Request timed out"
     except httpx.ConnectError:
-        return None, "Could not connect to remote runner"
+        return None, None, "Could not connect to remote runner"
     except httpx.RequestError as e:
         logger.error(f"Codex job start error: {e}")
-        return None, f"Network error - {type(e).__name__}"
+        return None, None, f"Network error - {type(e).__name__}"
     except Exception as e:
         logger.error(f"Codex job start unexpected error: {e}")
-        return None, str(e)[:200]
+        return None, None, str(e)[:200]
 
 
 async def poll_codex_job(job_id: str) -> CodexJobResult:
@@ -436,7 +437,7 @@ async def run_codex_job_async(
     elif mode == "fix_prompt":
         task = FIX_PROMPT_PREFIX + task
     
-    job_id, error = await start_codex_job(task)
+    job_id, sync_status, error = await start_codex_job(task)
     
     if error:
         return f"Error starting job: {error}", None
@@ -444,7 +445,7 @@ async def run_codex_job_async(
     if not job_id:
         return "Error: No job ID returned", None
     
-    logger.info("codex_job_async: started job_id=%s", job_id)
+    logger.info("codex_job_async: started job_id=%s sync_status=%s", job_id, sync_status)
     
     elapsed = 0.0
     while elapsed < timeout_seconds:
@@ -458,6 +459,8 @@ async def run_codex_job_async(
         
         if result.status in ("completed", "complete", "done", "finished"):
             data = result.data or {}
+            if sync_status and not data.get("sync_status"):
+                data["sync_status"] = sync_status
             
             if mode == "debug":
                 return _format_debug(data), None
@@ -478,7 +481,10 @@ async def run_codex_job_async(
         if result.status in ("cancelled", "canceled"):
             return "Job was cancelled.", None
     
-    return f"Still running. Job: {job_id}. Use /codex_job {job_id} to fetch results.", job_id
+    msg = f"Still running. JOB: {job_id}\nTry /codex_job {job_id} to check status later."
+    if sync_status:
+        msg = f"SYNC: {sync_status}\n\n{msg}"
+    return msg, job_id
 
 
 async def fetch_codex_job(job_id: str, mode: OutputMode = "normal") -> str:
