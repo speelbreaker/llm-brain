@@ -121,6 +121,9 @@ class ReviewService:
         emoji = severity_emoji.get(llm_result.overall_severity, "ℹ️")
         parts.append(f"*Review Result: {emoji} {llm_result.overall_severity}*")
         
+        if llm_result.error:
+            parts.append(f"⚠️ _AI review failed: {llm_result.error[:100]}_")
+        
         if change_result.from_ref and change_result.to_ref:
             parts.append(f"`{change_result.from_ref}..{change_result.to_ref}`")
         elif change_result.to_ref:

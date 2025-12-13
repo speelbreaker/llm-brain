@@ -63,6 +63,13 @@ The web dashboard offers a user-friendly interface with sections for "Live Agent
 - **Decision Logging System**: Comprehensive audit trail for Greg decisions stored in a `greg_decision_log` database table, with API for history and statistics, and a "What-If Report Script" for analysis.
 - **UI Enhancements**: Priority coloring, demo vs live badges, mode badges, and view hedge links.
 - **Greg Lab UI**: Dedicated dashboard tab for viewing and managing Greg strategy positions. Features mode banner (ADVICE ONLY / LIVE EXECUTION), sandbox summary, underlying/sandbox filters, positions table with badges (SANDBOX, DEMO, LIVE), PnL tracking, DTE display, suggested actions, and per-position log timelines. Includes Observer Notes stub for future LLM summaries. API endpoints: `/api/greg/positions`, `/api/greg/positions/{position_id}/logs`.
+- **Telegram Code Review Agent** (`agent/` module): A Telegram bot for automated code review:
+    - **Architecture**: Modular design with config, storage (SQLite), change detection (git-based with snapshot fallback), diff analysis, LLM-powered review, and Telegram bot interface.
+    - **Commands**: `/start`, `/help` (onboarding), `/status` (system health), `/review` (analyze latest changes), `/diff` (changed files summary), `/risks` (detailed issues with severity), `/next` (recommended actions).
+    - **LLM Integration**: Uses OpenAI GPT-4o for intelligent code review with structured JSON output. Automatic fallback to rule-based analysis if LLM unavailable.
+    - **Severity Levels**: CRITICAL (must fix), HIGH (strongly recommended), MEDIUM (fix soon), LOW (nice to have), INFO (observations).
+    - **Security**: User authorization via `TELEGRAM_ALLOWED_USER_IDS` secret. Bot token via `TELEGRAM_BOT_TOKEN` secret.
+    - **Workflow**: "Telegram Review Bot" runs `python -m agent.telegram_bot`.
 
 ## Daily Auto-Calibration (Cron Example)
 
