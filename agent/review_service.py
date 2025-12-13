@@ -124,6 +124,9 @@ class ReviewService:
         if llm_result.error:
             parts.append(f"⚠️ _AI review failed: {llm_result.error[:100]}_")
         
+        if llm_result.model_used:
+            parts.append(f"🤖 _Model: {llm_result.model_used}_")
+        
         if change_result.from_ref and change_result.to_ref:
             parts.append(f"`{change_result.from_ref}..{change_result.to_ref}`")
         elif change_result.to_ref:
@@ -147,6 +150,10 @@ class ReviewService:
                 parts.append(f"  🔴 {critical} critical")
             if high > 0:
                 parts.append(f"  🟠 {high} high")
+            parts.append("")
+        
+        if llm_result.reasoning_summary:
+            parts.append(f"💭 _{llm_result.reasoning_summary}_")
             parts.append("")
         
         parts.append("Use /risks for details, /diff for changes, /next for actions.")

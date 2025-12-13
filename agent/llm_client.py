@@ -50,10 +50,22 @@ Return valid JSON with this structure:
       "suggested_fix": "How to fix this"
     }
   ],
-  "next_steps": ["Action 1", "Action 2", ...]
+  "next_steps": ["Action 1", "Action 2", ...],
+  "reasoning_summary": "A concise 2-3 sentence summary of your reasoning process and key insights."
 }
 
 Be specific and actionable. Reference exact files and line numbers when possible."""
+
+
+MODEL_FALLBACK_CHAIN = [
+    "gpt-5.2-pro",
+    "gpt-5.2",
+    "gpt-5.2-thinking",
+    "o3",
+    "o1",
+    "gpt-4.1",
+    "gpt-4o",
+]
 
 
 @dataclass
@@ -63,16 +75,20 @@ class LLMReviewResult:
     overall_severity: str = "INFO"
     issues: List[Dict[str, Any]] = field(default_factory=list)
     next_steps: List[str] = field(default_factory=list)
+    reasoning_summary: str = ""
+    model_used: str = ""
     raw_response: str = ""
     error: Optional[str] = None
     
     @classmethod
-    def from_json(cls, data: Dict[str, Any]) -> "LLMReviewResult":
+    def from_json(cls, data: Dict[str, Any], model: str = "") -> "LLMReviewResult":
         return cls(
             summary=data.get("summary", []),
             overall_severity=data.get("overall_severity", "INFO"),
             issues=data.get("issues", []),
             next_steps=data.get("next_steps", []),
+            reasoning_summary=data.get("reasoning_summary", ""),
+            model_used=model,
         )
     
     @classmethod
@@ -137,6 +153,9 @@ class LLMClient:
     def __init__(self, api_key: Optional[str] = None):
         self.api_key = api_key or (settings.openai_api_key if settings else None)
         self._client = None
+        self._model_review = settings.openai_model_review if settings else "gpt-5.2-pro"
+        self._model_fast = settings.openai_model_fast if settings else "gpt-5.2"
+        self._reasoning_effort = settings.openai_reasoning_effort if settings else "high"
     
     def _get_client(self):
         """Get or create OpenAI client."""
@@ -147,6 +166,14 @@ class LLMClient:
             except ImportError:
                 raise RuntimeError("openai package not installed")
         return self._client
+    
+    def _get_fallback_models(self) -> List[str]:
+        """Get ordered list of models to try."""
+        models = [self._model_review]
+        for m in MODEL_FALLBACK_CHAIN:
+            if m not in models:
+                models.append(m)
+        return models
     
     def is_available(self) -> bool:
         """Check if LLM backend is reachable."""
@@ -160,31 +187,69 @@ class LLMClient:
         except Exception:
             return False
     
+    def _call_with_fallback(
+        self,
+        messages: List[Dict[str, str]],
+        max_tokens: int = 4000,
+    ) -> tuple[str, str]:
+        """Call API with model fallback chain. Returns (content, model_used)."""
+        client = self._get_client()
+        models = self._get_fallback_models()
+        last_error = None
+        
+        for model in models:
+            try:
+                logger.info(f"Trying model: {model}")
+                
+                kwargs: Dict[str, Any] = {
+                    "model": model,
+                    "messages": messages,
+                    "max_completion_tokens": max_tokens,
+                }
+                
+                if model.startswith(("o1", "o3", "gpt-5")):
+                    kwargs["reasoning_effort"] = self._reasoning_effort
+                else:
+                    kwargs["temperature"] = 0.3
+                
+                response = client.chat.completions.create(**kwargs)
+                content = response.choices[0].message.content or ""
+                logger.info(f"Success with model: {model}")
+                return content, model
+                
+            except Exception as e:
+                error_msg = str(e).lower()
+                logger.warning(f"Model {model} failed: {e}")
+                last_error = e
+                
+                if "model" in error_msg and ("not found" in error_msg or "does not exist" in error_msg or "invalid" in error_msg):
+                    continue
+                elif "rate" in error_msg or "quota" in error_msg:
+                    continue
+                else:
+                    raise
+        
+        raise last_error or RuntimeError("All models failed")
+    
     def review_changes(
         self,
         analysis: AnalysisContext,
         diff_text: str = "",
         commit_message: Optional[str] = None,
     ) -> LLMReviewResult:
-        """Review code changes using LLM."""
+        """Review code changes using LLM with smartest model and max reasoning."""
         if not self.api_key:
             return self._fallback_review(analysis)
         
         try:
-            client = self._get_client()
             user_prompt = _build_review_prompt(analysis, diff_text, commit_message)
             
-            response = client.chat.completions.create(
-                model="gpt-4o",
-                messages=[
-                    {"role": "system", "content": REVIEW_SYSTEM_PROMPT},
-                    {"role": "user", "content": user_prompt},
-                ],
-                temperature=0.3,
-                max_tokens=2000,
-            )
+            messages = [
+                {"role": "system", "content": REVIEW_SYSTEM_PROMPT},
+                {"role": "user", "content": user_prompt},
+            ]
             
-            content = response.choices[0].message.content or ""
+            content, model_used = self._call_with_fallback(messages)
             
             json_match = None
             if "```json" in content:
@@ -197,13 +262,14 @@ class LLMClient:
             
             if json_match:
                 data = json.loads(json_match)
-                result = LLMReviewResult.from_json(data)
+                result = LLMReviewResult.from_json(data, model=model_used)
                 result.raw_response = content
                 return result
             else:
                 return LLMReviewResult(
                     summary=["Review completed but response format was unexpected"],
                     overall_severity="INFO",
+                    model_used=model_used,
                     raw_response=content,
                 )
                 
