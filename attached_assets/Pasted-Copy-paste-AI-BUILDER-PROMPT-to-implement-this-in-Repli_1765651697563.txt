@@ -1,0 +1,99 @@
+Copy/paste AI BUILDER PROMPT to implement this in Replit
+
+AI BUILDER PROMPT — Add high-autonomy Codex review/audit/fix-prompt commands
+
+Role: You are a senior Python engineer. Extend our existing Telegram bot + agent/codex_remote.py integration to make Codex act as the “high autonomy” reviewer/planner while Replit Builder stays on Low.
+
+Goal
+
+Add commands: /review_latest, /audit_latest, /fix_prompt.
+
+Each command calls the existing remote runner (CODEX_RUNNER_URL/TOKEN) and returns clean, structured results in Telegram (plain text, split long messages).
+
+Ensure commands are restricted to TELEGRAM_ALLOWED_USER_IDS.
+
+Context
+
+We already have /codex, /codex_status.
+
+agent/codex_remote.py can send tasks to the runner and return stdout.
+
+Requirements
+
+Add /review_latest
+
+Runs a Codex task that:
+
+confirms current commit hash (run git rev-parse --short HEAD)
+
+runs smoke checks: pytest -q (and python -m compileall -q . if fast)
+
+scans for obvious issues: search TODO/FIXME, missing imports, etc.
+
+returns:
+
+summary
+
+test result (pass/fail)
+
+top issues (bulleted)
+
+suggested fixes (bulleted)
+
+Output should be concise by default.
+
+Add /audit_latest
+
+Same as review, plus security:
+
+If bandit not installed: install in a temp/venv-safe way or just run if available.
+
+If pip-audit not installed: same.
+
+Run:
+
+pip-audit -r requirements.txt (if requirements.txt exists)
+
+bandit -r src agent -q (paths if present)
+
+Return: security findings summary + highest severity items.
+
+Add /fix_prompt
+
+Codex produces a single Builder-ready prompt that:
+
+lists files to edit
+
+gives exact code changes (patch-style or very explicit instructions)
+
+includes acceptance criteria + how to rerun tests
+
+This is the “handoff” to cheap Replit Builder.
+
+Message handling
+
+Plain text only.
+
+Split messages into <= 3500 chars per Telegram message.
+
+If a command fails, show a short error + hint to run /codex_debug (if available).
+
+Runner sync expectation
+
+In the Codex task text, instruct Codex to first run:
+
+git fetch origin
+
+git reset --hard origin/main (or detect main/master)
+
+(We’ll harden runner-side sync later; start with task-level sync.)
+
+Acceptance Criteria
+
+/review_latest returns summary + test status + issues + fixes.
+
+/audit_latest includes security scan results.
+
+/fix_prompt outputs a clean Builder prompt you can paste into Replit Builder.
+
+All commands work only for allowed users.

@@ -139,6 +139,9 @@ class TelegramBot:
         self.application.add_handler(CommandHandler("codex_short", self.cmd_codex_short))
         self.application.add_handler(CommandHandler("codex_debug", self.cmd_codex_debug))
         self.application.add_handler(CommandHandler("codex_status", self.cmd_codex_status))
+        self.application.add_handler(CommandHandler("review_latest", self.cmd_review_latest))
+        self.application.add_handler(CommandHandler("audit_latest", self.cmd_audit_latest))
+        self.application.add_handler(CommandHandler("fix_prompt", self.cmd_fix_prompt))
         
         self.application.add_handler(MessageHandler(
             filters.TEXT & ~filters.COMMAND,
@@ -179,6 +182,11 @@ Codex CLI:
 /codex_short <task> - Concise answer
 /codex_debug <task> - Full debug output
 /codex_status - Check Codex CLI status
+
+High-Autonomy Review:
+/review_latest - Review code + tests
+/audit_latest - Security audit
+/fix_prompt <issue> - Get Builder prompt
 
 Or just type any question!"""
         
@@ -716,6 +724,61 @@ INFO - Observations"""
     async def cmd_codex_debug(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle /codex_debug command - full debug output."""
         await self._run_codex_command(update, context, mode="debug")
+    
+    async def cmd_review_latest(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Handle /review_latest command - code review with tests."""
+        if not _is_authorized(update):
+            await reply_safe(update, _unauthorized_response(), context)
+            return
+        
+        task = " ".join(context.args) if context.args else "the latest changes"
+        await reply_safe(update, "Running code review...", context, parse_mode=None)
+        
+        try:
+            result = await run_codex_remote(task, mode="review")
+            await self._reply_long_text(update, context, result)
+        except Exception as e:
+            logger.error(f"Error in /review_latest: {e}")
+            await reply_safe(update, f"Error: {str(e)[:200]}\nTry /codex_debug for details.", context, parse_mode=None)
+    
+    async def cmd_audit_latest(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Handle /audit_latest command - security audit."""
+        if not _is_authorized(update):
+            await reply_safe(update, _unauthorized_response(), context)
+            return
+        
+        task = " ".join(context.args) if context.args else "the codebase for security issues"
+        await reply_safe(update, "Running security audit...", context, parse_mode=None)
+        
+        try:
+            result = await run_codex_remote(task, mode="audit")
+            await self._reply_long_text(update, context, result)
+        except Exception as e:
+            logger.error(f"Error in /audit_latest: {e}")
+            await reply_safe(update, f"Error: {str(e)[:200]}\nTry /codex_debug for details.", context, parse_mode=None)
+    
+    async def cmd_fix_prompt(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Handle /fix_prompt command - generate Builder-ready prompt."""
+        if not _is_authorized(update):
+            await reply_safe(update, _unauthorized_response(), context)
+            return
+        
+        if not context.args:
+            await reply_safe(update,
+                "Usage: /fix_prompt <issue description>\n\n"
+                "Example: /fix_prompt fix the login validation bug",
+                context, parse_mode=None)
+            return
+        
+        task = " ".join(context.args)
+        await reply_safe(update, "Generating Builder prompt...", context, parse_mode=None)
+        
+        try:
+            result = await run_codex_remote(task, mode="fix_prompt")
+            await self._reply_long_text(update, context, result)
+        except Exception as e:
+            logger.error(f"Error in /fix_prompt: {e}")
+            await reply_safe(update, f"Error: {str(e)[:200]}\nTry /codex_debug for details.", context, parse_mode=None)
     
     async def handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle non-command text messages via chat controller."""

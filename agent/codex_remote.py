@@ -21,7 +21,61 @@ MAX_STDOUT_DEBUG = 12000
 MAX_STDERR_DEBUG = 6000
 MAX_SHORT_OUTPUT = 3000
 
-OutputMode = Literal["normal", "short", "debug"]
+OutputMode = Literal["normal", "short", "debug", "review", "audit", "fix_prompt"]
+
+REVIEW_TASK_PREFIX = """You are a code reviewer. First sync the repo:
+git fetch origin && git reset --hard origin/main 2>/dev/null || git reset --hard origin/master
+
+Then perform these checks:
+1. Get current commit: git rev-parse --short HEAD
+2. Run smoke tests: pytest -q --tb=no 2>&1 | head -30
+3. Scan for issues: grep -rn "TODO\\|FIXME\\|XXX" src/ agent/ --include="*.py" 2>/dev/null | head -10
+4. Check for missing imports or obvious errors
+
+Return a CONCISE summary in this format:
+COMMIT: <hash>
+TEST STATUS: PASS/FAIL (X passed, Y failed)
+TOP ISSUES:
+- issue 1
+- issue 2
+SUGGESTED FIXES:
+- fix 1
+- fix 2
+
+Now review: """
+
+AUDIT_TASK_PREFIX = """You are a security auditor. First sync:
+git fetch origin && git reset --hard origin/main 2>/dev/null || git reset --hard origin/master
+
+Perform review checks plus security scans:
+1. Get commit: git rev-parse --short HEAD
+2. Run tests: pytest -q --tb=no 2>&1 | head -20
+3. Run pip-audit: pip-audit -r requirements.txt 2>&1 | head -20 (if requirements.txt exists)
+4. Run bandit: bandit -r src agent -q 2>&1 | head -30 (if dirs exist)
+5. Check for hardcoded secrets, exposed keys, SQL injection risks
+
+Return CONCISE format:
+COMMIT: <hash>
+TEST STATUS: PASS/FAIL
+SECURITY FINDINGS:
+- [SEVERITY] finding
+RECOMMENDATIONS:
+- action
+
+Now audit: """
+
+FIX_PROMPT_PREFIX = """You are a senior engineer creating a handoff prompt for a junior developer.
+First sync: git fetch origin && git reset --hard origin/main 2>/dev/null || git reset --hard origin/master
+
+Analyze the codebase and produce a SINGLE, COMPLETE Builder-ready prompt that:
+1. Lists exact files to edit (full paths)
+2. Shows precise code changes (before/after or patch-style)
+3. Includes acceptance criteria
+4. Shows how to verify (test commands)
+
+Format as a clean, paste-ready prompt starting with "BUILDER PROMPT:".
+
+Now create fix prompt for: """
 
 
 def _get_runner_url() -> Optional[str]:
@@ -118,6 +172,12 @@ async def run_codex_remote(task: str, *, mode: OutputMode = "normal") -> str:
             "Answer in <=10 lines. Quote at most 2 snippets (<=20 lines each). "
             "No extra commentary.\n\n" + task
         )
+    elif mode == "review":
+        task = REVIEW_TASK_PREFIX + task
+    elif mode == "audit":
+        task = AUDIT_TASK_PREFIX + task
+    elif mode == "fix_prompt":
+        task = FIX_PROMPT_PREFIX + task
     
     payload = {"task": task}
     
