@@ -1211,6 +1211,15 @@ def render_dashboard_html() -> str:
       </div>
     </div>
     
+    <!-- Greg Selector Per-Strategy Results -->
+    <div class="section" id="greg-selector-results" style="display:none; margin-top:1rem;">
+      <h2>Greg Selector - Per-Strategy Diagnostics</h2>
+      <p style="color:#666;margin-bottom:1rem;">
+        Shows which of the 7 GregBot strategies passed, were blocked, or had no data during the analysis period.
+      </p>
+      <div id="greg-strategies-container"></div>
+    </div>
+    
     <!-- SELECTOR FREQUENCY SCAN -->
     <div class="section" style="margin-top:2rem;">
       <h2>Selector Frequency Scan (Synthetic)</h2>

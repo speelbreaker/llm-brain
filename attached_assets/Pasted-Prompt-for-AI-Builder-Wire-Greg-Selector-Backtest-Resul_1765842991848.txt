@@ -1,0 +1,216 @@
+Prompt for AI Builder: Wire Greg Selector Backtest Results into Backtesting Lab UI
+
+You are working in my Options Trading Agent repo on Replit.
+
+Repo: https://github.com/speelbreaker/llm-brain (code is already in this Replit project).
+
+Goal
+
+The previous task added “new backtest run and result data to the system” for the GregBot – VRP Harvester selector, but the Backtesting Lab UI still only shows a raw JSON blob and the old generic summary.
+
+Your job in this batch:
+
+Find the new Greg selector backtest result structure that was just implemented.
+
+Render it properly in the Backtesting Lab dashboard:
+
+Show a clean headline summary (PnL, trades, win-rate, etc.).
+
+Show a per-strategy breakdown (Strategy A/B/C/… for GregBot) instead of treating “GregBot” as a single monolithic strategy.
+
+Add at least one endpoint-level test that verifies the backtest endpoint returns the fields the UI depends on.
+
+Important rule: For every new or modified HTTP endpoint you rely on in this task, you must add at least one endpoint-level test (FastAPI TestClient style). The change is rejected if this is missing.
+
+Step 1 – Locate the Backtesting Lab and Greg selector code
+
+Find the dashboard code for the Backtesting Lab:
+
+Look for “Backtesting Lab” and “Selector Frequency Scan (Synthetic)” text.
+
+This will live either in:
+
+src/web/dashboard.py (if the web refactor has already happened), or
+
+src/web_app.py (older layout).
+
+Identify:
+
+The section that renders “GregBot – VRP Harvester” selector run.
+
+The block that currently dumps a raw JSON Results blob (as in the screenshot).
+
+Find the backend code for the Greg selector backtest:
+
+Search under backtest/ and src/ for things like:
+
+GREG_SELECTOR, GregBot – VRP Harvester, selector_frequency_scan, greg_selector.
+
+Identify:
+
+The function or endpoint that runs the Greg selector backtest.
+
+The data structure it returns (dict, Pydantic model, etc.).
+
+Also inspect the existing tests you added in the previous task – they should show the new result shape (fields like per_strategy, pass_counts, etc., if present).
+
+If you discover that the Greg selector backtest still only returns a flat result (no per-strategy data), you should:
+
+Extend that result structure to include a per-strategy summary (see Step 2), and
+
+Update the existing tests accordingly before touching the UI.
+
+Step 2 – Ensure the backtest result includes per-strategy breakdown
+
+For GregBot – VRP Harvester, the backtest result should expose:
+
+Global summary (top-level)
+
+initial_equity
+
+final_equity
+
+net_profit_usd
+
+net_profit_pct
+
+max_drawdown_pct
+
+num_trades
+
+Any existing fields you already added (keep them).
+
+Per-strategy summary (new or confirmed)
+
+A list (or dict) of entries like:
+
+{
+  "strategy_id": "STRATEGY_A_STRADDLE",
+  "underlying": "BTC",
+  "pass_count": 42,
+  "trade_count": 12,
+  "avg_score": 1.37,
+  "win_rate": 0.58,
+  "net_profit_usd": 1234.56,
+  "net_profit_pct": 0.12
+}
+
+
+One row per (strategy, underlying) pair (e.g., STRATEGY_A_STRADDLE/BTC, STRATEGY_A_STRADDLE/ETH, etc.).
+
+Implementation notes:
+
+Prefer adding a small Pydantic response model (e.g., GregBacktestResult and GregStrategySummary) to make this schema explicit.
+
+Do not remove existing fields that other parts of the app/tests rely on.
+
+Step 3 – Render Greg selector backtest in the Backtesting Lab UI
+
+In the Backtesting Lab dashboard:
+
+Locate the existing “GregBot – VRP Harvester” results area.
+
+It currently shows a raw JSON block like in the screenshot ("initial_equity": ..., "final_equity": ...).
+
+Replace that with a structured layout:
+
+Headline summary card
+
+Show key metrics in a small table or list:
+
+Initial equity / Final equity
+
+Net PnL (USD & %)
+
+Max drawdown %
+
+Number of trades
+
+Hit rate (wins / total trades)
+
+This should still fit nicely in the existing panel – no layout overhaul required.
+
+Per-strategy table
+
+Below the summary, render a table:
+
+Strategy	Underlying	Pass Count	Trades	Win-Rate	Net PnL (USD)	Net PnL (%)
+
+One row per per_strategy entry from the backtest response.
+
+Use the Greg JSON spec’s human-readable names where available (e.g., “Strategy A: ATM Straddle”, “Strategy B: OTM Strangle”) instead of raw IDs.
+
+Keep the raw JSON available but move it into a collapsible “Debug JSON” section (details/summary or a small toggle). That way, a non-coder sees something intelligible, and we still have the raw data for debugging.
+
+Ensure this UI refreshes live when a new backtest finishes:
+
+When the user clicks “Start Backtest” for GregBot – VRP Harvester, once the backend responds:
+
+The summary card should show the new metrics.
+
+The per-strategy table should update with the latest run’s data.
+
+Step 4 – Endpoint-level test
+
+Add a small test module under tests/ for the Greg selector backtest endpoint, for example:
+
+tests/test_backtest_greg_selector_endpoint.py
+
+The test should:
+
+Spin up the FastAPI app with TestClient (reuse any existing test helper used for other API tests).
+
+Call the Greg selector backtest endpoint (whichever path you’re using in the UI, e.g. /api/backtest/greg_selector/run or similar).
+
+Assert at minimum:
+
+assert resp.status_code == 200
+data = resp.json()
+assert data["ok"] is True  # or equivalent success flag
+assert "summary" in data
+assert "per_strategy" in data
+assert isinstance(data["per_strategy"], list)
+assert any(row["strategy_id"].startswith("STRATEGY_A_") for row in data["per_strategy"])
+
+
+Keep it deterministic:
+
+If the endpoint can hit Deribit or any live external dependency, introduce a way to run it in a synthetic or offline mode for tests (e.g., a mode="synthetic" flag or a test stub).
+
+Reminder: This test is mandatory. Any new or modified endpoint used by the UI must have at least one endpoint-level test.
+
+Step 5 – Safety and non-functional constraints
+
+Do not change any trading behaviour or risk engine logic in this batch.
+
+This is backtest UI only:
+
+No live trading, no new order paths.
+
+You are only exposing backtest results that are already computed.
+
+Preserve existing routes and behaviour:
+
+Do not rename endpoints.
+
+Do not break existing tests; add to them.
+
+Completion Checklist
+
+Before you mark the task as complete, verify that:
+
+ The Greg selector backtest endpoint returns:
+
+ A stable schema with a summary and a per_strategy list.
+
+ The Backtesting Lab UI for “GregBot – VRP Harvester”:
+
+ Shows a clean summary card (PnL, trades, win-rate, etc.).
+
+ Shows a per-strategy table (Strategy A/B/C/… by BTC/ETH).
+
+ Keeps the raw JSON in a collapsible debug section.
+
+ A new endpoint-level test for the Greg selector backtest is added and passing.
+
+ pytest passes for the full suite.
