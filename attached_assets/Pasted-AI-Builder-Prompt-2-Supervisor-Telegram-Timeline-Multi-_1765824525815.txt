@@ -1,0 +1,211 @@
+AI Builder Prompt #2 — Supervisor Telegram Timeline + Multi-Provider Debate + Dashboard Tab
+
+Role
+You are a senior Python engineer. You already implemented the PR Supervisor service from the prior prompt (GitHub webhook → job queue → checks → debate → optional Codex fix loop). Now implement the “visibility + UX” update.
+
+Goal
+Make Supervisor runs observable without reading logs, primarily via Telegram, secondarily via a new “Supervisor” tab in the web dashboard.
+
+Hard constraints
+
+Do not break existing app behavior.
+
+Keep everything disabled by default.
+
+Never leak secrets into Telegram/PR comments/UI.
+
+Keep diffs minimal.
+
+A) Telegram “Status Card” UX (primary visibility)
+
+Add these env vars (safe defaults):
+
+SUPERVISOR_TELEGRAM_ENABLED=0
+
+TELEGRAM_BOT_TOKEN (required if enabled)
+
+TELEGRAM_CHAT_ID (required if enabled)
+
+TELEGRAM_STATUS_MODE=card (default card)
+
+TELEGRAM_MAX_CHARS=3500 (Telegram limit safety)
+
+TELEGRAM_DEBOUNCE_SECONDS=3 (avoid spam)
+
+Behavior
+
+For each PR, keep one pinned-ish “status card” message (store telegram_message_id keyed by (repo, pr_number) in your job store).
+
+Update the same message using Telegram editMessageText at each step.
+
+Send short “detail replies” only when necessary (e.g., first failure excerpt, Arbiter verdict, Codex diff summary).
+
+Status card format (single message, edited in place):
+
+Header: PR #123 — <title> + link to PR
+
+Current phase: CHECKS, DEBATE, CODEX_FIX (loop 1/3), DONE
+
+Check summary:
+
+pytest: ✅/❌, ruff: ✅/❌, etc.
+
+Arbiter verdict line when relevant
+
+Latest commit SHA (short)
+
+Last update timestamp
+
+Detail messages (reply to the status card)
+
+If checks fail: include only last ~30 lines of the failing command output (truncate).
+
+Arbiter message: 3 bullets max:
+
+“Auto-fix allowed: yes/no”
+
+“Objectives: …”
+
+“Risk: low/med/high”
+
+Codex message: diff summary only:
+
+files changed count, LOC +/-,
+
+top 3 files touched
+
+Implementation notes:
+
+Implement Telegram API calls with httpx (no new heavy deps). Centralize into src/supervisor/telegram_notify.py.
+
+Add a helper safe_truncate(text, max_chars) and always use it.
+
+Add a minimal “message registry” in the job store so the supervisor can resume updating the same card after restarts.
+
+B) Multi-provider debate (OpenAI + optional Gemini)
+
+Add env vars (per role):
+
+OPTIMIST_PROVIDER=openai
+
+SKEPTIC_PROVIDER=openai (user may set to gemini)
+
+ARBITER_PROVIDER=openai
+
+MODEL_OPTIMIST=gpt-5-mini
+
+MODEL_SKEPTIC=gpt-5.2-pro
+
+MODEL_ARBITER=gpt-5-mini
+
+GEMINI_API_KEY (only required if any provider=gemini)
+
+GEMINI_BASE_URL=https://generativelanguage.googleapis.com/v1beta
+
+Implement provider abstraction
+Create src/supervisor/llm/:
+
+base.py (interface)
+
+openai_provider.py
+
+gemini_provider.py
+
+router.py (select provider+model from env)
+
+Strict JSON contract
+All three debate agents must return strict JSON with this schema:
+
+{
+  "role": "optimist|skeptic|arbiter",
+  "summary": "string",
+  "bullets": ["string", "string", "string"],
+  "auto_fix_allowed": true/false,          // arbiter only
+  "objectives": ["string", "string"],      // arbiter only
+  "risk_level": "low|med|high",            // arbiter only
+  "stop_reason": "string|null"             // arbiter only, required if auto_fix_allowed=false
+}
+
+
+Rules:
+
+Validate JSON with Pydantic models.
+
+If invalid JSON, do one retry with a “Return ONLY valid JSON matching schema” instruction.
+
+If still invalid, treat as auto_fix_allowed=false with stop_reason “debate_output_invalid”.
+
+Gemini provider
+
+Use HTTP requests to :generateContent and authenticate via x-goog-api-key header.
+
+Prefer Gemini “structured output / JSON mode” if available; otherwise enforce JSON via prompting and validate strictly.
+
+C) Web Dashboard “Supervisor” tab (secondary visibility)
+
+Your existing dashboard already has multiple tabs (Live Agent, Backtesting, Calibration, System Health, Chat, Bots, etc.). Add one more tab: Supervisor.
+
+Requirements
+
+Add a new page route like GET /supervisor that renders a simple table UI.
+
+Add new API endpoints on the main web app:
+
+GET /api/supervisor/jobs → returns latest 50 jobs (summary)
+
+GET /api/supervisor/jobs/{job_id} → returns full job details (phases, outputs truncated)
+
+How it should fetch data
+
+Add setting/env: SUPERVISOR_API_URL (blank by default).
+
+If blank: show “Supervisor not configured” page.
+
+If set: the web app should proxy the supervisor service:
+
+server-side httpx call to ${SUPERVISOR_API_URL}/api/jobs etc
+
+return JSON to the frontend
+This avoids browser CORS issues.
+
+UI (keep it simple, no heavy JS frameworks)
+
+A table with: PR, branch, SHA, status, phase, started_at, updated_at, loops, links.
+
+A “View” button opens a detail panel (or separate page) showing:
+
+checks results
+
+debate summary
+
+codex diff summary
+
+last failure excerpt (truncated)
+
+Non-goals
+
+No auth changes in this prompt (just read-only). Keep it behind whatever the dashboard already uses.
+
+D) PR comments: make them readable
+
+Improve PR comments created by Supervisor:
+
+One concise “Run summary” comment per SHA.
+
+Avoid dumping massive logs; include only:
+
+failing command,
+
+truncated excerpt,
+
+pointer: “See Telegram for timeline” (if enabled).
+
+E) Acceptance criteria
+
+With defaults, nothing changes.
+
+With SUPERVISOR_TELEGRAM_ENABLED=1, a single Telegram status card is created per PR and updated across phases.
+
+Setting SKEPTIC_PROVIDER=gemini works without changing other roles.
+
+Dashboard shows Supervisor tab; if SUPERVISOR_API_URL is unset it shows a clear “not configured” message; if set, it lists jobs.

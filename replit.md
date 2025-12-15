@@ -47,6 +47,38 @@ The web dashboard offers a user-friendly interface with sections for "Live Agent
 - **Decision Logging System**: Comprehensive audit trail for Greg decisions stored in a `greg_decision_log` database table.
 - **Greg Lab UI**: Dedicated dashboard tab for viewing and managing Greg strategy positions with mode banner, sandbox summary, filters, positions table, PnL tracking, suggested actions, and log timelines.
 - **Telegram Code Review Agent**: A Telegram bot for automated code review and Repo Q&A with modular design. It offers commands for `/review`, `/diff`, `/risks`, `/ask`, `/search`, `/open`, and natural language chat, utilizing LLM integration with automatic model fallback and secret redaction.
+- **PR Supervisor Service**: Automated PR verification and auto-fix service that:
+    - Listens to GitHub PR webhooks (opened/synchronize/reopened)
+    - Checks out PR branch in isolated workspace using git worktree
+    - Runs verification commands (pytest/lint)
+    - Posts structured PR comments with results
+    - Runs 3-agent debate (Optimist/Skeptic/Arbiter) to decide on auto-fix
+    - Invokes Codex CLI for minimal auto-fixes if approved
+    - Narrates each step to Telegram
+    - **Disabled by default** (SUPERVISOR_ENABLED=0)
+
+### PR Supervisor Configuration
+The PR Supervisor is located in `src/supervisor/` and is disabled by default. To enable:
+
+**Required Environment Variables (when enabled):**
+- `SUPERVISOR_ENABLED=1` - Enable the supervisor
+- `GITHUB_WEBHOOK_SECRET` - Secret for webhook signature verification
+- `GITHUB_TOKEN` - Fine-grained PAT with PR comments + push access
+
+**Optional Environment Variables:**
+- `SUPERVISOR_MAX_LOOPS` (default: 3) - Max fix attempts
+- `SUPERVISOR_MAX_FILES_CHANGED` (default: 10) - Max files in fix diff
+- `SUPERVISOR_MAX_LOC_CHANGED` (default: 300) - Max LOC in fix diff
+- `SUPERVISOR_ALLOW_FORKS` (default: 0) - Allow PRs from forks
+- `SUPERVISOR_ENABLE_CODEX` (default: 1) - Enable Codex auto-fix
+- `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` - For notifications
+- `MODEL_OPTIMIST` / `MODEL_SKEPTIC` / `MODEL_ARBITER` - LLM models
+- `CHECK_CMD_1` / `CHECK_CMD_2` / `CHECK_CMD_3` - Verification commands
+
+**Running the Supervisor:**
+```bash
+python -m src.supervisor  # Runs on port 8001
+```
 
 ## External Dependencies
 - **Deribit API**: Used for real-time market data (testnet) and historical data.
