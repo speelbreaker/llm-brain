@@ -15,6 +15,24 @@ The agent features a clear separation of concerns, with modules for configuratio
 
 ### UI/UX Decisions
 The web dashboard offers a user-friendly interface with sections for "Live Agent" status, "Backtesting", "Calibration", "System Health", "Chat" interface, "Bots" for expert trading bot analysis, "Greg Lab" for position management, "Supervisor" for PR verification monitoring, and an "AI Steward" panel for project insights.
+
+### Web Layer Structure
+The FastAPI app entrypoint is `src/web_app.py`, which owns lifespan/app.state initialization and includes routers from `src/web/`.
+
+| Module | Description |
+|--------|-------------|
+| `src/web/dashboard.py` | UI changes - Main Options Agent dashboard HTML + inline JS |
+| `src/web/routes_main.py` | API routes - Core endpoints (status, chat, training, strategy-status) |
+| `src/web/routes_backtest.py` | API routes - Backtest Lab APIs |
+| `src/web/routes_positions.py` | API routes - Position and calibration endpoints |
+| `src/web/routes_bots.py` | API routes - Bot/strategy endpoints |
+| `src/web/routes_health.py` | API routes - Health, risk, supervisor, steward endpoints |
+
+**Guidelines:**
+- UI changes → `src/web/dashboard.py`
+- API routes → `src/web/routes_*.py`
+- Entrypoint → `src/web_app.py` owns lifespan/app.state init
+
 # Replit Agent Rules (Non-Negotiable)
 
 ## Engineering Constitution (Non-Negotiable Quality Gates)

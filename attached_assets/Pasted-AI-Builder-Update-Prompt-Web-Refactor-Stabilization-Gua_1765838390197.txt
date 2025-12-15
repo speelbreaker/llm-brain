@@ -1,0 +1,84 @@
+AI Builder Update Prompt — Web Refactor Stabilization + Guardrails
+
+Role
+You are a senior FastAPI engineer. The repo was refactored to src/web/ routers + src/web/dashboard.py. Now stabilize and add guardrails to prevent regressions.
+
+Allowed Files
+
+src/web_app.py
+
+src/web/*.py
+
+replit.md
+
+tests/web/*
+
+tests/test_imports_smoke.py (or similar new test file)
+
+tests/test_routes_parity.py (or similar new test file)
+
+Do NOT change src/supervisor/* in this prompt unless you detect the refactor reverted supervisor security behavior; if so, explicitly call it out and fix only the regression with tests.
+
+Requirements
+1) Lifespan / startup invariants must be preserved
+
+Ensure src/web_app.py still includes the original lifespan/startup/shutdown initialization that populates app.state.*.
+
+Routers must not import app from src.web_app (avoid circular imports). Use Request injection and request.app.state.
+
+Add endpoint-level tests (these are existing endpoints, so still required):
+
+GET /health returns 200 and includes { "ok": true } (or your existing schema)
+
+GET / returns 200 and Content-Type text/html
+
+2) Route-parity guardrail (prevents silent path/method regressions)
+
+Add a snapshot-based test:
+
+Create tests/web/expected_routes.json containing a list of routes:
+[{ "path": "...", "methods": ["GET"], "name": "..." }, ...]
+
+Add tests/test_routes_parity.py that imports the app and asserts current routes match the snapshot exactly, ignoring only openapi.json, /docs, /redoc if present.
+
+Important: if the refactor intentionally changed any route details, update the snapshot explicitly and document why in the test file comment.
+
+3) Circular import / forbidden import check
+
+Add tests/test_no_router_imports_app.py that scans src/web/routes_*.py and fails if it finds:
+
+from src.web_app import app
+
+import src.web_app used to access app
+
+4) Docs drift fix (replit.md)
+
+Restore/ensure replit.md contains an explicit section:
+
+Web Layer Structure
+
+“UI changes → src/web/dashboard.py”
+
+“API routes → src/web/routes_*.py”
+
+“Entrypoint → src/web_app.py owns lifespan/app.state init”
+
+This section must not be removed or shortened into vagueness.
+
+5) Supervisor regression check (quick)
+
+Even if we don’t change supervisor code, add a quick test (or reuse existing ones) that ensures the critical security behaviors still pass on this branch (so we don’t merge a refactor that accidentally reverted them).
+
+Proof required in your final message
+
+Confirm no router imports app
+
+Show tests executed
+
+Confirm route-parity snapshot committed
+
+Confirm /health and / endpoint-level tests added/passing
+
+Endpoint-level test rule reminder
+
+If you add any new endpoints while doing this work, you must add at least one endpoint-level test for each new endpoint or the change is rejected.

@@ -1,0 +1,667 @@
+[
+  {
+    "path": "/",
+    "methods": [
+      "GET"
+    ],
+    "name": "index"
+  },
+  {
+    "path": "/api/agent/decisions",
+    "methods": [
+      "GET"
+    ],
+    "name": "get_agent_decisions"
+  },
+  {
+    "path": "/api/agent_healthcheck",
+    "methods": [
+      "POST"
+    ],
+    "name": "run_healthcheck_endpoint"
+  },
+  {
+    "path": "/api/backtest/insights",
+    "methods": [
+      "POST"
+    ],
+    "name": "get_backtest_insights"
+  },
+  {
+    "path": "/api/backtest/pause",
+    "methods": [
+      "POST"
+    ],
+    "name": "pause_backtest"
+  },
+  {
+    "path": "/api/backtest/presets",
+    "methods": [
+      "GET"
+    ],
+    "name": "get_backtest_presets"
+  },
+  {
+    "path": "/api/backtest/resolve-config",
+    "methods": [
+      "POST"
+    ],
+    "name": "resolve_backtest_config_endpoint"
+  },
+  {
+    "path": "/api/backtest/resume",
+    "methods": [
+      "POST"
+    ],
+    "name": "resume_backtest"
+  },
+  {
+    "path": "/api/backtest/run",
+    "methods": [
+      "POST"
+    ],
+    "name": "run_backtest"
+  },
+  {
+    "path": "/api/backtest/selector_heatmap",
+    "methods": [
+      "POST"
+    ],
+    "name": "selector_heatmap"
+  },
+  {
+    "path": "/api/backtest/selector_scan",
+    "methods": [
+      "POST"
+    ],
+    "name": "selector_scan"
+  },
+  {
+    "path": "/api/backtest/start",
+    "methods": [
+      "POST"
+    ],
+    "name": "start_backtest"
+  },
+  {
+    "path": "/api/backtest/status",
+    "methods": [
+      "GET"
+    ],
+    "name": "get_backtest_status"
+  },
+  {
+    "path": "/api/backtest/stop",
+    "methods": [
+      "POST"
+    ],
+    "name": "stop_backtest"
+  },
+  {
+    "path": "/api/backtest/strategies",
+    "methods": [
+      "GET"
+    ],
+    "name": "list_backtest_strategies"
+  },
+  {
+    "path": "/api/backtest/strategy_caps",
+    "methods": [
+      "GET"
+    ],
+    "name": "get_strategy_capabilities"
+  },
+  {
+    "path": "/api/backtest/strategy_caps/{selector_name}",
+    "methods": [
+      "GET"
+    ],
+    "name": "get_strategy_capabilities_by_name"
+  },
+  {
+    "path": "/api/backtests",
+    "methods": [
+      "GET"
+    ],
+    "name": "list_backtest_runs"
+  },
+  {
+    "path": "/api/backtests/{run_id}",
+    "methods": [
+      "DELETE"
+    ],
+    "name": "delete_backtest_run"
+  },
+  {
+    "path": "/api/backtests/{run_id}",
+    "methods": [
+      "GET"
+    ],
+    "name": "get_backtest_run"
+  },
+  {
+    "path": "/api/backtests/{run_id}/download",
+    "methods": [
+      "GET"
+    ],
+    "name": "download_backtest_run"
+  },
+  {
+    "path": "/api/backtests/{run_id}/events",
+    "methods": [
+      "GET"
+    ],
+    "name": "get_backtest_events"
+  },
+  {
+    "path": "/api/backtests/{run_id}/events/download",
+    "methods": [
+      "GET"
+    ],
+    "name": "download_backtest_events"
+  },
+  {
+    "path": "/api/backtests/{run_id}/strategy_summary",
+    "methods": [
+      "GET"
+    ],
+    "name": "get_backtest_strategy_summary"
+  },
+  {
+    "path": "/api/backtests/{run_id}/strategy_summary/download",
+    "methods": [
+      "GET"
+    ],
+    "name": "download_strategy_summary"
+  },
+  {
+    "path": "/api/bots/global_risk",
+    "methods": [
+      "GET"
+    ],
+    "name": "get_bots_global_risk"
+  },
+  {
+    "path": "/api/bots/global_risk",
+    "methods": [
+      "POST"
+    ],
+    "name": "update_bots_global_risk"
+  },
+  {
+    "path": "/api/bots/greg/execute_suggestion",
+    "methods": [
+      "POST"
+    ],
+    "name": "execute_greg_suggestion"
+  },
+  {
+    "path": "/api/bots/greg/hedge_history",
+    "methods": [
+      "GET"
+    ],
+    "name": "get_greg_hedge_history"
+  },
+  {
+    "path": "/api/bots/greg/hedging",
+    "methods": [
+      "GET"
+    ],
+    "name": "get_greg_hedging_status"
+  },
+  {
+    "path": "/api/bots/greg/hedging/dry_run",
+    "methods": [
+      "POST"
+    ],
+    "name": "set_hedge_dry_run"
+  },
+  {
+    "path": "/api/bots/greg/hedging/evaluate",
+    "methods": [
+      "POST"
+    ],
+    "name": "evaluate_greg_hedging"
+  },
+  {
+    "path": "/api/bots/greg/management",
+    "methods": [
+      "GET"
+    ],
+    "name": "get_greg_management"
+  },
+  {
+    "path": "/api/bots/greg/management/evaluate",
+    "methods": [
+      "POST"
+    ],
+    "name": "evaluate_greg_management"
+  },
+  {
+    "path": "/api/bots/greg/management/mock",
+    "methods": [
+      "POST"
+    ],
+    "name": "mock_greg_management"
+  },
+  {
+    "path": "/api/bots/market_sensors",
+    "methods": [
+      "GET"
+    ],
+    "name": "get_bots_market_sensors"
+  },
+  {
+    "path": "/api/bots/strategies",
+    "methods": [
+      "GET"
+    ],
+    "name": "get_bots_strategies"
+  },
+  {
+    "path": "/api/bots/{bot_id}/entry_rules",
+    "methods": [
+      "GET"
+    ],
+    "name": "get_bot_entry_rules"
+  },
+  {
+    "path": "/api/bots/{bot_id}/entry_rules",
+    "methods": [
+      "POST"
+    ],
+    "name": "update_bot_entry_rules"
+  },
+  {
+    "path": "/api/bots/{bot_id}/risk",
+    "methods": [
+      "GET"
+    ],
+    "name": "get_bot_risk"
+  },
+  {
+    "path": "/api/bots/{bot_id}/risk",
+    "methods": [
+      "POST"
+    ],
+    "name": "update_bot_risk"
+  },
+  {
+    "path": "/api/calibration",
+    "methods": [
+      "GET"
+    ],
+    "name": "get_calibration"
+  },
+  {
+    "path": "/api/calibration/apply_direct",
+    "methods": [
+      "POST"
+    ],
+    "name": "apply_calibration_direct"
+  },
+  {
+    "path": "/api/calibration/apply_skew",
+    "methods": [
+      "POST"
+    ],
+    "name": "apply_skew_ratios"
+  },
+  {
+    "path": "/api/calibration/auto_status",
+    "methods": [
+      "GET"
+    ],
+    "name": "get_auto_calibration_status"
+  },
+  {
+    "path": "/api/calibration/current_multipliers",
+    "methods": [
+      "GET"
+    ],
+    "name": "get_current_multipliers"
+  },
+  {
+    "path": "/api/calibration/force_apply",
+    "methods": [
+      "POST"
+    ],
+    "name": "force_apply_calibration"
+  },
+  {
+    "path": "/api/calibration/history",
+    "methods": [
+      "GET"
+    ],
+    "name": "get_calibration_history"
+  },
+  {
+    "path": "/api/calibration/overrides",
+    "methods": [
+      "GET"
+    ],
+    "name": "get_calibration_overrides"
+  },
+  {
+    "path": "/api/calibration/policy",
+    "methods": [
+      "GET"
+    ],
+    "name": "get_calibration_policy"
+  },
+  {
+    "path": "/api/calibration/run_with_policy",
+    "methods": [
+      "POST"
+    ],
+    "name": "run_calibration_with_policy_endpoint"
+  },
+  {
+    "path": "/api/calibration/runs",
+    "methods": [
+      "GET"
+    ],
+    "name": "get_calibration_runs"
+  },
+  {
+    "path": "/api/calibration/use_latest",
+    "methods": [
+      "POST"
+    ],
+    "name": "use_latest_calibration"
+  },
+  {
+    "path": "/api/data_status/intraday",
+    "methods": [
+      "GET"
+    ],
+    "name": "intraday_data_status"
+  },
+  {
+    "path": "/api/environment_heatmap",
+    "methods": [
+      "POST"
+    ],
+    "name": "environment_heatmap"
+  },
+  {
+    "path": "/api/greg/calibration",
+    "methods": [
+      "GET"
+    ],
+    "name": "get_greg_calibration"
+  },
+  {
+    "path": "/api/greg/decision_log",
+    "methods": [
+      "GET"
+    ],
+    "name": "get_greg_decision_log"
+  },
+  {
+    "path": "/api/greg/positions",
+    "methods": [
+      "GET"
+    ],
+    "name": "get_greg_positions"
+  },
+  {
+    "path": "/api/greg/positions/{position_id}/logs",
+    "methods": [
+      "GET"
+    ],
+    "name": "get_greg_position_logs"
+  },
+  {
+    "path": "/api/greg/trading_mode",
+    "methods": [
+      "GET"
+    ],
+    "name": "get_greg_trading_mode"
+  },
+  {
+    "path": "/api/greg/trading_mode",
+    "methods": [
+      "POST"
+    ],
+    "name": "update_greg_trading_mode"
+  },
+  {
+    "path": "/api/greg_sweetspots",
+    "methods": [
+      "GET"
+    ],
+    "name": "get_greg_sweetspots"
+  },
+  {
+    "path": "/api/greg_sweetspots/run",
+    "methods": [
+      "POST"
+    ],
+    "name": "run_greg_sweetspots"
+  },
+  {
+    "path": "/api/health/iv_sanity",
+    "methods": [
+      "GET"
+    ],
+    "name": "get_iv_sanity_check"
+  },
+  {
+    "path": "/api/llm_readiness",
+    "methods": [
+      "GET"
+    ],
+    "name": "get_llm_readiness_endpoint"
+  },
+  {
+    "path": "/api/llm_status",
+    "methods": [
+      "GET"
+    ],
+    "name": "get_llm_status"
+  },
+  {
+    "path": "/api/llm_status",
+    "methods": [
+      "POST"
+    ],
+    "name": "update_llm_status"
+  },
+  {
+    "path": "/api/positions/closed",
+    "methods": [
+      "GET"
+    ],
+    "name": "get_closed_positions"
+  },
+  {
+    "path": "/api/positions/open",
+    "methods": [
+      "GET"
+    ],
+    "name": "get_open_positions"
+  },
+  {
+    "path": "/api/reconcile_positions",
+    "methods": [
+      "POST"
+    ],
+    "name": "reconcile_positions_endpoint"
+  },
+  {
+    "path": "/api/reconciliation_config",
+    "methods": [
+      "GET"
+    ],
+    "name": "get_reconciliation_config"
+  },
+  {
+    "path": "/api/reconciliation_config",
+    "methods": [
+      "POST"
+    ],
+    "name": "update_reconciliation_config"
+  },
+  {
+    "path": "/api/risk_limits",
+    "methods": [
+      "GET"
+    ],
+    "name": "get_risk_limits"
+  },
+  {
+    "path": "/api/risk_limits",
+    "methods": [
+      "POST"
+    ],
+    "name": "update_risk_limits"
+  },
+  {
+    "path": "/api/rules-summary",
+    "methods": [
+      "GET"
+    ],
+    "name": "get_rules_summary"
+  },
+  {
+    "path": "/api/steward/report",
+    "methods": [
+      "GET"
+    ],
+    "name": "get_steward_report"
+  },
+  {
+    "path": "/api/steward/run",
+    "methods": [
+      "POST"
+    ],
+    "name": "run_steward"
+  },
+  {
+    "path": "/api/strategies/greg/selector",
+    "methods": [
+      "GET"
+    ],
+    "name": "get_greg_selector"
+  },
+  {
+    "path": "/api/strategy-status",
+    "methods": [
+      "GET"
+    ],
+    "name": "get_strategy_status"
+  },
+  {
+    "path": "/api/strategy_thresholds",
+    "methods": [
+      "GET"
+    ],
+    "name": "get_strategy_thresholds"
+  },
+  {
+    "path": "/api/strategy_thresholds",
+    "methods": [
+      "POST"
+    ],
+    "name": "update_strategy_thresholds"
+  },
+  {
+    "path": "/api/supervisor/jobs",
+    "methods": [
+      "GET"
+    ],
+    "name": "get_supervisor_jobs"
+  },
+  {
+    "path": "/api/supervisor/jobs/{job_id}",
+    "methods": [
+      "GET"
+    ],
+    "name": "get_supervisor_job"
+  },
+  {
+    "path": "/api/system/runtime-config",
+    "methods": [
+      "GET"
+    ],
+    "name": "get_runtime_config"
+  },
+  {
+    "path": "/api/system/runtime-config",
+    "methods": [
+      "POST"
+    ],
+    "name": "update_runtime_config"
+  },
+  {
+    "path": "/api/system_health/status",
+    "methods": [
+      "GET"
+    ],
+    "name": "get_system_health_status"
+  },
+  {
+    "path": "/api/test_kill_switch",
+    "methods": [
+      "POST"
+    ],
+    "name": "test_kill_switch"
+  },
+  {
+    "path": "/api/test_llm_decision",
+    "methods": [
+      "POST"
+    ],
+    "name": "test_llm_decision"
+  },
+  {
+    "path": "/api/training/status",
+    "methods": [
+      "GET"
+    ],
+    "name": "get_training_status"
+  },
+  {
+    "path": "/api/training/toggle",
+    "methods": [
+      "POST"
+    ],
+    "name": "toggle_training_mode"
+  },
+  {
+    "path": "/chat",
+    "methods": [
+      "POST"
+    ],
+    "name": "chat_endpoint"
+  },
+  {
+    "path": "/chat/clear",
+    "methods": [
+      "POST"
+    ],
+    "name": "clear_chat_endpoint"
+  },
+  {
+    "path": "/chat/messages",
+    "methods": [
+      "GET"
+    ],
+    "name": "get_chat_history_endpoint"
+  },
+  {
+    "path": "/health",
+    "methods": [
+      "GET"
+    ],
+    "name": "health_check"
+  },
+  {
+    "path": "/status",
+    "methods": [
+      "GET"
+    ],
+    "name": "get_status"
+  }
+]

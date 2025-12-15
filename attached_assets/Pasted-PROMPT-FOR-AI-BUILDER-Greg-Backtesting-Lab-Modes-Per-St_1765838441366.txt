@@ -1,0 +1,410 @@
+PROMPT FOR AI BUILDER – Greg Backtesting Lab: Modes, Per-Strategy Breakdown, and Selector Data Sources
+
+You are working on my “Options Trading Agent” repo (llm-brain).
+
+Goal of this task:
+
+Fix the conceptual bug where GregBot is treated as a single “strategy” and still shows generic exit-style controls in Backtesting Lab.
+
+Treat GregBot as a bundle of 7 strategies and make backtest results per-strategy, not one big blob.
+
+Extend the Selector Frequency Scan to support multiple data sources:
+
+Synthetic universe
+
+Harvester historical data
+
+Live snapshot (using current IV + chain)
+
+Ensure the Greg selector/harvester evaluates all 7 strategies and logs both:
+
+The chosen strategy according to Greg’s waterfall
+
+The per-strategy status (PASS/BLOCKED/NO_DATA) for diagnostics
+
+Tests: For every endpoint you add or modify, include at least one endpoint-level test using FastAPI’s TestClient that exercises the updated behavior. This is a hard project rule.
+
+If the web refactor into src/web/ has already been applied, prefer to put new/updated endpoints in src/web/routes_backtest.py and keep the HTML in src/web/dashboard.py.
+If not, apply the same changes in src/web_app.py’s backtest endpoints and dashboard HTML.
+
+1. Backtesting Lab UI: Backtest Mode & Greg-specific config
+1.1 Add “Backtest Mode” selector
+
+In the Backtesting Lab UI (wherever the current backtest form lives):
+
+Add a Backtest Mode selector (radio group or <select>), with at least:
+
+Generic Covered Calls
+
+GregBot – Selector Only (no position PnL)
+
+When Generic Covered Calls is selected:
+
+Keep existing fields as-is, including:
+
+Exit style (hold to expiry / take profit / roll / compare)
+
+DTE range, delta range, generic thresholds, etc.
+
+When GregBot – Selector Only is selected:
+
+Hide generic exit-style controls and any management-related knobs that do not apply to Greg selector logic.
+
+Show Greg-specific options instead (minimal for now):
+
+Underlying selector: BTC / ETH (multi-select or two checkboxes).
+
+Data source dropdown (see section 3):
+
+Synthetic
+
+Harvester
+
+Live
+
+(Optional for now) a note that this mode does not simulate PnL, only selector frequency and per-strategy metrics.
+
+1.2 Wire Backtest Mode into the request
+
+Identify the existing backtest run endpoint used by this form (e.g. something like POST /api/backtest/run or similar in routes_backtest.py / web_app.py).
+
+Extend its request model to include:
+
+class BacktestMode(str, Enum):
+    GENERIC = "generic"
+    GREG_SELECTOR = "greg_selector"
+
+
+and a field:
+
+backtest_mode: BacktestMode = BacktestMode.GENERIC
+
+
+Make sure the UI sends backtest_mode in the JSON body when starting a backtest:
+
+BacktestMode.GENERIC when Generic Covered Calls mode is selected.
+
+BacktestMode.GREG_SELECTOR when GregBot – Selector Only is selected.
+
+Important: Do not change the path or HTTP verb of the backtest run endpoint; just extend its payload. Existing behavior for backtest_mode = GENERIC must remain identical to today.
+
+2. Backtest engine: treat GregBot as 7 strategies, not one blob
+2.1 Extend backtest result model
+
+Find the backtest result model used by the backtest run endpoint (e.g. a Pydantic model returned from /api/backtest/*).
+
+Extend it to support per-strategy summaries, at least for Greg backtests:
+
+Add a field something like:
+
+class StrategyBacktestSummary(BaseModel):
+    bot_id: str
+    strategy_code: str  # "A", "B", "C", "D", "F", "G", "NO_TRADE"
+    strategy_name: str
+    underlying: str  # "BTC" / "ETH"
+    trades: int
+    wins: int
+    losses: int
+    win_rate: float
+    gross_pnl: float
+    max_drawdown: float
+    # You can add avg_dte, avg_vrp, etc. if cheap to compute.
+
+class BacktestResult(BaseModel):
+    # existing fields...
+    greg_strategy_summaries: List[StrategyBacktestSummary] = []
+
+
+For Generic runs (backtest_mode = GENERIC):
+
+You can leave greg_strategy_summaries as an empty list.
+
+For Greg selector runs (backtest_mode = GREG_SELECTOR):
+
+greg_strategy_summaries should contain one row per (underlying, strategy_code) combination where at least one event occurred.
+
+Even if you don’t simulate PnL yet in GREG_SELECTOR mode, you can set gross_pnl = 0 and max_drawdown = 0 for now and focus on counts / win rate where relevant.
+
+2.2 Log chosen strategy for every event
+
+In the backtest logic that runs when backtest_mode = GREG_SELECTOR:
+
+Every “decision” step (each time slice, bar, or snapshot) must call the Greg selector and get a structured result:
+
+class GregSelectorDecision(BaseModel):
+    bot_id: str = "GregBot"
+    strategy_code: str  # "A" .. "G" or "NO_TRADE"
+    strategy_name: str
+    # plus per-strategy diagnostics (see section 4)
+
+
+Ensure that wherever you currently log backtest steps (e.g. JSONL, DB, or in-memory), you attach:
+
+bot_id
+
+strategy_code
+
+strategy_name
+
+The aggregation for greg_strategy_summaries should be based on these fields.
+
+3. Selector Frequency Scan: data sources (Synthetic / Harvester / Live)
+
+You already have a selector frequency scan that runs on the synthetic universe.
+
+We want to generalize it to 3 data sources, without changing its external purpose.
+
+3.1 Introduce a data source enum
+
+Define an enum in a central place used by both backtest and selector scan, e.g.:
+
+class SelectorDataSource(str, Enum):
+    SYNTHETIC = "synthetic"
+    HARVESTER = "harvester"
+    LIVE = "live"
+
+3.2 Use data source in selector frequency scan
+
+Locate the endpoint that powers the selector frequency scan panel in the Backtesting Lab (e.g. /api/backtest/greg_selector_scan, /api/backtest/selector_frequency, etc.).
+
+Extend its request model to accept:
+
+data_source: SelectorDataSource = SelectorDataSource.SYNTHETIC
+
+
+In the backend implementation, switch on data_source:
+
+SYNTHETIC:
+
+Keep existing behavior: iterate over synthetic universe data.
+
+HARVESTER:
+
+Use your existing harvested intraday data (OHLC + IV + sensor series) as the source.
+
+Iterate over time, build the same sensor snapshot structure used for the selector, then call the Greg selector.
+
+LIVE:
+
+Pull a single “current” snapshot from Deribit / sensors:
+
+Current IV, RV, VRP, ADX, RSI, skew, term structure, etc.
+
+Pass through the selector to see “what Greg would choose right now”.
+
+For LIVE, you can treat this as a one-step scan; the response should still match the shape of the existing selector scan output (counts may just be 0/1).
+
+3.3 UI wiring
+
+In the Backtesting Lab when Backtest Mode = GregBot – Selector Only:
+
+Expose a Data Source dropdown:
+
+Synthetic
+
+Harvester
+
+Live
+
+Wire it to the selector scan endpoint as data_source in the request body.
+
+4. Greg selector & harvester: per-strategy diagnostics
+
+Right now, GregBot is effectively treated as a single “thing” in some parts. We want one clear place that:
+
+Reads the Greg JSON spec.
+
+Evaluates all 7 strategies + NO_TRADE.
+
+Applies Greg’s waterfall (Skew fork, Calendar trap, etc.).
+
+Returns:
+
+A chosen strategy struct.
+
+A per-strategy status map for debugging.
+
+4.1 Centralize selector logic
+
+Create or update a module (if it already exists) like src/bots/greg_selector.py with:
+
+A function to evaluate all strategies:
+
+class GregStrategyStatus(BaseModel):
+    status: Literal["PASS", "BLOCKED", "NO_DATA"]
+    detail: str  # e.g. "vrp_30d (-6.05 < 15); adx_14d OK; skew_25d ?"
+
+class GregSelectorOutput(BaseModel):
+    bot_id: str = "GregBot"
+    strategy_code: str  # "A" .. "G" or "NO_TRADE"
+    strategy_name: str
+    strategies: Dict[str, GregStrategyStatus]  # keys: "A","B","C","D","F","G","NO_TRADE"
+
+def run_greg_selector(sensors: GregSensorSnapshot, config: GregConfig) -> GregSelectorOutput:
+    ...
+
+
+Ensure this function:
+
+Evaluates all strategies using the JSON thresholds.
+
+Applies Greg’s waterfall including the skew fork and calendar VRP checks.
+
+Decides strategy_code and strategy_name.
+
+Builds the strategies dict from the individual passes/blocks.
+
+4.2 Use this in both:
+
+The selector frequency scan.
+
+Any Greg-specific backtest code for backtest_mode = GREG_SELECTOR.
+
+Do not duplicate Greg logic in multiple places; everything should call run_greg_selector().
+
+5. Harvester integration
+
+Make sure the harvester (the job that stores historical sensor snapshots) logs enough information to support:
+
+Selector frequency scans across time (Harvester mode).
+
+Potential future PnL backtests with management rules.
+
+At minimum, for every harvested snapshot that can be passed through the selector:
+
+Save the sensor snapshot (vrp_30d, adx_14d, skew_25d, term_structure_spread, iv_rank_6m, etc.).
+
+Optionally, store the selector decision (strategy_code, strategy_name) as derived columns for faster scans. If that’s too invasive for this batch, you can derive it on the fly from the sensors during the scan.
+
+6. Endpoint changes & tests (hard rule)
+6.1 Endpoint changes
+
+You will be adjusting existing endpoints rather than creating new ones:
+
+Backtest run endpoint (e.g. POST /api/backtest/run):
+
+Add backtest_mode to the request model.
+
+Implement mode switch:
+
+BacktestMode.GENERIC: existing behavior.
+
+BacktestMode.GREG_SELECTOR: run selector backtest (no PnL) and populate greg_strategy_summaries.
+
+Selector frequency scan endpoint (e.g. /api/backtest/greg_selector_scan or equivalent):
+
+Add data_source: SelectorDataSource to the request model.
+
+Implement SYNTHETIC / HARVESTER / LIVE branching as described.
+
+If you do decide to introduce any new API endpoints instead of extending existing ones, you must:
+
+Keep paths consistent with the current naming scheme under /api/backtest/*.
+
+Add at least one endpoint-level test per new endpoint (see below).
+This is a project rule – do not skip endpoint tests.
+
+6.2 Endpoint-level tests (required)
+
+Add a new test module, e.g. tests/test_backtest_greg_modes.py, with endpoint-level tests using TestClient. At minimum:
+
+Test 1 – Generic mode unchanged
+
+Use TestClient(app) to POST the backtest run endpoint with backtest_mode = "generic" and a minimal payload valid for a small run.
+
+Assert:
+
+response.status_code == 200
+
+The response JSON contains the existing fields you expect.
+
+greg_strategy_summaries exists and is an empty list (or omitted, depending on how you modeled it, but not populated).
+
+Test 2 – Greg selector mode returns summaries
+
+POST the same endpoint with backtest_mode = "greg_selector" and a synthetic-only dataset small config (mock or stub any external data if needed, or use a tiny synthetic universe sample).
+
+Assert:
+
+response.status_code == 200
+
+The JSON contains a non-empty greg_strategy_summaries list.
+
+Every item has bot_id == "GregBot" and a valid strategy_code (e.g. "A","B",…,"NO_TRADE").
+
+Test 3 – Selector frequency scan data sources
+
+Call the selector-scan endpoint with each data_source:
+
+synthetic
+
+harvester
+
+live
+
+For each call, assert:
+
+response.status_code == 200
+
+The JSON includes a field that indicates the data source was honored, e.g. a "data_source" echo or non-empty results for at least synthetic.
+
+For harvester and live, if you don’t have real data in tests, you may:
+
+Stub the data loaders.
+
+Or assert that "ok": False with a clear "error": "harvester_not_configured" type message, as long as it’s deterministic and documented.
+
+Reminder of project rule:
+For any new endpoint you introduce, you must add at least one endpoint-level test hitting it. Even though in this batch we are primarily extending existing endpoints, you are still required to add or update tests so they explicitly exercise the new backtest_mode and data_source behaviors.
+
+7. Acceptance criteria
+
+This batch is complete when:
+
+Backtesting Lab UI
+
+Shows a clear Backtest Mode selector.
+
+Hides generic exit-style controls when GregBot – Selector Only is chosen.
+
+Shows a data source dropdown in Greg mode (Synthetic/Harvester/Live).
+
+Backtest engine
+
+For backtest_mode = GENERIC, behavior is unchanged.
+
+For backtest_mode = GREG_SELECTOR, the response includes a per-strategy greg_strategy_summaries breakdown.
+
+Selector scan
+
+Endpoint accepts data_source.
+
+Synthetic still works as before.
+
+Harvester and Live modes are wired, even if they currently return limited data in tests.
+
+Greg selector
+
+Centralized in a function like run_greg_selector(...) that:
+
+Evaluates all 7 strategies + NO_TRADE.
+
+Applies the waterfall (including skew fork & calendar VRP checks).
+
+Returns both the chosen strategy and per-strategy diagnostic statuses.
+
+Tests
+
+New test module tests/test_backtest_greg_modes.py (or similar) exists.
+
+At least three endpoint-level tests:
+
+Generic mode backtest.
+
+Greg selector mode backtest.
+
+Selector frequency scan with different data_source values.
+
+Test suite passes (pytest).
+
+Please implement this batch now, following the steps above.
