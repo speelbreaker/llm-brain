@@ -55,8 +55,16 @@ The web dashboard offers a user-friendly interface with sections for "Live Agent
     - Runs 3-agent debate (Optimist/Skeptic/Arbiter) to decide on auto-fix
     - Invokes Codex CLI for minimal auto-fixes if approved
     - **Multi-provider LLM abstraction**: Supports OpenAI (primary) and Gemini (fallback) with automatic failover
-    - **Telegram Status Card UX**: Single updateable message per PR with phase-based updates (STARTING → CHECKS → DEBATE → CODEX_FIX → DONE/NEEDS_HUMAN)
+    - **Telegram Status Card UX**: Single updateable message per PR with phase-based updates (STARTING → CHECKS → DEBATE → CODEX_FIX → DONE/NEEDS_HUMAN), with HTML escaping and plaintext fallback
     - **Dashboard Integration**: Supervisor tab in web dashboard with job listing, filtering, and detail views (requires `SUPERVISOR_API_URL`)
+    - **Production Hardening (v0.2.0)**:
+        - In-process asyncio.Queue job worker (replaces BackgroundTasks for reliability)
+        - Fail-fast startup validation (503 on missing GITHUB_TOKEN/GITHUB_WEBHOOK_SECRET)
+        - Secret redaction in PR comments, Telegram, and API responses (`src/supervisor/redact.py`)
+        - Retry helper with exponential backoff for external APIs (`src/supervisor/retry.py`)
+        - Job store write safety with asyncio.Lock and atomic file writes
+        - API response truncation to prevent payload bloat
+        - HTML escaping for Telegram messages with automatic plaintext fallback
     - **Disabled by default** (SUPERVISOR_ENABLED=0)
 
 ### PR Supervisor Configuration
