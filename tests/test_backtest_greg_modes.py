@@ -100,6 +100,26 @@ class TestGregSelectorBacktestMode:
             assert "status" in summary
             assert summary["status"] in ["PASS", "BLOCKED", "NO_DATA"]
 
+    def test_backtest_start_greg_selector_summaries_have_strategy_fields(self, client):
+        """Greg selector summaries should include strategy_code and underlying for UI display."""
+        response = client.post("/api/backtest/start", json={
+            "underlying": "BTC",
+            "start": "2024-01-01",
+            "end": "2024-01-07",
+            "backtest_type": "greg_selector",
+            "greg_underlyings": ["BTC", "ETH"],
+        })
+        assert response.status_code == 200
+        data = response.json()
+        assert "strategy_summaries" in data
+        if len(data["strategy_summaries"]) > 0:
+            summary = data["strategy_summaries"][0]
+            assert "strategy_code" in summary
+            assert "underlying" in summary
+            assert "selection_pct" in summary
+            assert isinstance(summary["strategy_code"], str)
+            assert summary["underlying"] in ["BTC", "ETH"]
+
     def test_backtest_start_greg_selector_is_synchronous(self, client):
         """Greg selector mode should be marked as synchronous execution."""
         response = client.post("/api/backtest/start", json={

@@ -6776,10 +6776,124 @@ def render_dashboard_html() -> str:
         const data = await res.json();
         if (!res.ok || data.started === false) {{
           alert('Failed to start backtest: ' + (data.error || res.statusText));
+        }} else if (data.backtest_type === 'greg_selector' && data.completed) {{
+          displayGregSelectorResults(data);
         }}
       }} catch (err) {{
         alert('Backtest start error: ' + err.message);
       }}
+    }}
+    
+    function displayGregSelectorResults(data) {{
+      const container = document.getElementById('greg-strategies-container');
+      const resultsSection = document.getElementById('greg-selector-results');
+      
+      if (!data.strategy_summaries || data.strategy_summaries.length === 0) {{
+        container.innerHTML = '<p style="color:#888;">No strategy data available.</p>';
+        resultsSection.style.display = 'block';
+        return;
+      }}
+      
+      const strategySummaries = data.strategy_summaries;
+      const strategyNames = {{
+        'STRATEGY_A_STRADDLE': 'Strategy A: ATM Straddle',
+        'STRATEGY_B_STRANGLE': 'Strategy B: OTM Strangle',
+        'STRATEGY_C_CALENDAR': 'Strategy C: Calendar Spread',
+        'STRATEGY_D_VERTICAL': 'Strategy D: Vertical Spread',
+        'STRATEGY_E_BUTTERFLY': 'Strategy E: Butterfly',
+        'STRATEGY_F_CONDOR': 'Strategy F: Iron Condor',
+        'STRATEGY_G_RATIO': 'Strategy G: Ratio Spread',
+        'NO_TRADE': 'No Trade (Blocked)',
+      }};
+      
+      const totals = {{
+        total: strategySummaries.length,
+        passed: strategySummaries.filter(s => s.status === 'PASS').length,
+        blocked: strategySummaries.filter(s => s.status === 'BLOCKED').length,
+        no_data: strategySummaries.filter(s => s.status === 'NO_DATA').length,
+      }};
+      
+      let html = `
+        <div class="card" style="margin-bottom:1rem;">
+          <h4 style="margin-top:0;">Summary</h4>
+          <div style="display:flex;gap:2rem;flex-wrap:wrap;">
+            <div>
+              <span style="font-size:1.5rem;font-weight:bold;color:#2e7d32;">${{totals.passed}}</span>
+              <span style="color:#888;margin-left:0.3rem;">Passed</span>
+            </div>
+            <div>
+              <span style="font-size:1.5rem;font-weight:bold;color:#c62828;">${{totals.blocked}}</span>
+              <span style="color:#888;margin-left:0.3rem;">Blocked</span>
+            </div>
+            <div>
+              <span style="font-size:1.5rem;font-weight:bold;color:#666;">${{totals.no_data}}</span>
+              <span style="color:#888;margin-left:0.3rem;">No Data</span>
+            </div>
+            <div>
+              <span style="color:#888;">Horizon:</span>
+              <span style="font-weight:bold;">${{data.horizon_days || '--'}} days</span>
+            </div>
+            <div>
+              <span style="color:#888;">Interval:</span>
+              <span style="font-weight:bold;">${{data.decision_interval_days || '--'}} days</span>
+            </div>
+          </div>
+        </div>
+        
+        <div style="overflow-x:auto;">
+          <table class="decisions-table">
+            <thead>
+              <tr>
+                <th>Strategy</th>
+                <th>Underlying</th>
+                <th>Status</th>
+                <th>Pass Count</th>
+                <th>Blocked</th>
+                <th>No Data</th>
+                <th>Selection %</th>
+              </tr>
+            </thead>
+            <tbody>
+      `;
+      
+      for (const s of strategySummaries) {{
+        const name = strategyNames[s.strategy_code] || s.strategy_name || s.strategy_code;
+        const statusClass = s.status === 'PASS' ? 'color:#2e7d32;' : 
+                           (s.status === 'BLOCKED' ? 'color:#c62828;' : 'color:#666;');
+        const statusBadge = s.status === 'PASS' 
+          ? '<span style="background:#c8e6c9;color:#2e7d32;padding:2px 8px;border-radius:4px;font-size:0.85rem;">PASS</span>'
+          : s.status === 'BLOCKED'
+          ? '<span style="background:#ffcdd2;color:#c62828;padding:2px 8px;border-radius:4px;font-size:0.85rem;">BLOCKED</span>'
+          : '<span style="background:#e0e0e0;color:#666;padding:2px 8px;border-radius:4px;font-size:0.85rem;">NO DATA</span>';
+        
+        html += `
+          <tr>
+            <td>${{name}}</td>
+            <td>${{s.underlying}}</td>
+            <td>${{statusBadge}}</td>
+            <td style="color:#2e7d32;font-weight:bold;">${{s.pass_count || 0}}</td>
+            <td style="color:#c62828;">${{s.blocked_count || 0}}</td>
+            <td style="color:#666;">${{s.no_data_count || 0}}</td>
+            <td>${{(s.selection_pct || 0).toFixed(1)}}%</td>
+          </tr>
+        `;
+      }}
+      
+      html += `
+            </tbody>
+          </table>
+        </div>
+        
+        <details style="margin-top:1rem;">
+          <summary style="cursor:pointer;color:#888;font-size:0.9rem;">Debug JSON</summary>
+          <pre style="background:#1a1a2e;color:#e0e0e0;padding:1rem;border-radius:4px;overflow-x:auto;font-size:0.85rem;max-height:300px;">${{JSON.stringify(data, null, 2)}}</pre>
+        </details>
+      `;
+      
+      container.innerHTML = html;
+      resultsSection.style.display = 'block';
+      
+      resultsSection.scrollIntoView({{ behavior: 'smooth', block: 'start' }});
     }}
     
     async function togglePause() {{
