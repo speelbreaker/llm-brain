@@ -201,3 +201,49 @@ class BacktestChain(Base):
             "max_drawdown_usd": self.max_drawdown_usd,
             "details_json": self.details_json,
         }
+
+
+class BacktestEvent(Base):
+    """
+    Strategy-level events emitted during a backtest run.
+    
+    Used to track decisions, entries, exits, and skips with stable keys
+    for GregBot and other strategies. Enables post-run analytics by strategy.
+    """
+    __tablename__ = "backtest_events"
+    __table_args__ = (
+        Index("ix_backtest_events_run_id", "run_id"),
+        Index("ix_backtest_events_run_strategy", "run_id", "strategy_key"),
+        Index("ix_backtest_events_run_time", "run_id", "event_time"),
+    )
+    
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    run_id = Column(BigInteger, ForeignKey("backtest_runs.id", ondelete="CASCADE"), nullable=False)
+    
+    event_time = Column(DateTime(timezone=True), nullable=False)
+    selector_name = Column(String(64), nullable=False)
+    strategy_key = Column(String(128), nullable=False)
+    event_type = Column(String(64), nullable=False)
+    
+    trade_id = Column(String(128), nullable=True)
+    position_id = Column(String(128), nullable=True)
+    pnl = Column(Float, nullable=True)
+    
+    reason_json = Column(JSONB, nullable=True)
+    
+    run = relationship("BacktestRun")
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dictionary for API responses."""
+        return {
+            "id": self.id,
+            "run_id": self.run_id,
+            "event_time": self.event_time.isoformat() if self.event_time else None,
+            "selector_name": self.selector_name,
+            "strategy_key": self.strategy_key,
+            "event_type": self.event_type,
+            "trade_id": self.trade_id,
+            "position_id": self.position_id,
+            "pnl": self.pnl,
+            "reason_json": self.reason_json,
+        }

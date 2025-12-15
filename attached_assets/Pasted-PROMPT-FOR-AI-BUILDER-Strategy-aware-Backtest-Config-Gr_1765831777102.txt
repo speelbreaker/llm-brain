@@ -1,0 +1,72 @@
+PROMPT FOR AI BUILDER — Strategy-aware Backtest Config + GregBot Strategy Breakdown
+
+Context
+We have a unified Backtest Configuration UI used by multiple selectors/strategies.
+Generic covered-call uses user knobs like Exit Style, DTE/Delta ranges, and targets.
+GregBot has its own internal entry/exit rules and does NOT use the generic Exit Style, and it already knows its own DTE/Delta targeting.
+
+Goal
+1) Remove confusion by making the UI + backend strategy-aware (no “settings that do nothing”).
+2) Add GregBot backtest reporting: which strategy/signal fired, when, how often, and PnL per strategy.
+
+Requirements
+- Backwards compatible: do not break existing DB schema, API response shapes, or existing backtests. Add new fields/tables endpoints in additive ways only.
+- If a user supplies irrelevant config fields for a strategy, ignore safely and return warnings.
+- Include effective_config in results so the UI can show what actually ran.
+
+Part 1 — Strategy Capabilities / Config Ownership
+1) Add a strategy capability metadata object for each selector/strategy, e.g.:
+   - supports_exit_style: bool
+   - supports_dte_range: bool
+   - supports_delta_range: bool
+   - supports_targets (target_dte/target_delta): bool
+   - config_owner_fields: list[str] (fields the strategy owns)
+   - user_fields: list[str] (fields user can set)
+   - strategy_defaults_summary: dict (read-only display values for the UI)
+
+2) Provide an endpoint like GET /api/backtest/strategy_caps?selector=...
+   returning the capability object.
+
+3) In the backtest run config building, apply strategy overrides:
+   - For GregBot: force/override exit logic and any internal DTE/Delta/target values.
+   - If user provides conflicting fields, ignore them and append a human-readable warning.
+
+4) Include in the backtest-start response and/or backtest-result:
+   - warnings: string[]
+   - effective_config: the final config actually used by the engine
+
+Part 2 — UI: Dynamic Form
+1) When Selector/Strategy changes, fetch caps and dynamically:
+   - Hide or disable irrelevant inputs (Exit Style, DTE Range, Delta Range, Target DTE/Delta) for GregBot.
+   - Replace with a read-only “GregBot Managed” label and “Effective GregBot Parameters” summary box.
+2) Keep an optional “Advanced overrides” toggle (default OFF) if you want future experimentation; when OFF, strategy-owned fields are disabled.
+
+Part 3 — Backtest Strategy Analytics (Events + Summary)
+1) Add an event log for backtests:
+   - Store per-run events: timestamp, selector, strategy_key/signal_key, event_type, reason_json, trade_id/position_id (nullable), pnl (nullable).
+   - Prefer a new additive DB table (e.g., backtest_events) keyed by run_id, or store alongside existing run artifacts if that’s how the app works.
+
+2) Ensure GregBot emits events with stable keys:
+   - example keys: greg.vrp_harvest.short_call, greg.take_profit, greg.roll, greg.skip.no_edge
+   - Emit at least: DECISION, OPEN, CLOSE, TAKE_PROFIT, ROLL, SKIP.
+
+3) In results, compute a “Strategy Breakdown” summary grouped by strategy_key:
+   - opens, closes, total_pnl, avg_pnl, win_rate, avg_hold_time
+   - Return this as strategy_summary[] plus the raw event timeline events[].
+
+4) UI: Add a “GregBot Breakdown” section in the backtest results:
+   - Table 1: Strategy Breakdown (grouped summary)
+   - Table 2: Event Timeline (sortable)
+   - Add “Download CSV” for both.
+
+Tests
+- Unit test: GregBot ignores exit_style and returns warning + correct effective_config.
+- UI/API test: caps endpoint drives hiding/disabling fields.
+- Integration test: running a small GregBot backtest produces non-empty events and a non-empty grouped strategy summary.
+
+Deliverable
+- Implement above changes.
+- Add a short note in replit.md describing:
+  - “UI shows only applicable knobs per strategy”
+  - “GregBot runs with managed rules”
+  - “Strategy Breakdown + Timeline available after runs”

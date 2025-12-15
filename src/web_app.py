@@ -236,6 +236,36 @@ def get_backtest_presets() -> JSONResponse:
     return JSONResponse(content=presets)
 
 
+@app.get("/api/backtest/strategy_caps")
+def get_strategy_capabilities(selector: str = "generic_covered_call") -> JSONResponse:
+    """
+    Get capability metadata for a selector/strategy.
+    
+    Returns what configuration fields the strategy supports, owns, or ignores.
+    The UI uses this to show/hide relevant configuration controls.
+    """
+    from src.backtest.strategy_caps import get_strategy_caps, list_available_strategies
+    
+    caps = get_strategy_caps(selector)
+    if caps is None:
+        return JSONResponse(
+            status_code=404,
+            content={
+                "error": f"Unknown selector: {selector}",
+                "available": [s["selector_name"] for s in list_available_strategies()],
+            }
+        )
+    
+    return JSONResponse(content=caps.to_dict())
+
+
+@app.get("/api/backtest/strategies")
+def list_backtest_strategies() -> JSONResponse:
+    """List all available backtest strategies with their capabilities."""
+    from src.backtest.strategy_caps import list_available_strategies
+    return JSONResponse(content={"strategies": list_available_strategies()})
+
+
 @app.post("/api/backtest/resolve-config")
 def resolve_backtest_config_endpoint(config: BacktestConfig) -> JSONResponse:
     """
@@ -1100,6 +1130,7 @@ class BacktestStartRequest(BaseModel):
 def start_backtest(req: BacktestStartRequest) -> JSONResponse:
     """Start a new backtest in the background."""
     from src.backtest.manager import backtest_manager
+    from src.backtest.strategy_caps import apply_strategy_overrides
     
     try:
         start_dt = datetime.fromisoformat(req.start.replace("Z", "+00:00"))
@@ -1115,8 +1146,22 @@ def start_backtest(req: BacktestStartRequest) -> JSONResponse:
     if start_dt >= end_dt:
         raise HTTPException(status_code=400, detail="Start date must be before end date")
     
-    valid_exit_styles = ["hold_to_expiry", "tp_and_roll", "both"]
-    if req.exit_style not in valid_exit_styles:
+    user_config = {
+        "exit_style": req.exit_style,
+        "target_dte": req.target_dte,
+        "target_delta": req.target_delta,
+        "min_dte": req.min_dte,
+        "max_dte": req.max_dte,
+        "delta_min": req.delta_min,
+        "delta_max": req.delta_max,
+    }
+    
+    validation = apply_strategy_overrides(req.selector_name, user_config)
+    effective = validation.effective_config
+    
+    valid_exit_styles = ["hold_to_expiry", "tp_and_roll", "both", "gregbot_managed"]
+    effective_exit_style = effective.get("exit_style", req.exit_style)
+    if effective_exit_style not in valid_exit_styles:
         raise HTTPException(status_code=400, detail=f"Invalid exit_style. Must be one of: {valid_exit_styles}")
     
     started = backtest_manager.start(
@@ -1125,13 +1170,13 @@ def start_backtest(req: BacktestStartRequest) -> JSONResponse:
         end_date=end_dt,
         timeframe=req.timeframe,
         decision_interval_hours=req.decision_interval_hours,
-        exit_style=req.exit_style,
-        target_dte=req.target_dte,
-        target_delta=req.target_delta,
-        min_dte=req.min_dte,
-        max_dte=req.max_dte,
-        delta_min=req.delta_min,
-        delta_max=req.delta_max,
+        exit_style=effective_exit_style,
+        target_dte=effective.get("target_dte", req.target_dte),
+        target_delta=effective.get("target_delta", req.target_delta),
+        min_dte=effective.get("min_dte", req.min_dte),
+        max_dte=effective.get("max_dte", req.max_dte),
+        delta_min=effective.get("delta_min", req.delta_min),
+        delta_max=effective.get("delta_max", req.delta_max),
         margin_type=req.margin_type,
         settlement_ccy=req.settlement_ccy,
         sigma_mode=req.sigma_mode,
@@ -1146,7 +1191,11 @@ def start_backtest(req: BacktestStartRequest) -> JSONResponse:
             content={"started": False, "error": "Backtest already running"},
         )
     
-    return JSONResponse(content={"started": True})
+    return JSONResponse(content={
+        "started": True,
+        "warnings": validation.warnings,
+        "effective_config": validation.effective_config,
+    })
 
 
 @app.get("/api/backtest/status")
@@ -1444,6 +1493,160 @@ def delete_backtest_run(run_id: str) -> JSONResponse:
         
         delete_run(db, run_id)
         return JSONResponse(content={"deleted": True, "run_id": run_id})
+
+
+@app.get("/api/backtests/{run_id}/events")
+def get_backtest_events(
+    run_id: str,
+    strategy_key: Optional[str] = None,
+    event_type: Optional[str] = None,
+) -> JSONResponse:
+    """
+    Get the event timeline for a backtest run.
+    
+    Optionally filter by strategy_key or event_type.
+    """
+    from src.db import get_db_session
+    from src.db.models_backtest import BacktestRun, BacktestEvent
+    
+    with get_db_session() as db:
+        run = db.query(BacktestRun).filter(BacktestRun.run_id == run_id).first()
+        if run is None:
+            raise HTTPException(status_code=404, detail=f"Backtest run '{run_id}' not found")
+        
+        query = db.query(BacktestEvent).filter(BacktestEvent.run_id == run.id)
+        
+        if strategy_key:
+            query = query.filter(BacktestEvent.strategy_key == strategy_key)
+        if event_type:
+            query = query.filter(BacktestEvent.event_type == event_type)
+        
+        events = query.order_by(BacktestEvent.event_time).all()
+        
+        return JSONResponse(content={
+            "run_id": run_id,
+            "count": len(events),
+            "events": [e.to_dict() for e in events],
+        })
+
+
+@app.get("/api/backtests/{run_id}/strategy_summary")
+def get_backtest_strategy_summary(run_id: str) -> JSONResponse:
+    """
+    Get strategy breakdown summary for a backtest run.
+    
+    Returns aggregated metrics grouped by strategy_key.
+    """
+    from src.db import get_db_session
+    from src.db.models_backtest import BacktestRun, BacktestEvent
+    from sqlalchemy import func
+    
+    with get_db_session() as db:
+        run = db.query(BacktestRun).filter(BacktestRun.run_id == run_id).first()
+        if run is None:
+            raise HTTPException(status_code=404, detail=f"Backtest run '{run_id}' not found")
+        
+        events = db.query(BacktestEvent).filter(BacktestEvent.run_id == run.id).all()
+        
+        if not events:
+            return JSONResponse(content={
+                "run_id": run_id,
+                "strategy_summary": [],
+                "total_events": 0,
+            })
+        
+        from collections import defaultdict
+        strategy_stats: Dict[str, Dict[str, Any]] = defaultdict(lambda: {
+            "opens": 0, "closes": 0, "total_pnl": 0.0, "wins": 0,
+            "decisions": 0, "skips": 0, "rolls": 0, "take_profits": 0,
+        })
+        
+        for event in events:
+            stats = strategy_stats[event.strategy_key]
+            if event.event_type == "DECISION":
+                stats["decisions"] += 1
+            elif event.event_type == "OPEN":
+                stats["opens"] += 1
+            elif event.event_type == "SKIP":
+                stats["skips"] += 1
+            elif event.event_type == "ROLL":
+                stats["rolls"] += 1
+            elif event.event_type == "TAKE_PROFIT":
+                stats["take_profits"] += 1
+                stats["closes"] += 1
+                if event.pnl: stats["total_pnl"] += event.pnl
+                if event.pnl and event.pnl > 0: stats["wins"] += 1
+            elif event.event_type in ("CLOSE", "STOP_LOSS", "EXPIRY"):
+                stats["closes"] += 1
+                if event.pnl: stats["total_pnl"] += event.pnl
+                if event.pnl and event.pnl > 0: stats["wins"] += 1
+        
+        summaries = []
+        for key, stats in strategy_stats.items():
+            closes = stats["closes"]
+            summaries.append({
+                "strategy_key": key,
+                "opens": stats["opens"],
+                "closes": closes,
+                "total_pnl": round(stats["total_pnl"], 2),
+                "avg_pnl": round(stats["total_pnl"] / closes, 2) if closes > 0 else 0.0,
+                "win_rate": round(stats["wins"] / closes, 4) if closes > 0 else 0.0,
+                "decisions": stats["decisions"],
+                "skips": stats["skips"],
+                "rolls": stats["rolls"],
+                "take_profits": stats["take_profits"],
+            })
+        
+        summaries.sort(key=lambda x: x["total_pnl"], reverse=True)
+        
+        return JSONResponse(content={
+            "run_id": run_id,
+            "strategy_summary": summaries,
+            "total_events": len(events),
+        })
+
+
+@app.get("/api/backtests/{run_id}/events/download")
+def download_backtest_events(run_id: str) -> Response:
+    """Download backtest events as CSV."""
+    from src.db import get_db_session
+    from src.db.models_backtest import BacktestRun, BacktestEvent
+    from fastapi.responses import Response
+    import csv
+    import io
+    
+    with get_db_session() as db:
+        run = db.query(BacktestRun).filter(BacktestRun.run_id == run_id).first()
+        if run is None:
+            raise HTTPException(status_code=404, detail=f"Backtest run '{run_id}' not found")
+        
+        events = db.query(BacktestEvent).filter(
+            BacktestEvent.run_id == run.id
+        ).order_by(BacktestEvent.event_time).all()
+        
+        output = io.StringIO()
+        writer = csv.writer(output)
+        writer.writerow([
+            "event_time", "selector_name", "strategy_key", "event_type",
+            "trade_id", "position_id", "pnl"
+        ])
+        
+        for e in events:
+            writer.writerow([
+                e.event_time.isoformat() if e.event_time else "",
+                e.selector_name,
+                e.strategy_key,
+                e.event_type,
+                e.trade_id or "",
+                e.position_id or "",
+                e.pnl if e.pnl is not None else "",
+            ])
+        
+        return Response(
+            content=output.getvalue(),
+            media_type="text/csv",
+            headers={"Content-Disposition": f'attachment; filename="{run_id}_events.csv"'},
+        )
 
 
 # =============================================================================
