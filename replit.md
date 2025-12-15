@@ -83,13 +83,37 @@ The PR Supervisor is located in `src/supervisor/` and is disabled by default. To
 - `GITHUB_WEBHOOK_SECRET` - Secret for webhook signature verification
 - `GITHUB_TOKEN` - Fine-grained PAT with PR comments + push access
 
-**Optional Environment Variables:**
+**Autofix Policy (Opt-in Codex Gating):**
+- `SUPERVISOR_ENABLE_CODEX` (default: 0) - Enable Codex auto-fix (must be 1 to allow fixes)
+- `SUPERVISOR_AUTOFIX_POLICY` (default: label) - Policy: `label`, `telegram`, or `both`
+- `SUPERVISOR_AUTOFIX_LABEL` (default: autofix-ok) - Required label for `label` policy
+- `SUPERVISOR_REQUIRE_HUMAN_FOR_HIGH_RISK` (default: 1) - Block high-risk auto-fixes
+
+**Telegram Commands:**
+- `TELEGRAM_ALLOWED_USER_IDS` - Comma-separated user IDs allowed to use commands
+- `TELEGRAM_ADMIN_CHAT_ID` - Optional admin chat for alerts
+
+| Command | Description |
+|---------|-------------|
+| `/supervisor last` | Show last 5 jobs |
+| `/supervisor pr <n>` | Show PR status |
+| `/rerun <n>` | Queue rerun for PR |
+| `/autofix <n>` | Approve autofix |
+| `/pause <n>` | Pause PR processing |
+| `/resume <n>` | Resume PR |
+| `/revoke <n>` | Revoke autofix approval |
+
+**Debug & Deployment:**
+- `SUPERVISOR_DEBUG` (default: 0) - Enable debug endpoints
+- `SUPERVISOR_WORKSPACE_TTL_HOURS` (default: 24) - Workspace cleanup TTL
+- See `docs/SUPERVISOR_VPS_SETUP.md` for VPS deployment guide
+- Docker files: `docker/supervisor.Dockerfile`, `docker/docker-compose.supervisor.yml`
+
+**Other Settings:**
 - `SUPERVISOR_MAX_LOOPS` (default: 3) - Max fix attempts
 - `SUPERVISOR_MAX_FILES_CHANGED` (default: 10) - Max files in fix diff
 - `SUPERVISOR_MAX_LOC_CHANGED` (default: 300) - Max LOC in fix diff
 - `SUPERVISOR_ALLOW_FORKS` (default: 0) - Allow PRs from forks
-- `SUPERVISOR_ENABLE_CODEX` (default: 1) - Enable Codex auto-fix
-- `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` - For notifications
 - `MODEL_OPTIMIST` / `MODEL_SKEPTIC` / `MODEL_ARBITER` - LLM models
 - `CHECK_CMD_1` / `CHECK_CMD_2` / `CHECK_CMD_3` - Verification commands
 

@@ -21,6 +21,7 @@ from .models import (
     SupervisorJob,
     VerificationReport,
 )
+from .policy import check_autofix_policy
 from .redact import redact_job_for_api, redact_secrets
 from .runner import VerificationRunner
 from .store import JobStore
@@ -295,6 +296,14 @@ async def github_webhook(
             message=f"Job already exists for SHA {payload.head_sha[:8]}",
         )
     
+    approval = store.get_pr_approval(payload.repo_full_name, payload.pr_number)
+    if approval.paused:
+        return JobResponse(
+            job_id="",
+            status="paused",
+            message=f"PR #{payload.pr_number} is paused",
+        )
+    
     job_id = f"pr-{payload.pr_number}-{payload.head_sha[:8]}-{uuid.uuid4().hex[:6]}"
     job = SupervisorJob(
         job_id=job_id,
@@ -316,6 +325,134 @@ async def github_webhook(
         status="queued",
         message=f"Job queued for PR #{payload.pr_number}",
     )
+
+
+class SimulatePRRequest(BaseModel):
+    """Request body for PR simulation endpoint."""
+    repo: str
+    pr_number: int
+    action: str = "synchronize"
+
+
+@app.post("/debug/simulate_pr_event")
+async def simulate_pr_event(request: Request, body: SimulatePRRequest):
+    """
+    Simulate a PR webhook event for testing (debug mode only).
+    
+    Enabled only when SUPERVISOR_DEBUG=1.
+    """
+    settings: SupervisorSettings = request.app.state.settings
+    
+    if not settings.debug:
+        raise HTTPException(
+            status_code=404,
+            detail="Debug endpoints disabled"
+        )
+    
+    if not settings.enabled:
+        raise HTTPException(
+            status_code=400,
+            detail="Supervisor disabled"
+        )
+    
+    if not request.app.state.ready:
+        raise HTTPException(
+            status_code=503,
+            detail="Supervisor not ready"
+        )
+    
+    github_client: GitHubClient = request.app.state.github_client
+    if not github_client:
+        raise HTTPException(
+            status_code=500,
+            detail="GitHub client not configured"
+        )
+    
+    try:
+        pr_info = await github_client.get_pr_info(body.repo, body.pr_number)
+    except Exception as e:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Failed to fetch PR info: {str(e)}"
+        )
+    
+    head_sha = pr_info.get("head", {}).get("sha", "")
+    head_ref = pr_info.get("head", {}).get("ref", "")
+    base_ref = pr_info.get("base", {}).get("ref", "")
+    is_fork = pr_info.get("head", {}).get("repo", {}).get("fork", False)
+    
+    store: JobStore = request.app.state.store
+    existing = store.get_by_sha(body.repo, body.pr_number, head_sha)
+    if existing:
+        return {
+            "ok": True,
+            "job_id": existing.job_id,
+            "status": "duplicate",
+            "message": f"Job already exists for SHA {head_sha[:8]}"
+        }
+    
+    approval = store.get_pr_approval(body.repo, body.pr_number)
+    if approval.paused:
+        return {
+            "ok": False,
+            "error": "pr_paused",
+            "message": f"PR #{body.pr_number} is paused"
+        }
+    
+    job_id = f"pr-{body.pr_number}-{head_sha[:8]}-{uuid.uuid4().hex[:6]}"
+    job = SupervisorJob(
+        job_id=job_id,
+        repo_full_name=body.repo,
+        pr_number=body.pr_number,
+        head_sha=head_sha,
+        head_ref=head_ref,
+        base_ref=base_ref,
+        pr_url=pr_info.get("html_url", ""),
+        is_fork=is_fork,
+    )
+    
+    store.save(job)
+    await request.app.state.job_queue.put(job)
+    
+    return {
+        "ok": True,
+        "job_id": job_id,
+        "status": "queued",
+        "message": f"Simulated job queued for PR #{body.pr_number}"
+    }
+
+
+@app.get("/api/jobs")
+async def list_jobs_api(request: Request, limit: int = 50):
+    """List recent supervisor jobs (API route)."""
+    settings: SupervisorSettings = request.app.state.settings
+    store: JobStore = request.app.state.store
+    jobs = store.list_recent(limit)
+    
+    result = []
+    for job in jobs:
+        job_dict = job.model_dump()
+        job_dict = redact_job_for_api(job_dict, settings)
+        job_dict = truncate_job_for_api(job_dict)
+        result.append(job_dict)
+    
+    return {"jobs": result, "count": len(result)}
+
+
+@app.get("/api/jobs/{job_id}")
+async def get_job_api(request: Request, job_id: str):
+    """Get a specific job by ID (API route)."""
+    settings: SupervisorSettings = request.app.state.settings
+    store: JobStore = request.app.state.store
+    job = store.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    
+    job_dict = job.model_dump()
+    job_dict = redact_job_for_api(job_dict, settings)
+    job_dict = truncate_job_for_api(job_dict)
+    
+    return {"ok": True, "job": job_dict}
 
 
 @app.get("/jobs")
@@ -461,11 +598,24 @@ async def run_supervisor_job(job: SupervisorJob, app: FastAPI) -> None:
             await notifier.notify_final_result(job, success=False, message=arbiter_decision.stop_reason or "")
             return
         
-        if not settings.enable_codex:
-            job.update_status(JobStatus.NEEDS_HUMAN)
-            job.final_message = "Codex auto-fix disabled (SUPERVISOR_ENABLE_CODEX=0)"
+        pr_labels = [lbl.get("name", "") for lbl in pr_info.get("labels", [])]
+        risk_level = arbiter_decision.risk_level if hasattr(arbiter_decision, "risk_level") else None
+        
+        autofix_decision = check_autofix_policy(
+            settings=settings,
+            store=store,
+            repo=job.repo_full_name,
+            pr_number=job.pr_number,
+            pr_labels=pr_labels,
+            arbiter_risk_level=risk_level,
+        )
+        
+        if not autofix_decision.allowed:
+            status = JobStatus.NEEDS_HUMAN if autofix_decision.needs_human else JobStatus.NEEDS_HUMAN
+            job.update_status(status)
+            job.final_message = autofix_decision.reason
             store.save(job)
-            await notifier.notify_final_result(job, success=False, message="Codex disabled")
+            await notifier.notify_final_result(job, success=False, message=autofix_decision.reason)
             return
         
         job.update_status(JobStatus.FIXING)
