@@ -96,6 +96,22 @@ class TestWebhookSignature:
         assert verify_signature(payload, f"sha256={empty_secret_sig}", "") is False
         assert verify_signature(payload, "", "") is False
     
+    def test_whitespace_only_secret_rejected(self):
+        """Test that whitespace-only secret is rejected (P0 critical: bypass prevention)."""
+        payload = b'{"action": "opened"}'
+        
+        whitespace_secrets = ["   ", "\t", "\n", " \t\n "]
+        for ws_secret in whitespace_secrets:
+            ws_sig = hmac.new(
+                ws_secret.encode("utf-8"),
+                payload,
+                hashlib.sha256
+            ).hexdigest()
+            
+            assert verify_signature(payload, f"sha256={ws_sig}", ws_secret) is False, (
+                f"Whitespace-only secret '{repr(ws_secret)}' should be rejected"
+            )
+    
     def test_short_signature_rejected(self):
         """Test that signature with wrong length is rejected."""
         secret = "test_secret_key"

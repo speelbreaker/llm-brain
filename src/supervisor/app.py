@@ -151,9 +151,9 @@ async def lifespan(app: FastAPI):
     
     if settings.enabled:
         missing = []
-        if not settings.github_webhook_secret:
+        if not settings.github_webhook_secret or not settings.github_webhook_secret.strip():
             missing.append("GITHUB_WEBHOOK_SECRET")
-        if not settings.github_token:
+        if not settings.github_token or not settings.github_token.strip():
             missing.append("GITHUB_TOKEN")
         
         if missing:
@@ -559,7 +559,7 @@ async def run_supervisor_job(job: SupervisorJob, app: FastAPI) -> None:
         await notifier.notify_final_result(job, success=False, message=job.final_message)
     
     except Exception as e:
-        logger.exception(f"Job {job.job_id} failed with error")
+        logger.error(f"Job {job.job_id} failed with error: {type(e).__name__}")
         job.update_status(JobStatus.ERROR)
         error_msg = redact_secrets(str(e)[:500], settings)
         job.error_message = error_msg

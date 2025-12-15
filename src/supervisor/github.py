@@ -28,7 +28,7 @@ def verify_signature(payload_body: bytes, signature_header: str, secret: str) ->
     Returns:
         True if signature is valid, False otherwise
     """
-    if not secret:
+    if not secret or not secret.strip():
         return False
     
     if not signature_header:
