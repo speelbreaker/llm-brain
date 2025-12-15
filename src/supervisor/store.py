@@ -1,5 +1,6 @@
-"""Job history storage for PR Supervisor."""
+"""Job history storage for PR Supervisor with write safety."""
 
+import asyncio
 import json
 from datetime import datetime
 from pathlib import Path
@@ -7,9 +8,11 @@ from typing import Optional
 
 from .models import SupervisorJob
 
+_store_lock = asyncio.Lock()
+
 
 class JobStore:
-    """JSONL-based job history store with message registry support."""
+    """JSONL-based job history store with message registry support and write safety."""
     
     def __init__(self, storage_path: str = "/tmp/pr_supervisor_jobs/job_history.jsonl"):
         self.storage_path = Path(storage_path)
@@ -35,23 +38,40 @@ class JobStore:
         except Exception:
             pass
     
-    def _save_job(self, job: SupervisorJob) -> None:
-        """Append or update job in storage."""
+    def _save_job_sync(self, job: SupervisorJob) -> None:
+        """Synchronously append or update job in storage (called within lock)."""
         self._jobs_cache[job.job_id] = job
         self._rewrite_store()
     
     def _rewrite_store(self) -> None:
-        """Rewrite the entire JSONL store from cache."""
+        """Rewrite the entire JSONL store from cache with atomic flush."""
         try:
-            with open(self.storage_path, "w") as f:
+            temp_path = self.storage_path.with_suffix(".jsonl.tmp")
+            with open(temp_path, "w") as f:
                 for job in self._jobs_cache.values():
                     f.write(job.model_dump_json() + "\n")
+                f.flush()
+            temp_path.replace(self.storage_path)
         except Exception:
             pass
     
     def save(self, job: SupervisorJob) -> None:
-        """Save a job to the store."""
-        self._save_job(job)
+        """Save a job to the store (thread-safe)."""
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            loop.create_task(self._async_save(job))
+        else:
+            self._save_job_sync(job)
+    
+    async def _async_save(self, job: SupervisorJob) -> None:
+        """Async save with lock protection."""
+        async with _store_lock:
+            self._save_job_sync(job)
+    
+    async def save_async(self, job: SupervisorJob) -> None:
+        """Explicitly async save with lock protection."""
+        async with _store_lock:
+            self._save_job_sync(job)
     
     def get(self, job_id: str) -> Optional[SupervisorJob]:
         """Get a job by ID."""
@@ -105,10 +125,13 @@ class JobStore:
             self._message_registry = {}
     
     def _save_message_registry(self) -> None:
-        """Save Telegram message registry to JSON file."""
+        """Save Telegram message registry to JSON file with atomic write."""
         try:
-            with open(self._registry_path, "w") as f:
+            temp_path = self._registry_path.with_suffix(".json.tmp")
+            with open(temp_path, "w") as f:
                 json.dump(self._message_registry, f)
+                f.flush()
+            temp_path.replace(self._registry_path)
         except Exception:
             pass
     

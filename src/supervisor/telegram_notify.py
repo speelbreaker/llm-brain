@@ -1,6 +1,15 @@
-"""Enhanced Telegram notification with status card UX for PR Supervisor."""
+"""Enhanced Telegram notification with status card UX for PR Supervisor.
+
+Implements:
+- Status card UX (single updateable message per PR)
+- HTML escaping for dynamic content
+- Plaintext fallback on formatting errors
+- Proper error handling
+"""
 
 import asyncio
+import html
+import logging
 from datetime import datetime
 from typing import Optional
 
@@ -8,6 +17,8 @@ import httpx
 
 from .config import SupervisorSettings
 from .models import ArbiterDecision, CheckResult, DiffStats, JobStatus, SupervisorJob
+
+logger = logging.getLogger(__name__)
 
 
 def safe_truncate(text: str, max_chars: int, suffix: str = "...") -> str:
@@ -17,6 +28,21 @@ def safe_truncate(text: str, max_chars: int, suffix: str = "...") -> str:
     if len(text) <= max_chars:
         return text
     return text[:max_chars - len(suffix)] + suffix
+
+
+def escape_html(text: str) -> str:
+    """Escape HTML special characters for Telegram."""
+    if not text:
+        return ""
+    return html.escape(text, quote=True)
+
+
+def strip_html_tags(text: str) -> str:
+    """Strip HTML tags for plaintext fallback."""
+    import re
+    clean = re.sub(r'<[^>]+>', '', text)
+    clean = clean.replace('&lt;', '<').replace('&gt;', '>').replace('&amp;', '&')
+    return clean
 
 
 class TelegramStatusCard:
@@ -50,15 +76,25 @@ class TelegramStatusCard:
     
     async def _get_client(self) -> httpx.AsyncClient:
         """Get HTTP client for Telegram API."""
-        return httpx.AsyncClient(timeout=10.0)
+        return httpx.AsyncClient(timeout=20.0)
     
-    def _build_card_text(self) -> str:
-        """Build the status card message text."""
+    def _build_card_text(self, use_html: bool = True) -> str:
+        """Build the status card message text.
+        
+        Args:
+            use_html: If True, use HTML formatting. If False, use plaintext.
+        """
         lines = []
         
-        lines.append(f"<b>PR #{self.pr_number}</b> — {safe_truncate(self.pr_title, 50)}")
-        if self.pr_url:
-            lines.append(f"<a href=\"{self.pr_url}\">View PR</a>")
+        title_escaped = escape_html(safe_truncate(self.pr_title, 50))
+        if use_html:
+            lines.append(f"<b>PR #{self.pr_number}</b> — {title_escaped}")
+            if self.pr_url:
+                lines.append(f'<a href="{escape_html(self.pr_url)}">View PR</a>')
+        else:
+            lines.append(f"PR #{self.pr_number} — {safe_truncate(self.pr_title, 50)}")
+            if self.pr_url:
+                lines.append(f"Link: {self.pr_url}")
         lines.append("")
         
         phase_emoji = {
@@ -71,31 +107,48 @@ class TelegramStatusCard:
             "NEEDS_HUMAN": "🛑",
         }.get(self.current_phase, "⏳")
         
-        phase_text = self.current_phase
+        phase_text = escape_html(self.current_phase) if use_html else self.current_phase
+        loop_text = escape_html(self.loop_info) if use_html else self.loop_info
         if self.loop_info:
-            phase_text += f" {self.loop_info}"
-        lines.append(f"<b>Phase:</b> {phase_emoji} {phase_text}")
+            phase_text += f" {loop_text}"
+        
+        if use_html:
+            lines.append(f"<b>Phase:</b> {phase_emoji} {phase_text}")
+        else:
+            lines.append(f"Phase: {phase_emoji} {phase_text}")
         
         if self.checks:
             lines.append("")
-            lines.append("<b>Checks:</b>")
+            lines.append("<b>Checks:</b>" if use_html else "Checks:")
             for check in self.checks:
                 cmd = check.get("command", "unknown")
                 cmd_short = cmd.split()[0].split("/")[-1] if cmd else "?"
                 passed = check.get("passed", False)
                 emoji = "✅" if passed else "❌"
-                lines.append(f"  {emoji} {cmd_short}")
+                cmd_escaped = escape_html(cmd_short) if use_html else cmd_short
+                lines.append(f"  {emoji} {cmd_escaped}")
         
         if self.arbiter_verdict:
             lines.append("")
-            lines.append(f"<b>Arbiter:</b> {self.arbiter_verdict}")
+            verdict_text = escape_html(self.arbiter_verdict) if use_html else self.arbiter_verdict
+            if use_html:
+                lines.append(f"<b>Arbiter:</b> {verdict_text}")
+            else:
+                lines.append(f"Arbiter: {verdict_text}")
         
         if self.commit_sha:
             lines.append("")
-            lines.append(f"<b>Commit:</b> <code>{self.commit_sha[:8]}</code>")
+            if use_html:
+                lines.append(f"<b>Commit:</b> <code>{escape_html(self.commit_sha[:8])}</code>")
+            else:
+                lines.append(f"Commit: {self.commit_sha[:8]}")
         
         lines.append("")
-        lines.append(f"<i>Updated: {datetime.utcnow().strftime('%H:%M:%S')} UTC</i>")
+        timestamp = datetime.utcnow().strftime('%H:%M:%S')
+        if use_html:
+            lines.append(f"<i>Updated: {timestamp} UTC</i>")
+        else:
+            lines.append(f"Updated: {timestamp} UTC")
         
         return safe_truncate("\n".join(lines), self.settings.telegram_max_chars)
     
@@ -115,64 +168,120 @@ class TelegramStatusCard:
         if await self._should_debounce():
             return True
         
-        text = self._build_card_text()
         key = (self.repo, self.pr_number)
         existing_msg_id = self.registry.get_message_id(key)
         
         async with await self._get_client() as client:
             if existing_msg_id:
-                return await self._edit_message(client, existing_msg_id, text)
+                return await self._edit_message(client, existing_msg_id)
             else:
-                return await self._send_new_message(client, text, key)
+                return await self._send_new_message(client, key)
     
     async def _send_new_message(
         self,
         client: httpx.AsyncClient,
-        text: str,
         key: tuple,
     ) -> bool:
-        """Send a new status card message."""
-        try:
-            response = await client.post(
-                f"{self.base_url}/sendMessage",
-                json={
+        """Send a new status card message with fallback to plaintext."""
+        return await self._send_with_fallback(
+            client,
+            self._build_card_text(use_html=True),
+            self._build_card_text(use_html=False),
+            key=key,
+        )
+    
+    async def _send_with_fallback(
+        self,
+        client: httpx.AsyncClient,
+        html_text: str,
+        plain_text: str,
+        key: Optional[tuple] = None,
+        reply_to_message_id: Optional[int] = None,
+    ) -> bool:
+        """Send message with HTML, falling back to plaintext on error."""
+        for parse_mode, text in [("HTML", html_text), (None, plain_text)]:
+            try:
+                payload = {
                     "chat_id": self.settings.telegram_chat_id,
                     "text": text,
-                    "parse_mode": "HTML",
                     "disable_web_page_preview": True,
                 }
-            )
-            if response.status_code == 200:
-                data = response.json()
-                if data.get("ok") and data.get("result", {}).get("message_id"):
-                    msg_id = data["result"]["message_id"]
-                    self.registry.set_message_id(key, msg_id)
-                    return True
-            return False
-        except Exception:
-            return False
+                if parse_mode:
+                    payload["parse_mode"] = parse_mode
+                if reply_to_message_id:
+                    payload["reply_to_message_id"] = reply_to_message_id
+                
+                response = await client.post(
+                    f"{self.base_url}/sendMessage",
+                    json=payload,
+                )
+                
+                if response.status_code == 200:
+                    data = response.json()
+                    if data.get("ok") and data.get("result", {}).get("message_id"):
+                        msg_id = data["result"]["message_id"]
+                        if key:
+                            self.registry.set_message_id(key, msg_id)
+                        return True
+                
+                if parse_mode == "HTML":
+                    logger.warning(f"HTML send failed, trying plaintext: {response.status_code}")
+                    continue
+                    
+                return False
+                
+            except Exception as e:
+                if parse_mode == "HTML":
+                    logger.warning(f"HTML send error, trying plaintext: {e}")
+                    continue
+                logger.error(f"Telegram send failed: {e}")
+                return False
+        
+        return False
     
     async def _edit_message(
         self,
         client: httpx.AsyncClient,
         message_id: int,
-        text: str,
     ) -> bool:
-        """Edit an existing status card message."""
-        try:
-            response = await client.post(
-                f"{self.base_url}/editMessageText",
-                json={
+        """Edit an existing status card message with fallback to plaintext."""
+        for parse_mode, use_html in [("HTML", True), (None, False)]:
+            try:
+                text = self._build_card_text(use_html=use_html)
+                payload = {
                     "chat_id": self.settings.telegram_chat_id,
                     "message_id": message_id,
                     "text": text,
-                    "parse_mode": "HTML",
                     "disable_web_page_preview": True,
                 }
-            )
-            return response.status_code == 200
-        except Exception:
-            return False
+                if parse_mode:
+                    payload["parse_mode"] = parse_mode
+                
+                response = await client.post(
+                    f"{self.base_url}/editMessageText",
+                    json=payload,
+                )
+                
+                if response.status_code == 200:
+                    return True
+                
+                if response.status_code == 400:
+                    data = response.json()
+                    if "message is not modified" in data.get("description", ""):
+                        return True
+                    if parse_mode == "HTML":
+                        logger.warning(f"HTML edit failed, trying plaintext")
+                        continue
+                
+                return False
+                
+            except Exception as e:
+                if parse_mode == "HTML":
+                    logger.warning(f"HTML edit error, trying plaintext: {e}")
+                    continue
+                return False
+        
+        return False
     
     async def send_detail_reply(self, text: str) -> bool:
         """Send a detail reply to the status card (for failures, arbiter, etc)."""
@@ -183,26 +292,15 @@ class TelegramStatusCard:
         parent_msg_id = self.registry.get_message_id(key)
         
         truncated_text = safe_truncate(text, self.settings.telegram_max_chars)
+        plain_text = strip_html_tags(truncated_text)
         
         async with await self._get_client() as client:
-            try:
-                payload = {
-                    "chat_id": self.settings.telegram_chat_id,
-                    "text": truncated_text,
-                    "parse_mode": "HTML",
-                    "disable_web_page_preview": True,
-                }
-                
-                if parent_msg_id:
-                    payload["reply_to_message_id"] = parent_msg_id
-                
-                response = await client.post(
-                    f"{self.base_url}/sendMessage",
-                    json=payload,
-                )
-                return response.status_code == 200
-            except Exception:
-                return False
+            return await self._send_with_fallback(
+                client,
+                truncated_text,
+                plain_text,
+                reply_to_message_id=parent_msg_id,
+            )
 
 
 class MessageRegistry:
@@ -297,7 +395,8 @@ class TelegramNotifier:
         
         if not passed and failure_excerpt:
             last_lines = "\n".join(failure_excerpt.strip().split("\n")[-30:])
-            detail = f"<b>Check Failure Excerpt:</b>\n<pre>{safe_truncate(last_lines, 2500)}</pre>"
+            escaped_excerpt = escape_html(safe_truncate(last_lines, 2500))
+            detail = f"<b>Check Failure Excerpt:</b>\n<pre>{escaped_excerpt}</pre>"
             await card.send_detail_reply(detail)
     
     async def notify_debate_started(self, job: SupervisorJob) -> None:
@@ -324,11 +423,11 @@ class TelegramNotifier:
         detail_lines = [
             "<b>Arbiter Decision:</b>",
             f"• Auto-fix: {'Yes' if decision.auto_fix_allowed else 'No'}",
-            f"• Risk: {decision.risk_level}",
+            f"• Risk: {escape_html(decision.risk_level or 'unknown')}",
         ]
         if decision.fix_objectives:
             objectives_str = ", ".join(decision.fix_objectives[:3])
-            detail_lines.append(f"• Objectives: {safe_truncate(objectives_str, 100)}")
+            detail_lines.append(f"• Objectives: {escape_html(safe_truncate(objectives_str, 100))}")
         
         await card.send_detail_reply("\n".join(detail_lines))
     
@@ -356,13 +455,13 @@ class TelegramNotifier:
         if diff_stats:
             detail_lines = [
                 "<b>Fix Pushed:</b>",
-                f"Commit: <code>{commit_sha[:8]}</code>",
+                f"Commit: <code>{escape_html(commit_sha[:8])}</code>",
                 f"Files: {diff_stats.files_changed} | +{diff_stats.lines_added}/-{diff_stats.lines_removed}",
             ]
             if top_files:
                 detail_lines.append("Top files:")
                 for f in top_files[:3]:
-                    detail_lines.append(f"  • {safe_truncate(f, 40)}")
+                    detail_lines.append(f"  • {escape_html(safe_truncate(f, 40))}")
             await card.send_detail_reply("\n".join(detail_lines))
     
     async def notify_final_result(
@@ -388,6 +487,7 @@ class TelegramNotifier:
         card.last_error = error
         await card.update_card()
         
+        escaped_error = escape_html(safe_truncate(error, 500))
         await card.send_detail_reply(
-            f"<b>Error:</b>\n<pre>{safe_truncate(error, 500)}</pre>"
+            f"<b>Error:</b>\n<pre>{escaped_error}</pre>"
         )

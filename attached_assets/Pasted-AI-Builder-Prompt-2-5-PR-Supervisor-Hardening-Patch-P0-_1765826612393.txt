@@ -1,0 +1,153 @@
+AI Builder Prompt #2.5 — PR Supervisor Hardening Patch (P0 Safety + Reliability)
+
+Role
+You are a senior Python engineer. The PR Supervisor service exists (FastAPI webhook → enqueue/run job → checks → PR comment → Telegram updates → optional debate/Codex). Now harden it based on a review report listing multiple risks.
+
+Goal
+Fix reliability/safety issues BEFORE adding more features. Keep changes minimal.
+
+P0: Ensure webhook-triggered jobs actually run (no “scheduled but never executed”)
+
+In src/supervisor/app.py:
+
+Stop relying on request-scoped BackgroundTasks to run the main job.
+Implement a simple in-process queue worker:
+
+Create a module-level asyncio.Queue (or store on app.state.job_queue)
+
+In lifespan startup, start a worker task: asyncio.create_task(job_worker(app))
+
+Webhook handler should only enqueue the job and return immediately
+
+Worker pulls from queue and calls run_supervisor_job(job, app) safely
+
+Add protection:
+
+Store the worker task on app.state.supervisor_worker_task
+
+On shutdown, cancel the task gracefully
+
+Acceptance
+
+Enqueuing a webhook event must always lead to job execution while the app is running.
+
+Add a unit test that enqueues a job and asserts run_supervisor_job was called.
+
+P0: Fail fast when critical settings are missing (GitHub client must not be None)
+
+If SUPERVISOR_ENABLED=1, then the following must be required at startup:
+
+GITHUB_WEBHOOK_SECRET
+
+GITHUB_TOKEN
+
+In lifespan startup:
+
+If missing → log a clear error and set app.state.ready=false
+
+In /github/webhook:
+
+If not ready → return 503 with JSON { "ok": false, "error": "Supervisor misconfigured" }
+
+Do not enqueue anything.
+
+P0: Prevent secrets leakage in PR comments and Telegram messages
+
+Create src/supervisor/redact.py with:
+
+redact_secrets(text: str, settings: Settings) -> str
+
+Replace exact configured secrets (github token, webhook secret, openai api key, telegram bot token, gemini api key, codex tokens) if present in output
+
+Additionally redact common token patterns via regex (examples):
+
+ghp_[A-Za-z0-9]{20,}
+
+Bearer\s+[A-Za-z0-9\-_\.]{15,}
+
+x-goog-api-key[:=]\s*\S+
+
+sk-[A-Za-z0-9]{20,} (OpenAI-style keys)
+
+any long base64-ish blobs
+
+Apply redaction everywhere before:
+
+posting PR comments
+
+sending Telegram messages
+
+returning API payloads from /api/jobs*
+
+Acceptance
+
+Add tests: given a string containing a fake token, output must contain ***REDACTED***.
+
+P1: Telegram message safety (no HTML injection, no parse failures)
+
+In src/supervisor/telegram_notify.py:
+
+Default to plain text (parse_mode=None) for all dynamic content.
+
+If you keep formatting, only use it for small static headers and escape everything dynamic.
+
+Add a send_with_fallback() that retries as plain text on any Telegram formatting error.
+
+Acceptance
+
+Unit test: dynamic fields containing <b> or & do not break message sending logic.
+
+P1: Timeouts + retries for external APIs
+
+For GitHub / Telegram / LLM calls:
+
+Use httpx.AsyncClient(timeout=20.0)
+
+Implement a small retry helper for transient errors (429/5xx) with exponential backoff and jitter (max 3 tries).
+
+Never retry on 4xx (except 429).
+
+P1: LLM JSON schema enforcement (debate system)
+
+In src/supervisor/debate.py:
+
+Validate outputs with Pydantic models.
+
+On invalid JSON: retry once with “Return ONLY valid JSON matching schema.”
+
+If still invalid: set arbiter result to auto_fix_allowed=false with stop_reason="debate_output_invalid".
+
+P2: Job store write safety (race conditions)
+
+If using JSONL:
+
+Introduce an asyncio.Lock() around writes and ensure atomic append flush.
+If using SQLite:
+
+Ensure transactions are used correctly and writes are serialized.
+
+P2: Truncation on API endpoints
+
+In /api/jobs and /api/jobs/{id}:
+
+Truncate large fields (failure_summary, stderr, stdout, codex_output) to safe limits
+
+Include metadata flags like {"truncated": true, "max_chars": 5000}.
+
+P2: Settings consistency
+
+Use request.app.state.settings in handlers instead of reloading settings repeatedly.
+
+Deliverable
+
+Commit the fixes.
+
+All tests pass.
+
+Why this order matters (translation: don’t build a control room for a reactor with loose bolts)
+
+If jobs don’t reliably run: everything else is theater.
+
+If secrets can leak: Telegram becomes a liability.
+
+If GitHub client can be None: you’ll get random runtime crashes that look “haunted.”
