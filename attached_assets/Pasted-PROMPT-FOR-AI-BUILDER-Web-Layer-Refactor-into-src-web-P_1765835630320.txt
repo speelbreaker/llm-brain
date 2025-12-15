@@ -1,0 +1,312 @@
+PROMPT FOR AI BUILDER – Web Layer Refactor into src/web/ Package
+
+You are working on my “Options Trading Agent” repo (llm-brain), a FastAPI app with a single large src/web_app.py file that currently:
+
+Creates the FastAPI app and wires startup/shutdown behavior.
+
+Declares many /api/* endpoints (status, positions, backtests, training, bots, health, etc.).
+
+Embeds the entire HTML + JS dashboard in the index() route.
+
+This file has become a “god module”. I want you to split it into a small entrypoint + a src/web/ package with routers and a dedicated dashboard module, without changing any behaviour or URLs.
+
+Your job is to:
+
+Create a src/web/ package with router modules + dashboard.py.
+
+Move the existing endpoints/HTML out of src/web_app.py into those modules.
+
+Keep src/web_app.py as a very thin entrypoint that wires everything together.
+
+Update replit.md to explain the new layout:
+“UI changes → src/web/dashboard.py; API routes → src/web/routes_*.py.”
+
+Run tests and ensure nothing breaks.
+
+Step 0 – Understand the current state
+
+Inspect src/web_app.py to see:
+
+How the FastAPI app is created.
+
+What startup/shutdown hooks exist (@app.on_event, lifespan context, etc.).
+
+All the route definitions (e.g. @app.get, @app.post).
+
+The index() route that returns the full HTML/JS dashboard.
+
+Find any tests or scripts that import or reference app, e.g.:
+
+from src.web_app import app
+
+Smoke scripts that hit /api/* endpoints.
+
+You must not change any of those import paths or URL paths.
+
+Step 1 – Create the src/web/ package
+
+Create a directory src/web/ with an empty __init__.py.
+
+Inside src/web/, create the following modules:
+
+src/web/dashboard.py
+
+src/web/routes_main.py
+
+src/web/routes_backtest.py
+
+src/web/routes_positions.py
+
+src/web/routes_bots.py
+
+src/web/routes_health.py
+
+These names are important for future prompts.
+
+Step 2 – Move the dashboard HTML into src/web/dashboard.py
+
+In src/web/dashboard.py, define a function that returns the full HTML string that is currently built in index():
+
+from fastapi.responses import HTMLResponse
+
+def render_dashboard_html() -> HTMLResponse:
+    """
+    Return the main Options Agent dashboard HTML.
+    This is exactly the content previously returned by src/web_app.py:index().
+    """
+    html = """...existing HTML/JS from index()..."""
+    return HTMLResponse(html)
+
+
+Copy the entire HTML/JS template from the current index() route in src/web_app.py into this function (inside the triple-quoted string). Do not change the HTML or JS content in this step; just relocate it.
+
+In src/web_app.py, replace the old index() implementation with a small wrapper that calls this function:
+
+from fastapi.responses import HTMLResponse
+from src.web.dashboard import render_dashboard_html
+
+@app.get("/", response_class=HTMLResponse)
+def index() -> HTMLResponse:
+    return render_dashboard_html()
+
+
+Confirm the root route / still returns the exact same HTML/JS.
+
+Step 3 – Introduce routers and move endpoints
+
+We want each group of /api/* endpoints in src/web_app.py to live in one of the router modules under src/web/, but we must not change their paths, methods, tags, or response models.
+
+3.1 Create APIRouter instances
+
+In each router module, define an APIRouter and move the relevant endpoints:
+
+src/web/routes_main.py
+
+This should hold “core” non-backtest, non-bot, non-health endpoints, for example:
+
+General status / info endpoints (e.g. /status, /api/status, /api/agent/loop, etc. – whatever is in web_app.py today).
+
+Training status endpoints, if they don’t belong to a more specific router.
+
+Structure:
+
+from fastapi import APIRouter
+
+router = APIRouter()
+
+# Move the relevant @app.get / @app.post routes from web_app.py here,
+# changing @app.* to @router.* but keeping paths and logic identical.
+
+src/web/routes_backtest.py
+
+This should hold all backtest-related endpoints:
+
+/api/backtest/*
+
+/api/backtests*
+
+Any endpoints used by the Backtesting Lab UI and backtest history.
+
+Structure:
+
+from fastapi import APIRouter
+
+router = APIRouter()
+
+# Move all backtest endpoints here, with @router.get/post
+# Keep exact paths: /api/backtest/start, /api/backtest/status, /api/backtests, etc.
+
+src/web/routes_positions.py
+
+This should hold positions and PnL related endpoints:
+
+/api/positions/*
+
+Any calibration / reconciliation endpoints that relate to positions (unless they are clearly health-only).
+
+Structure:
+
+from fastapi import APIRouter
+
+router = APIRouter()
+
+# Move all position-related endpoints here (open chains, reconciliation helpers, etc.)
+
+src/web/routes_bots.py
+
+This should hold bot and strategy related endpoints:
+
+/api/bots/* (market sensors, strategy matches, GregBot evaluations, etc.).
+
+Any “strategy tuning” or “bot config” endpoints that are clearly bot-specific.
+
+Structure:
+
+from fastapi import APIRouter
+
+router = APIRouter()
+
+# Move bot/strategy endpoints here (GregBot selectors, expert bots, etc.)
+
+src/web/routes_health.py
+
+This should hold health and risk related endpoints:
+
+/api/agent_healthcheck
+
+/api/llm_status (GET + POST)
+
+/api/risk_limits (GET + POST)
+
+/api/strategy_thresholds (GET + POST)
+
+Any other purely health / system-control endpoints (kill switch test, etc.) if they are not clearly bot-specific.
+
+Structure:
+
+from fastapi import APIRouter
+
+router = APIRouter()
+
+# Move system health & risk configuration endpoints here
+
+
+Important: When moving each route:
+
+Change @app.get(...) → @router.get(...) and @app.post(...) → @router.post(...).
+
+Do not change the path strings, tags, response models, or function bodies unless you must fix imports.
+
+Fix imports so the moved functions can still access settings, shared helpers, models, etc.
+
+3.2 Slim down src/web_app.py entrypoint
+
+After moving the routes:
+
+In src/web_app.py, remove the route functions you just moved, leaving only:
+
+FastAPI app creation.
+
+Any startup/shutdown hooks or lifespan functionality.
+
+The root index() route (now delegating to render_dashboard_html()).
+
+In src/web_app.py, import and include the routers:
+
+from fastapi import FastAPI
+from src.web.routes_main import router as main_router
+from src.web.routes_backtest import router as backtest_router
+from src.web.routes_positions import router as positions_router
+from src.web.routes_bots import router as bots_router
+from src.web.routes_health import router as health_router
+
+app = FastAPI(...existing init arguments...)
+
+app.include_router(main_router)
+app.include_router(backtest_router)
+app.include_router(positions_router)
+app.include_router(bots_router)
+app.include_router(health_router)
+
+
+Ensure app is still defined in src/web_app.py and importable as from src.web_app import app. Do not change this public import contract.
+
+If any tests or scripts previously relied on app in a specific state, keep that initialization order unchanged (e.g., include routers after settings are loaded, etc.).
+
+Step 4 – Fix imports and shared objects
+
+As you move endpoints into router modules:
+
+If routes used settings, logger, healthcheck, or other objects from web_app.py:
+
+Import those from their original modules, not from web_app.py.
+
+For example, if settings is defined in src/config.py, import it there:
+
+from src.config import settings
+
+
+If there are shared helper functions currently defined in web_app.py and used by multiple endpoints, consider moving those helpers into an appropriate module (e.g. src/web/helpers.py or an existing core module) and import them from there.
+
+Make sure no router module imports app directly. Only web_app.py should own the app and include routers.
+
+Avoid circular imports: if you break into a cycle, move shared helpers into a neutral module (e.g. src/core/web_utils.py).
+
+Step 5 – Update replit.md to document the new structure
+
+In replit.md, add a short “Web layer structure” section explaining where things now live and how future edits should be made. For example:
+
+## Web Layer Structure
+
+The FastAPI app entrypoint is still `src/web_app.py`, but it is now a thin wrapper:
+
+- Creates the `FastAPI` app.
+- Includes routers from the `src/web/` package.
+- Exposes `app` for Uvicorn and tests.
+- Delegates the main dashboard HTML to `src/web/dashboard.py`.
+
+The `src/web/` package contains:
+
+- `src/web/dashboard.py` – The main Options Agent dashboard HTML + inline JS. All future UI layout changes (tabs, panels, buttons) should be made here.
+- `src/web/routes_main.py` – Core non-specialized API endpoints (status, agent loop, training status, etc.).
+- `src/web/routes_backtest.py` – Backtest APIs (`/api/backtest/*`, `/api/backtests*`) used by the Backtesting Lab and history views.
+- `src/web/routes_positions.py` – Position and PnL endpoints (`/api/positions/*`, calibration/reconciliation helpers).
+- `src/web/routes_bots.py` – Bot/strategy endpoints (`/api/bots/*`, GregBot selectors, expert bot views).
+- `src/web/routes_health.py` – Health and risk configuration endpoints (`/api/agent_healthcheck`, `/api/llm_status`, `/api/risk_limits`, `/api/strategy_thresholds`, etc.).
+
+**Guideline:**  
+- If you are changing **HTML/JS layout** of the dashboard (tabs, sections, panels), edit `src/web/dashboard.py`.  
+- If you are adding or changing **API endpoints**, create or update the relevant router in `src/web/routes_*.py` and include it in `src/web_app.py`.
+
+
+Make sure this section is consistent with wherever you already describe the web app in replit.md.
+
+Step 6 – Tests & verification
+
+Run the full test suite (e.g. pytest) and ensure all tests pass.
+
+If you have smoke scripts (like scripts/smoke_live_agent.sh or scripts/smoke_backtest.sh), run them and confirm they still work.
+
+Manually verify in the web UI that:
+
+The root / loads the same dashboard.
+
+Backtesting actions still work.
+
+Positions tab still loads.
+
+Bots / Greg sections still behave exactly as before.
+
+Healthcheck and LLM status endpoints still respond as expected.
+
+Constraints
+
+Do not change any URL paths, HTTP methods, or response schemas.
+
+Do not change the from src.web_app import app surface.
+
+Any changes to the HTML/JS should be limited to relocation, not behavior changes.
+
+The goal is pure refactor for structure/maintainability – no new features in this task.
+
+Please perform this refactor now, following the steps above.
