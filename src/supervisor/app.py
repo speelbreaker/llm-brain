@@ -508,6 +508,8 @@ async def run_supervisor_job(job: SupervisorJob, app: FastAPI) -> None:
     codex_fixer = CodexFixer(settings)
     
     try:
+        await workspace_manager.cleanup_old_workspaces()
+        
         job.update_status(JobStatus.RUNNING)
         store.save(job)
         

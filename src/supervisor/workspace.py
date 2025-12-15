@@ -1,13 +1,17 @@
 """Workspace isolation using git worktree."""
 
 import asyncio
+import logging
 import os
 import shutil
+import time
 from pathlib import Path
 from typing import Optional
 
 from .config import SupervisorSettings
 from .models import DiffStats
+
+logger = logging.getLogger(__name__)
 
 
 class WorkspaceManager:
@@ -71,6 +75,41 @@ class WorkspaceManager:
         
         if workspace_path.exists():
             shutil.rmtree(workspace_path, ignore_errors=True)
+    
+    async def cleanup_old_workspaces(self) -> int:
+        """Remove workspaces older than TTL.
+        
+        Returns number of workspaces cleaned up.
+        """
+        ttl_hours = self.settings.workspace_ttl_hours
+        if ttl_hours <= 0:
+            return 0
+        
+        if not self.base_dir.exists():
+            return 0
+        
+        cutoff = time.time() - (ttl_hours * 3600)
+        cleaned = 0
+        
+        for path in self.base_dir.iterdir():
+            if path.name.startswith("_"):
+                continue
+            if not path.is_dir():
+                continue
+            
+            try:
+                mtime = path.stat().st_mtime
+                if mtime < cutoff:
+                    logger.info(f"Cleaning up old workspace: {path.name}")
+                    shutil.rmtree(path, ignore_errors=True)
+                    cleaned += 1
+            except Exception as e:
+                logger.warning(f"Failed to clean workspace {path.name}: {e}")
+        
+        if cleaned > 0:
+            logger.info(f"Cleaned up {cleaned} old workspaces (TTL: {ttl_hours}h)")
+        
+        return cleaned
     
     async def get_diff_stats(self, workspace_path: str) -> DiffStats:
         """Get diff statistics for uncommitted changes."""

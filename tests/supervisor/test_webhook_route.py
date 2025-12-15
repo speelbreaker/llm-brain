@@ -70,6 +70,11 @@ class TestWebhookRoute:
                 app.state.store = MagicMock()
                 app.state.store.get_by_sha = MagicMock(return_value=None)
                 app.state.store.save = MagicMock()
+                
+                mock_approval = MagicMock()
+                mock_approval.paused = False
+                app.state.store.get_pr_approval = MagicMock(return_value=mock_approval)
+                
                 app.state.job_queue = MagicMock()
                 app.state.job_queue.put = AsyncMock()
                 
