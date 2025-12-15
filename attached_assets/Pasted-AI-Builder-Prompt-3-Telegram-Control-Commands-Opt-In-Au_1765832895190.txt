@@ -1,0 +1,224 @@
+AI Builder Prompt #3 — Telegram Control Commands + Opt-In Autofix + Simulate Webhooks + Deployment Hardening
+
+Role
+You are a senior Python engineer extending the PR Supervisor service you implemented in Prompt #1 and Prompt #2.
+
+Goal
+Add: (1) Telegram command controls so I can operate the system from my phone, (2) opt-in “autofix” gating so Codex never edits PRs unless approved, (3) a dev-only webhook simulator so we can test without GitHub/VPS, and (4) Docker/deploy hardening so VPS setup is one command.
+
+Hard constraints
+
+No behavioral changes when disabled (default off).
+
+No secrets in logs/Telegram/PR comments.
+
+Never push to main, only PR branches.
+
+Keep changes minimal; avoid new heavy deps.
+
+A) Opt-in Autofix Gating (No surprise Codex edits)
+Add env vars
+
+SUPERVISOR_ENABLE_CODEX=0 (default 0)
+
+SUPERVISOR_AUTOFIX_POLICY=label (default label)
+
+allowed: label, telegram, both
+
+SUPERVISOR_AUTOFIX_LABEL=autofix-ok (default autofix-ok)
+
+SUPERVISOR_REQUIRE_HUMAN_FOR_HIGH_RISK=1 (default 1)
+
+SUPERVISOR_MAX_LOOPS=3 (ensure already exists)
+
+Behavior
+
+Supervisor may run checks + debate always, but may only run Codex if:
+
+SUPERVISOR_ENABLE_CODEX=1, AND
+
+policy satisfied:
+
+label: PR has label SUPERVISOR_AUTOFIX_LABEL
+
+telegram: user explicitly approves via Telegram /autofix <pr>
+
+both: requires label AND Telegram approval
+
+Additionally, if Arbiter returns risk_level=high and SUPERVISOR_REQUIRE_HUMAN_FOR_HIGH_RISK=1, then do not auto-fix even if approved; instead post “Needs human review”.
+
+Implementation details
+
+Store per-PR approval state in your store: {repo, pr_number, approved_by_telegram: bool, approved_at, approved_by_user_id}.
+
+Approval should be per-PR and apply to subsequent synchronizations until revoked (/pause or /revoke).
+
+B) Telegram Command Controls (phone cockpit)
+
+You already implemented Telegram “status card” updates. Now add commands that I can send to the bot.
+
+Add env vars
+
+SUPERVISOR_TELEGRAM_ENABLED=0 (already exists)
+
+TELEGRAM_ALLOWED_USER_IDS (comma-separated list; required when telegram enabled)
+
+TELEGRAM_ADMIN_CHAT_ID (optional; if set, send alerts here too)
+
+Commands (must work)
+
+/supervisor last
+
+returns the latest 5 jobs summary (PR, status, phase, updated, links)
+
+/supervisor pr <number>
+
+returns the current PR status card (or creates one if missing) + last job summary
+
+/rerun <pr_number>
+
+enqueues a job for the latest PR head SHA (fetch fresh PR data via GitHub API)
+
+replies “Queued rerun for PR #…”
+
+/autofix <pr_number>
+
+sets approved_by_telegram=true for that PR (and records user id)
+
+replies with policy reminder (e.g. “Autofix approved; requires label too”)
+
+/pause <pr_number>
+
+sets PR paused: Supervisor should not run new jobs for this PR until unpaused
+
+/resume <pr_number>
+
+unpauses the PR
+
+/revoke <pr_number>
+
+removes Telegram approval for autofix
+
+/help
+
+prints short command list
+
+Security rules
+
+Only accept commands from user ids in TELEGRAM_ALLOWED_USER_IDS.
+
+If not allowed → reply “Unauthorized”.
+
+Never echo secrets.
+
+Implementation notes
+
+Use the existing Telegram bot integration (python-telegram-bot or your current method). Keep it consistent with Prompt #2.
+
+Commands should be idempotent.
+
+Update the PR status card after any command (pause/resume/autofix).
+
+C) Dev-only Webhook Simulation (no GitHub/VPS needed)
+
+Add a debug endpoint to the Supervisor service:
+
+POST /debug/simulate_pr_event
+
+Enabled only if SUPERVISOR_DEBUG=1
+
+Accepts JSON:
+
+{ "repo": "owner/name", "pr_number": 123, "action": "opened|synchronize" }
+
+
+It should:
+
+Fetch PR info via GitHub API using GITHUB_TOKEN (or if token missing, return a clear error)
+
+Enqueue the job as if a real webhook arrived
+
+Return {ok:true, job_id:"..."}
+
+Also add GET /api/jobs and GET /api/jobs/{id} if not already present (Prompt #2 uses them for the dashboard).
+
+D) Deployment Hardening (VPS “one command”)
+Add
+
+docker/supervisor.Dockerfile (if not already):
+
+Multi-stage or simple
+
+Runs: uvicorn src.supervisor.app:app --host 0.0.0.0 --port 8080
+
+docker-compose.supervisor.yml:
+
+service supervisor
+
+mounts a volume for job store + workspace base dir (e.g. /var/lib/pr_supervisor)
+
+exposes 8080
+
+environment file .env.supervisor
+
+.env.supervisor.example:
+
+includes all required vars (with blanks), and safe defaults
+
+docs/SUPERVISOR_VPS_SETUP.md:
+
+step-by-step:
+
+create GitHub webhook + secret
+
+set env vars
+
+start with docker compose
+
+verify /health
+
+test Telegram /help
+
+test simulate endpoint (if debug)
+
+Minimal “production” knobs
+
+SUPERVISOR_BASE_JOBS_DIR=/var/lib/pr_supervisor/jobs
+
+SUPERVISOR_STORE_PATH=/var/lib/pr_supervisor/store.sqlite
+
+SUPERVISOR_WORKSPACE_TTL_HOURS=24 (cleanup old worktrees periodically)
+
+Implement cleanup:
+
+On each new job, delete expired workspaces older than TTL (best-effort).
+
+Never delete active job workspace.
+
+E) Acceptance Criteria
+
+Defaults unchanged: Supervisor does nothing unless enabled.
+
+Codex fixes never run unless explicitly permitted by policy + SUPERVISOR_ENABLE_CODEX=1.
+
+Telegram commands work and are access-controlled.
+
+Debug simulate endpoint can enqueue a PR run when SUPERVISOR_DEBUG=1.
+
+Docker compose starts supervisor and persists job store.
+
+Unit tests added for:
+
+autofix gating logic
+
+Telegram allowed user enforcement
+
+pause/resume behavior
+
+simulate endpoint enabled/disabled behavior
+
+Deliverable
+
+Code + docs committed.
+
+Update replit.md with a short “Supervisor controls” section (Telegram commands + env vars).

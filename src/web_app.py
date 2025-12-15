@@ -1177,8 +1177,15 @@ def start_backtest(req: BacktestStartRequest) -> JSONResponse:
     validation = apply_strategy_overrides(req.selector_name, user_config)
     effective = validation.effective_config
     
-    valid_exit_styles = ["hold_to_expiry", "tp_and_roll", "both", "gregbot_managed"]
     effective_exit_style = effective.get("exit_style", req.exit_style)
+    
+    if effective_exit_style == "gregbot_managed" and req.selector_name != "gregbot":
+        raise HTTPException(
+            status_code=400,
+            detail="exit_style 'gregbot_managed' is only valid for the gregbot selector"
+        )
+    
+    valid_exit_styles = ["hold_to_expiry", "tp_and_roll", "both", "gregbot_managed"]
     if effective_exit_style not in valid_exit_styles:
         raise HTTPException(status_code=400, detail=f"Invalid exit_style. Must be one of: {valid_exit_styles}")
     
@@ -1592,12 +1599,16 @@ def get_backtest_strategy_summary(run_id: str) -> JSONResponse:
             elif event.event_type == "TAKE_PROFIT":
                 stats["take_profits"] += 1
                 stats["closes"] += 1
-                if event.pnl: stats["total_pnl"] += event.pnl
-                if event.pnl and event.pnl > 0: stats["wins"] += 1
+                if event.pnl is not None:
+                    stats["total_pnl"] += event.pnl
+                    if event.pnl > 0:
+                        stats["wins"] += 1
             elif event.event_type in ("CLOSE", "STOP_LOSS", "EXPIRY"):
                 stats["closes"] += 1
-                if event.pnl: stats["total_pnl"] += event.pnl
-                if event.pnl and event.pnl > 0: stats["wins"] += 1
+                if event.pnl is not None:
+                    stats["total_pnl"] += event.pnl
+                    if event.pnl > 0:
+                        stats["wins"] += 1
         
         summaries = []
         for key, stats in strategy_stats.items():

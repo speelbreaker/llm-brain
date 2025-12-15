@@ -73,7 +73,8 @@ class BacktestEventEmitter:
     """
     Collects events during a backtest run.
     
-    Thread-safe for use in async backtest simulations.
+    NOTE: This emitter is NOT thread-safe. Use only from a single thread/task
+    or add external synchronization if needed in concurrent contexts.
     Events are accumulated in memory and can be persisted at the end of the run.
     """
     
@@ -211,6 +212,10 @@ class BacktestEventEmitter:
                     stats["total_pnl"] += event.pnl
                     if event.pnl > 0:
                         stats["wins"] += 1
+                if event.position_id and event.position_id in self._position_open_times:
+                    open_time = self._position_open_times[event.position_id]
+                    hold_hours = (event.event_time - open_time).total_seconds() / 3600
+                    stats["hold_times"].append(hold_hours)
             elif event.event_type in (EventType.CLOSE.value, EventType.STOP_LOSS.value, EventType.EXPIRY.value):
                 stats["closes"] += 1
                 if event.pnl is not None:
@@ -292,13 +297,12 @@ GREG_EVENT_KEYS = {
 }
 
 
-def get_greg_event_key(strategy_name: str, event_type: str = "") -> str:
+def get_greg_event_key(strategy_name: str) -> str:
     """
     Get a stable event key for GregBot events.
     
     Args:
         strategy_name: The GregBot strategy name (e.g., "STRATEGY_A_STRADDLE")
-        event_type: Optional event type suffix
         
     Returns:
         Stable event key like "greg.vrp_harvest.straddle"

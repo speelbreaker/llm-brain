@@ -1,0 +1,44 @@
+🟠 *HIGH* — Strategy summary miscomputes PnL when pnl == 0.0
+  📄 `src/web_app.py`
+  In get_backtest_strategy_summary, the code uses `if event.pnl` before adding PnL or counting wins. This treats 0.0 as False, skipping valid zero PnL closes and skewing total_pnl, avg_pnl, and win_rate
+  💡 Fix: Change checks to use explicit None checks: `if event.pnl is not None: stats["total_pnl"] += event.pnl` and `if event.pnl is not None and event.pnl > 0
+
+🟠 *HIGH* — Allowing 'gregbot_managed' exit_style for non-GregBot selectors may break engines
+  📄 `src/web_app.py`
+  start_backtest allows 'gregbot_managed' for all selectors by extending valid_exit_styles globally. For selectors like generic_covered_call that likely don't handle this value, the manager may crash or
+  💡 Fix: Validate exit_style against the selected strategy's capabilities. Only allow 'gregbot_managed' when selector_name == 'gregbot'. Otherwise, reject or m
+
+🟠 *HIGH* — Potential 500 if BacktestEvent.to_dict is missing or incomplete
+  📄 `src/web_app.py`
+  get_backtest_events calls `e.to_dict()` on DB models. If to_dict isn't implemented or doesn't serialize reason_json properly, the endpoint will raise an AttributeError or return non-serializable data.
+  💡 Fix: Ensure BacktestEvent model defines a robust to_dict method that serializes datetime to ISO and reason_json to native dict. Add unit tests for these en
+
+🟡 *MEDIUM* — BacktestEventEmitter is not thread-safe despite claiming to be
+  📄 `src/backtest/event_emitter.py`
+  The emitter uses plain lists/dicts without synchronization while the docstring claims thread-safety for async simulations. If used from multiple threads/tasks concurrently, events could be lost or int
+  💡 Fix: Either add a threading.Lock/asyncio.Lock around mutations to `_events` and `_position_open_times`, or update the docstring to state it's not thread-sa
+
+🟡 *MEDIUM* — Hold time not computed for TAKE_PROFIT events
+  📄 `src/backtest/event_emitter.py`
+  compute_strategy_summary treats TAKE_PROFIT as a close for counting PnL but does not include TAKE_PROFIT in the hold-time calculation branch, under-reporting avg_hold_time_hours for those closes.
+  💡 Fix: Include TAKE_PROFIT alongside CLOSE/STOP_LOSS/EXPIRY when computing hold times so it uses the open_time to calculate the duration.
+
+🟡 *MEDIUM* — Event endpoints load all events into memory without pagination
+  📄 `src/web_app.py`
+  get_backtest_events and get_backtest_strategy_summary retrieve all events for a run, which can be very large and cause memory and response time issues.
+  💡 Fix: Add pagination parameters (limit, offset) to /events and consider streaming or server-side pagination. For strategy_summary, compute using SQL aggrega
+
+🟡 *MEDIUM* — Duplicated aggregation logic between emitter and API
+  📄 `src/web_app.py`
+  Strategy aggregation is implemented both in BacktestEventEmitter.compute_strategy_summary and in get_backtest_strategy_summary, risking divergence and inconsistent results.
+  💡 Fix: Refactor aggregation into a shared utility (e.g., in src/backtest/event_emitter.py or a new module) and reuse it in the API and internal computations 
+
+🟡 *MEDIUM* — Missing or undocumented strategy_caps endpoints referenced in docs
+  📄 `src/web_app.py`
+  Docs list GET /api/backtest/strategy_caps and /api/backtest/strategy_caps/{selector}, but only /api/backtest/strategies is visible in the diff. This can break UI expectations.
+  💡 Fix: Add the strategy_caps endpoints that return capabilities for all strategies and a single selector (using get_strategy_caps), or update docs/UI to alig
+
+🟢 *LOW* — Unused parameters and constants in event key helper
+  📄 `src/backtest/event_emitter.py`
+  get_greg_event_key has an unused event_type parameter and GREG_EVENT_KEYS is not used. This may confuse future maintainers.
+  💡 Fix: Remove the unused parameter and constant, or extend the function to use event_type (e.g., append suffixes) and leverage the mapping.
