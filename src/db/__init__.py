@@ -53,7 +53,7 @@ def init_db() -> None:
     """Create all tables if they don't exist."""
     if engine is None:
         raise RuntimeError("Database not configured. Set DATABASE_URL environment variable.")
-    from src.db.models_backtest import BacktestRun, BacktestMetric, BacktestChain
+    from src.db.models_backtest import BacktestRun, BacktestMetric, BacktestChain, BacktestEvent
     from src.db.models_calibration import CalibrationHistory
     from src.db.models_greg_decision import GregDecisionLog
     Base.metadata.create_all(bind=engine)

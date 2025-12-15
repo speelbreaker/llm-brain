@@ -46,6 +46,14 @@ The web dashboard offers a user-friendly interface with sections for "Live Agent
 - **Real-Trading Mode (Phase 2)**: Execution support with strong safety gates (Global mode, master switch, per-strategy flags, dry_run cross-check) and tiny-size guardrails.
 - **Decision Logging System**: Comprehensive audit trail for Greg decisions stored in a `greg_decision_log` database table.
 - **Greg Lab UI**: Dedicated dashboard tab for viewing and managing Greg strategy positions with mode banner, sandbox summary, filters, positions table, PnL tracking, suggested actions, and log timelines.
+- **Strategy Capabilities System**: Strategy-aware backtest configuration with:
+    - **StrategyCapabilities metadata**: Each strategy declares which config fields it owns vs. user-configurable
+    - **GregBot parameter management**: GregBot owns exit_style, DTE, and delta targeting; user controls underlying, date range, IV multiplier
+    - **Config override logic**: `apply_strategy_overrides()` returns warnings when user inputs conflict with strategy requirements
+    - **Backtest event logging**: `BacktestEvent` table tracks strategy decisions, opens, closes, rolls, take-profits for analytics
+    - **Event emitter**: `BacktestEventEmitter` provides standard interface for strategies to emit analytics events
+    - **Strategy breakdown endpoints**: `/api/backtests/{run_id}/events` and `/api/backtests/{run_id}/strategy_summary` for post-run analysis
+    - **API endpoints**: `GET /api/backtest/strategy_caps`, `GET /api/backtest/strategy_caps/{selector}`, `GET /api/backtest/strategies`
 - **Telegram Code Review Agent**: A Telegram bot for automated code review and Repo Q&A with modular design. It offers commands for `/review`, `/diff`, `/risks`, `/ask`, `/search`, `/open`, and natural language chat, utilizing LLM integration with automatic model fallback and secret redaction.
 - **PR Supervisor Service**: Automated PR verification and auto-fix service that:
     - Listens to GitHub PR webhooks (opened/synchronize/reopened)

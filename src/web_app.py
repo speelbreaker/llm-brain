@@ -259,6 +259,24 @@ def get_strategy_capabilities(selector: str = "generic_covered_call") -> JSONRes
     return JSONResponse(content=caps.to_dict())
 
 
+@app.get("/api/backtest/strategy_caps/{selector_name}")
+def get_strategy_capabilities_by_name(selector_name: str) -> JSONResponse:
+    """Get capability metadata for a specific selector by path."""
+    from src.backtest.strategy_caps import get_strategy_caps, list_available_strategies
+    
+    caps = get_strategy_caps(selector_name)
+    if caps is None:
+        return JSONResponse(
+            status_code=404,
+            content={
+                "error": f"Unknown selector: {selector_name}",
+                "available": [s["selector_name"] for s in list_available_strategies()],
+            }
+        )
+    
+    return JSONResponse(content=caps.to_dict())
+
+
 @app.get("/api/backtest/strategies")
 def list_backtest_strategies() -> JSONResponse:
     """List all available backtest strategies with their capabilities."""
@@ -1607,7 +1625,7 @@ def get_backtest_strategy_summary(run_id: str) -> JSONResponse:
 
 
 @app.get("/api/backtests/{run_id}/events/download")
-def download_backtest_events(run_id: str) -> Response:
+def download_backtest_events(run_id: str):
     """Download backtest events as CSV."""
     from src.db import get_db_session
     from src.db.models_backtest import BacktestRun, BacktestEvent
