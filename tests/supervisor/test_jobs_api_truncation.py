@@ -53,7 +53,11 @@ def make_mock_job(
 
 
 class TestJobsApiTruncation:
-    """Tests for /jobs API endpoint truncation."""
+    """Tests for /jobs API endpoint truncation.
+    
+    Note: These tests set up mocks on app.state directly and use TestClient
+    without context manager to avoid lifespan overwriting the mocks.
+    """
     
     @pytest.fixture
     def app_with_store(self):
@@ -80,7 +84,7 @@ class TestJobsApiTruncation:
         job, _ = make_mock_job(huge_stdout=True)
         app_with_store.state.store.list_recent.return_value = [job]
         
-        client = TestClient(app_with_store)
+        client = TestClient(app_with_store, raise_server_exceptions=False)
         response = client.get("/jobs")
         
         assert response.status_code == 200
@@ -91,13 +95,13 @@ class TestJobsApiTruncation:
         
         assert len(check["stdout"]) <= MAX_TRUNCATE_CHARS
         assert check["stdout_truncated"] is True
-    
+
     def test_list_jobs_truncates_stderr(self, app_with_store):
         """Test that /jobs endpoint truncates large stderr."""
         job, _ = make_mock_job(huge_stderr=True)
         app_with_store.state.store.list_recent.return_value = [job]
         
-        client = TestClient(app_with_store)
+        client = TestClient(app_with_store, raise_server_exceptions=False)
         response = client.get("/jobs")
         
         assert response.status_code == 200
@@ -107,13 +111,13 @@ class TestJobsApiTruncation:
         
         assert len(check["stderr"]) <= MAX_TRUNCATE_CHARS
         assert check["stderr_truncated"] is True
-    
+
     def test_list_jobs_truncates_failure_summary(self, app_with_store):
         """Test that /jobs endpoint truncates large failure_summary."""
         job, _ = make_mock_job(huge_failure_summary=True)
         app_with_store.state.store.list_recent.return_value = [job]
         
-        client = TestClient(app_with_store)
+        client = TestClient(app_with_store, raise_server_exceptions=False)
         response = client.get("/jobs")
         
         assert response.status_code == 200
@@ -123,7 +127,7 @@ class TestJobsApiTruncation:
         
         assert len(verification["failure_summary"]) <= MAX_TRUNCATE_CHARS
         assert verification["failure_summary_truncated"] is True
-    
+
     def test_get_job_truncates_all_fields(self, app_with_store):
         """Test that /jobs/{id} endpoint truncates all large fields."""
         job, _ = make_mock_job(
@@ -134,7 +138,7 @@ class TestJobsApiTruncation:
         )
         app_with_store.state.store.get.return_value = job
         
-        client = TestClient(app_with_store)
+        client = TestClient(app_with_store, raise_server_exceptions=False)
         response = client.get("/jobs/test-job-123")
         
         assert response.status_code == 200
@@ -153,13 +157,13 @@ class TestJobsApiTruncation:
         attempt = data["fix_attempts"][0]
         assert len(attempt["codex_output"]) <= MAX_TRUNCATE_CHARS
         assert attempt["codex_output_truncated"] is True
-    
+
     def test_short_fields_not_truncated(self, app_with_store):
         """Test that short fields are not marked as truncated."""
         job, _ = make_mock_job()
         app_with_store.state.store.get.return_value = job
         
-        client = TestClient(app_with_store)
+        client = TestClient(app_with_store, raise_server_exceptions=False)
         response = client.get("/jobs/test-job-123")
         
         assert response.status_code == 200
@@ -170,12 +174,12 @@ class TestJobsApiTruncation:
         assert check["stdout_truncated"] is False
         assert check["stderr"] == "short stderr"
         assert check["stderr_truncated"] is False
-    
+
     def test_job_not_found_returns_404(self, app_with_store):
         """Test that missing job returns 404."""
         app_with_store.state.store.get.return_value = None
         
-        client = TestClient(app_with_store)
+        client = TestClient(app_with_store, raise_server_exceptions=False)
         response = client.get("/jobs/nonexistent")
         
         assert response.status_code == 404

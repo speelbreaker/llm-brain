@@ -1,0 +1,54 @@
+> Coding assistant:
+*Review Result: 🟡 MEDIUM*
+🤖 _Model: gpt-5_
+`df83ef7..3b5aee8`
+
+*Summary:*
+• Hardened GitHub webhook auth: route rejects requests when supervisor not ready or secret missing; verify_signature now rejects empty/whitespace secrets and enforces sha256 prefix and 64-char hex length
+• Introduced shared httpx.AsyncClient for Telegram (app.state.telegram_http) and closed it in lifespan shutdown; TelegramNotifier uses shared client
+• Reduced logging verbosity: replaced logger.exception with logger.error in worker and job run paths to avoid stack traces
+• Worker made backward-compatible with legacy queue payloads by normalizing tuples to job objects
+• Added route-level tests for webhook auth and Jobs API truncation (new tests for empty/whitespace secrets and truncation flags)
+
+*Issues:* 6 found
+  🟠 1 high
+
+💭 _The changes correctly block empty-secret webhook verification and add route-level protections and tests, while improving client lifecycle and logging. The main remaining risks are a potential async-to-sync mismatch in Telegram client helpers, minor inconsistency in route-level secret trimming, and some resource usage and testing practices. Addressing these will solidify reliability without altering intended behavior._
+
+Use /risks for details, /diff for changes, /next for actions.
+
+> Maryuri:
+/risks
+
+> Coding assistant:
+*Risks* (review #17)
+
+🟠 *HIGH* — Changed _get_client from async to sync; potential leftover awaits will crash
+  📄 `src/supervisor/telegram_notify.py`
+  TelegramStatusCard._get_client was changed from async to a regular function returning an AsyncClient. While two call sites were updated (update_message and send_followup), any remaining usage of 'awai
+  💡 Fix: Search the codebase for 'await self._get_client' and update all call sites to either pass the shared client directly or use 'async with self._get_clie
+
+🟡 *MEDIUM* — Route-level secret check does not trim whitespace
+  📄 `src/supervisor/app.py`
+  In the /github/webhook handler, misconfiguration is detected using 'not settings.github_webhook_secret' (around lines ~229-247). While lifespan already trims and will keep app.state.ready False when s
+  💡 Fix: Use a trimmed check in the route: 'if not request.app.state.ready or not (settings.github_webhook_secret and settings.github_webhook_secret.strip())' 
+
+🟡 *MEDIUM* — Legacy queue tuple handling discards provided app context
+  📄 `src/supervisor/app.py`
+  The worker normalizes legacy payloads by setting 'job = job[0]' when given a tuple (around line ~116), effectively discarding the second element (the app). If producers still enqueue (job, app) with a
+  💡 Fix: If the tuple length is 2 and the second element looks like a FastAPI app, prefer that for run_supervisor_job, or log a warning and document the expect
+
+🟢 *LOW* — Telegram HTTP client created even when Telegram notifications are disabled
+  📄 `src/supervisor/app.py`
+  The lifespan creates app.state.telegram_http unconditionally when the supervisor is ready (around line ~163), even if Telegram notifications are disabled. This allocates a connection pool that may nev
+  💡 Fix: Only create the Telegram AsyncClient if settings.telegram_enabled and both bot token and chat ID are configured; otherwise leave it as None.
+
+🟢 *LOW* — Logging sanitization could be stricter
+  📄 `src/supervisor/app.py`
+  logger.error calls in exception handlers do not explicitly set exc_info=False (e.g., around lines ~118 and ~185). While logger.error does not include stack traces by default, explicit exc_info=False e
+  💡 Fix: Use 'logger.error("...", exc_info=False)' consistently in exception paths. Continue storing sanitized/truncated error details in the job record for us
+
+ℹ️ *INFO* — Tests instantiate TestClient without context manager
+  📄 `tests/supervisor/test_jobs_api_truncation.py`
+  Some tests create TestClient(app) without using a context manager, which can bypass lifespan hooks or leak resources depending on Starlette/FastAPI versions. This may lead to false positives when test
+  💡 Fix: Use 'with TestClient(app) as client:' to ensure lifespan startup/shutdown are properly executed. Apply similarly in tests/supervisor/test_webhook_rout

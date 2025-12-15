@@ -38,7 +38,11 @@ def make_pr_payload(action: str = "opened") -> dict:
 
 
 class TestWebhookRoute:
-    """Route-level tests for /github/webhook endpoint."""
+    """Route-level tests for /github/webhook endpoint.
+    
+    Note: These tests set up mocks on app.state directly and use TestClient
+    without context manager to avoid lifespan overwriting the mocks.
+    """
     
     @pytest.fixture
     def configured_app(self):

@@ -114,13 +114,14 @@ async def job_worker(app: FastAPI) -> None:
             job = await app.state.job_queue.get()
             
             if isinstance(job, tuple):
+                logger.warning("Legacy tuple queue payload received, app context discarded")
                 job = job[0]
             
             try:
                 logger.info("Worker processing job: %s", job.job_id)
                 await run_supervisor_job(job, app)
             except Exception:
-                logger.error("Job %s failed in worker", job.job_id)
+                logger.error("Job %s failed in worker", job.job_id, exc_info=False)
             finally:
                 app.state.job_queue.task_done()
                 
@@ -128,7 +129,7 @@ async def job_worker(app: FastAPI) -> None:
             logger.info("Job worker cancelled, shutting down")
             break
         except Exception:
-            logger.error("Job worker error")
+            logger.error("Job worker error", exc_info=False)
             await asyncio.sleep(1)
 
 
@@ -163,7 +164,8 @@ async def lifespan(app: FastAPI):
             app.state.ready = False
         else:
             app.state.github_client = GitHubClient(settings.github_token)  # type: ignore[arg-type]
-            app.state.telegram_http = httpx.AsyncClient(timeout=httpx.Timeout(20.0))
+            if settings.telegram_enabled and settings.telegram_bot_token and settings.telegram_chat_id:
+                app.state.telegram_http = httpx.AsyncClient(timeout=httpx.Timeout(20.0))
             app.state.ready = True
             
             app.state.supervisor_worker_task = asyncio.create_task(job_worker(app))
@@ -229,7 +231,7 @@ async def github_webhook(
             message="Supervisor is disabled. Set SUPERVISOR_ENABLED=1 to enable.",
         )
     
-    if not request.app.state.ready or not settings.github_webhook_secret:
+    if not request.app.state.ready or not settings.github_webhook_secret or not settings.github_webhook_secret.strip():
         return JSONResponse(
             status_code=503,
             content={
@@ -559,7 +561,7 @@ async def run_supervisor_job(job: SupervisorJob, app: FastAPI) -> None:
         await notifier.notify_final_result(job, success=False, message=job.final_message)
     
     except Exception as e:
-        logger.error(f"Job {job.job_id} failed with error: {type(e).__name__}")
+        logger.error(f"Job {job.job_id} failed with error: {type(e).__name__}", exc_info=False)
         job.update_status(JobStatus.ERROR)
         error_msg = redact_secrets(str(e)[:500], settings)
         job.error_message = error_msg
