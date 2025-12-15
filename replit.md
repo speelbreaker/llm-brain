@@ -104,10 +104,19 @@ The PR Supervisor is located in `src/supervisor/` and is disabled by default. To
 | `/revoke <n>` | Revoke autofix approval |
 
 **Debug & Deployment:**
-- `SUPERVISOR_DEBUG` (default: 0) - Enable debug endpoints
+- `SUPERVISOR_DEBUG` (default: 0) - Enable debug endpoints (conditionally registers routes)
+- `SUPERVISOR_DEBUG_TOKEN` - Optional token for debug endpoint authentication (header: X-Debug-Token)
 - `SUPERVISOR_WORKSPACE_TTL_HOURS` (default: 24) - Workspace cleanup TTL
 - See `docs/SUPERVISOR_VPS_SETUP.md` for VPS deployment guide
 - Docker files: `docker/supervisor.Dockerfile`, `docker/docker-compose.supervisor.yml`
+
+**Safety Features (v0.3.1):**
+- Webhook secret validation returns 503 with details when misconfigured
+- Debug endpoints only registered when SUPERVISOR_DEBUG=1
+- Approval state uses threading.Lock for concurrent write safety
+- Workspace cleanup uses .supervisor_active sentinel files to protect active jobs
+- All timestamps are timezone-aware UTC
+- Retry helper with exponential backoff for external API calls (429, 500-504)
 
 **Other Settings:**
 - `SUPERVISOR_MAX_LOOPS` (default: 3) - Max fix attempts
