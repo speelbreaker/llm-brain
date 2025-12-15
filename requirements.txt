@@ -24,3 +24,4 @@ bandit
 pip-audit
 pytest
 ruff
+pytest-asyncio
