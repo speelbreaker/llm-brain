@@ -218,3 +218,54 @@ class TestPRApprovalState:
         assert not state.paused
         assert state.approved_at is None
         assert state.approved_by_user_id is None
+
+
+class TestPolicyPersistence:
+    """Tests for policy enforcement across reruns."""
+    
+    def test_policy_enforced_on_rerun(self):
+        """Policy is checked on each job execution including reruns."""
+        settings = MockSettings(enable_codex=True, autofix_policy="telegram")
+        
+        approval = PRApprovalState(repo="owner/repo", pr_number=1, approved_by_telegram=False)
+        store = MockStore(approval=approval)
+        
+        decision = check_autofix_policy(
+            settings=settings,
+            store=store,
+            repo="owner/repo",
+            pr_number=1,
+            pr_labels=[],
+        )
+        
+        assert not decision.allowed
+        assert "telegram" in decision.reason.lower()
+    
+    def test_approval_state_used_across_jobs(self):
+        """Same approval state is used for multiple jobs on same PR."""
+        settings = MockSettings(enable_codex=True, autofix_policy="telegram")
+        
+        approval1 = PRApprovalState(repo="owner/repo", pr_number=1, approved_by_telegram=True)
+        store = MockStore(approval=approval1)
+        
+        decision1 = check_autofix_policy(
+            settings=settings,
+            store=store,
+            repo="owner/repo",
+            pr_number=1,
+            pr_labels=[],
+        )
+        
+        assert decision1.allowed
+        
+        store._approval.approved_by_telegram = False
+        
+        decision2 = check_autofix_policy(
+            settings=settings,
+            store=store,
+            repo="owner/repo",
+            pr_number=1,
+            pr_labels=[],
+        )
+        
+        assert not decision2.allowed
