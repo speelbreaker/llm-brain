@@ -1,0 +1,41 @@
+*Risks* (review #25)
+
+🟠 *HIGH* — Potential path traversal in backtest download endpoints
+  📄 `src/web/routes_backtest.py`
+  Endpoints like GET /api/backtests/{run_id}/download and /api/backtests/{run_id}/events/download likely assemble file paths from the unvalidated run_id. Without strict validation and safe path resoluti
+  💡 Fix: Validate run_id against a strict regex (e.g., ^[A-Za-z0-9._:-]+$), and build paths using Path.resolve with a base directory check. Example: base = Pat
+
+🟠 *HIGH* — External API calls for LIVE/HARVESTER modes may lack timeouts/retries
+  📄 `src/web/routes_backtest.py`
+  The new selector scan/backtest modes that use HARVESTER or LIVE data sources likely perform outbound HTTP requests or heavy I/O. Without explicit httpx timeouts, bounded retries with backoff, and prop
+  💡 Fix: Use httpx (or the existing client) with explicit timeouts (connect/read/write) and retries with exponential backoff for 429/5xx. Ensure clients are cl
+
+🟡 *MEDIUM* — Missing robust error mapping for file-backed endpoints
+  📄 `src/web/routes_backtest.py`
+  File-backed endpoints (e.g., getting run status, events, or strategy summaries) can raise FileNotFoundError/JSONDecodeError when files are missing or partially written, which may bubble up as 500s. Pr
+  💡 Fix: Wrap file I/O with try/except for FileNotFoundError (raise HTTPException 404), JSONDecodeError (422 with message), and general Exception (500 with gen
+
+🟡 *MEDIUM* — Non-atomic writes and possible corruption of JSON/JSONL artifacts
+  📄 `src/web/routes_backtest.py`
+  Backtest indices and results are stored under data/backtests (index.jsonl and result.json files). Without an atomic write pattern and a file lock, concurrent writes (or crashes mid-write) can corrupt 
+  💡 Fix: Use atomic write (write to a temp file in the same directory and os.replace) and a file lock around index.jsonl updates (e.g., portalocker or fastener
+
+🟡 *MEDIUM* — Repository contains generated backtest artifacts
+  📄 `data/backtests/*`
+  The repository includes data/backtests/*/result.json and index.jsonl updates. Generated data can bloat the repo and cause noisy diffs, making maintenance harder and risking test flakiness if tests rel
+  💡 Fix: Move generated artifacts to a .gitignored directory, keep only minimal deterministic fixtures under tests/fixtures/. Update code/tests to read from fi
+
+🟡 *MEDIUM* — Security gate tests for supervisor/webhooks are missing
+  📄 `tests/`
+  The Engineering Constitution requires webhook endpoints to 503 when secrets are missing and to enforce signature verification. Current changes add import smoke tests only; there are no endpoint-level 
+  💡 Fix: Add supervisor security tests (e.g., tests/supervisor/test_webhook_security.py) that patch env vars to unset secrets and assert 503, and tests that se
+
+🟢 *LOW* — Missing response_model on new/updated endpoints
+  📄 `src/web/routes_backtest.py`
+  If new endpoints (e.g., strategy summary, downloads, selector scan modes) do not specify response_model, API docs and validation can drift and regress without detection.
+  💡 Fix: Define and use Pydantic models (e.g., BacktestResult with greg_strategy_summaries, StrategyBacktestSummary, and request enums BacktestMode/SelectorDat
+
+🟢 *LOW* — TestClient not used as context manager in core endpoint tests
+  📄 `tests/web/test_core_endpoints.py`
+  tests/web/test_core_endpoints.py constructs TestClient(app) without a context manager. Depending on Starlette/FastAPI versions, lifespan events may not run reliably without context management.
+  💡 Fix: Prefer 'with TestClient(app) as client:' in fixtures to ensure startup/shutdown events run deterministically. Alternatively, use pytest fixture
