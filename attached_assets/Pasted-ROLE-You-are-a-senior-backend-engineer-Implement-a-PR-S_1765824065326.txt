@@ -1,0 +1,274 @@
+ROLE
+You are a senior backend engineer. Implement a “PR Supervisor” service inside this repo. Keep changes minimal and do not break existing app behavior.
+
+GOAL
+Add a new module/service that:
+
+Listens to GitHub PR webhooks (opened/synchronize/reopened).
+
+Checks out the PR branch in an isolated workspace.
+
+Runs verification commands (pytest/lint/etc).
+
+Posts a structured PR comment with results.
+
+If failing, runs a 3-agent debate (Optimist + Skeptic + Arbiter) to decide whether to auto-fix.
+
+If auto-fix is approved, invokes Codex CLI to apply minimal fixes on the PR branch, pushes commits, re-runs checks.
+
+Narrates each step to Telegram (no log-reading required).
+
+Must be disabled by default unless SUPERVISOR_ENABLED=1.
+
+CONSTRAINTS / SAFETY
+
+Never push to main. Only push to the PR branch.
+
+Hard stop after SUPERVISOR_MAX_LOOPS (default 3).
+
+Stop if diff too large: SUPERVISOR_MAX_FILES_CHANGED (default 10) or SUPERVISOR_MAX_LOC_CHANGED (default 300).
+
+Ignore PRs from forks unless SUPERVISOR_ALLOW_FORKS=1.
+
+Do not print secrets into logs or PR comments.
+
+Implementation Plan
+1) New package
+
+Create src/supervisor/ with:
+
+app.py – FastAPI app with endpoints:
+
+GET /health → {ok:true}
+
+POST /github/webhook → verifies signature then enqueues job
+
+config.py – pydantic settings (env vars below)
+
+github.py – webhook signature verify + GitHub API helpers (comment on PR, get PR info)
+
+workspace.py – isolated checkout using git worktree in a jobs dir
+
+runner.py – executes checks and captures output (timeout + streaming-safe)
+
+debate.py – runs Optimist/Skeptic/Arbiter LLM calls with different models
+
+codex_fixer.py – invokes Codex CLI in the workspace with a constrained prompt
+
+telegram_notify.py – sends short updates to Telegram chat
+
+models.py – job state, result structs
+
+store.py – minimal SQLite job store (or JSONL file) for job history
+
+__main__.py – python -m src.supervisor runs the server
+
+2) Environment variables
+
+Add these settings (with safe defaults):
+
+SUPERVISOR_ENABLED (default 0)
+
+SUPERVISOR_BASE_JOBS_DIR (default /tmp/pr_supervisor_jobs)
+
+SUPERVISOR_MAX_LOOPS (default 3)
+
+SUPERVISOR_MAX_FILES_CHANGED (default 10)
+
+SUPERVISOR_MAX_LOC_CHANGED (default 300)
+
+SUPERVISOR_ALLOW_FORKS (default 0)
+
+GITHUB_WEBHOOK_SECRET (required when enabled)
+
+GITHUB_TOKEN (required when enabled) — fine-grained PAT for repo: PR comments + push to branches
+
+TELEGRAM_BOT_TOKEN (optional)
+
+TELEGRAM_CHAT_ID (optional)
+
+OPENAI_API_KEY (only needed for debate)
+
+MODEL_OPTIMIST default gpt-5-mini
+
+MODEL_SKEPTIC default gpt-5.2-pro
+
+MODEL_ARBITER default gpt-5-mini
+
+CODEX_MODEL default gpt-5.1-codex
+
+CODEX_BIN default codex (path)
+
+CHECK_CMD_1 default python -m pytest -q
+
+CHECK_CMD_2 default python -m ruff check . (if ruff exists; otherwise skip gracefully)
+
+CHECK_CMD_3 optional (blank by default)
+
+3) Webhook handling
+
+Verify GitHub signature: X-Hub-Signature-256 with GITHUB_WEBHOOK_SECRET.
+
+Only handle events: pull_request with actions opened, reopened, synchronize.
+
+Enqueue a job keyed by (repo, pr_number, head_sha); if same SHA already processed, ignore.
+
+4) Workspace isolation
+
+For each job:
+
+Create a clean workspace:
+
+git clone bare cache OR git fetch in a cached repo folder
+
+use git worktree add <job_dir> <head_sha> (preferred)
+
+Ensure workspace is unique per job id.
+
+Capture the PR branch ref for pushing later.
+
+5) Verification runner
+
+Run check commands with:
+
+timeout per command (e.g., 10 minutes)
+
+capture stdout/stderr (truncate to last N lines for comments)
+
+produce a structured report:
+
+status per command
+
+top failure summary
+
+failing tests lines (best-effort extraction)
+
+Post a PR comment:
+
+“Supervisor Run #X” header
+
+commit SHA
+
+check results table
+
+short failure summary
+
+link to “Fix loop started” if applicable
+
+6) Debate system (Optimist / Skeptic / Arbiter)
+
+Implement debate.py:
+
+Inputs: verification report + small relevant context (changed files list + failure excerpt)
+
+Optimist prompt: argue why change is correct / how to fix minimally.
+
+Skeptic prompt: find hidden risks / edge cases / why tests might be misleading.
+
+Arbiter prompt: decide among:
+
+AUTO_FIX_ALLOWED true/false
+
+list of fix objectives (bullet points)
+
+risk level
+
+stop reason if false
+
+Keep debate outputs short (token-limited). Post Arbiter decision to PR comment and Telegram.
+
+7) Codex fix loop
+
+If Arbiter allows auto-fix:
+
+Build a constrained Codex prompt containing:
+
+fix objectives
+
+failing command output excerpt
+
+constraints: minimal diff, do not refactor, keep behavior, add tests if needed
+
+Run Codex CLI in the workspace (using CODEX_BIN and CODEX_MODEL).
+
+After Codex edits:
+
+run checks again
+
+compute diff stats (files changed, LOC changed)
+
+if within thresholds: commit + push to PR branch
+
+if not: stop and post “needs human review”
+
+Repeat up to SUPERVISOR_MAX_LOOPS.
+
+8) Telegram narration
+
+If Telegram env vars exist, send updates on:
+
+job start (PR number + branch + sha)
+
+checks pass/fail (summary)
+
+Arbiter decision
+
+Codex fix started
+
+fix pushed (commit hash)
+
+final result: ✅ ready to merge / 🛑 needs human
+
+Messages must be short and link to the PR URL.
+
+9) Deployment artifacts (VPS-ready but safe in Replit)
+
+Add:
+
+docker/supervisor.Dockerfile (or single Dockerfile) that runs the supervisor
+
+docker-compose.supervisor.yml with env passthrough
+
+Document in replit.md:
+
+Supervisor is off by default (SUPERVISOR_ENABLED=0)
+
+On VPS: set env vars and run compose/service
+
+10) Tests
+
+Add minimal unit tests (pytest):
+
+signature verification
+
+webhook payload parsing
+
+report formatting (PR comment text generation)
+
+diff stats calculation and threshold enforcement
+
+Tests must not require real GitHub network calls; mock API helpers.
+
+Acceptance Criteria
+
+SUPERVISOR_ENABLED=0: no behavior change to current app.
+
+SUPERVISOR_ENABLED=1: /health works and webhook endpoint validates signature and enqueues jobs.
+
+Supervisor produces a PR comment with check results (mocked in tests).
+
+Debate + arbiter logic runs with model names configurable.
+
+Codex loop is implemented but can be disabled with SUPERVISOR_ENABLE_CODEX=0 (add this flag).
+
+Telegram notifications fire when configured.
+
+All new tests pass.
+
+Quick guidance on “when to do what”
+
+Implement now (in repo) so you can iterate on architecture safely.
+
+Actually run it once VPS is ready (so webhooks and Codex CLI run in the correct environment).
+
+Until VPS exists, keep SUPERVISOR_ENABLED=0 and test using unit tests + local manual runs.
