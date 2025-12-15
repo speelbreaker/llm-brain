@@ -134,6 +134,7 @@ Before marking work complete, report:
 - **Greg Lab UI**: Dedicated dashboard tab for viewing and managing Greg strategy positions.
 - **Strategy Capabilities System**: Strategy-aware backtest configuration with metadata, parameter management, config override logic, field hints for UX, backtest event logging, and API endpoints for analysis.
 - **Selector Frequency Scan with Live IV**: Extended scan configuration with `iv_mode` toggle supporting 'synthetic', 'live', or 'hybrid' IV.
+- **Greg Backtesting Lab**: Dual-mode backtest system supporting `BacktestType.GENERIC` (covered call simulation) and `BacktestType.GREG_SELECTOR` (synchronous selector-only analysis). The Greg selector mode runs immediately, returns per-strategy pass/block/no_data diagnostics with `StrategyBacktestSummary` models, and supports `SelectorDataSource` options (SYNTHETIC, HARVESTER, LIVE) for different data sources.
 - **Telegram Code Review Agent**: A Telegram bot for automated code review and Repo Q&A with LLM integration.
 - **PR Supervisor Service**: Automated PR verification and auto-fix service that listens to GitHub PR webhooks, runs verification commands, posts structured PR comments, and can invoke auto-fixes if approved. It includes multi-provider LLM abstraction and Telegram Status Card UX. This service is disabled by default.
 

@@ -10,6 +10,7 @@ import json
 import os
 from collections import defaultdict
 from datetime import datetime, timezone
+from enum import Enum
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, HTTPException
@@ -26,6 +27,38 @@ from src.backtest.config_schema import (
 from src.backtest.config_presets import resolve_backtest_config, get_preset_config
 
 router = APIRouter()
+
+
+class BacktestType(str, Enum):
+    """Type of backtest to run."""
+    GENERIC = "generic"
+    GREG_SELECTOR = "greg_selector"
+
+
+class SelectorDataSource(str, Enum):
+    """Data source for selector frequency scans."""
+    SYNTHETIC = "synthetic"
+    HARVESTER = "harvester"
+    LIVE = "live"
+
+
+class GregStrategyStatus(BaseModel):
+    """Per-strategy diagnostic status from Greg selector."""
+    status: TypingLiteral["PASS", "BLOCKED", "NO_DATA"]
+    detail: str = ""
+
+
+class StrategyBacktestSummary(BaseModel):
+    """Per-strategy summary for Greg selector backtests."""
+    bot_id: str = "GregBot"
+    strategy_code: str
+    strategy_name: str
+    underlying: str
+    selections: int = 0
+    pass_count: int = 0
+    blocked_count: int = 0
+    no_data_count: int = 0
+    selection_pct: float = 0.0
 
 
 class BacktestRequest(BaseModel):
@@ -62,6 +95,14 @@ class BacktestStartRequest(BaseModel):
     chain_mode: str = "synthetic_grid"
     synthetic_iv_multiplier: float = 1.0
     selector_name: str = "generic_covered_call"
+    backtest_type: BacktestType = Field(
+        default=BacktestType.GENERIC,
+        description="Type of backtest: 'generic' for covered calls or 'greg_selector' for Greg strategy selection only"
+    )
+    greg_underlyings: List[str] = Field(
+        default=["BTC", "ETH"],
+        description="Underlyings for Greg selector mode (ignored in generic mode)"
+    )
 
 
 class InsightsRequest(BaseModel):
@@ -85,6 +126,10 @@ class SelectorScanRequest(BaseModel):
     iv_fallback_warning: bool = Field(
         default=True,
         description="If true, emit warnings when falling back from live to synthetic IV"
+    )
+    data_source: SelectorDataSource = Field(
+        default=SelectorDataSource.SYNTHETIC,
+        description="Data source for scan: 'synthetic' (universe), 'harvester' (historical), or 'live' (current snapshot)"
     )
 
 
@@ -209,6 +254,11 @@ def start_backtest(req: BacktestStartRequest) -> JSONResponse:
     from src.backtest.manager import backtest_manager
     from src.backtest.strategy_caps import apply_strategy_overrides
     
+    backtest_type_value = req.backtest_type.value if hasattr(req.backtest_type, 'value') else str(req.backtest_type)
+    
+    if backtest_type_value == BacktestType.GREG_SELECTOR.value:
+        return _run_greg_selector_backtest(req)
+    
     try:
         start_dt = datetime.fromisoformat(req.start.replace("Z", "+00:00"))
         end_dt = datetime.fromisoformat(req.end.replace("Z", "+00:00"))
@@ -277,9 +327,97 @@ def start_backtest(req: BacktestStartRequest) -> JSONResponse:
     
     return JSONResponse(content={
         "started": True,
+        "backtest_type": "generic",
         "warnings": validation.warnings,
         "effective_config": validation.effective_config,
     })
+
+
+def _run_greg_selector_backtest(req: BacktestStartRequest) -> JSONResponse:
+    """Run Greg selector-only backtest across specified underlyings.
+    
+    This mode runs a synchronous selector scan on the synthetic universe and returns
+    per-strategy pass/block diagnostics. Unlike generic backtests, this is an immediate
+    response that does NOT use the backtest_manager and does NOT block other backtests.
+    """
+    from src.backtest.selector_scan import SelectorScanConfig, run_selector_scan
+    
+    try:
+        start_dt = datetime.fromisoformat(req.start.replace("Z", "+00:00"))
+        end_dt = datetime.fromisoformat(req.end.replace("Z", "+00:00"))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=f"Invalid date format: {e}")
+    
+    if start_dt >= end_dt:
+        raise HTTPException(status_code=400, detail="Start date must be before end date")
+    
+    horizon_days = (end_dt - start_dt).days
+    if horizon_days < 1:
+        horizon_days = 1
+    
+    decision_interval_days = req.decision_interval_hours / 24.0
+    
+    try:
+        config = SelectorScanConfig(
+            selector_id="greg",
+            underlyings=req.greg_underlyings,
+            num_paths=1,
+            horizon_days=horizon_days,
+            decision_interval_days=decision_interval_days,
+            threshold_overrides={},
+            iv_mode="synthetic",
+            iv_fallback_warning=False,
+        )
+        result = run_selector_scan(config)
+        
+        strategy_summaries: List[Dict[str, Any]] = []
+        for underlying, strats in result.summary.items():
+            total_steps = result.total_steps.get(underlying, 1)
+            for strat_key, strat_data in strats.items():
+                pass_count = strat_data.get("pass_count", 0)
+                blocked_count = strat_data.get("blocked_count", 0)
+                no_data_count = strat_data.get("no_data_count", 0)
+                
+                if blocked_count == 0 and no_data_count == 0:
+                    blocked_count = int(total_steps - pass_count)
+                
+                total = pass_count + blocked_count + no_data_count
+                pass_pct = pass_count / total if total > 0 else 0.0
+                
+                strategy_summaries.append({
+                    "bot_id": "GregBot",
+                    "strategy_code": strat_key,
+                    "strategy_name": strat_key,
+                    "underlying": underlying,
+                    "selections": int(pass_count),
+                    "pass_count": int(pass_count),
+                    "blocked_count": int(blocked_count),
+                    "no_data_count": int(no_data_count),
+                    "selection_pct": round(pass_pct * 100, 2),
+                    "status": "PASS" if pass_count > 0 else ("NO_DATA" if no_data_count > 0 else "BLOCKED"),
+                })
+        
+        return JSONResponse(content={
+            "started": True,
+            "backtest_type": "greg_selector",
+            "completed": True,
+            "execution_mode": "synchronous",
+            "greg_underlyings": req.greg_underlyings,
+            "horizon_days": horizon_days,
+            "decision_interval_days": decision_interval_days,
+            "summary": result.summary,
+            "total_steps": result.total_steps,
+            "strategy_summaries": strategy_summaries,
+        })
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={
+                "started": False,
+                "backtest_type": "greg_selector",
+                "error": str(e),
+            }
+        )
 
 
 @router.get("/api/backtest/status")
@@ -821,12 +959,20 @@ def download_strategy_summary(run_id: str, format: str = "json"):
 @router.post("/api/backtest/selector_scan")
 def selector_scan(req: SelectorScanRequest) -> JSONResponse:
     """
-    Run a selector frequency scan in the synthetic universe and return summary.
-    Backtest-only; no orders, no Deribit calls.
+    Run a selector frequency scan and return summary.
+    Supports synthetic universe, harvester historical data, or live snapshot.
+    Backtest-only; no orders.
     """
     from src.backtest.selector_scan import SelectorScanConfig, run_selector_scan
     
     try:
+        data_source_value = req.data_source.value if hasattr(req.data_source, 'value') else str(req.data_source)
+        
+        if data_source_value == SelectorDataSource.LIVE.value:
+            return _run_live_selector_scan(req)
+        elif data_source_value == SelectorDataSource.HARVESTER.value:
+            return _run_harvester_selector_scan(req)
+        
         config = SelectorScanConfig(
             selector_id=req.selector_id,
             underlyings=req.underlyings,
@@ -841,6 +987,7 @@ def selector_scan(req: SelectorScanRequest) -> JSONResponse:
         
         response_data: Dict[str, Any] = {
             "ok": True,
+            "data_source": data_source_value,
             "summary": result.summary,
             "total_steps": result.total_steps,
             "config": {
@@ -856,6 +1003,131 @@ def selector_scan(req: SelectorScanRequest) -> JSONResponse:
         return JSONResponse(content=response_data)
     except Exception as e:
         return JSONResponse(content={"ok": False, "error": str(e)})
+
+
+def _run_live_selector_scan(req: SelectorScanRequest) -> JSONResponse:
+    """Run selector scan using current live market snapshot."""
+    from src.bots.gregbot import get_gregbot_evaluations_for_underlying
+    
+    try:
+        summary: Dict[str, Dict[str, Dict[str, float]]] = {}
+        strategy_diagnostics: Dict[str, Dict[str, Dict[str, str]]] = {}
+        
+        for underlying in req.underlyings:
+            try:
+                eval_result = get_gregbot_evaluations_for_underlying(underlying)
+                selected = eval_result.get("selected_strategy", "NO_TRADE")
+                strategies = eval_result.get("strategies", [])
+                
+                underlying_summary: Dict[str, Dict[str, float]] = {}
+                underlying_diagnostics: Dict[str, Dict[str, str]] = {}
+                
+                for strat in strategies:
+                    key = strat.strategy_key
+                    status = strat.status.upper()
+                    is_selected = 1.0 if key == selected else 0.0
+                    underlying_summary[key] = {
+                        "pass_count": 1.0 if status == "PASS" else 0.0,
+                        "total_steps": 1,
+                        "pass_pct": 1.0 if status == "PASS" else 0.0,
+                        "selected": is_selected,
+                    }
+                    underlying_diagnostics[key] = {
+                        "status": status,
+                        "detail": strat.summary,
+                    }
+                
+                summary[underlying.upper()] = underlying_summary
+                strategy_diagnostics[underlying.upper()] = underlying_diagnostics
+            except Exception as e:
+                summary[underlying.upper()] = {"error": {"pass_count": 0, "total_steps": 0, "pass_pct": 0}}
+        
+        return JSONResponse(content={
+            "ok": True,
+            "data_source": "live",
+            "summary": summary,
+            "total_steps": {u: 1 for u in req.underlyings},
+            "strategy_diagnostics": strategy_diagnostics,
+            "config": {"iv_mode": "live", "iv_mode_description": "Current market snapshot"},
+        })
+    except Exception as e:
+        return JSONResponse(content={"ok": False, "data_source": "live", "error": str(e)})
+
+
+def _run_harvester_selector_scan(req: SelectorScanRequest) -> JSONResponse:
+    """Run selector scan using harvester historical data."""
+    from pathlib import Path
+    import pandas as pd
+    from src.strategies.greg_selector import GregSelectorSensors, evaluate_greg_selector
+    
+    try:
+        harvester_base = Path("data/live_deribit")
+        if not harvester_base.exists():
+            return JSONResponse(content={
+                "ok": False,
+                "data_source": "harvester",
+                "error": "harvester_not_configured",
+                "detail": "No harvester data directory found at data/live_deribit",
+            })
+        
+        summary: Dict[str, Dict[str, Dict[str, float]]] = {}
+        total_steps: Dict[str, int] = {}
+        
+        for underlying in req.underlyings:
+            underlying_dir = harvester_base / underlying.upper()
+            if not underlying_dir.exists():
+                summary[underlying.upper()] = {}
+                total_steps[underlying.upper()] = 0
+                continue
+            
+            parquet_files = list(underlying_dir.rglob("*.parquet"))
+            if not parquet_files:
+                summary[underlying.upper()] = {}
+                total_steps[underlying.upper()] = 0
+                continue
+            
+            strategy_counts: Dict[str, int] = {}
+            step_count = 0
+            
+            for pf in parquet_files[:min(len(parquet_files), req.horizon_days)]:
+                try:
+                    df = pd.read_parquet(pf)
+                    if df.empty:
+                        continue
+                    
+                    sensors = GregSelectorSensors(
+                        vrp_30d=df.get("vrp_30d", pd.Series([None])).iloc[0] if "vrp_30d" in df.columns else None,
+                        adx_14d=df.get("adx_14d", pd.Series([None])).iloc[0] if "adx_14d" in df.columns else None,
+                        skew_25d=df.get("skew_25d", pd.Series([None])).iloc[0] if "skew_25d" in df.columns else None,
+                    )
+                    
+                    decision = evaluate_greg_selector(sensors)
+                    selected = decision.selected_strategy
+                    strategy_counts[selected] = strategy_counts.get(selected, 0) + 1
+                    step_count += 1
+                except Exception:
+                    continue
+            
+            underlying_summary: Dict[str, Dict[str, float]] = {}
+            for strat, count in strategy_counts.items():
+                underlying_summary[strat] = {
+                    "pass_count": float(count),
+                    "total_steps": float(step_count),
+                    "pass_pct": count / step_count if step_count > 0 else 0.0,
+                }
+            
+            summary[underlying.upper()] = underlying_summary
+            total_steps[underlying.upper()] = step_count
+        
+        return JSONResponse(content={
+            "ok": True,
+            "data_source": "harvester",
+            "summary": summary,
+            "total_steps": total_steps,
+            "config": {"iv_mode": "harvester", "iv_mode_description": "Historical harvester snapshots"},
+        })
+    except Exception as e:
+        return JSONResponse(content={"ok": False, "data_source": "harvester", "error": str(e)})
 
 
 @router.post("/api/backtest/selector_heatmap")
