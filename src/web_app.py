@@ -3526,6 +3526,53 @@ def update_runtime_config(update: RuntimeConfigUpdate) -> JSONResponse:
     })
 
 
+SUPERVISOR_API_URL = os.environ.get("SUPERVISOR_API_URL", "")
+
+
+@app.get("/api/supervisor/jobs")
+async def get_supervisor_jobs():
+    """Proxy supervisor jobs list from supervisor service."""
+    if not SUPERVISOR_API_URL:
+        return JSONResponse(content={"error": "not_configured", "jobs": []})
+    
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(f"{SUPERVISOR_API_URL.rstrip('/')}/jobs")
+            resp.raise_for_status()
+            return JSONResponse(content=resp.json())
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={"error": str(e), "jobs": []}
+        )
+
+
+@app.get("/api/supervisor/jobs/{job_id}")
+async def get_supervisor_job(job_id: str):
+    """Proxy single supervisor job from supervisor service."""
+    if not SUPERVISOR_API_URL:
+        return JSONResponse(
+            status_code=503,
+            content={"error": "Supervisor not configured"}
+        )
+    
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(f"{SUPERVISOR_API_URL.rstrip('/')}/jobs/{job_id}")
+            resp.raise_for_status()
+            return JSONResponse(content=resp.json())
+    except httpx.HTTPStatusError as e:
+        return JSONResponse(
+            status_code=e.response.status_code,
+            content={"error": str(e)}
+        )
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={"error": str(e)}
+        )
+
+
 @app.get("/", response_class=HTMLResponse)
 def index() -> str:
     """Full HTML dashboard with Live Agent view and Backtesting Lab."""
@@ -4104,6 +4151,7 @@ def index() -> str:
     <button class="tab" onclick="showTab('greglab')">Greg Lab</button>
     <button class="tab" onclick="showTab('health')">System Health</button>
     <button class="tab" onclick="showTab('chat')">Chat</button>
+    <button class="tab" onclick="showTab('supervisor')">Supervisor</button>
   </div>
 
   <!-- DASHBOARD TAB (formerly Live Agent) -->
@@ -6314,6 +6362,54 @@ def index() -> str:
     </div>
   </div>
 
+  <!-- SUPERVISOR TAB -->
+  <div id="tab-supervisor" class="tab-content">
+    <div class="section">
+      <h2>PR Supervisor</h2>
+      <p style="color: #888; margin-bottom: 15px;">Monitor automated PR verification and auto-fix jobs.</p>
+      
+      <div id="supervisor-status" style="margin-bottom: 1rem;"></div>
+      
+      <div id="supervisor-not-configured" style="display: none; text-align: center; padding: 2rem; background: #fff3e0; border-radius: 8px; color: #e65100;">
+        <h3>Supervisor Not Configured</h3>
+        <p>Set <code>SUPERVISOR_API_URL</code> environment variable to connect to the Supervisor service.</p>
+      </div>
+      
+      <div id="supervisor-content" style="display: none;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+          <span style="font-size: 0.9rem; color: #666;">Showing latest 50 jobs</span>
+          <button onclick="loadSupervisorJobs()" style="padding: 0.5rem 1rem;">Refresh</button>
+        </div>
+        
+        <div style="overflow-x: auto;">
+          <table class="steps-table">
+            <thead>
+              <tr>
+                <th>PR</th>
+                <th>Branch</th>
+                <th>SHA</th>
+                <th>Status</th>
+                <th>Phase</th>
+                <th>Started</th>
+                <th>Updated</th>
+                <th>Loops</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody id="supervisor-jobs-body">
+              <tr><td colspan="9" style="text-align:center;color:#666;">Loading...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+      
+      <div id="supervisor-job-detail" style="display: none; margin-top: 1.5rem;">
+        <h3 style="margin-bottom: 1rem;">Job Details</h3>
+        <div id="supervisor-detail-content"></div>
+      </div>
+    </div>
+  </div>
+
   <script>
     let backtestResult = null;
     
@@ -6341,6 +6437,9 @@ def index() -> str:
       if (name === 'calibration') {{
         fetchAutoCalibStatus();
       }}
+      if (name === 'supervisor') {{
+        loadSupervisorJobs();
+      }}
     }}
     
     function toggleBacktestSection(which) {{
@@ -6353,6 +6452,160 @@ def index() -> str:
       el.style.display = isHidden ? 'block' : 'none';
       if (iconEl) {{
         iconEl.innerHTML = isHidden ? '&#9660;' : '&#9654;';
+      }}
+    }}
+    
+    // ==============================================
+    // SUPERVISOR TAB FUNCTIONS
+    // ==============================================
+    
+    async function loadSupervisorJobs() {{
+      try {{
+        const resp = await fetch('/api/supervisor/jobs');
+        const data = await resp.json();
+        
+        if (data.error === 'not_configured') {{
+          document.getElementById('supervisor-not-configured').style.display = 'block';
+          document.getElementById('supervisor-content').style.display = 'none';
+          return;
+        }}
+        
+        document.getElementById('supervisor-not-configured').style.display = 'none';
+        document.getElementById('supervisor-content').style.display = 'block';
+        
+        const tbody = document.getElementById('supervisor-jobs-body');
+        if (!data.jobs || data.jobs.length === 0) {{
+          tbody.innerHTML = '<tr><td colspan="9" style="text-align:center;color:#666;">No jobs found</td></tr>';
+          return;
+        }}
+        
+        tbody.innerHTML = data.jobs.map(job => {{
+          const statusColors = {{
+            'pending': '#fff3e0',
+            'running': '#e3f2fd',
+            'checks_passed': '#e8f5e9',
+            'checks_failed': '#ffebee',
+            'debating': '#f3e5f5',
+            'fixing': '#fff8e1',
+            'fixed': '#e8f5e9',
+            'needs_human': '#ffebee',
+            'error': '#ffcdd2',
+            'skipped': '#eeeeee'
+          }};
+          const statusEmoji = {{
+            'pending': '⏳',
+            'running': '🔄',
+            'checks_passed': '✅',
+            'checks_failed': '❌',
+            'debating': '💬',
+            'fixing': '🔧',
+            'fixed': '✅',
+            'needs_human': '🛑',
+            'error': '❗',
+            'skipped': '⏭️'
+          }};
+          
+          const started = new Date(job.created_at).toLocaleString();
+          const updated = new Date(job.updated_at).toLocaleString();
+          const loops = job.fix_attempts ? job.fix_attempts.length : 0;
+          const status = job.status || 'pending';
+          
+          return `
+            <tr>
+              <td><a href="${{job.pr_url}}" target="_blank">#${{job.pr_number}}</a></td>
+              <td><code>${{job.head_ref}}</code></td>
+              <td><code>${{job.head_sha?.slice(0,8) || 'N/A'}}</code></td>
+              <td style="background: ${{statusColors[status] || '#fff'}}">${{statusEmoji[status] || ''}} ${{status}}</td>
+              <td>${{job.arbiter_decision ? 'DONE' : status.toUpperCase()}}</td>
+              <td style="font-size:0.8rem">${{started}}</td>
+              <td style="font-size:0.8rem">${{updated}}</td>
+              <td>${{loops}}</td>
+              <td><button onclick="viewSupervisorJob('${{job.job_id}}')" style="padding:0.25rem 0.5rem;font-size:0.8rem;">View</button></td>
+            </tr>
+          `;
+        }}).join('');
+        
+      }} catch (err) {{
+        console.error('Failed to load supervisor jobs:', err);
+        document.getElementById('supervisor-jobs-body').innerHTML = 
+          '<tr><td colspan="9" style="text-align:center;color:#c00;">Error loading jobs</td></tr>';
+      }}
+    }}
+    
+    async function viewSupervisorJob(jobId) {{
+      try {{
+        const resp = await fetch(`/api/supervisor/jobs/${{jobId}}`);
+        const job = await resp.json();
+        
+        const detailDiv = document.getElementById('supervisor-job-detail');
+        const contentDiv = document.getElementById('supervisor-detail-content');
+        
+        let checksHtml = '';
+        if (job.verification && job.verification.checks) {{
+          checksHtml = `
+            <h4>Checks</h4>
+            <ul>
+              ${{job.verification.checks.map(c => `
+                <li>${{c.passed ? '✅' : '❌'}} <code>${{c.command}}</code></li>
+              `).join('')}}
+            </ul>
+          `;
+          if (job.verification.failure_summary) {{
+            const excerpt = job.verification.failure_summary.slice(-500);
+            checksHtml += `<details><summary>Failure excerpt</summary><pre style="background:#f5f5f5;padding:0.5rem;overflow-x:auto;max-height:200px;">${{excerpt}}</pre></details>`;
+          }}
+        }}
+        
+        let debateHtml = '';
+        if (job.arbiter_decision) {{
+          const d = job.arbiter_decision;
+          debateHtml = `
+            <h4>Arbiter Decision</h4>
+            <ul>
+              <li><strong>Auto-fix:</strong> ${{d.auto_fix_allowed ? '✅ Approved' : '❌ Denied'}}</li>
+              <li><strong>Risk:</strong> ${{d.risk_level}}</li>
+              ${{d.stop_reason ? `<li><strong>Reason:</strong> ${{d.stop_reason}}</li>` : ''}}
+              ${{d.fix_objectives?.length ? `<li><strong>Objectives:</strong> ${{d.fix_objectives.join(', ')}}</li>` : ''}}
+            </ul>
+          `;
+        }}
+        
+        let fixHtml = '';
+        if (job.fix_attempts && job.fix_attempts.length > 0) {{
+          fixHtml = `
+            <h4>Fix Attempts (${{job.fix_attempts.length}})</h4>
+            <ul>
+              ${{job.fix_attempts.map(f => `
+                <li>Loop ${{f.loop_number}}: ${{f.committed ? '✅ Committed' : '❌ Not committed'}}
+                  ${{f.diff_stats ? ` (${{f.diff_stats.files_changed}} files, +${{f.diff_stats.lines_added}}/-${{f.diff_stats.lines_removed}})` : ''}}
+                </li>
+              `).join('')}}
+            </ul>
+          `;
+        }}
+        
+        contentDiv.innerHTML = `
+          <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(200px, 1fr));gap:1rem;margin-bottom:1rem;">
+            <div><strong>Job ID:</strong> ${{job.job_id}}</div>
+            <div><strong>Repo:</strong> ${{job.repo_full_name}}</div>
+            <div><strong>PR:</strong> <a href="${{job.pr_url}}" target="_blank">#${{job.pr_number}}</a></div>
+            <div><strong>Status:</strong> ${{job.status}}</div>
+            <div><strong>Branch:</strong> ${{job.head_ref}}</div>
+            <div><strong>Commit:</strong> <code>${{job.head_sha?.slice(0,8)}}</code></div>
+          </div>
+          ${{checksHtml}}
+          ${{debateHtml}}
+          ${{fixHtml}}
+          ${{job.final_message ? `<p><strong>Final:</strong> ${{job.final_message}}</p>` : ''}}
+          ${{job.error_message ? `<p style="color:#c00;"><strong>Error:</strong> ${{job.error_message}}</p>` : ''}}
+          <button onclick="document.getElementById('supervisor-job-detail').style.display='none'" style="margin-top:1rem;">Close</button>
+        `;
+        
+        detailDiv.style.display = 'block';
+        
+      }} catch (err) {{
+        console.error('Failed to load job:', err);
+        alert('Failed to load job details');
       }}
     }}
     

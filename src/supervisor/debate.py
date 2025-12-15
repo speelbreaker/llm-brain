@@ -1,20 +1,34 @@
-"""3-agent debate system: Optimist, Skeptic, Arbiter."""
+"""3-agent debate system with multi-provider support: Optimist, Skeptic, Arbiter."""
 
 import json
-from typing import Any, Optional
+import logging
+from typing import Any, Literal, Optional
 
-from openai import AsyncOpenAI
+from pydantic import BaseModel, ValidationError
 
 from .config import SupervisorSettings
+from .llm import get_provider_for_role, DebateResponse
 from .models import ArbiterDecision, VerificationReport
+
+logger = logging.getLogger(__name__)
+
+
+DEBATE_SCHEMA = """{
+  "role": "optimist|skeptic|arbiter",
+  "summary": "string (max 300 chars)",
+  "bullets": ["string", "string", "string"] (max 3 items),
+  "auto_fix_allowed": true|false (arbiter only),
+  "objectives": ["string", "string"] (arbiter only, max 5 items),
+  "risk_level": "low|med|high" (arbiter only),
+  "stop_reason": "string|null" (arbiter only, required if auto_fix_allowed=false)
+}"""
 
 
 class DebateSystem:
-    """Runs Optimist/Skeptic/Arbiter debate to decide on auto-fix."""
+    """Runs Optimist/Skeptic/Arbiter debate with multi-provider support."""
     
-    def __init__(self, settings: SupervisorSettings, client: Optional[AsyncOpenAI] = None):
+    def __init__(self, settings: SupervisorSettings):
         self.settings = settings
-        self.client = client or AsyncOpenAI()
         self.max_context_chars = 4000
     
     async def run_debate(
@@ -27,12 +41,20 @@ class DebateSystem:
         """Run the 3-agent debate and return Arbiter's decision."""
         context = self._build_context(verification, changed_files, pr_title, pr_body)
         
-        optimist_response = await self._call_optimist(context)
-        skeptic_response = await self._call_skeptic(context, optimist_response)
-        arbiter_decision = await self._call_arbiter(context, optimist_response, skeptic_response)
+        optimist_response = await self._call_agent("optimist", context)
+        skeptic_response = await self._call_agent(
+            "skeptic", 
+            context, 
+            optimist_view=optimist_response
+        )
+        arbiter_decision = await self._call_arbiter(
+            context, 
+            optimist_response, 
+            skeptic_response
+        )
         
-        arbiter_decision.optimist_summary = optimist_response[:500]
-        arbiter_decision.skeptic_summary = skeptic_response[:500]
+        arbiter_decision.optimist_summary = optimist_response.get("summary", "")[:500]
+        arbiter_decision.skeptic_summary = skeptic_response.get("summary", "")[:500]
         
         return arbiter_decision
     
@@ -64,14 +86,96 @@ class DebateSystem:
             f"  Failing tests: {', '.join(verification.failing_tests[:5])}",
             "",
             "Failure Summary:",
-            verification.failure_summary[:1500],
+            verification.failure_summary[:1500] if verification.failure_summary else "None",
         ])
         
         return "\n".join(parts)[:self.max_context_chars]
     
-    async def _call_optimist(self, context: str) -> str:
-        """Call the Optimist agent."""
-        prompt = f"""You are the OPTIMIST in a code review debate. Your role is to:
+    async def _call_agent(
+        self,
+        role: Literal["optimist", "skeptic"],
+        context: str,
+        optimist_view: Optional[dict] = None,
+    ) -> dict:
+        """Call an agent (Optimist or Skeptic) with retry for JSON validation."""
+        provider, model = get_provider_for_role(role, self.settings)
+        
+        if role == "optimist":
+            prompt = self._build_optimist_prompt(context)
+        else:
+            prompt = self._build_skeptic_prompt(context, optimist_view or {})
+        
+        for attempt in range(2):
+            try:
+                result = await provider.generate_json(
+                    prompt=prompt,
+                    model=model,
+                    schema_hint=DEBATE_SCHEMA,
+                    max_tokens=600,
+                    temperature=0.7 if attempt == 0 else 0.3,
+                )
+                
+                response = DebateResponse(role=role, **result)
+                return response.model_dump()
+                
+            except (json.JSONDecodeError, ValidationError) as e:
+                logger.warning(f"JSON validation failed for {role} (attempt {attempt + 1}): {e}")
+                if attempt == 0:
+                    prompt = f"{prompt}\n\nIMPORTANT: Return ONLY valid JSON matching the schema."
+                continue
+        
+        return {
+            "role": role,
+            "summary": "Failed to generate valid response",
+            "bullets": [],
+        }
+    
+    async def _call_arbiter(
+        self,
+        context: str,
+        optimist_view: dict,
+        skeptic_view: dict,
+    ) -> ArbiterDecision:
+        """Call the Arbiter agent to make final decision with retry."""
+        provider, model = get_provider_for_role("arbiter", self.settings)
+        prompt = self._build_arbiter_prompt(context, optimist_view, skeptic_view)
+        
+        for attempt in range(2):
+            try:
+                result = await provider.generate_json(
+                    prompt=prompt,
+                    model=model,
+                    schema_hint=DEBATE_SCHEMA,
+                    max_tokens=500,
+                    temperature=0.3,
+                )
+                
+                response = DebateResponse(role="arbiter", **result)
+                
+                return ArbiterDecision(
+                    auto_fix_allowed=response.auto_fix_allowed or False,
+                    fix_objectives=response.objectives or [],
+                    risk_level=response.risk_level or "unknown",
+                    stop_reason=response.stop_reason,
+                    arbiter_reasoning=response.summary,
+                )
+                
+            except (json.JSONDecodeError, ValidationError) as e:
+                logger.warning(f"JSON validation failed for arbiter (attempt {attempt + 1}): {e}")
+                if attempt == 0:
+                    prompt = f"{prompt}\n\nIMPORTANT: Return ONLY valid JSON matching the schema."
+                continue
+        
+        return ArbiterDecision(
+            auto_fix_allowed=False,
+            risk_level="unknown",
+            stop_reason="debate_output_invalid",
+            arbiter_reasoning="Failed to parse arbiter response",
+        )
+    
+    def _build_optimist_prompt(self, context: str) -> str:
+        """Build the Optimist agent prompt."""
+        return f"""You are the OPTIMIST in a code review debate. Your role is to:
 1. Argue why the code changes are likely correct
 2. Propose minimal fixes for any failing tests
 3. Be constructive and solution-oriented
@@ -79,25 +183,21 @@ class DebateSystem:
 Context:
 {context}
 
-Provide a brief analysis (max 300 words):
-1. Why the changes are probably correct
-2. Likely causes of test failures (if any)
-3. Suggested minimal fixes
+Respond with JSON matching this schema:
+{{
+  "role": "optimist",
+  "summary": "Brief analysis of why changes are correct (max 300 chars)",
+  "bullets": ["point 1", "point 2", "point 3"]
+}}
 
-Be concise and actionable."""
+Be concise. Max 3 bullet points. Focus on solutions."""
 
-        response = await self.client.chat.completions.create(
-            model=self.settings.model_optimist,
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=500,
-            temperature=0.7,
-        )
+    def _build_skeptic_prompt(self, context: str, optimist_view: dict) -> str:
+        """Build the Skeptic agent prompt."""
+        optimist_summary = optimist_view.get("summary", "")
+        optimist_bullets = optimist_view.get("bullets", [])
         
-        return response.choices[0].message.content or ""
-    
-    async def _call_skeptic(self, context: str, optimist_view: str) -> str:
-        """Call the Skeptic agent."""
-        prompt = f"""You are the SKEPTIC in a code review debate. Your role is to:
+        return f"""You are the SKEPTIC in a code review debate. Your role is to:
 1. Find hidden risks and edge cases
 2. Challenge the Optimist's assumptions
 3. Identify why tests might be failing for good reasons
@@ -106,87 +206,50 @@ Context:
 {context}
 
 Optimist's view:
-{optimist_view[:800]}
+Summary: {optimist_summary}
+Points: {', '.join(optimist_bullets[:3])}
 
-Provide a brief counter-analysis (max 300 words):
-1. Potential risks the Optimist missed
-2. Edge cases that could cause issues
-3. Reasons why auto-fix might be dangerous
+Respond with JSON matching this schema:
+{{
+  "role": "skeptic",
+  "summary": "Counter-analysis of risks (max 300 chars)",
+  "bullets": ["risk 1", "risk 2", "risk 3"]
+}}
 
-Be constructive but thorough in finding risks."""
+Be thorough but concise. Max 3 bullet points."""
 
-        response = await self.client.chat.completions.create(
-            model=self.settings.model_skeptic,
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=500,
-            temperature=0.7,
-        )
-        
-        return response.choices[0].message.content or ""
-    
-    async def _call_arbiter(
+    def _build_arbiter_prompt(
         self,
         context: str,
-        optimist_view: str,
-        skeptic_view: str,
-    ) -> ArbiterDecision:
-        """Call the Arbiter agent to make final decision."""
-        prompt = f"""You are the ARBITER in a code review debate. Based on the Optimist and Skeptic views, make a decision.
+        optimist_view: dict,
+        skeptic_view: dict,
+    ) -> str:
+        """Build the Arbiter agent prompt."""
+        return f"""You are the ARBITER in a code review debate. Make a decision based on both perspectives.
 
 Context:
 {context}
 
 Optimist's view:
-{optimist_view[:600]}
+{optimist_view.get('summary', '')}
+{', '.join(optimist_view.get('bullets', [])[:3])}
 
 Skeptic's view:
-{skeptic_view[:600]}
+{skeptic_view.get('summary', '')}
+{', '.join(skeptic_view.get('bullets', [])[:3])}
 
-Make a decision in JSON format:
+Respond with JSON matching this schema:
 {{
-    "auto_fix_allowed": true/false,
-    "fix_objectives": ["objective 1", "objective 2"],
-    "risk_level": "low" | "medium" | "high",
-    "stop_reason": "reason if auto_fix_allowed is false, else null",
-    "reasoning": "brief explanation of your decision"
+  "role": "arbiter",
+  "summary": "Your decision reasoning (max 300 chars)",
+  "bullets": ["key point 1", "key point 2"],
+  "auto_fix_allowed": true or false,
+  "objectives": ["fix objective 1", "fix objective 2"] (if auto_fix_allowed),
+  "risk_level": "low" or "med" or "high",
+  "stop_reason": "reason for denial" (required if auto_fix_allowed is false)
 }}
 
 Rules:
 - Allow auto-fix only for low/medium risk with clear fix objectives
-- Reject if: security concerns, complex refactoring needed, unclear failures
-- Keep fix_objectives specific and actionable
-
-Respond with only the JSON object."""
-
-        response = await self.client.chat.completions.create(
-            model=self.settings.model_arbiter,
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=400,
-            temperature=0.3,
-        )
-        
-        content = response.choices[0].message.content or "{}"
-        
-        try:
-            content = content.strip()
-            if content.startswith("```"):
-                content = content.split("```")[1]
-                if content.startswith("json"):
-                    content = content[4:]
-            
-            data = json.loads(content)
-            
-            return ArbiterDecision(
-                auto_fix_allowed=data.get("auto_fix_allowed", False),
-                fix_objectives=data.get("fix_objectives", []),
-                risk_level=data.get("risk_level", "unknown"),
-                stop_reason=data.get("stop_reason"),
-                arbiter_reasoning=data.get("reasoning", ""),
-            )
-        except (json.JSONDecodeError, KeyError):
-            return ArbiterDecision(
-                auto_fix_allowed=False,
-                risk_level="unknown",
-                stop_reason="Failed to parse Arbiter decision",
-                arbiter_reasoning=content[:500],
-            )
+- Reject if: security concerns, complex refactoring, unclear failures
+- Keep objectives specific and actionable"""

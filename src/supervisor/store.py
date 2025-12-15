@@ -9,12 +9,15 @@ from .models import SupervisorJob
 
 
 class JobStore:
-    """JSONL-based job history store."""
+    """JSONL-based job history store with message registry support."""
     
     def __init__(self, storage_path: str = "/tmp/pr_supervisor_jobs/job_history.jsonl"):
         self.storage_path = Path(storage_path)
         self.storage_path.parent.mkdir(parents=True, exist_ok=True)
         self._jobs_cache: dict[str, SupervisorJob] = {}
+        self._message_registry: dict[str, int] = {}
+        self._registry_path = self.storage_path.parent / "message_registry.json"
+        self._load_message_registry()
     
     def _load_cache(self) -> None:
         """Load jobs from JSONL file into cache."""
@@ -90,3 +93,43 @@ class JobStore:
             reverse=True
         )
         return jobs[:limit]
+    
+    def _load_message_registry(self) -> None:
+        """Load Telegram message registry from JSON file."""
+        if not self._registry_path.exists():
+            return
+        try:
+            with open(self._registry_path, "r") as f:
+                self._message_registry = json.load(f)
+        except Exception:
+            self._message_registry = {}
+    
+    def _save_message_registry(self) -> None:
+        """Save Telegram message registry to JSON file."""
+        try:
+            with open(self._registry_path, "w") as f:
+                json.dump(self._message_registry, f)
+        except Exception:
+            pass
+    
+    def get_telegram_message_id(self, repo: str, pr_number: int) -> Optional[int]:
+        """Get stored Telegram message ID for a PR."""
+        key = f"{repo}:{pr_number}"
+        return self._message_registry.get(key)
+    
+    def set_telegram_message_id(self, repo: str, pr_number: int, message_id: int) -> None:
+        """Store Telegram message ID for a PR."""
+        key = f"{repo}:{pr_number}"
+        self._message_registry[key] = message_id
+        self._save_message_registry()
+    
+    def clear_telegram_message_id(self, repo: str, pr_number: int) -> None:
+        """Clear Telegram message ID for a PR."""
+        key = f"{repo}:{pr_number}"
+        if key in self._message_registry:
+            del self._message_registry[key]
+            self._save_message_registry()
+    
+    def get_message_registry(self) -> dict[str, int]:
+        """Get full message registry (for export)."""
+        return self._message_registry.copy()

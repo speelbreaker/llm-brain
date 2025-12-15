@@ -1,6 +1,6 @@
 """Configuration settings for PR Supervisor."""
 
-from typing import Optional
+from typing import Literal, Optional
 from pydantic import Field
 from pydantic_settings import BaseSettings
 
@@ -19,10 +19,23 @@ class SupervisorSettings(BaseSettings):
     github_webhook_secret: Optional[str] = Field(default=None, alias="GITHUB_WEBHOOK_SECRET")
     github_token: Optional[str] = Field(default=None, alias="GITHUB_TOKEN")
     
+    telegram_enabled: bool = Field(default=False, alias="SUPERVISOR_TELEGRAM_ENABLED")
     telegram_bot_token: Optional[str] = Field(default=None, alias="TELEGRAM_BOT_TOKEN")
     telegram_chat_id: Optional[str] = Field(default=None, alias="TELEGRAM_CHAT_ID")
+    telegram_status_mode: str = Field(default="card", alias="TELEGRAM_STATUS_MODE")
+    telegram_max_chars: int = Field(default=3500, alias="TELEGRAM_MAX_CHARS")
+    telegram_debounce_seconds: int = Field(default=3, alias="TELEGRAM_DEBOUNCE_SECONDS")
     
     openai_api_key: Optional[str] = Field(default=None, alias="OPENAI_API_KEY")
+    gemini_api_key: Optional[str] = Field(default=None, alias="GEMINI_API_KEY")
+    gemini_base_url: str = Field(
+        default="https://generativelanguage.googleapis.com/v1beta",
+        alias="GEMINI_BASE_URL"
+    )
+    
+    optimist_provider: str = Field(default="openai", alias="OPTIMIST_PROVIDER")
+    skeptic_provider: str = Field(default="openai", alias="SKEPTIC_PROVIDER")
+    arbiter_provider: str = Field(default="openai", alias="ARBITER_PROVIDER")
     
     model_optimist: str = Field(default="gpt-4o-mini", alias="MODEL_OPTIMIST")
     model_skeptic: str = Field(default="gpt-4o", alias="MODEL_SKEPTIC")
@@ -35,6 +48,8 @@ class SupervisorSettings(BaseSettings):
     check_cmd_3: Optional[str] = Field(default=None, alias="CHECK_CMD_3")
     
     command_timeout: int = Field(default=600, alias="SUPERVISOR_COMMAND_TIMEOUT")
+    
+    supervisor_api_url: Optional[str] = Field(default=None, alias="SUPERVISOR_API_URL")
     
     model_config = {"env_file": ".env", "extra": "ignore"}
     

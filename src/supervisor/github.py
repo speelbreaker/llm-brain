@@ -136,70 +136,67 @@ def format_pr_comment(
     fix_started: bool = False,
     arbiter_decision: Optional[dict[str, Any]] = None,
     final_status: Optional[str] = None,
+    telegram_enabled: bool = False,
 ) -> str:
-    """Format a structured PR comment with check results."""
+    """Format a concise, readable PR comment with check results."""
     lines = [
         f"## 🤖 Supervisor Run #{run_number}",
         "",
         f"**Commit:** `{commit_sha[:8]}`",
         "",
-        "### Check Results",
-        "",
-        "| Command | Status | Duration |",
-        "|---------|--------|----------|",
     ]
     
-    for check in checks:
-        status = "✅ Pass" if check.get("passed") else "❌ Fail"
-        cmd = check.get("command", "unknown")
-        if len(cmd) > 40:
-            cmd = cmd[:37] + "..."
-        duration = f"{check.get('duration_seconds', 0):.1f}s"
-        lines.append(f"| `{cmd}` | {status} | {duration} |")
+    all_passed = all(c.get("passed", False) for c in checks)
+    if all_passed:
+        lines.append("### ✅ All checks passed")
+    else:
+        lines.append("### Check Results")
+        lines.append("")
+        for check in checks:
+            status = "✅" if check.get("passed") else "❌"
+            cmd = check.get("command", "unknown").split()[0].split("/")[-1]
+            lines.append(f"- {status} `{cmd}`")
     
     lines.append("")
     
-    if failure_summary:
+    if failure_summary and not all_passed:
+        excerpt = failure_summary.strip().split("\n")[-15:]
+        truncated = "\n".join(excerpt)[:800]
         lines.extend([
-            "### Failure Summary",
+            "<details>",
+            "<summary>Failure excerpt (click to expand)</summary>",
             "",
             "```",
-            failure_summary[:1500],
+            truncated,
             "```",
+            "",
+            "</details>",
             "",
         ])
     
     if arbiter_decision:
-        lines.extend([
-            "### Arbiter Decision",
-            "",
-            f"**Auto-fix allowed:** {'✅ Yes' if arbiter_decision.get('auto_fix_allowed') else '❌ No'}",
-            f"**Risk level:** {arbiter_decision.get('risk_level', 'unknown')}",
-            "",
-        ])
+        allowed = arbiter_decision.get("auto_fix_allowed", False)
+        risk = arbiter_decision.get("risk_level", "unknown")
         
-        if arbiter_decision.get("fix_objectives"):
-            lines.append("**Fix objectives:**")
-            for obj in arbiter_decision["fix_objectives"]:
-                lines.append(f"- {obj}")
-            lines.append("")
-        
-        if arbiter_decision.get("stop_reason"):
-            lines.append(f"**Stop reason:** {arbiter_decision['stop_reason']}")
-            lines.append("")
+        if allowed:
+            lines.append(f"**Arbiter:** 🟢 Auto-fix approved (risk: {risk})")
+        else:
+            reason = arbiter_decision.get("stop_reason", "")[:100]
+            lines.append(f"**Arbiter:** 🔴 Auto-fix denied — {reason}")
+        lines.append("")
     
     if fix_started:
-        lines.extend([
-            "---",
-            "🔧 **Fix loop started** - Codex is attempting to resolve issues...",
-            "",
-        ])
+        lines.append("🔧 **Codex fix in progress...**")
+        lines.append("")
     
     if final_status:
         lines.extend([
             "---",
-            f"### Final Status: {final_status}",
+            f"**{final_status}**",
             "",
         ])
+    
+    if telegram_enabled:
+        lines.append("_📱 See Telegram for live timeline_")
     
     return "\n".join(lines)

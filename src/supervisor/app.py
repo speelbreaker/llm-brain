@@ -212,16 +212,22 @@ async def run_supervisor_job(job: SupervisorJob, app: FastAPI) -> None:
                 commit_sha=job.head_sha,
                 checks=[c.model_dump() for c in verification.checks],
                 final_status="✅ All checks passed - Ready to merge",
+                telegram_enabled=settings.telegram_enabled,
             )
             await github_client.post_pr_comment(job.repo_full_name, job.pr_number, comment)
-            await notifier.notify_checks_result(job, passed=True)
+            await notifier.notify_checks_result(job, passed=True, checks=verification.checks)
             await notifier.notify_final_result(job, success=True)
             return
         
         job.update_status(JobStatus.CHECKS_FAILED)
         store.save(job)
         
-        await notifier.notify_checks_result(job, passed=False, summary=verification.failure_summary[:200])
+        await notifier.notify_checks_result(
+            job, 
+            passed=False, 
+            checks=verification.checks,
+            failure_excerpt=verification.failure_summary[:500],
+        )
         
         pr_files = await github_client.get_pr_files(job.repo_full_name, job.pr_number)
         changed_files = [f.get("filename", "") for f in pr_files]
@@ -251,6 +257,7 @@ async def run_supervisor_job(job: SupervisorJob, app: FastAPI) -> None:
             failure_summary=verification.failure_summary,
             arbiter_decision=arbiter_decision.model_dump(),
             fix_started=arbiter_decision.auto_fix_allowed and settings.enable_codex,
+            telegram_enabled=settings.telegram_enabled,
         )
         await github_client.post_pr_comment(job.repo_full_name, job.pr_number, comment)
         
@@ -272,7 +279,7 @@ async def run_supervisor_job(job: SupervisorJob, app: FastAPI) -> None:
         store.save(job)
         
         for loop_num in range(1, settings.max_loops + 1):
-            await notifier.notify_fix_started(job, loop_num)
+            await notifier.notify_fix_started(job, loop_num, settings.max_loops)
             
             success, codex_output = await codex_fixer.apply_fix(
                 workspace_path=workspace_path,
