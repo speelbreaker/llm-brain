@@ -1,0 +1,26 @@
+*Risks* (review #18)
+
+🟠 *HIGH* — Conditional Telegram client creation may cause shutdown AttributeError or runtime access errors
+  📄 `src/supervisor/app.py`
+  In lifespan startup, app.state.telegram_http is created only if Telegram is enabled (src/supervisor/app.py around lines 164-169). If the shutdown phase still unconditionally closes app.state.telegram_
+  💡 Fix: Initialize app.state.telegram_http = None before the conditional, and in the shutdown block use: client = getattr(app.state, 'telegram_http', None); i
+
+🟡 *MEDIUM* — Discarding legacy queue payload app context may run jobs against the wrong app instance
+  📄 `src/supervisor/app.py`
+  When a tuple is dequeued, the worker logs a warning and assigns job = job[0], discarding the second element (src/supervisor/app.py around lines 114-121). If producers are still enqueuing (job, app) fo
+  💡 Fix: If the dequeued item is a tuple of length 2 and the second element looks like a FastAPI instance (has .state), preferentially pass that app to run_sup
+
+🟡 *MEDIUM* — Worker may exit after an unexpected exception outside inner try/except
+  📄 `src/supervisor/app.py`
+  The broad except Exception outside the while loop logs and sleeps once (src/supervisor/app.py around lines 129-133). If app.state.job_queue.get() raises, the worker will sleep for 1s and then exit, po
+  💡 Fix: Wrap the await job_queue.get() and subsequent handling inside a try/except within the while loop, and on errors continue the loop. Alternatively, in t
+
+🟢 *LOW* — Webhook 503 for missing/blank secret may leak configuration state
+  📄 `src/supervisor/app.py`
+  The /github/webhook route returns 503 when the supervisor is not ready or the secret is missing/blank (src/supervisor/app.py around line 231). Depending on the response body, this can disclose misconf
+  💡 Fix: Return a generic error message in the body for 503 and avoid mentioning secrets or readiness in detail. Consider using 403 for missing/invalid signatu
+
+🟢 *LOW* — Tests instantiate TestClient without context manager and suppress server exceptions
+  📄 `tests/supervisor/test_jobs_api_truncation.py`
+  Tests explicitly avoid using a context manager and set raise_server_exceptions=False (tests/supervisor/test_jobs_api_truncation.py multiple call sites). This can bypass lifespan hooks and hide real er
+  💡 Fix: Prefer 'with TestClient(app) as client:' to ensure startup/shutdown run. If you need to avoid the app's lifespan for specific tests, explicitly disabl

@@ -114,8 +114,12 @@ async def job_worker(app: FastAPI) -> None:
             job = await app.state.job_queue.get()
             
             if isinstance(job, tuple):
-                logger.warning("Legacy tuple queue payload received, app context discarded")
-                job = job[0]
+                if len(job) >= 2 and hasattr(job[1], 'state'):
+                    logger.warning("Legacy tuple queue payload received, using provided app context")
+                    job, app = job[0], job[1]
+                else:
+                    logger.warning("Legacy tuple queue payload received, app context discarded")
+                    job = job[0]
             
             try:
                 logger.info("Worker processing job: %s", job.job_id)
