@@ -58,6 +58,7 @@ class TelegramStatusCard:
         repo: str,
         pr_number: int,
         message_registry: "MessageRegistry",
+        http_client: Optional[httpx.AsyncClient] = None,
     ):
         self.settings = settings
         self.repo = repo
@@ -68,6 +69,7 @@ class TelegramStatusCard:
             settings.telegram_bot_token and settings.telegram_chat_id
         )
         self._last_update: float = 0
+        self._http_client = http_client
         
         self.pr_title: str = ""
         self.pr_url: str = ""
@@ -78,8 +80,13 @@ class TelegramStatusCard:
         self.loop_info: str = ""
         self.last_error: Optional[str] = None
     
-    async def _get_client(self) -> httpx.AsyncClient:
-        """Get HTTP client for Telegram API with explicit timeout."""
+    def _get_client(self) -> httpx.AsyncClient:
+        """Get HTTP client for Telegram API.
+        
+        Returns the shared client if available, otherwise creates one for context manager use.
+        """
+        if self._http_client:
+            return self._http_client
         return httpx.AsyncClient(timeout=httpx.Timeout(TELEGRAM_TIMEOUT))
     
     def _build_card_text(self, use_html: bool = True) -> str:
@@ -175,11 +182,17 @@ class TelegramStatusCard:
         key = (self.repo, self.pr_number)
         existing_msg_id = self.registry.get_message_id(key)
         
-        async with await self._get_client() as client:
+        if self._http_client:
             if existing_msg_id:
-                return await self._edit_message(client, existing_msg_id)
+                return await self._edit_message(self._http_client, existing_msg_id)
             else:
-                return await self._send_new_message(client, key)
+                return await self._send_new_message(self._http_client, key)
+        else:
+            async with self._get_client() as client:
+                if existing_msg_id:
+                    return await self._edit_message(client, existing_msg_id)
+                else:
+                    return await self._send_new_message(client, key)
     
     async def _send_new_message(
         self,
@@ -362,13 +375,21 @@ class TelegramStatusCard:
         truncated_text = safe_truncate(text, self.settings.telegram_max_chars)
         plain_text = strip_html_tags(truncated_text)
         
-        async with await self._get_client() as client:
+        if self._http_client:
             return await self._send_with_fallback(
-                client,
+                self._http_client,
                 truncated_text,
                 plain_text,
                 reply_to_message_id=parent_msg_id,
             )
+        else:
+            async with self._get_client() as client:
+                return await self._send_with_fallback(
+                    client,
+                    truncated_text,
+                    plain_text,
+                    reply_to_message_id=parent_msg_id,
+                )
 
 
 class MessageRegistry:
@@ -406,13 +427,19 @@ class MessageRegistry:
 class TelegramNotifier:
     """Enhanced Telegram notifier with status card support."""
     
-    def __init__(self, settings: SupervisorSettings, registry: Optional[MessageRegistry] = None):
+    def __init__(
+        self,
+        settings: SupervisorSettings,
+        registry: Optional[MessageRegistry] = None,
+        http_client: Optional[httpx.AsyncClient] = None,
+    ):
         self.settings = settings
         self.registry = registry or MessageRegistry()
         self.enabled = settings.telegram_enabled and bool(
             settings.telegram_bot_token and settings.telegram_chat_id
         )
         self._cards: dict[tuple[str, int], TelegramStatusCard] = {}
+        self._http_client = http_client
     
     def get_card(self, job: SupervisorJob) -> TelegramStatusCard:
         """Get or create a status card for a job."""
@@ -423,6 +450,7 @@ class TelegramNotifier:
                 repo=job.repo_full_name,
                 pr_number=job.pr_number,
                 message_registry=self.registry,
+                http_client=self._http_client,
             )
         return self._cards[key]
     

@@ -82,3 +82,24 @@ class TestWebhookSignature:
         ).hexdigest()
         
         assert verify_signature(payload, f"sha256={signature}", wrong_secret) is False
+    
+    def test_empty_secret_rejected(self):
+        """Test that empty secret always fails (P0 critical: empty-secret bypass)."""
+        payload = b'{"action": "opened"}'
+        
+        empty_secret_sig = hmac.new(
+            b"",
+            payload,
+            hashlib.sha256
+        ).hexdigest()
+        
+        assert verify_signature(payload, f"sha256={empty_secret_sig}", "") is False
+        assert verify_signature(payload, "", "") is False
+    
+    def test_short_signature_rejected(self):
+        """Test that signature with wrong length is rejected."""
+        secret = "test_secret_key"
+        payload = b'{"action": "opened"}'
+        
+        assert verify_signature(payload, "sha256=abc123", secret) is False
+        assert verify_signature(payload, "sha256=", secret) is False

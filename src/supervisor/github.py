@@ -23,11 +23,14 @@ def verify_signature(payload_body: bytes, signature_header: str, secret: str) ->
     Args:
         payload_body: Raw request body bytes
         signature_header: Value of X-Hub-Signature-256 header
-        secret: Configured webhook secret
+        secret: Configured webhook secret (MUST be non-empty)
         
     Returns:
         True if signature is valid, False otherwise
     """
+    if not secret:
+        return False
+    
     if not signature_header:
         return False
     
@@ -35,6 +38,9 @@ def verify_signature(payload_body: bytes, signature_header: str, secret: str) ->
         return False
     
     expected_signature = signature_header[7:]
+    if len(expected_signature) != 64:
+        return False
+    
     computed_signature = hmac.new(
         secret.encode("utf-8"),
         payload_body,
