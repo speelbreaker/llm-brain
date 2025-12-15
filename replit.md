@@ -14,7 +14,7 @@ This project is a modular Python framework for automated BTC/ETH covered call tr
 The agent features a clear separation of concerns, with modules for configuration, data modeling, API interaction, market context generation, risk management, policy decisions (rule-based and LLM), execution, and logging. It supports "research" and "production" modes, with a FastAPI web application providing a real-time dashboard for monitoring, interaction, and backtesting.
 
 ### UI/UX Decisions
-The web dashboard offers a user-friendly interface with sections for "Live Agent" status, unified "Backtesting" tab, "Calibration", "System Health", "Chat" interface, "Bots" tab for expert trading bot analysis, "Greg Lab" for position management, and an "AI Steward" panel for project insights.
+The web dashboard offers a user-friendly interface with sections for "Live Agent" status, unified "Backtesting" tab, "Calibration", "System Health", "Chat" interface, "Bots" tab for expert trading bot analysis, "Greg Lab" for position management, "Supervisor" tab for PR verification monitoring, and an "AI Steward" panel for project insights.
 
 ### Technical Implementations
 - **Configuration**: Pydantic settings manage application configuration.
@@ -54,7 +54,9 @@ The web dashboard offers a user-friendly interface with sections for "Live Agent
     - Posts structured PR comments with results
     - Runs 3-agent debate (Optimist/Skeptic/Arbiter) to decide on auto-fix
     - Invokes Codex CLI for minimal auto-fixes if approved
-    - Narrates each step to Telegram
+    - **Multi-provider LLM abstraction**: Supports OpenAI (primary) and Gemini (fallback) with automatic failover
+    - **Telegram Status Card UX**: Single updateable message per PR with phase-based updates (STARTING → CHECKS → DEBATE → CODEX_FIX → DONE/NEEDS_HUMAN)
+    - **Dashboard Integration**: Supervisor tab in web dashboard with job listing, filtering, and detail views (requires `SUPERVISOR_API_URL`)
     - **Disabled by default** (SUPERVISOR_ENABLED=0)
 
 ### PR Supervisor Configuration
