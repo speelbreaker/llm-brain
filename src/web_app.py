@@ -1678,6 +1678,109 @@ def download_backtest_events(run_id: str):
         )
 
 
+@app.get("/api/backtests/{run_id}/strategy_summary/download")
+def download_strategy_summary(run_id: str, format: str = "json"):
+    """
+    Download strategy summary as JSON or CSV.
+    
+    Args:
+        run_id: The backtest run ID
+        format: 'json' or 'csv' (default: json)
+    """
+    from src.db import get_db_session
+    from src.db.models_backtest import BacktestRun, BacktestEvent
+    from fastapi.responses import Response
+    import csv
+    import io
+    import json
+    
+    with get_db_session() as db:
+        run = db.query(BacktestRun).filter(BacktestRun.run_id == run_id).first()
+        if run is None:
+            raise HTTPException(status_code=404, detail=f"Backtest run '{run_id}' not found")
+        
+        events = db.query(BacktestEvent).filter(BacktestEvent.run_id == run.id).all()
+        
+        from collections import defaultdict
+        strategy_stats: Dict[str, Dict[str, Any]] = defaultdict(lambda: {
+            "opens": 0, "closes": 0, "total_pnl": 0.0, "wins": 0,
+            "decisions": 0, "skips": 0, "rolls": 0, "take_profits": 0,
+        })
+        
+        for event in events:
+            stats = strategy_stats[event.strategy_key]
+            if event.event_type == "DECISION":
+                stats["decisions"] += 1
+            elif event.event_type == "OPEN":
+                stats["opens"] += 1
+            elif event.event_type == "SKIP":
+                stats["skips"] += 1
+            elif event.event_type == "ROLL":
+                stats["rolls"] += 1
+            elif event.event_type == "TAKE_PROFIT":
+                stats["take_profits"] += 1
+                stats["closes"] += 1
+                if event.pnl is not None:
+                    stats["total_pnl"] += event.pnl
+                    if event.pnl > 0:
+                        stats["wins"] += 1
+            elif event.event_type in ("CLOSE", "STOP_LOSS", "EXPIRY"):
+                stats["closes"] += 1
+                if event.pnl is not None:
+                    stats["total_pnl"] += event.pnl
+                    if event.pnl > 0:
+                        stats["wins"] += 1
+        
+        summaries = []
+        for key, stats in strategy_stats.items():
+            closes = stats["closes"]
+            summaries.append({
+                "strategy_key": key,
+                "opens": stats["opens"],
+                "closes": closes,
+                "total_pnl": round(stats["total_pnl"], 2),
+                "avg_pnl": round(stats["total_pnl"] / closes, 2) if closes > 0 else 0.0,
+                "win_rate": round(stats["wins"] / closes, 4) if closes > 0 else 0.0,
+                "decisions": stats["decisions"],
+                "skips": stats["skips"],
+                "rolls": stats["rolls"],
+                "take_profits": stats["take_profits"],
+            })
+        
+        summaries.sort(key=lambda x: x["total_pnl"], reverse=True)
+        
+        if format.lower() == "csv":
+            output = io.StringIO()
+            writer = csv.writer(output)
+            writer.writerow([
+                "strategy_key", "opens", "closes", "total_pnl", "avg_pnl",
+                "win_rate", "decisions", "skips", "rolls", "take_profits"
+            ])
+            for s in summaries:
+                writer.writerow([
+                    s["strategy_key"], s["opens"], s["closes"], s["total_pnl"],
+                    s["avg_pnl"], s["win_rate"], s["decisions"], s["skips"],
+                    s["rolls"], s["take_profits"]
+                ])
+            return Response(
+                content=output.getvalue(),
+                media_type="text/csv",
+                headers={"Content-Disposition": f'attachment; filename="{run_id}_strategy_summary.csv"'},
+            )
+        else:
+            export_data = {
+                "run_id": run_id,
+                "export_time": datetime.now(timezone.utc).isoformat(),
+                "total_events": len(events),
+                "strategy_summary": summaries,
+            }
+            return Response(
+                content=json.dumps(export_data, indent=2),
+                media_type="application/json",
+                headers={"Content-Disposition": f'attachment; filename="{run_id}_strategy_summary.json"'},
+            )
+
+
 # =============================================================================
 # SELECTOR SCAN & HEATMAP ENDPOINTS (BACKTESTING)
 # =============================================================================
@@ -1690,6 +1793,14 @@ class SelectorScanRequest(BaseModel):
     horizon_days: int = 365
     decision_interval_days: float = 1.0
     threshold_overrides: Dict[str, float] = Field(default_factory=dict)
+    iv_mode: str = Field(
+        default="synthetic",
+        description="IV data source: 'synthetic' (estimated), 'live' (current market), or 'hybrid' (live with synthetic fallback)"
+    )
+    iv_fallback_warning: bool = Field(
+        default=True,
+        description="If true, emit warnings when falling back from live to synthetic IV"
+    )
 
 
 @app.post("/api/backtest/selector_scan")
@@ -1708,17 +1819,38 @@ def selector_scan(req: SelectorScanRequest) -> JSONResponse:
             horizon_days=req.horizon_days,
             decision_interval_days=req.decision_interval_days,
             threshold_overrides=req.threshold_overrides,
+            iv_mode=req.iv_mode,
+            iv_fallback_warning=req.iv_fallback_warning,
         )
         result = run_selector_scan(config)
-        return JSONResponse(
-            content={
-                "ok": True,
-                "summary": result.summary,
-                "total_steps": result.total_steps,
-            }
-        )
+        
+        response_data: Dict[str, Any] = {
+            "ok": True,
+            "summary": result.summary,
+            "total_steps": result.total_steps,
+            "config": {
+                "iv_mode": req.iv_mode,
+                "iv_mode_description": _get_iv_mode_description(req.iv_mode),
+            },
+        }
+        
+        if hasattr(result, 'iv_fallback_count') and result.iv_fallback_count:
+            response_data["iv_fallback_count"] = result.iv_fallback_count
+            response_data["iv_fallback_warning"] = "Live IV was unavailable for some data points; fell back to synthetic estimates."
+        
+        return JSONResponse(content=response_data)
     except Exception as e:
         return JSONResponse(content={"ok": False, "error": str(e)})
+
+
+def _get_iv_mode_description(mode: str) -> str:
+    """Get human-readable description for IV mode."""
+    descriptions = {
+        "synthetic": "Uses synthetic/estimated IV based on historical patterns",
+        "live": "Uses current market IV from Deribit",
+        "hybrid": "Uses live market IV when available; falls back to synthetic estimates otherwise",
+    }
+    return descriptions.get(mode, "Unknown IV mode")
 
 
 class SelectorHeatmapRequest(BaseModel):

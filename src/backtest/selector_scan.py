@@ -15,6 +15,13 @@ import numpy as np
 from pydantic import BaseModel, Field
 
 
+class IVMode(str):
+    """IV data source mode for selector scans."""
+    SYNTHETIC = "synthetic"
+    LIVE = "live"
+    HYBRID = "hybrid"
+
+
 class SelectorScanConfig(BaseModel):
     """Configuration for a selector frequency scan."""
     selector_id: Literal["greg"] = "greg"
@@ -23,6 +30,15 @@ class SelectorScanConfig(BaseModel):
     horizon_days: int = 365
     decision_interval_days: float = 1.0
     threshold_overrides: Dict[str, float] = Field(default_factory=dict)
+    
+    iv_mode: str = Field(
+        default="synthetic",
+        description="IV data source: 'synthetic' (estimated), 'live' (current market), or 'hybrid' (live with synthetic fallback)"
+    )
+    iv_fallback_warning: bool = Field(
+        default=True,
+        description="If true, emit warnings when falling back from live to synthetic IV"
+    )
 
 
 class SelectorScanResult(BaseModel):

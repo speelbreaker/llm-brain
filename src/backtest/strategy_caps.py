@@ -12,6 +12,17 @@ from typing import Any, Dict, List, Optional
 
 
 @dataclass
+class FieldHint:
+    """UX hint for a configuration field."""
+    field_name: str
+    disabled: bool = False
+    readonly: bool = False
+    hidden: bool = False
+    tooltip: str = ""
+    display_value: Optional[str] = None
+
+
+@dataclass
 class StrategyCapabilities:
     """Defines what configuration options a strategy supports."""
     
@@ -29,8 +40,12 @@ class StrategyCapabilities:
     
     strategy_defaults_summary: Dict[str, Any] = field(default_factory=dict)
     
+    field_hints: List[FieldHint] = field(default_factory=list)
+    
     def to_dict(self) -> Dict[str, Any]:
-        return asdict(self)
+        d = asdict(self)
+        d["field_hints"] = [asdict(h) for h in self.field_hints]
+        return d
 
 
 GENERIC_COVERED_CALL_CAPS = StrategyCapabilities(
@@ -87,6 +102,51 @@ GREGBOT_CAPS = StrategyCapabilities(
         "entry_rules": "VRP waterfall with sensor-based signals",
         "position_management": "Rolling and profit-taking built-in",
     },
+    field_hints=[
+        FieldHint(
+            field_name="exit_style",
+            disabled=True,
+            hidden=True,
+            tooltip="GregBot always exits on profit targets; expiry holds and rolls are disabled.",
+            display_value="GregBot-Managed",
+        ),
+        FieldHint(
+            field_name="target_dte",
+            readonly=True,
+            tooltip="Values controlled by GregBot strategy.",
+            display_value="7-21 days (dynamic)",
+        ),
+        FieldHint(
+            field_name="target_delta",
+            readonly=True,
+            tooltip="Values controlled by GregBot strategy.",
+            display_value="0.15-0.40 (dynamic)",
+        ),
+        FieldHint(
+            field_name="min_dte",
+            readonly=True,
+            tooltip="Values controlled by GregBot strategy.",
+            display_value="3",
+        ),
+        FieldHint(
+            field_name="max_dte",
+            readonly=True,
+            tooltip="Values controlled by GregBot strategy.",
+            display_value="30",
+        ),
+        FieldHint(
+            field_name="delta_min",
+            readonly=True,
+            tooltip="Values controlled by GregBot strategy.",
+            display_value="0.10",
+        ),
+        FieldHint(
+            field_name="delta_max",
+            readonly=True,
+            tooltip="Values controlled by GregBot strategy.",
+            display_value="0.45",
+        ),
+    ],
 )
 
 
