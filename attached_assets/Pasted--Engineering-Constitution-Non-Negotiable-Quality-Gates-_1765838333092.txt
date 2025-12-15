@@ -1,0 +1,69 @@
+## Engineering Constitution (Non-Negotiable Quality Gates)
+
+These rules are mandatory for ALL changes. If any rule fails, the work is rejected.
+
+### 1) Regression Gate (Hard Stop)
+- MUST run the full suite: `python -m pytest -q`
+- If any existing test fails, FIX THE CODE (not the test) unless the behavior change is intentional and documented.
+- PROHIBITED: deleting/skipping tests to make the build pass.
+
+### 2) Endpoint Testing Rule (Hard Stop)
+- For EVERY new endpoint, MUST add at least ONE endpoint-level test (FastAPI TestClient) covering:
+  - success path (expected status + minimal response shape)
+  - at least one failure/guard case (400/401/403/404/422/503 as appropriate)
+- For modified endpoints, MUST add/extend endpoint-level tests proving the bugfix and preventing regressions.
+- Any prompt that adds an endpoint without an endpoint-level test is REJECTED.
+
+### 3) Static Integrity Gate (“Does it compile/import?”)
+Before running logic tests, code must pass a static integrity check:
+- No SyntaxError / ImportError in modified modules.
+- MUST run at least one:
+  - `python -m compileall -q src`
+  - AND/OR an import smoke test that imports the modified modules (and critical entrypoints).
+
+### 4) Route Parity Gate (for refactors / router splits)
+If routes are moved/refactored:
+- MUST run a route-parity test comparing `[(path, methods, name)]` to a committed baseline.
+- Only update the baseline if changes are intentional and documented.
+- MUST preserve paths/methods/tags unless explicitly requested.
+
+### 5) Shared Dependency Constraint (Stop breaking callers)
+If you change any shared utility/model/schema/helper:
+- MUST search all usages (e.g., `rg "FunctionName\\(" -g'*.py'`).
+- If signature/return shape changes, MUST update ALL callers in the same change.
+- PROHIBITED: “fix one place, break five others.”
+
+### 6) Frontend/Backend Contract Gate (if HTML/JS touched)
+If API response shape changes OR frontend uses an endpoint:
+- MUST search frontend code for the endpoint/path and updated keys.
+- MUST update frontend to match the backend change.
+- SHOULD add a small contract test (or endpoint-level test asserting key names used by frontend).
+
+### 7) Security Gate (especially Supervisor)
+- Webhook endpoints MUST 503 when required secrets are missing/empty.
+- Signature verification MUST be enforced (no empty-secret fallback).
+- Debug endpoints MUST be disabled unless `SUPERVISOR_DEBUG=1` AND protected (token/header).
+- MUST redact secrets from PR comments, Telegram messages, and API payloads.
+- PROHIBITED: returning raw exception strings to clients.
+
+### 8) External API Resilience Gate
+All outbound calls (GitHub/Telegram/LLMs) MUST:
+- use explicit httpx timeouts
+- use retries w/ backoff for 429/5xx (bounded attempts)
+- avoid leaking sensitive payloads in logs
+- properly close AsyncClient (context manager or shared lifecycle client)
+
+### 9) Concurrency & Persistence Gate
+If writing shared state (job store, approvals, JSONL/SQLite):
+- MUST be atomic and safe under concurrency (lock + atomic replace where applicable)
+- PROHIBITED: swallowing write errors silently
+- MUST have tests for concurrent writes or corruption recovery if using files.
+
+### 10) Definition of Done Checklist (must be stated in completion message)
+Before marking work complete, report:
+- ✅ Full test suite passed: `python -m pytest -q`
+- ✅ Static integrity passed (compile/import smoke test)
+- ✅ List of new/changed endpoints + each has endpoint-level tests
+- ✅ Impact analysis done for any shared dependency changes (all callers updated)
+- ✅ Route parity baseline updated (only if intentional) and test passed
+- ✅ No secrets leaked (redaction applied where relevant)
