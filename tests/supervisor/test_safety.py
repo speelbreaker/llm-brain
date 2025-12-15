@@ -268,6 +268,125 @@ class TestWorkspaceCleanupSafety:
             assert not sentinel.exists()
 
 
+class TestDeadlockPrevention:
+    """Tests for deadlock prevention in approval state (CRITICAL)."""
+    
+    def test_set_pr_approval_does_not_hang(self):
+        """set_pr_approval() should not deadlock when called."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = JobStore(f"{tmpdir}/jobs.jsonl")
+            completed = []
+            
+            def do_approval():
+                store.set_pr_approval("owner/repo", 1, True, user_id=123)
+                completed.append(True)
+            
+            thread = threading.Thread(target=do_approval)
+            thread.start()
+            thread.join(timeout=1.0)
+            
+            assert not thread.is_alive(), "set_pr_approval() deadlocked"
+            assert len(completed) == 1
+    
+    def test_set_pr_paused_does_not_hang(self):
+        """set_pr_paused() should not deadlock when called."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = JobStore(f"{tmpdir}/jobs.jsonl")
+            completed = []
+            
+            def do_pause():
+                store.set_pr_paused("owner/repo", 1, True, user_id=123)
+                completed.append(True)
+            
+            thread = threading.Thread(target=do_pause)
+            thread.start()
+            thread.join(timeout=1.0)
+            
+            assert not thread.is_alive(), "set_pr_paused() deadlocked"
+            assert len(completed) == 1
+
+
+class TestCorruptedFileBackup:
+    """Tests for corrupted approval file backup (HIGH)."""
+    
+    def test_corrupted_file_backed_up(self):
+        """Corrupted approval file should be backed up and continue with empty state."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = JobStore(f"{tmpdir}/jobs.jsonl")
+            
+            approval_path = store._get_approval_path()
+            approval_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(approval_path, "w") as f:
+                f.write("not valid json {{{")
+            
+            state = store.get_pr_approval("owner/repo", 1)
+            
+            assert state.approved_by_telegram is False
+            
+            backup_files = list(approval_path.parent.glob("*.corrupt-*"))
+            assert len(backup_files) == 1
+            
+            with open(backup_files[0]) as f:
+                assert f.read() == "not valid json {{{"
+
+
+class TestStaleSentinelCleanup:
+    """Tests for stale sentinel handling in workspace cleanup (HIGH)."""
+    
+    @pytest.mark.asyncio
+    async def test_stale_sentinel_allows_cleanup(self):
+        """Workspace with stale sentinel (older than TTL) should be cleaned up."""
+        from src.supervisor.workspace import WorkspaceManager, ACTIVE_SENTINEL
+        from src.supervisor.config import SupervisorSettings
+        
+        with tempfile.TemporaryDirectory() as tmpdir:
+            settings = SupervisorSettings()
+            settings.base_jobs_dir = tmpdir
+            settings.workspace_ttl_hours = 1
+            
+            manager = WorkspaceManager(settings)
+            
+            old_workspace = Path(tmpdir) / "stale-job-789"
+            old_workspace.mkdir()
+            sentinel = old_workspace / ACTIVE_SENTINEL
+            sentinel.touch()
+            
+            old_time = time.time() - (4 * 3600)
+            os.utime(old_workspace, (old_time, old_time))
+            os.utime(sentinel, (old_time, old_time))
+            
+            cleaned = await manager.cleanup_old_workspaces(sentinel_ttl_hours=2)
+            
+            assert not old_workspace.exists()
+            assert cleaned == 1
+    
+    @pytest.mark.asyncio
+    async def test_fresh_sentinel_prevents_cleanup(self):
+        """Workspace with fresh sentinel should not be cleaned up."""
+        from src.supervisor.workspace import WorkspaceManager, ACTIVE_SENTINEL
+        from src.supervisor.config import SupervisorSettings
+        
+        with tempfile.TemporaryDirectory() as tmpdir:
+            settings = SupervisorSettings()
+            settings.base_jobs_dir = tmpdir
+            settings.workspace_ttl_hours = 1
+            
+            manager = WorkspaceManager(settings)
+            
+            old_workspace = Path(tmpdir) / "active-job-999"
+            old_workspace.mkdir()
+            sentinel = old_workspace / ACTIVE_SENTINEL
+            sentinel.touch()
+            
+            old_time = time.time() - (4 * 3600)
+            os.utime(old_workspace, (old_time, old_time))
+            
+            cleaned = await manager.cleanup_old_workspaces(sentinel_ttl_hours=2)
+            
+            assert old_workspace.exists()
+            assert cleaned == 0
+
+
 class TestRetryHelper:
     """Tests for retry helper imports and behavior."""
     

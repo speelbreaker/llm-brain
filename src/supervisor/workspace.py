@@ -101,13 +101,17 @@ class WorkspaceManager:
             except OSError:
                 pass
     
-    async def cleanup_old_workspaces(self) -> int:
+    async def cleanup_old_workspaces(self, sentinel_ttl_hours: int = 2) -> int:
         """Remove workspaces older than TTL.
         
         Returns number of workspaces cleaned up.
         
-        SAFETY: Workspaces with an .active sentinel file are skipped
-        to prevent deleting workspaces that are currently in use.
+        SAFETY: Workspaces with a fresh .active sentinel file are skipped.
+        If the sentinel is stale (mtime older than sentinel_ttl_hours), 
+        the workspace is considered orphaned and eligible for cleanup.
+        
+        Args:
+            sentinel_ttl_hours: Max age for sentinel to be considered fresh (default 2h)
         """
         ttl_hours = self.settings.workspace_ttl_hours
         if ttl_hours <= 0:
@@ -117,6 +121,7 @@ class WorkspaceManager:
             return 0
         
         cutoff = time.time() - (ttl_hours * 3600)
+        sentinel_cutoff = time.time() - (sentinel_ttl_hours * 3600)
         cleaned = 0
         
         for path in self.base_dir.iterdir():
@@ -127,8 +132,15 @@ class WorkspaceManager:
             
             sentinel = path / ACTIVE_SENTINEL
             if sentinel.exists():
-                logger.debug(f"Skipping active workspace: {path.name}")
-                continue
+                try:
+                    sentinel_mtime = sentinel.stat().st_mtime
+                    if sentinel_mtime > sentinel_cutoff:
+                        logger.debug(f"Skipping active workspace (fresh sentinel): {path.name}")
+                        continue
+                    else:
+                        logger.warning(f"Stale sentinel detected in {path.name}, treating as orphaned")
+                except OSError:
+                    pass
             
             try:
                 mtime = path.stat().st_mtime

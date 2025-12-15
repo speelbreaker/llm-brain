@@ -1,0 +1,119 @@
+Role
+You are a senior engineer. Fix critical/high reliability & security issues in the new src/supervisor/ service. Keep diff minimal and do not add new features.
+
+Fixes required (in order)
+1) CRITICAL: Deadlock in approval state methods
+
+File: src/supervisor/store.py
+
+Replace _approval_lock: threading.Lock with threading.RLock, OR refactor so no method that holds the lock calls another method that also acquires it.
+
+Preferred: remove nested locking entirely:
+
+Create _get_pr_approval_unlocked(...) and _set_pr_approval_unlocked(...) helpers used only while lock is held.
+
+Acceptance
+
+Unit test that calling set_pr_approval() does not hang:
+
+run it in a thread and join(timeout=1); fail test if thread is still alive.
+
+2) CRITICAL: Webhook secret must never be empty
+
+File: src/supervisor/app.py (webhook handler)
+
+If SUPERVISOR_ENABLED=1 and webhook route is hit:
+
+If settings.github_webhook_secret is missing/empty → return 503 (or 500) and do not attempt signature verification.
+
+Never verify using secret or "".
+
+Acceptance
+
+Add FastAPI route-level test:
+
+secret missing → 503
+
+secret set + invalid signature → 401
+
+secret set + valid signature → 200 and enqueues job
+
+3) HIGH: Debug simulate endpoint must be strictly gated and safe
+
+File: src/supervisor/app.py
+
+Ensure Header is imported if used.
+
+Register /debug/simulate_pr_event only when SUPERVISOR_DEBUG=1; otherwise it should return 404 (route not present).
+
+Add optional SUPERVISOR_DEBUG_TOKEN header requirement (X-Debug-Token) when enabled.
+
+Acceptance
+
+Tests:
+
+SUPERVISOR_DEBUG=0 → GET/POST returns 404
+
+SUPERVISOR_DEBUG=1 but missing/invalid token → 401
+
+valid token → 200 and enqueues job
+
+4) HIGH: Approval persistence must be atomic and not silently swallow errors
+
+File: src/supervisor/store.py
+
+Remove “catch-all and ignore” behavior in _save_approval_state.
+
+Writes must be atomic:
+
+write to temp file then os.replace()
+
+If JSON decode fails when loading:
+
+move corrupted file to *.corrupt-<timestamp> and start fresh but also emit a clear warning and do not overwrite silently without backup.
+
+Acceptance
+
+Unit test:
+
+create corrupted approval file → load should back it up and continue with empty state.
+
+5) HIGH: Workspace cleanup must not delete active workspaces and must handle orphaned sentinels
+
+File: src/supervisor/workspace.py
+
+If you use an “active sentinel” file, treat it as a heartbeat:
+
+If sentinel mtime is older than TTL (or SENTINEL_TTL_HOURS, default 2) → consider stale and allow cleanup.
+
+Cleanup must skip workspaces currently used by running jobs:
+
+either pass active_job_ids into cleanup, or create a per-workspace .active with periodic touches by the worker.
+
+Acceptance
+
+Unit test:
+
+active workspace with fresh sentinel is not deleted
+
+stale sentinel older than threshold allows deletion
+
+6) MEDIUM: Remove unused locks / confusing concurrency artifacts
+
+If _store_lock exists but unused, delete it or use it consistently. No dead code.
+
+Additional hardening (small, surgical)
+
+Ensure Telegram notifier AsyncClient lifecycle is correct:
+
+Use async with httpx.AsyncClient(...) as client: at call sites OR maintain one long-lived client and close it on shutdown.
+
+Ensure no exception logs include raw strings that might contain secrets:
+
+avoid logger.exception(f"... {e}"); use logger.error("...", exc_info=True) only if you’ve redacted or you’re sure it can’t contain secrets.
+
+Deliverables
+
+Fixes + tests + small docs update in replit.md under Supervisor troubleshooting (“If webhook secret missing → 503”, “Debug simulate requires token”, etc.)
+
+All tests pass (pytest -q).

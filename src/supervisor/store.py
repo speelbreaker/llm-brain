@@ -15,7 +15,7 @@ from .models import SupervisorJob
 logger = logging.getLogger(__name__)
 
 _store_lock = asyncio.Lock()
-_approval_lock = threading.Lock()
+_approval_lock = threading.RLock()
 
 
 @dataclass
@@ -182,7 +182,11 @@ class JobStore:
         return self.storage_path.parent / "pr_approval_state.json"
     
     def _load_approval_state_unlocked(self) -> dict[str, dict]:
-        """Load per-PR approval state from JSON file (caller must hold lock)."""
+        """Load per-PR approval state from JSON file (caller must hold lock).
+        
+        If the file is corrupted (JSON decode fails), it will be backed up
+        to *.corrupt-<timestamp> and an empty state returned with a warning.
+        """
         path = self._get_approval_path()
         if not path.exists():
             return {}
@@ -190,7 +194,18 @@ class JobStore:
             with open(path, "r") as f:
                 return json.load(f)
         except json.JSONDecodeError as e:
-            logger.error(f"Failed to parse approval state file: {e}")
+            timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+            backup_path = path.with_suffix(f".json.corrupt-{timestamp}")
+            logger.warning(
+                f"Corrupted approval state file detected: {e}. "
+                f"Backing up to {backup_path} and starting fresh."
+            )
+            try:
+                import shutil
+                shutil.copy2(path, backup_path)
+                logger.info(f"Backed up corrupted file to: {backup_path}")
+            except OSError as backup_err:
+                logger.error(f"Failed to backup corrupted file: {backup_err}")
             return {}
         except OSError as e:
             logger.error(f"Failed to read approval state file: {e}")

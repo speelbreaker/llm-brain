@@ -116,13 +116,24 @@ The PR Supervisor is located in `src/supervisor/` and is disabled by default. To
 - See `docs/SUPERVISOR_VPS_SETUP.md` for VPS deployment guide
 - Docker files: `docker/supervisor.Dockerfile`, `docker/docker-compose.supervisor.yml`
 
-**Safety Features (v0.3.1):**
+**Safety Features (v0.3.2):**
 - Webhook secret validation returns 503 with details when misconfigured
-- Debug endpoints only registered when SUPERVISOR_DEBUG=1
-- Approval state uses threading.Lock for concurrent write safety
-- Workspace cleanup uses .supervisor_active sentinel files to protect active jobs
+- Debug endpoints only registered when SUPERVISOR_DEBUG=1, with optional token auth
+- Approval state uses threading.RLock (reentrant) for deadlock prevention
+- Atomic file writes with .tmp suffix for approval state persistence
+- Corrupted approval files backed up to *.corrupt-<timestamp> before recovery
+- Workspace cleanup uses .supervisor_active sentinel files with stale detection (2h TTL)
 - All timestamps are timezone-aware UTC
 - Retry helper with exponential backoff for external API calls (429, 500-504)
+
+**Supervisor Troubleshooting:**
+| Issue | Cause | Solution |
+|-------|-------|----------|
+| Webhook returns 503 | GITHUB_WEBHOOK_SECRET missing/empty | Set the secret in environment |
+| Debug simulate returns 404 | SUPERVISOR_DEBUG=0 | Set SUPERVISOR_DEBUG=1 to enable |
+| Debug simulate returns 401 | Invalid/missing token | Set correct SUPERVISOR_DEBUG_TOKEN header |
+| Approval state lost | Corrupted JSON file | Check for *.corrupt-* backups in /tmp/pr_supervisor_jobs/ |
+| Old workspaces not cleaned | Fresh .supervisor_active sentinel | Workspace still active; wait for job completion |
 
 **Other Settings:**
 - `SUPERVISOR_MAX_LOOPS` (default: 3) - Max fix attempts
