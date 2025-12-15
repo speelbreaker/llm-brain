@@ -1,0 +1,40 @@
+# GregBot Backtesting Configuration Prompt
+
+This prompt outlines how to reconcile generic backtest configuration with GregBot-specific behavior, expands backtest reporting, and adds live IV support to the Selector Frequency Scan (Synthetic). Use it as the source of truth for implementation.
+
+## Goals
+- Prevent conflicts between generic covered-call settings and GregBot's baked-in rules.
+- Ensure GregBot runs with its own trade selection inputs (delta, DTE, targets) without redundant user configuration.
+- Enrich backtest output with per-strategy attribution and P&L.
+- Extend Selector Frequency Scan (Synthetic) to optionally source current market IV.
+
+## Configuration Rules
+1. **Exit style alignment**
+   - When the user chooses the GregBot strategy, lock the exit style to the GregBot playbook: take-profit exits only; never hold to expiry.
+   - Hide or disable incompatible exit-style choices (Hold to Expire, Roll) to avoid conflicting settings. If needed, show a tooltip that GregBot exits on profit or defined management rules.
+
+2. **Trade selection inputs**
+   - For GregBot runs, ignore manual inputs for DTE range, target profit, and delta. Instead, preload and display the strategy's canonical values (read-only) so users understand what will be used.
+   - If a user attempts to override these fields, surface a validation note stating that GregBot overrides manual selections.
+
+3. **Strategy stats capture**
+   - During backtests, log each strategy trigger with timestamp, symbol/expiration/strike, and action type.
+   - Aggregate per-strategy metrics: number of entries, exits, win rate, gross/net P&L, average hold time, and max drawdown. Include a breakdown in the run summary and exportable CSV/JSON.
+   - Tag trades with the strategy identifier (e.g., `gregbot_take_profit`) so downstream analytics can filter by strategy.
+
+4. **Selector Frequency Scan (Synthetic) with live IV**
+   - Add a toggle to pull IV from live market data in addition to synthetic/estimated IV.
+   - Document the data source and fallback behavior (e.g., if live IV missing, fall back to synthetic with a warning).
+   - Persist the choice in run parameters and surface it in the backtest summary for reproducibility.
+
+## UX/Copy Suggestions
+- In the exit-style selector, show contextual help: "GregBot always exits on profit targets; expiry holds and rolls are disabled." 
+- In the DTE/target/delta inputs, display the read-only GregBot defaults with a note: "Values controlled by GregBot strategy." 
+- In the results view, add a panel/table: "GregBot Strategy Attribution" with per-strategy counts, P&L, and links to the underlying trades.
+- For the live IV option, add helper text: "Uses current market IV when available; falls back to synthetic estimates otherwise." 
+
+## Acceptance Criteria
+- Selecting GregBot automatically enforces its exit logic and prevents conflicting user choices.
+- Manual DTE, target, and delta inputs are non-editable (or ignored) during GregBot runs, with clear messaging.
+- Backtest output includes per-strategy attribution and P&L metrics, with exports containing strategy identifiers.
+- Selector Frequency Scan (Synthetic) offers a live IV toggle with documented fallback behavior and persists in run configs.

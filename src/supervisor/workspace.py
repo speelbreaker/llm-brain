@@ -13,7 +13,7 @@ from .models import DiffStats
 
 logger = logging.getLogger(__name__)
 
-ACTIVE_SENTINEL = ".active"
+ACTIVE_SENTINEL = ".supervisor_active"
 
 
 class WorkspaceManager:
