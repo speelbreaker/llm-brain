@@ -13,6 +13,8 @@ from .models import DiffStats
 
 logger = logging.getLogger(__name__)
 
+ACTIVE_SENTINEL = ".active"
+
 
 class WorkspaceManager:
     """Manages isolated workspaces for PR verification."""
@@ -56,11 +58,24 @@ class WorkspaceManager:
             cwd=str(bare_repo)
         )
         
+        sentinel = workspace_path / ACTIVE_SENTINEL
+        sentinel.touch()
+        
         return str(workspace_path)
     
     async def cleanup_workspace(self, job_id: str, bare_repo_name: Optional[str] = None) -> None:
-        """Clean up a workspace after job completion."""
+        """Clean up a workspace after job completion.
+        
+        Removes the sentinel file first, then cleans up the workspace.
+        """
         workspace_path = self.base_dir / job_id
+        
+        sentinel = workspace_path / ACTIVE_SENTINEL
+        if sentinel.exists():
+            try:
+                sentinel.unlink()
+            except OSError:
+                pass
         
         if bare_repo_name:
             bare_repo = self.cache_dir / f"{bare_repo_name}.git"
@@ -76,10 +91,23 @@ class WorkspaceManager:
         if workspace_path.exists():
             shutil.rmtree(workspace_path, ignore_errors=True)
     
+    def mark_workspace_inactive(self, workspace_path: str) -> None:
+        """Remove the active sentinel from a workspace (for use in finally blocks)."""
+        path = Path(workspace_path)
+        sentinel = path / ACTIVE_SENTINEL
+        if sentinel.exists():
+            try:
+                sentinel.unlink()
+            except OSError:
+                pass
+    
     async def cleanup_old_workspaces(self) -> int:
         """Remove workspaces older than TTL.
         
         Returns number of workspaces cleaned up.
+        
+        SAFETY: Workspaces with an .active sentinel file are skipped
+        to prevent deleting workspaces that are currently in use.
         """
         ttl_hours = self.settings.workspace_ttl_hours
         if ttl_hours <= 0:
@@ -95,6 +123,11 @@ class WorkspaceManager:
             if path.name.startswith("_"):
                 continue
             if not path.is_dir():
+                continue
+            
+            sentinel = path / ACTIVE_SENTINEL
+            if sentinel.exists():
+                logger.debug(f"Skipping active workspace: {path.name}")
                 continue
             
             try:

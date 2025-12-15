@@ -120,7 +120,7 @@ class TestWebhookRoute:
         assert response.status_code == 503
         data = response.json()
         assert data["ok"] is False
-        assert data.get("error") == "service_unavailable"
+        assert data.get("error") == "not_ready"
     
     def test_valid_signature_accepted(self, configured_app):
         """Test that valid signature is accepted and job is queued."""

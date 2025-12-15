@@ -237,12 +237,23 @@ async def github_webhook(
             message="Supervisor is disabled. Set SUPERVISOR_ENABLED=1 to enable.",
         )
     
-    if not request.app.state.ready or not settings.github_webhook_secret or not settings.github_webhook_secret.strip():
+    if not settings.github_webhook_secret or not settings.github_webhook_secret.strip():
         return JSONResponse(
             status_code=503,
             content={
                 "ok": False,
-                "error": "service_unavailable",
+                "error": "not_ready",
+                "details": "GITHUB_WEBHOOK_SECRET missing",
+            }
+        )
+    
+    if not request.app.state.ready:
+        return JSONResponse(
+            status_code=503,
+            content={
+                "ok": False,
+                "error": "not_ready",
+                "details": "Supervisor startup incomplete",
             }
         )
     
@@ -334,20 +345,25 @@ class SimulatePRRequest(BaseModel):
     action: str = "synchronize"
 
 
-@app.post("/debug/simulate_pr_event")
-async def simulate_pr_event(request: Request, body: SimulatePRRequest):
+async def simulate_pr_event_handler(
+    request: Request,
+    body: SimulatePRRequest,
+    x_debug_token: Optional[str] = Header(None, alias="X-Debug-Token"),
+):
     """
     Simulate a PR webhook event for testing (debug mode only).
     
     Enabled only when SUPERVISOR_DEBUG=1.
+    Requires X-Debug-Token header if SUPERVISOR_DEBUG_TOKEN is configured.
     """
     settings: SupervisorSettings = request.app.state.settings
     
-    if not settings.debug:
-        raise HTTPException(
-            status_code=404,
-            detail="Debug endpoints disabled"
-        )
+    if settings.debug_token and settings.debug_token.strip():
+        if not x_debug_token or x_debug_token != settings.debug_token:
+            raise HTTPException(
+                status_code=401,
+                detail="Invalid or missing debug token"
+            )
     
     if not settings.enabled:
         raise HTTPException(
@@ -420,6 +436,16 @@ async def simulate_pr_event(request: Request, body: SimulatePRRequest):
         "status": "queued",
         "message": f"Simulated job queued for PR #{body.pr_number}"
     }
+
+
+def register_debug_routes(app_instance: FastAPI) -> None:
+    """Register debug routes only if SUPERVISOR_DEBUG=1."""
+    settings = get_settings()
+    if settings.debug:
+        app_instance.post("/debug/simulate_pr_event")(simulate_pr_event_handler)
+
+
+register_debug_routes(app)
 
 
 @app.get("/api/jobs")

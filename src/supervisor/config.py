@@ -10,6 +10,7 @@ class SupervisorSettings(BaseSettings):
     
     enabled: bool = Field(default=False, alias="SUPERVISOR_ENABLED")
     debug: bool = Field(default=False, alias="SUPERVISOR_DEBUG")
+    debug_token: Optional[str] = Field(default=None, alias="SUPERVISOR_DEBUG_TOKEN")
     
     enable_codex: bool = Field(default=False, alias="SUPERVISOR_ENABLE_CODEX")
     autofix_policy: str = Field(default="label", alias="SUPERVISOR_AUTOFIX_POLICY")

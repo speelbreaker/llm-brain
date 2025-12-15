@@ -1,0 +1,131 @@
+Stop-ship items (must fix before Prompt #3)
+
+From the reviews you posted, these are non-negotiable:
+
+CRITICAL: webhook verification with empty secret
+
+If GITHUB_WEBHOOK_SECRET is missing, the endpoint must refuse (503 not-ready or 401) and never call verify with ''.
+
+HIGH: external HTTP resilience and lifecycle
+
+Ensure httpx.AsyncClient is reused and closed (lifespan-managed), with explicit timeouts + retries actually applied on GitHub/Telegram calls.
+
+HIGH: debug simulate endpoint safety
+
+Route must not exist unless SUPERVISOR_DEBUG=1, and ideally requires a debug token or localhost restriction.
+
+HIGH: approval persistence correctness
+
+No silent exception swallowing.
+
+Add locking + atomic writes (or move approvals into the same SQLite store if you already have one).
+
+HIGH: workspace cleanup safety
+
+Must not delete active workspaces. Use an .active sentinel file or an in-memory active set + sentinel.
+
+Everything else (hold-time TAKE_PROFIT, pagination, etc.) is real but it’s not your current constraint. Put it in backlog after the supervisor is safe.
+
+Builder “Hotfix Prompt” (run this before Prompt #3)
+
+Paste this as the next builder prompt.
+
+AI Builder Prompt — Supervisor Safety/Robustness Hotfix (Blocker Fixes)
+
+ROLE
+Senior Python engineer. You are fixing blocker issues found by the internal reviewer in the PR Supervisor implementation.
+
+GOAL
+Fix security and reliability risks before adding any new features.
+
+REQUIRED FIXES
+
+1) Webhook secret must be required (CRITICAL)
+
+In POST /github/webhook, if settings.github_webhook_secret is missing/blank:
+
+Return 503 with { "ok": false, "error": "not_ready", "details": "GITHUB_WEBHOOK_SECRET missing" }
+
+Do not attempt signature verification with ''.
+
+Also ensure readiness gating marks the app “not ready” if enabled but required secrets are missing.
+
+Add route-level tests using FastAPI TestClient:
+
+missing secret ⇒ 503
+
+invalid signature ⇒ 401
+
+valid signature ⇒ 200 and job enqueued
+
+2) External HTTP calls: timeouts + retries actually used (HIGH)
+
+Ensure GitHub + Telegram requests use a shared httpx.AsyncClient(timeout=20.0) created once in lifespan and closed on shutdown.
+
+Implement retry with exponential backoff for 429/5xx (max 3 attempts) and apply it to:
+
+PR comment POSTs
+
+Telegram send/edit calls
+
+any GitHub GET needed for PR info
+
+Fix src/supervisor/retry.py so it imports cleanly; add a unit test that imports it and verifies retry behavior.
+
+3) Debug simulate endpoint must be gated (HIGH)
+
+Register /debug/simulate_pr_event only if SUPERVISOR_DEBUG=1. Otherwise it must be 404 (route not present).
+
+Add optional SUPERVISOR_DEBUG_TOKEN; if set, require header X-Debug-Token or reject 401.
+
+Add tests for:
+
+debug off ⇒ 404
+
+debug on + missing/invalid token ⇒ 401 (when token configured)
+
+debug on + valid token ⇒ 200 and enqueues
+
+4) Approval state persistence: lock + no silent failures (HIGH)
+
+Remove broad except: pass in approval save. Never silently ignore.
+
+Add process-level lock (threading.Lock) plus atomic write:
+
+write to temp file then os.replace
+
+Use timezone-aware timestamps (datetime.now(timezone.utc).isoformat()).
+
+Add a unit test that simulates two concurrent writes (best-effort) and asserts file remains valid JSON.
+
+(If the supervisor already uses SQLite for jobs, you may instead store approvals/pauses in SQLite to avoid file races; do the minimal change.)
+
+5) Workspace cleanup must never delete active workspaces (HIGH)
+
+When a job starts using a workspace, create a sentinel file <workspace>/.active.
+
+Ensure cleanup skips directories containing .active.
+
+Remove .active on job completion (finally block).
+
+Add tests for cleanup skipping active workspaces.
+
+6) Logging must not leak secrets (MEDIUM)
+
+Avoid logger.exception(...) on job failures or sanitize exception strings with redact_secrets.
+
+Prefer: logger.error("Job %s failed", job_id, exc_info=False) and store sanitized error in job record.
+
+ACCEPTANCE
+
+All tests pass.
+
+No webhook requests are accepted when secret is missing.
+
+No unbounded client creation/leaks.
+
+Debug endpoint cannot be abused when off.
+
+Approval state cannot silently fail.
+
+Cleanup cannot delete active workspaces.

@@ -2,14 +2,20 @@
 
 import asyncio
 import json
-from dataclasses import dataclass, asdict
-from datetime import datetime
+import logging
+import os
+import threading
+from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
 from .models import SupervisorJob
 
+logger = logging.getLogger(__name__)
+
 _store_lock = asyncio.Lock()
+_approval_lock = threading.Lock()
 
 
 @dataclass
@@ -175,28 +181,52 @@ class JobStore:
         """Get path to approval state file."""
         return self.storage_path.parent / "pr_approval_state.json"
     
-    def _load_approval_state(self) -> dict[str, dict]:
-        """Load per-PR approval state from JSON file."""
+    def _load_approval_state_unlocked(self) -> dict[str, dict]:
+        """Load per-PR approval state from JSON file (caller must hold lock)."""
         path = self._get_approval_path()
         if not path.exists():
             return {}
         try:
             with open(path, "r") as f:
                 return json.load(f)
-        except Exception:
+        except json.JSONDecodeError as e:
+            logger.error(f"Failed to parse approval state file: {e}")
             return {}
+        except OSError as e:
+            logger.error(f"Failed to read approval state file: {e}")
+            raise
     
-    def _save_approval_state(self, state: dict[str, dict]) -> None:
-        """Save per-PR approval state to JSON file."""
+    def _save_approval_state_unlocked(self, state: dict[str, dict]) -> None:
+        """Save per-PR approval state with atomic write (caller must hold lock).
+        
+        Raises on failure - never silently ignores errors.
+        """
         path = self._get_approval_path()
+        temp_path = path.with_suffix(".json.tmp")
         try:
-            temp_path = path.with_suffix(".json.tmp")
             with open(temp_path, "w") as f:
                 json.dump(state, f, indent=2)
                 f.flush()
-            temp_path.replace(path)
-        except Exception:
-            pass
+                os.fsync(f.fileno())
+            os.replace(str(temp_path), str(path))
+        except OSError as e:
+            logger.error(f"Failed to save approval state: {e}")
+            if temp_path.exists():
+                try:
+                    temp_path.unlink()
+                except OSError:
+                    pass
+            raise
+    
+    def _load_approval_state(self) -> dict[str, dict]:
+        """Load per-PR approval state from JSON file (thread-safe)."""
+        with _approval_lock:
+            return self._load_approval_state_unlocked()
+    
+    def _save_approval_state(self, state: dict[str, dict]) -> None:
+        """Save per-PR approval state to JSON file (thread-safe)."""
+        with _approval_lock:
+            self._save_approval_state_unlocked(state)
     
     def get_pr_approval(self, repo: str, pr_number: int) -> PRApprovalState:
         """Get approval state for a PR."""
@@ -223,22 +253,26 @@ class JobStore:
         approved: bool,
         user_id: Optional[int] = None,
     ) -> PRApprovalState:
-        """Set Telegram approval for a PR."""
-        state = self._load_approval_state()
-        key = f"{repo}:{pr_number}"
+        """Set Telegram approval for a PR.
         
-        if key not in state:
-            state[key] = {"repo": repo, "pr_number": pr_number}
-        
-        state[key]["approved_by_telegram"] = approved
-        if approved:
-            state[key]["approved_at"] = datetime.utcnow().isoformat()
-            state[key]["approved_by_user_id"] = user_id
-        else:
-            state[key]["approved_at"] = None
-            state[key]["approved_by_user_id"] = None
-        
-        self._save_approval_state(state)
+        Uses timezone-aware UTC timestamps for audit trail.
+        """
+        with _approval_lock:
+            state = self._load_approval_state_unlocked()
+            key = f"{repo}:{pr_number}"
+            
+            if key not in state:
+                state[key] = {"repo": repo, "pr_number": pr_number}
+            
+            state[key]["approved_by_telegram"] = approved
+            if approved:
+                state[key]["approved_at"] = datetime.now(timezone.utc).isoformat()
+                state[key]["approved_by_user_id"] = user_id
+            else:
+                state[key]["approved_at"] = None
+                state[key]["approved_by_user_id"] = None
+            
+            self._save_approval_state_unlocked(state)
         return self.get_pr_approval(repo, pr_number)
     
     def set_pr_paused(
@@ -248,22 +282,26 @@ class JobStore:
         paused: bool,
         user_id: Optional[int] = None,
     ) -> PRApprovalState:
-        """Set paused state for a PR."""
-        state = self._load_approval_state()
-        key = f"{repo}:{pr_number}"
+        """Set paused state for a PR.
         
-        if key not in state:
-            state[key] = {"repo": repo, "pr_number": pr_number}
-        
-        state[key]["paused"] = paused
-        if paused:
-            state[key]["paused_at"] = datetime.utcnow().isoformat()
-            state[key]["paused_by_user_id"] = user_id
-        else:
-            state[key]["paused_at"] = None
-            state[key]["paused_by_user_id"] = None
-        
-        self._save_approval_state(state)
+        Uses timezone-aware UTC timestamps for audit trail.
+        """
+        with _approval_lock:
+            state = self._load_approval_state_unlocked()
+            key = f"{repo}:{pr_number}"
+            
+            if key not in state:
+                state[key] = {"repo": repo, "pr_number": pr_number}
+            
+            state[key]["paused"] = paused
+            if paused:
+                state[key]["paused_at"] = datetime.now(timezone.utc).isoformat()
+                state[key]["paused_by_user_id"] = user_id
+            else:
+                state[key]["paused_at"] = None
+                state[key]["paused_by_user_id"] = None
+            
+            self._save_approval_state_unlocked(state)
         return self.get_pr_approval(repo, pr_number)
     
     def get_jobs_for_pr(self, repo: str, pr_number: int) -> list[SupervisorJob]:
