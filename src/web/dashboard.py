@@ -947,6 +947,38 @@ def render_dashboard_html() -> str:
           </select>
         </div>
       </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label>Backtest Mode</label>
+          <select id="bt-backtest-type" onchange="updateBacktestModeUI()">
+            <option value="generic" selected>Generic (Full Simulation)</option>
+            <option value="greg_selector">Greg Selector (Quick Analysis)</option>
+          </select>
+          <small id="bt-mode-desc" style="display:block;margin-top:4px;color:#888;font-size:0.8rem;">Full covered call simulation with position tracking and P&amp;L.</small>
+        </div>
+        <div class="form-group" id="bt-data-source-group" style="display:none;">
+          <label>Data Source</label>
+          <select id="bt-data-source">
+            <option value="synthetic" selected>Synthetic Universe</option>
+            <option value="harvester">Harvester Historical</option>
+            <option value="live">Live Market Snapshot</option>
+          </select>
+          <small style="display:block;margin-top:4px;color:#888;font-size:0.8rem;">Source for Greg selector analysis.</small>
+        </div>
+      </div>
+      <div class="form-row" id="bt-greg-underlyings-group" style="display:none;">
+        <div class="form-group" style="flex:2;">
+          <label>Greg Underlyings</label>
+          <div style="display:flex;gap:0.5rem;">
+            <label style="display:flex;align-items:center;gap:0.3rem;cursor:pointer;">
+              <input type="checkbox" id="bt-greg-btc" checked> BTC
+            </label>
+            <label style="display:flex;align-items:center;gap:0.3rem;cursor:pointer;">
+              <input type="checkbox" id="bt-greg-eth" checked> ETH
+            </label>
+          </div>
+        </div>
+      </div>
       <div style="display:flex;gap:0.5rem;">
         <button id="bt-start-stop-btn" onclick="startBacktest()">Start Backtest</button>
         <button id="bt-pause-resume-btn" class="secondary" onclick="togglePause()" style="display:none;">Pause</button>
@@ -6660,6 +6692,23 @@ def render_dashboard_html() -> str:
       desc.textContent = descriptions[mode] || descriptions['pure_synthetic'];
     }}
     
+    function updateBacktestModeUI() {{
+      const mode = document.getElementById('bt-backtest-type').value;
+      const dataSourceGroup = document.getElementById('bt-data-source-group');
+      const gregUnderlyingsGroup = document.getElementById('bt-greg-underlyings-group');
+      const modeDesc = document.getElementById('bt-mode-desc');
+      
+      if (mode === 'greg_selector') {{
+        dataSourceGroup.style.display = 'block';
+        gregUnderlyingsGroup.style.display = 'block';
+        modeDesc.textContent = 'Quick selector-only analysis returning per-strategy pass/block diagnostics.';
+      }} else {{
+        dataSourceGroup.style.display = 'none';
+        gregUnderlyingsGroup.style.display = 'none';
+        modeDesc.textContent = 'Full covered call simulation with position tracking and P&L.';
+      }}
+    }}
+    
     async function startBacktest() {{
       const underlying = document.getElementById('bt-underlying').value;
       const start = document.getElementById('bt-start').value;
@@ -6678,6 +6727,12 @@ def render_dashboard_html() -> str:
       const syntheticParams = getSyntheticModeParams();
       
       const selectorName = document.getElementById('bt-selector-name').value;
+      const backtestType = document.getElementById('bt-backtest-type').value;
+      const dataSource = document.getElementById('bt-data-source').value;
+      
+      const gregUnderlyings = [];
+      if (document.getElementById('bt-greg-btc').checked) gregUnderlyings.push('BTC');
+      if (document.getElementById('bt-greg-eth').checked) gregUnderlyings.push('ETH');
       
       const payload = {{
         underlying,
@@ -6697,6 +6752,8 @@ def render_dashboard_html() -> str:
         sigma_mode: syntheticParams.sigma_mode,
         chain_mode: syntheticParams.chain_mode,
         selector_name: selectorName,
+        backtest_type: backtestType,
+        greg_underlyings: gregUnderlyings,
       }};
       
       document.getElementById('bt-error').style.display = 'none';
