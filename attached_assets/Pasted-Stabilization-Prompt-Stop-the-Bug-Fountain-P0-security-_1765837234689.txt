@@ -1,0 +1,149 @@
+Stabilization Prompt — Stop the Bug Fountain (P0 security + P0 reliability)
+
+ROLE
+You are a senior security-minded backend engineer. Your job is to stabilize the Supervisor. No new features. Fix the listed CRITICAL/HIGH issues and add tests that prevent regressions.
+
+GOAL
+Make the Supervisor “fail closed” and deterministic:
+
+webhook never accepts requests unless properly configured
+
+debug endpoints never exist in prod
+
+approval state cannot deadlock or corrupt
+
+external HTTP calls have timeouts and safe client lifecycle
+
+route-level tests cover the security gates
+
+P0 FIXES (must do)
+1) Webhook secret enforcement (CRITICAL)
+
+In src/supervisor/app.py:
+
+If SUPERVISOR_ENABLED=1 and GITHUB_WEBHOOK_SECRET is missing/empty → webhook must return 503 immediately (before reading body).
+
+Do not call signature verification with secret or "". That’s a security bypass.
+
+Same for GITHUB_TOKEN: if it’s required for job execution, then gate the webhook with 503 if missing (or gate job start).
+
+Acceptance
+
+Missing secret → POST /github/webhook returns 503 (even if signature header is present).
+
+Invalid/missing signature → 401.
+
+Valid signature with secret set → 200 and job enqueued.
+
+2) Debug simulate endpoint must be impossible in prod (HIGH)
+
+Register /debug/simulate_pr_event only if SUPERVISOR_DEBUG=1.
+
+Otherwise: route should not exist (404).
+
+When enabled, require X-Debug-Token header matching SUPERVISOR_DEBUG_TOKEN.
+
+Ensure Header is imported (from fastapi import Header) and add an import smoke test so this can’t regress.
+
+3) Approval state deadlock + corruption (CRITICAL/HIGH)
+
+In src/supervisor/store.py:
+
+Replace _approval_lock = threading.Lock() with threading.RLock() OR refactor to avoid lock re-entry (don’t call a locked method from another locked method).
+
+Remove “swallow all exceptions” behavior. If save fails, surface it (return error to caller or store a startup_error flag).
+
+Make writes atomic:
+
+write temp file in same dir
+
+flush + os.fsync()
+
+os.replace(temp, target)
+
+If JSON is corrupted:
+
+move the corrupted file out of the way using os.replace(path, backup_path) (not copy)
+
+do not silently return {} and overwrite state on next save
+
+Acceptance
+
+Two concurrent approval updates do not deadlock.
+
+A simulated JSON corruption triggers backup/move and does not silently reset state.
+
+4) Workspace cleanup safety (HIGH)
+
+In src/supervisor/workspace.py:
+
+Cleanup must never delete an active workspace.
+
+Implement one of:
+
+pass active_job_ids into cleanup and skip them, OR
+
+sentinel file .supervisor_active plus stale detection: if sentinel older than TTL, treat as stale and allow cleanup.
+
+Ensure crash won’t orphan the sentinel forever.
+
+5) HTTP client lifecycle (HIGH)
+
+In src/supervisor/telegram_notify.py (and GitHub client if applicable):
+
+Do not create a new httpx.AsyncClient per request without closing it.
+
+Prefer one shared AsyncClient created in lifespan and stored on app.state.http_client, closed on shutdown.
+
+All external calls must have explicit timeouts (e.g., timeout=20.0) and retries (429/5xx) with exponential backoff.
+
+TESTS (must add — these prevent the exact regressions you’re seeing)
+
+Add route-level tests (FastAPI TestClient/AsyncClient):
+
+/github/webhook:
+
+secret missing → 503
+
+invalid signature → 401
+
+valid signature → 200 and job is queued
+
+/debug/simulate_pr_event:
+
+debug off → 404
+
+debug on but token missing/wrong → 401/403
+
+debug on with token → 200 enqueues
+
+Import smoke:
+
+import src.supervisor.app
+
+import src.supervisor.store
+
+import src.supervisor.telegram_notify
+This catches missing imports like Header instantly.
+
+Store concurrency:
+
+run set_pr_approval + set_pr_paused in threads; assert no deadlock and final state consistent.
+
+Approval file corruption:
+
+write invalid JSON; call load; assert file moved to .corrupt-<ts> and error surfaced.
+
+OUTPUT / CLEANUP
+
+Remove unused locks (e.g., _store_lock if unused).
+
+Ensure no dynamic exception strings with secrets go into logs. If logging exceptions, keep exc_info=False or redact.
+
+DEFINITION OF DONE
+
+All tests pass.
+
+The service fails closed: no secret/no token/no debug token → no dangerous behavior.
+
+No new features. Only stabilization and tests.
