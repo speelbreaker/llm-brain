@@ -113,17 +113,18 @@ async def job_worker(app: FastAPI) -> None:
         try:
             job = await app.state.job_queue.get()
             
+            job_app = app
             if isinstance(job, tuple):
                 if len(job) >= 2 and hasattr(job[1], 'state'):
                     logger.warning("Legacy tuple queue payload received, using provided app context")
-                    job, app = job[0], job[1]
+                    job, job_app = job[0], job[1]
                 else:
                     logger.warning("Legacy tuple queue payload received, app context discarded")
                     job = job[0]
             
             try:
                 logger.info("Worker processing job: %s", job.job_id)
-                await run_supervisor_job(job, app)
+                await run_supervisor_job(job, job_app)
             except Exception:
                 logger.error("Job %s failed in worker", job.job_id, exc_info=False)
             finally:
@@ -240,8 +241,7 @@ async def github_webhook(
             status_code=503,
             content={
                 "ok": False,
-                "error": "misconfigured",
-                "missing": request.app.state.startup_errors or ["GITHUB_WEBHOOK_SECRET"],
+                "error": "service_unavailable",
             }
         )
     
