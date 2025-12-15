@@ -50,10 +50,16 @@ The web dashboard offers a user-friendly interface with sections for "Live Agent
     - **StrategyCapabilities metadata**: Each strategy declares which config fields it owns vs. user-configurable
     - **GregBot parameter management**: GregBot owns exit_style, DTE, and delta targeting; user controls underlying, date range, IV multiplier
     - **Config override logic**: `apply_strategy_overrides()` returns warnings when user inputs conflict with strategy requirements
+    - **Field hints for UX**: `FieldHint` metadata (disabled/readonly/hidden/tooltip) for frontend field control
     - **Backtest event logging**: `BacktestEvent` table tracks strategy decisions, opens, closes, rolls, take-profits for analytics
     - **Event emitter**: `BacktestEventEmitter` provides standard interface for strategies to emit analytics events
     - **Strategy breakdown endpoints**: `/api/backtests/{run_id}/events` and `/api/backtests/{run_id}/strategy_summary` for post-run analysis
+    - **Strategy export endpoints**: `/api/backtests/{run_id}/strategy_summary/download?format=json|csv` for per-strategy attribution export
     - **API endpoints**: `GET /api/backtest/strategy_caps`, `GET /api/backtest/strategy_caps/{selector}`, `GET /api/backtest/strategies`
+- **Selector Frequency Scan with Live IV**: Extended scan configuration with:
+    - **IV Mode toggle**: `iv_mode` field supports 'synthetic' (default), 'live' (current market), or 'hybrid' (live with fallback)
+    - **Fallback behavior**: When live IV unavailable, falls back to synthetic with warning
+    - **Config persistence**: IV mode persisted in scan parameters for reproducibility
 - **Telegram Code Review Agent**: A Telegram bot for automated code review and Repo Q&A with modular design. It offers commands for `/review`, `/diff`, `/risks`, `/ask`, `/search`, `/open`, and natural language chat, utilizing LLM integration with automatic model fallback and secret redaction.
 - **PR Supervisor Service**: Automated PR verification and auto-fix service that:
     - Listens to GitHub PR webhooks (opened/synchronize/reopened)
