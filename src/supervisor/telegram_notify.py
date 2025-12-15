@@ -4,6 +4,7 @@ Implements:
 - Status card UX (single updateable message per PR)
 - HTML escaping for dynamic content
 - Plaintext fallback on formatting errors
+- Retry with exponential backoff for transient failures
 - Proper error handling
 """
 
@@ -17,8 +18,11 @@ import httpx
 
 from .config import SupervisorSettings
 from .models import ArbiterDecision, CheckResult, DiffStats, JobStatus, SupervisorJob
+from .retry import with_retry
 
 logger = logging.getLogger(__name__)
+
+TELEGRAM_TIMEOUT = 20.0
 
 
 def safe_truncate(text: str, max_chars: int, suffix: str = "...") -> str:
@@ -75,8 +79,8 @@ class TelegramStatusCard:
         self.last_error: Optional[str] = None
     
     async def _get_client(self) -> httpx.AsyncClient:
-        """Get HTTP client for Telegram API."""
-        return httpx.AsyncClient(timeout=20.0)
+        """Get HTTP client for Telegram API with explicit timeout."""
+        return httpx.AsyncClient(timeout=httpx.Timeout(TELEGRAM_TIMEOUT))
     
     def _build_card_text(self, use_html: bool = True) -> str:
         """Build the status card message text.
@@ -198,90 +202,154 @@ class TelegramStatusCard:
         key: Optional[tuple] = None,
         reply_to_message_id: Optional[int] = None,
     ) -> bool:
-        """Send message with HTML, falling back to plaintext on error."""
+        """Send message with HTML, falling back to plaintext on error.
+        
+        Uses retry with exponential backoff for transient failures.
+        """
         for parse_mode, text in [("HTML", html_text), (None, plain_text)]:
             try:
-                payload = {
-                    "chat_id": self.settings.telegram_chat_id,
-                    "text": text,
-                    "disable_web_page_preview": True,
-                }
-                if parse_mode:
-                    payload["parse_mode"] = parse_mode
-                if reply_to_message_id:
-                    payload["reply_to_message_id"] = reply_to_message_id
-                
-                response = await client.post(
-                    f"{self.base_url}/sendMessage",
-                    json=payload,
+                result = await self._send_message_with_retry(
+                    client, text, parse_mode, key, reply_to_message_id
                 )
-                
-                if response.status_code == 200:
-                    data = response.json()
-                    if data.get("ok") and data.get("result", {}).get("message_id"):
-                        msg_id = data["result"]["message_id"]
-                        if key:
-                            self.registry.set_message_id(key, msg_id)
-                        return True
+                if result:
+                    return True
                 
                 if parse_mode == "HTML":
-                    logger.warning(f"HTML send failed, trying plaintext: {response.status_code}")
+                    logger.warning("HTML send failed, trying plaintext")
                     continue
                     
                 return False
                 
             except Exception as e:
                 if parse_mode == "HTML":
-                    logger.warning(f"HTML send error, trying plaintext: {e}")
+                    logger.warning("HTML send error, trying plaintext: %s", type(e).__name__)
                     continue
-                logger.error(f"Telegram send failed: {e}")
+                logger.error("Telegram send failed: %s", type(e).__name__)
                 return False
         
         return False
+    
+    async def _send_message_with_retry(
+        self,
+        client: httpx.AsyncClient,
+        text: str,
+        parse_mode: Optional[str],
+        key: Optional[tuple],
+        reply_to_message_id: Optional[int],
+    ) -> bool:
+        """Send a single message with retry logic."""
+        async def do_send() -> bool:
+            payload = {
+                "chat_id": self.settings.telegram_chat_id,
+                "text": text,
+                "disable_web_page_preview": True,
+            }
+            if parse_mode:
+                payload["parse_mode"] = parse_mode
+            if reply_to_message_id:
+                payload["reply_to_message_id"] = reply_to_message_id
+            
+            response = await client.post(
+                f"{self.base_url}/sendMessage",
+                json=payload,
+            )
+            response.raise_for_status()
+            
+            data = response.json()
+            if data.get("ok") and data.get("result", {}).get("message_id"):
+                msg_id = data["result"]["message_id"]
+                if key:
+                    self.registry.set_message_id(key, msg_id)
+                return True
+            return False
+        
+        try:
+            return await with_retry(
+                do_send,
+                operation_name="telegram_send",
+                max_retries=3,
+            )
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 400:
+                return False
+            raise
     
     async def _edit_message(
         self,
         client: httpx.AsyncClient,
         message_id: int,
     ) -> bool:
-        """Edit an existing status card message with fallback to plaintext."""
+        """Edit an existing status card message with fallback to plaintext.
+        
+        Uses retry with exponential backoff for transient failures.
+        """
         for parse_mode, use_html in [("HTML", True), (None, False)]:
             try:
-                text = self._build_card_text(use_html=use_html)
-                payload = {
-                    "chat_id": self.settings.telegram_chat_id,
-                    "message_id": message_id,
-                    "text": text,
-                    "disable_web_page_preview": True,
-                }
-                if parse_mode:
-                    payload["parse_mode"] = parse_mode
-                
-                response = await client.post(
-                    f"{self.base_url}/editMessageText",
-                    json=payload,
+                result = await self._edit_message_with_retry(
+                    client, message_id, use_html, parse_mode
                 )
-                
-                if response.status_code == 200:
+                if result:
                     return True
                 
-                if response.status_code == 400:
-                    data = response.json()
-                    if "message is not modified" in data.get("description", ""):
-                        return True
-                    if parse_mode == "HTML":
-                        logger.warning(f"HTML edit failed, trying plaintext")
-                        continue
+                if parse_mode == "HTML":
+                    logger.warning("HTML edit failed, trying plaintext")
+                    continue
                 
                 return False
                 
             except Exception as e:
                 if parse_mode == "HTML":
-                    logger.warning(f"HTML edit error, trying plaintext: {e}")
+                    logger.warning("HTML edit error, trying plaintext: %s", type(e).__name__)
                     continue
                 return False
         
         return False
+    
+    async def _edit_message_with_retry(
+        self,
+        client: httpx.AsyncClient,
+        message_id: int,
+        use_html: bool,
+        parse_mode: Optional[str],
+    ) -> bool:
+        """Edit a single message with retry logic."""
+        async def do_edit() -> bool:
+            text = self._build_card_text(use_html=use_html)
+            payload = {
+                "chat_id": self.settings.telegram_chat_id,
+                "message_id": message_id,
+                "text": text,
+                "disable_web_page_preview": True,
+            }
+            if parse_mode:
+                payload["parse_mode"] = parse_mode
+            
+            response = await client.post(
+                f"{self.base_url}/editMessageText",
+                json=payload,
+            )
+            
+            if response.status_code == 200:
+                return True
+            
+            if response.status_code == 400:
+                data = response.json()
+                if "message is not modified" in data.get("description", ""):
+                    return True
+            
+            response.raise_for_status()
+            return False
+        
+        try:
+            return await with_retry(
+                do_edit,
+                operation_name="telegram_edit",
+                max_retries=3,
+            )
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 400:
+                return False
+            raise
     
     async def send_detail_reply(self, text: str) -> bool:
         """Send a detail reply to the status card (for failures, arbiter, etc)."""

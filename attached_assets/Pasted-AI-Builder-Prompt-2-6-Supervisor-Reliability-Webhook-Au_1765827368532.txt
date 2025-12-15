@@ -1,0 +1,138 @@
+AI Builder Prompt #2.6 — Supervisor Reliability + Webhook Auth + Retry/Timeouts + Payload Truncation
+
+Role
+You are a senior Python engineer. The PR Supervisor service exists and has a queue worker, readiness gating, redaction, and Telegram notifications. Now address remaining HIGH risks.
+
+Goal (P0 first)
+
+Implement correct GitHub webhook signature validation.
+
+Fix and use the retry helper with explicit timeouts for external calls (GitHub/Telegram).
+
+Complete truncation of API payloads.
+
+Remove potential sensitive leakage via logs and clean up small code smells.
+
+Constraints
+
+No behavior changes when disabled (SUPERVISOR_ENABLED=0).
+
+Never leak secrets to logs/PR comments/Telegram/API payloads.
+
+Add/extend unit tests; all tests must pass.
+
+A) P0: Webhook signature validation must be explicit and correct
+
+Files: src/supervisor/app.py and/or src/supervisor/github.py
+
+Ensure webhook handler computes HMAC SHA-256 of the raw request body using GITHUB_WEBHOOK_SECRET.
+
+Compare against X-Hub-Signature-256 using constant-time comparison (hmac.compare_digest).
+
+If header missing or invalid:
+
+return 401 (or 400, pick one and be consistent) with {ok:false,error:"invalid_signature"}.
+
+do not enqueue job.
+
+Add unit tests:
+
+valid signature accepted
+
+invalid signature rejected
+
+missing signature rejected
+
+B) P0: Fix retry helper and make it actually used
+
+File: src/supervisor/retry.py
+
+Fix any incomplete TypeVar / syntax issues. Make sure the module imports cleanly.
+
+Implement a small async retry helper:
+
+retries: max 3
+
+exponential backoff + jitter
+
+retry only on transient conditions (429, 5xx, timeouts, connection errors)
+
+never retry on other 4xx
+
+Add tests:
+
+module import test
+
+retry triggers on a simulated transient exception, stops after N attempts
+
+C) P0: Add explicit httpx timeouts and wrap external calls with retry
+
+Files: src/supervisor/telegram_notify.py, src/supervisor/github.py (or wherever GitHub requests happen)
+
+Ensure all httpx.AsyncClient instances use an explicit timeout (e.g. timeout=20.0).
+
+Wrap Telegram send/edit calls in the retry helper.
+
+Wrap GitHub API calls (commenting, PR fetch, labels, etc.) in retry helper.
+
+Keep existing Telegram “fallback to plain text” behavior; retries should apply to both primary send and fallback send.
+
+Add tests (mock httpx):
+
+Telegram call retries on 429 or 500
+
+GitHub call retries on 502
+
+D) P1: Complete truncation of API payload fields
+
+File: src/supervisor/app.py (jobs endpoints)
+
+Currently truncation is incomplete. Apply truncation to:
+
+verification.checks[*].stdout
+
+verification.checks[*].stderr
+
+any stored raw tool output fields
+
+Include metadata flags in response (e.g. {"truncated": true, "max_chars": 5000}) or keep your existing truncation pattern, but enforce it consistently.
+
+Add tests:
+
+a job with huge stdout returns truncated stdout in /api/jobs and /api/jobs/{id}
+
+E) P1: Prevent sensitive data in exception logging
+
+File: src/supervisor/app.py
+
+Change worker exception logging to avoid interpolating the exception string:
+
+Prefer logger.exception("Job %s failed in worker", job.job_id)
+
+Do not include raw exception messages that may contain command output or tokens.
+
+If you must log dynamic text, run it through redact_secrets().
+
+Add test:
+
+ensure logging call does not format str(e) into message (basic unit test with caplog)
+
+F) P2: Minor cleanup requested by reviewer
+
+Unify readiness checks in webhook: rely on app.state.ready and app.state.startup_errors only.
+
+Simplify queue payload: enqueue just the job; the worker already has app.
+
+Acceptance criteria
+
+Signature validation is clearly present and tested.
+
+retry.py is complete, imported in tests, and used for GitHub/Telegram external calls.
+
+All external clients have explicit timeouts.
+
+/api/jobs* never returns unbounded stdout/stderr.
+
+Logging avoids leaking raw exception strings.
+
+All tests pass.

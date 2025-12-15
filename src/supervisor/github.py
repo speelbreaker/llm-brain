@@ -2,15 +2,32 @@
 
 import hashlib
 import hmac
+import logging
 from typing import Any, Optional
 
 import httpx
 
 from .models import WebhookPayload
+from .retry import with_retry
+
+logger = logging.getLogger(__name__)
+
+GITHUB_TIMEOUT = 30.0
 
 
 def verify_signature(payload_body: bytes, signature_header: str, secret: str) -> bool:
-    """Verify GitHub webhook signature (X-Hub-Signature-256)."""
+    """Verify GitHub webhook signature (X-Hub-Signature-256).
+    
+    Uses HMAC SHA-256 with constant-time comparison to prevent timing attacks.
+    
+    Args:
+        payload_body: Raw request body bytes
+        signature_header: Value of X-Hub-Signature-256 header
+        secret: Configured webhook secret
+        
+    Returns:
+        True if signature is valid, False otherwise
+    """
     if not signature_header:
         return False
     
@@ -57,7 +74,7 @@ def parse_webhook_payload(data: dict[str, Any]) -> Optional[WebhookPayload]:
 
 
 class GitHubClient:
-    """GitHub API client for PR operations."""
+    """GitHub API client for PR operations with retry support."""
     
     def __init__(self, token: str):
         self.token = token
@@ -73,7 +90,7 @@ class GitHubClient:
                     "Accept": "application/vnd.github.v3+json",
                     "X-GitHub-Api-Version": "2022-11-28",
                 },
-                timeout=30.0,
+                timeout=httpx.Timeout(GITHUB_TIMEOUT),
             )
         return self._client
     
@@ -82,45 +99,71 @@ class GitHubClient:
             await self._client.aclose()
             self._client = None
     
+    async def _request_with_retry(
+        self,
+        method: str,
+        path: str,
+        operation_name: str,
+        **kwargs,
+    ) -> httpx.Response:
+        """Make an HTTP request with retry logic."""
+        async def do_request() -> httpx.Response:
+            client = await self._get_client()
+            response = await client.request(method, path, **kwargs)
+            response.raise_for_status()
+            return response
+        
+        return await with_retry(
+            do_request,
+            operation_name=operation_name,
+            max_retries=3,
+        )
+    
     async def get_pr_info(self, repo: str, pr_number: int) -> dict[str, Any]:
-        """Get PR details."""
-        client = await self._get_client()
-        response = await client.get(f"/repos/{repo}/pulls/{pr_number}")
-        response.raise_for_status()
+        """Get PR details with retry."""
+        response = await self._request_with_retry(
+            "GET",
+            f"/repos/{repo}/pulls/{pr_number}",
+            operation_name=f"github_get_pr_{repo}_{pr_number}",
+        )
         return response.json()
     
     async def get_pr_files(self, repo: str, pr_number: int) -> list[dict[str, Any]]:
-        """Get list of files changed in PR."""
-        client = await self._get_client()
-        response = await client.get(f"/repos/{repo}/pulls/{pr_number}/files")
-        response.raise_for_status()
+        """Get list of files changed in PR with retry."""
+        response = await self._request_with_retry(
+            "GET",
+            f"/repos/{repo}/pulls/{pr_number}/files",
+            operation_name=f"github_get_files_{repo}_{pr_number}",
+        )
         return response.json()
     
     async def post_pr_comment(self, repo: str, pr_number: int, body: str) -> dict[str, Any]:
-        """Post a comment on a PR."""
-        client = await self._get_client()
-        response = await client.post(
+        """Post a comment on a PR with retry."""
+        response = await self._request_with_retry(
+            "POST",
             f"/repos/{repo}/issues/{pr_number}/comments",
-            json={"body": body}
+            operation_name=f"github_post_comment_{repo}_{pr_number}",
+            json={"body": body},
         )
-        response.raise_for_status()
         return response.json()
     
     async def update_pr_comment(self, repo: str, comment_id: int, body: str) -> dict[str, Any]:
-        """Update an existing PR comment."""
-        client = await self._get_client()
-        response = await client.patch(
+        """Update an existing PR comment with retry."""
+        response = await self._request_with_retry(
+            "PATCH",
             f"/repos/{repo}/issues/comments/{comment_id}",
-            json={"body": body}
+            operation_name=f"github_update_comment_{comment_id}",
+            json={"body": body},
         )
-        response.raise_for_status()
         return response.json()
     
     async def get_repo_clone_url(self, repo: str) -> str:
-        """Get the clone URL for a repository."""
-        client = await self._get_client()
-        response = await client.get(f"/repos/{repo}")
-        response.raise_for_status()
+        """Get the clone URL for a repository with retry."""
+        response = await self._request_with_retry(
+            "GET",
+            f"/repos/{repo}",
+            operation_name=f"github_get_repo_{repo}",
+        )
         data = response.json()
         clone_url = data.get("clone_url", "")
         if self.token and clone_url.startswith("https://"):

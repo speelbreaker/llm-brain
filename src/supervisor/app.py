@@ -66,6 +66,41 @@ def truncate_field(value: Optional[str], max_chars: int = MAX_TRUNCATE_CHARS) ->
     }
 
 
+def truncate_job_for_api(job_dict: dict) -> dict:
+    """Apply truncation to all large text fields in a job dict."""
+    if job_dict.get("verification") and isinstance(job_dict["verification"], dict):
+        verification = job_dict["verification"]
+        
+        if "failure_summary" in verification:
+            truncated = truncate_field(verification.get("failure_summary"))
+            verification["failure_summary"] = truncated["value"]
+            verification["failure_summary_truncated"] = truncated["truncated"]
+        
+        if "checks" in verification and isinstance(verification["checks"], list):
+            for check in verification["checks"]:
+                if "stdout" in check:
+                    truncated = truncate_field(check.get("stdout"))
+                    check["stdout"] = truncated["value"]
+                    check["stdout_truncated"] = truncated["truncated"]
+                if "stderr" in check:
+                    truncated = truncate_field(check.get("stderr"))
+                    check["stderr"] = truncated["value"]
+                    check["stderr_truncated"] = truncated["truncated"]
+    
+    if job_dict.get("fix_attempts") and isinstance(job_dict["fix_attempts"], list):
+        for attempt in job_dict["fix_attempts"]:
+            if "codex_output" in attempt:
+                truncated = truncate_field(attempt.get("codex_output"))
+                attempt["codex_output"] = truncated["value"]
+                attempt["codex_output_truncated"] = truncated["truncated"]
+            if "codex_prompt" in attempt:
+                truncated = truncate_field(attempt.get("codex_prompt"))
+                attempt["codex_prompt"] = truncated["value"]
+                attempt["codex_prompt_truncated"] = truncated["truncated"]
+    
+    return job_dict
+
+
 async def job_worker(app: FastAPI) -> None:
     """Background worker that processes jobs from the queue.
     
@@ -76,21 +111,21 @@ async def job_worker(app: FastAPI) -> None:
     
     while True:
         try:
-            job, job_app = await app.state.job_queue.get()
+            job = await app.state.job_queue.get()
             
             try:
-                logger.info(f"Worker processing job: {job.job_id}")
-                await run_supervisor_job(job, job_app)
-            except Exception as e:
-                logger.exception(f"Job {job.job_id} failed in worker: {e}")
+                logger.info("Worker processing job: %s", job.job_id)
+                await run_supervisor_job(job, app)
+            except Exception:
+                logger.exception("Job %s failed in worker", job.job_id)
             finally:
                 app.state.job_queue.task_done()
                 
         except asyncio.CancelledError:
             logger.info("Job worker cancelled, shutting down")
             break
-        except Exception as e:
-            logger.exception(f"Job worker error: {e}")
+        except Exception:
+            logger.exception("Job worker error")
             await asyncio.sleep(1)
 
 
@@ -193,16 +228,19 @@ async def github_webhook(
             }
         )
     
-    if not settings.github_webhook_secret:
-        return JSONResponse(
-            status_code=503,
-            content={"ok": False, "error": "GITHUB_WEBHOOK_SECRET not configured"}
-        )
-    
     body = await request.body()
     
-    if not verify_signature(body, x_hub_signature_256 or "", settings.github_webhook_secret):
-        raise HTTPException(status_code=401, detail="Invalid signature")
+    if not x_hub_signature_256:
+        return JSONResponse(
+            status_code=401,
+            content={"ok": False, "error": "invalid_signature", "detail": "Missing X-Hub-Signature-256 header"}
+        )
+    
+    if not verify_signature(body, x_hub_signature_256, settings.github_webhook_secret or ""):
+        return JSONResponse(
+            status_code=401,
+            content={"ok": False, "error": "invalid_signature", "detail": "Signature verification failed"}
+        )
     
     if x_github_event != "pull_request":
         return JobResponse(
@@ -254,7 +292,7 @@ async def github_webhook(
     
     store.save(job)
     
-    await request.app.state.job_queue.put((job, request.app))
+    await request.app.state.job_queue.put(job)
     
     return JobResponse(
         job_id=job_id,
@@ -273,15 +311,8 @@ async def list_jobs(request: Request, limit: int = 50):
     result = []
     for job in jobs:
         job_dict = job.model_dump()
-        
         job_dict = redact_job_for_api(job_dict, settings)
-        
-        if job_dict.get("verification") and isinstance(job_dict["verification"], dict):
-            if "failure_summary" in job_dict["verification"]:
-                truncated = truncate_field(job_dict["verification"]["failure_summary"])
-                job_dict["verification"]["failure_summary"] = truncated["value"]
-                job_dict["verification"]["failure_summary_truncated"] = truncated["truncated"]
-        
+        job_dict = truncate_job_for_api(job_dict)
         result.append(job_dict)
     
     return {"jobs": result}
@@ -297,21 +328,8 @@ async def get_job(request: Request, job_id: str):
         raise HTTPException(status_code=404, detail="Job not found")
     
     job_dict = job.model_dump()
-    
     job_dict = redact_job_for_api(job_dict, settings)
-    
-    if job_dict.get("verification") and isinstance(job_dict["verification"], dict):
-        if "failure_summary" in job_dict["verification"]:
-            truncated = truncate_field(job_dict["verification"]["failure_summary"])
-            job_dict["verification"]["failure_summary"] = truncated["value"]
-            job_dict["verification"]["failure_summary_truncated"] = truncated["truncated"]
-    
-    if job_dict.get("fix_attempts") and isinstance(job_dict["fix_attempts"], list):
-        for attempt in job_dict["fix_attempts"]:
-            if "codex_output" in attempt:
-                truncated = truncate_field(attempt.get("codex_output"))
-                attempt["codex_output"] = truncated["value"]
-                attempt["codex_output_truncated"] = truncated["truncated"]
+    job_dict = truncate_job_for_api(job_dict)
     
     return job_dict
 
