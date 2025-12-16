@@ -378,3 +378,4 @@ In that case, **do not** auto-apply the day's calibration; investigate data or D
 ## License
 
 This project is for educational and research purposes only.
+smoke test Tue Dec 16 19:28:17 CET 2025
