@@ -634,7 +634,7 @@ async def run_supervisor_job(job: SupervisorJob, app: FastAPI) -> None:
             comment = redact_secrets(comment, settings)
             await github_client.post_pr_comment(job.repo_full_name, job.pr_number, comment)
             
-            final_status = JobStatus.FAILED if not verification.all_passed else JobStatus.CHECKS_PASSED
+            final_status = JobStatus.CHECKS_FAILED if not verification.all_passed else JobStatus.CHECKS_PASSED
             job.update_status(final_status)
             job.final_message = f"LLM unavailable: {llm_err.failure_reason}"
             store.save(job)

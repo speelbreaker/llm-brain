@@ -1,6 +1,7 @@
 """Unit tests for PR Supervisor."""
 
 import json
+import os
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -14,7 +15,9 @@ from src.supervisor.models import (
     SupervisorJob,
     VerificationReport,
 )
-from src.supervisor.runner import VerificationRunner
+from src.supervisor.runner import VerificationRunner, get_sanitized_env
+from src.supervisor.github import format_fallback_comment
+from src.supervisor.debate import LLMFailure
 
 
 class TestWebhookSignature:
@@ -332,7 +335,19 @@ class TestSettings:
     """Tests for configuration settings."""
     
     def test_default_settings(self):
-        with patch.dict("os.environ", {}, clear=False):
+        env_override = {
+            "SUPERVISOR_ENABLED": "",
+            "SUPERVISOR_DEBUG": "",
+            "SUPERVISOR_MAX_LOOPS": "",
+            "SUPERVISOR_MAX_FILES_CHANGED": "",
+            "SUPERVISOR_MAX_LOC_CHANGED": "",
+            "SUPERVISOR_ALLOW_FORKS": "",
+        }
+        with patch.dict("os.environ", env_override, clear=False):
+            for key in env_override:
+                if key in os.environ:
+                    del os.environ[key]
+            
             settings = SupervisorSettings()
             
             assert settings.enabled is False
@@ -365,3 +380,126 @@ class TestSettings:
             
             assert len(commands) == 1
             assert "pytest" in commands
+
+
+class TestSanitizedEnv:
+    """Tests for subprocess environment sanitization."""
+    
+    def test_removes_supervisor_prefixed_vars(self):
+        """Test that SUPERVISOR_* vars are removed from subprocess env."""
+        with patch.dict("os.environ", {
+            "SUPERVISOR_ENABLED": "1",
+            "SUPERVISOR_DEBUG": "1",
+            "SUPERVISOR_MAX_LOOPS": "5",
+            "PATH": "/usr/bin",
+            "HOME": "/home/user",
+        }):
+            sanitized = get_sanitized_env()
+            
+            assert "SUPERVISOR_ENABLED" not in sanitized
+            assert "SUPERVISOR_DEBUG" not in sanitized
+            assert "SUPERVISOR_MAX_LOOPS" not in sanitized
+            assert "PATH" in sanitized
+            assert "HOME" in sanitized
+    
+    def test_removes_github_prefixed_vars(self):
+        """Test that GITHUB_* vars are removed from subprocess env."""
+        with patch.dict("os.environ", {
+            "GITHUB_TOKEN": "secret_token",
+            "GITHUB_WEBHOOK_SECRET": "secret",
+            "PATH": "/usr/bin",
+        }):
+            sanitized = get_sanitized_env()
+            
+            assert "GITHUB_TOKEN" not in sanitized
+            assert "GITHUB_WEBHOOK_SECRET" not in sanitized
+            assert "PATH" in sanitized
+    
+    def test_removes_telegram_prefixed_vars(self):
+        """Test that TELEGRAM_* vars are removed from subprocess env."""
+        with patch.dict("os.environ", {
+            "TELEGRAM_BOT_TOKEN": "secret_token",
+            "TELEGRAM_CHAT_ID": "12345",
+            "PATH": "/usr/bin",
+        }):
+            sanitized = get_sanitized_env()
+            
+            assert "TELEGRAM_BOT_TOKEN" not in sanitized
+            assert "TELEGRAM_CHAT_ID" not in sanitized
+    
+    def test_removes_openai_api_key(self):
+        """Test that OPENAI_API_KEY is removed from subprocess env."""
+        with patch.dict("os.environ", {
+            "OPENAI_API_KEY": "sk-secret",
+            "PATH": "/usr/bin",
+        }):
+            sanitized = get_sanitized_env()
+            
+            assert "OPENAI_API_KEY" not in sanitized
+    
+    def test_keeps_safe_vars(self):
+        """Test that safe environment vars are preserved."""
+        with patch.dict("os.environ", {
+            "PATH": "/usr/bin:/usr/local/bin",
+            "HOME": "/home/user",
+            "LANG": "en_US.UTF-8",
+            "USER": "testuser",
+            "PYTHONPATH": "/app/src",
+        }):
+            sanitized = get_sanitized_env()
+            
+            assert sanitized.get("PATH") == "/usr/bin:/usr/local/bin"
+            assert sanitized.get("HOME") == "/home/user"
+            assert sanitized.get("LANG") == "en_US.UTF-8"
+            assert sanitized.get("USER") == "testuser"
+            assert sanitized.get("PYTHONPATH") == "/app/src"
+
+
+class TestLLMFailure:
+    """Tests for LLMFailure exception and fallback handling."""
+    
+    def test_llm_failure_stores_reason(self):
+        """Test that LLMFailure stores the failure reason."""
+        err = LLMFailure("OpenAI quota exceeded", original_error=ValueError("test"))
+        
+        assert err.failure_reason == "OpenAI quota exceeded"
+        assert isinstance(err.original_error, ValueError)
+    
+    def test_fallback_comment_includes_checks(self):
+        """Test that fallback comment includes check results."""
+        checks = [
+            {"command": "pytest", "passed": True, "duration_seconds": 10.5},
+            {"command": "ruff check .", "passed": False, "duration_seconds": 2.3},
+        ]
+        
+        comment = format_fallback_comment(
+            run_number=1,
+            commit_sha="abc12345",
+            checks=checks,
+            failure_summary="Some tests failed",
+            llm_error="OpenAI quota exceeded",
+        )
+        
+        assert "Supervisor Run #1" in comment
+        assert "abc12345" in comment
+        assert "pytest" in comment
+        assert "ruff" in comment
+        assert "OpenAI analysis skipped" in comment
+        assert "OpenAI quota exceeded" in comment
+        assert "Manual review required" in comment
+    
+    def test_fallback_comment_without_llm_error(self):
+        """Test fallback comment when no LLM error is provided."""
+        checks = [
+            {"command": "pytest", "passed": True, "duration_seconds": 5.0},
+        ]
+        
+        comment = format_fallback_comment(
+            run_number=2,
+            commit_sha="def67890",
+            checks=checks,
+        )
+        
+        assert "Supervisor Run #2" in comment
+        assert "OpenAI analysis skipped" in comment
+        assert "def67890" in comment
