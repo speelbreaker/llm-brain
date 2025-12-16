@@ -148,8 +148,8 @@ class TestPRCommentFormatting:
         
         assert "## 🤖 Supervisor Run #1" in comment
         assert "`abc123de`" in comment
-        assert "✅ Pass" in comment
-        assert "❌ Fail" in comment
+        assert "- ✅" in comment
+        assert "- ❌" in comment
         assert "pytest" in comment
     
     def test_format_comment_with_failure_summary(self):
@@ -164,7 +164,7 @@ class TestPRCommentFormatting:
             failure_summary="AssertionError: expected 1, got 2",
         )
         
-        assert "### Failure Summary" in comment
+        assert "Failure excerpt" in comment
         assert "AssertionError" in comment
     
     def test_format_comment_with_arbiter_decision(self):
@@ -184,9 +184,9 @@ class TestPRCommentFormatting:
             arbiter_decision=arbiter,
         )
         
-        assert "### Arbiter Decision" in comment
-        assert "✅ Yes" in comment
-        assert "Fix assertion error" in comment
+        assert "**Arbiter:**" in comment
+        assert "Auto-fix approved" in comment
+        assert "low" in comment
     
     def test_format_comment_with_final_status(self):
         checks = [
@@ -200,7 +200,7 @@ class TestPRCommentFormatting:
             final_status="✅ All checks passed - Ready to merge",
         )
         
-        assert "### Final Status" in comment
+        assert "All checks passed" in comment
         assert "Ready to merge" in comment
 
 
