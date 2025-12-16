@@ -1,0 +1,520 @@
+{
+  "run_id": "2025-12-16T00-03-06Z_BTC_a0d174c3",
+  "created_at": "2025-12-16T00:03:06.953888",
+  "status": "finished",
+  "config": {
+    "underlying": "BTC",
+    "start_date": "2024-09-01T00:00:00+00:00",
+    "end_date": "2024-11-01T00:00:00+00:00",
+    "timeframe": "1d",
+    "decision_interval_hours": 24,
+    "exit_style": "hold_to_expiry",
+    "target_dte": 7,
+    "target_delta": 0.25,
+    "min_dte": 3,
+    "max_dte": 21,
+    "delta_min": 0.15,
+    "delta_max": 0.35,
+    "margin_type": "inverse",
+    "settlement_ccy": "ANY",
+    "sigma_mode": "atm_iv_x_multiplier",
+    "chain_mode": "synthetic_grid",
+    "synthetic_iv_multiplier": 1.0,
+    "selector_name": "greg_vrp_harvester"
+  },
+  "metrics": {
+    "initial_equity": 58466.0,
+    "final_equity": 73325.42,
+    "net_profit_usd": 14859.42,
+    "net_profit_pct": 25.42,
+    "hodl_profit_usd": 10705.0,
+    "hodl_profit_pct": 18.31,
+    "max_drawdown_pct": 6.0,
+    "max_drawdown_usd": 3727.61,
+    "num_trades": 31,
+    "win_rate": 90.3,
+    "avg_trade_usd": 2594.88,
+    "profit_factor": 16.81,
+    "gross_profit": 85527.78,
+    "gross_loss": 5086.66,
+    "avg_winner": 3054.56,
+    "avg_loser": 1695.55,
+    "sharpe_ratio": 0.31,
+    "sortino_ratio": 0.36,
+    "final_pnl": 80441.1283,
+    "final_pnl_vs_hodl": 4154.415,
+    "avg_pnl": 2594.8751
+  },
+  "recent_steps": {
+    "hold_to_expiry": [
+      {
+        "time": "2024-09-13T00:00:00+00:00",
+        "candidates": 3,
+        "best_score": 3.38,
+        "traded": true
+      },
+      {
+        "time": "2024-09-14T00:00:00+00:00",
+        "candidates": 3,
+        "best_score": 3.23,
+        "traded": true
+      },
+      {
+        "time": "2024-09-15T00:00:00+00:00",
+        "candidates": 3,
+        "best_score": 3.22,
+        "traded": true
+      },
+      {
+        "time": "2024-09-16T00:00:00+00:00",
+        "candidates": 3,
+        "best_score": 3.38,
+        "traded": true
+      },
+      {
+        "time": "2024-09-17T00:00:00+00:00",
+        "candidates": 3,
+        "best_score": 3.0,
+        "traded": true
+      },
+      {
+        "time": "2024-09-18T00:00:00+00:00",
+        "candidates": 2,
+        "best_score": 2.86,
+        "traded": false
+      },
+      {
+        "time": "2024-09-19T00:00:00+00:00",
+        "candidates": 3,
+        "best_score": 3.23,
+        "traded": true
+      },
+      {
+        "time": "2024-09-20T00:00:00+00:00",
+        "candidates": 3,
+        "best_score": 3.07,
+        "traded": true
+      },
+      {
+        "time": "2024-09-21T00:00:00+00:00",
+        "candidates": 3,
+        "best_score": 3.22,
+        "traded": true
+      },
+      {
+        "time": "2024-09-22T00:00:00+00:00",
+        "candidates": 3,
+        "best_score": 3.21,
+        "traded": true
+      },
+      {
+        "time": "2024-09-23T00:00:00+00:00",
+        "candidates": 2,
+        "best_score": 2.34,
+        "traded": false
+      },
+      {
+        "time": "2024-09-24T00:00:00+00:00",
+        "candidates": 3,
+        "best_score": 2.32,
+        "traded": false
+      },
+      {
+        "time": "2024-09-25T00:00:00+00:00",
+        "candidates": 3,
+        "best_score": 2.7,
+        "traded": false
+      },
+      {
+        "time": "2024-09-26T00:00:00+00:00",
+        "candidates": 2,
+        "best_score": 2.61,
+        "traded": false
+      },
+      {
+        "time": "2024-09-27T00:00:00+00:00",
+        "candidates": 3,
+        "best_score": 1.89,
+        "traded": false
+      },
+      {
+        "time": "2024-09-28T00:00:00+00:00",
+        "candidates": 2,
+        "best_score": 1.45,
+        "traded": false
+      },
+      {
+        "time": "2024-09-29T00:00:00+00:00",
+        "candidates": 3,
+        "best_score": 1.93,
+        "traded": false
+      },
+      {
+        "time": "2024-09-30T00:00:00+00:00",
+        "candidates": 3,
+        "best_score": 3.01,
+        "traded": true
+      },
+      {
+        "time": "2024-10-01T00:00:00+00:00",
+        "candidates": 2,
+        "best_score": 2.23,
+        "traded": false
+      },
+      {
+        "time": "2024-10-02T00:00:00+00:00",
+        "candidates": 2,
+        "best_score": 3.3,
+        "traded": true
+      },
+      {
+        "time": "2024-10-03T00:00:00+00:00",
+        "candidates": 2,
+        "best_score": 3.32,
+        "traded": true
+      },
+      {
+        "time": "2024-10-04T00:00:00+00:00",
+        "candidates": 2,
+        "best_score": 2.34,
+        "traded": false
+      },
+      {
+        "time": "2024-10-05T00:00:00+00:00",
+        "candidates": 2,
+        "best_score": 3.0,
+        "traded": true
+      },
+      {
+        "time": "2024-10-06T00:00:00+00:00",
+        "candidates": 2,
+        "best_score": 3.47,
+        "traded": true
+      },
+      {
+        "time": "2024-10-07T00:00:00+00:00",
+        "candidates": 2,
+        "best_score": 2.94,
+        "traded": false
+      },
+      {
+        "time": "2024-10-08T00:00:00+00:00",
+        "candidates": 2,
+        "best_score": 2.59,
+        "traded": false
+      },
+      {
+        "time": "2024-10-09T00:00:00+00:00",
+        "candidates": 2,
+        "best_score": 2.44,
+        "traded": false
+      },
+      {
+        "time": "2024-10-10T00:00:00+00:00",
+        "candidates": 1,
+        "best_score": 3.2,
+        "traded": true
+      },
+      {
+        "time": "2024-10-11T00:00:00+00:00",
+        "candidates": 2,
+        "best_score": 2.56,
+        "traded": false
+      },
+      {
+        "time": "2024-10-12T00:00:00+00:00",
+        "candidates": 2,
+        "best_score": 3.38,
+        "traded": true
+      },
+      {
+        "time": "2024-10-13T00:00:00+00:00",
+        "candidates": 1,
+        "best_score": 3.17,
+        "traded": true
+      },
+      {
+        "time": "2024-10-14T00:00:00+00:00",
+        "candidates": 2,
+        "best_score": 3.07,
+        "traded": true
+      },
+      {
+        "time": "2024-10-15T00:00:00+00:00",
+        "candidates": 2,
+        "best_score": 3.03,
+        "traded": true
+      },
+      {
+        "time": "2024-10-16T00:00:00+00:00",
+        "candidates": 2,
+        "best_score": 2.22,
+        "traded": false
+      },
+      {
+        "time": "2024-10-17T00:00:00+00:00",
+        "candidates": 2,
+        "best_score": 1.15,
+        "traded": false
+      },
+      {
+        "time": "2024-10-18T00:00:00+00:00",
+        "candidates": 2,
+        "best_score": 1.92,
+        "traded": false
+      },
+      {
+        "time": "2024-10-19T00:00:00+00:00",
+        "candidates": 2,
+        "best_score": 1.19,
+        "traded": false
+      },
+      {
+        "time": "2024-10-20T00:00:00+00:00",
+        "candidates": 2,
+        "best_score": 2.15,
+        "traded": false
+      },
+      {
+        "time": "2024-10-21T00:00:00+00:00",
+        "candidates": 2,
+        "best_score": 2.05,
+        "traded": false
+      },
+      {
+        "time": "2024-10-22T00:00:00+00:00",
+        "candidates": 2,
+        "best_score": 2.16,
+        "traded": false
+      },
+      {
+        "time": "2024-10-23T00:00:00+00:00",
+        "candidates": 2,
+        "best_score": 2.72,
+        "traded": false
+      },
+      {
+        "time": "2024-10-24T00:00:00+00:00",
+        "candidates": 2,
+        "best_score": 2.86,
+        "traded": false
+      },
+      {
+        "time": "2024-10-25T00:00:00+00:00",
+        "candidates": 2,
+        "best_score": 2.08,
+        "traded": false
+      },
+      {
+        "time": "2024-10-26T00:00:00+00:00",
+        "candidates": 1,
+        "best_score": 2.71,
+        "traded": false
+      },
+      {
+        "time": "2024-10-27T00:00:00+00:00",
+        "candidates": 2,
+        "best_score": 2.88,
+        "traded": false
+      },
+      {
+        "time": "2024-10-28T00:00:00+00:00",
+        "candidates": 2,
+        "best_score": 2.16,
+        "traded": false
+      },
+      {
+        "time": "2024-10-29T00:00:00+00:00",
+        "candidates": 2,
+        "best_score": 3.05,
+        "traded": true
+      },
+      {
+        "time": "2024-10-30T00:00:00+00:00",
+        "candidates": 2,
+        "best_score": 1.13,
+        "traded": false
+      },
+      {
+        "time": "2024-10-31T00:00:00+00:00",
+        "candidates": 2,
+        "best_score": 1.0,
+        "traded": false
+      },
+      {
+        "time": "2024-11-01T00:00:00+00:00",
+        "candidates": 2,
+        "best_score": 1.62,
+        "traded": false
+      }
+    ]
+  },
+  "recent_chains": {},
+  "equity_curves": {
+    "hold_to_expiry": [
+      [
+        "2024-09-01T00:00:00+00:00",
+        58466.0,
+        58466.0
+      ],
+      [
+        "2024-09-08T00:00:00+00:00",
+        55169.258340406035,
+        54425.0
+      ],
+      [
+        "2024-09-09T00:00:00+00:00",
+        56438.87694352198,
+        54963.0
+      ],
+      [
+        "2024-09-11T00:00:00+00:00",
+        59136.76337977731,
+        56696.5
+      ],
+      [
+        "2024-09-12T00:00:00+00:00",
+        61572.16491229839,
+        58144.0
+      ],
+      [
+        "2024-09-13T00:00:00+00:00",
+        62152.21039481011,
+        58099.5
+      ],
+      [
+        "2024-09-14T00:00:00+00:00",
+        62090.971315560375,
+        60195.0
+      ],
+      [
+        "2024-09-15T00:00:00+00:00",
+        59979.06421705732,
+        60205.5
+      ],
+      [
+        "2024-09-16T00:00:00+00:00",
+        58424.60356807455,
+        58889.0
+      ],
+      [
+        "2024-09-17T00:00:00+00:00",
+        59140.390927785986,
+        58697.5
+      ],
+      [
+        "2024-09-18T00:00:00+00:00",
+        60905.8215615902,
+        60453.0
+      ],
+      [
+        "2024-09-19T00:00:00+00:00",
+        62295.64877496034,
+        62114.5
+      ],
+      [
+        "2024-09-20T00:00:00+00:00",
+        62242.764099215005,
+        63531.5
+      ],
+      [
+        "2024-09-21T00:00:00+00:00",
+        62250.45206403628,
+        63113.0
+      ],
+      [
+        "2024-09-22T00:00:00+00:00",
+        62593.90527657753,
+        62936.5
+      ],
+      [
+        "2024-09-23T00:00:00+00:00",
+        62544.90871695879,
+        63552.5
+      ],
+      [
+        "2024-09-24T00:00:00+00:00",
+        61824.06328606482,
+        63569.0
+      ],
+      [
+        "2024-09-26T00:00:00+00:00",
+        63062.717946091856,
+        63858.0
+      ],
+      [
+        "2024-09-27T00:00:00+00:00",
+        65594.38795984622,
+        65484.5
+      ],
+      [
+        "2024-09-28T00:00:00+00:00",
+        66571.7938639793,
+        65875.0
+      ],
+      [
+        "2024-09-29T00:00:00+00:00",
+        66885.09577458477,
+        65490.5
+      ],
+      [
+        "2024-10-07T00:00:00+00:00",
+        66433.55666087175,
+        63555.5
+      ],
+      [
+        "2024-10-09T00:00:00+00:00",
+        66413.54163799775,
+        62259.0
+      ],
+      [
+        "2024-10-10T00:00:00+00:00",
+        66380.69340393448,
+        60844.5
+      ],
+      [
+        "2024-10-12T00:00:00+00:00",
+        69615.65940717864,
+        62770.5
+      ],
+      [
+        "2024-10-13T00:00:00+00:00",
+        70924.60655989661,
+        62843.5
+      ],
+      [
+        "2024-10-17T00:00:00+00:00",
+        72540.21857585959,
+        67285.5
+      ],
+      [
+        "2024-10-19T00:00:00+00:00",
+        71729.53300213924,
+        68349.0
+      ],
+      [
+        "2024-10-20T00:00:00+00:00",
+        69884.74396429391,
+        68386.5
+      ],
+      [
+        "2024-10-21T00:00:00+00:00",
+        69753.34362892993,
+        68508.5
+      ],
+      [
+        "2024-10-22T00:00:00+00:00",
+        69663.24350144705,
+        67378.0
+      ],
+      [
+        "2024-11-05T00:00:00+00:00",
+        73325.41503225444,
+        69171.0
+      ]
+    ]
+  },
+  "error": null,
+  "finished_at": "2025-12-16T00:04:15.860406",
+  "duration_seconds": 68.906518
+}
