@@ -503,3 +503,66 @@ class TestLLMFailure:
         assert "Supervisor Run #2" in comment
         assert "OpenAI analysis skipped" in comment
         assert "def67890" in comment
+
+
+class TestWorkspaceSetup:
+    """Tests for workspace setup and fetch behavior."""
+    
+    @pytest.mark.asyncio
+    async def test_setup_workspace_accepts_new_params(self):
+        """Test that setup_workspace accepts base_ref and pr_number params."""
+        from src.supervisor.workspace import WorkspaceManager
+        from src.supervisor.config import SupervisorSettings
+        
+        settings = SupervisorSettings()
+        manager = WorkspaceManager(settings)
+        
+        assert hasattr(manager.setup_workspace, '__call__')
+        
+        import inspect
+        sig = inspect.signature(manager.setup_workspace)
+        params = list(sig.parameters.keys())
+        
+        assert 'job_id' in params
+        assert 'repo_url' in params
+        assert 'head_sha' in params
+        assert 'head_ref' in params
+        assert 'base_ref' in params
+        assert 'pr_number' in params
+    
+    def test_sanitized_env_removes_check_cmd_prefix(self):
+        """Test that CHECK_CMD_ prefixed vars are removed from sanitized env."""
+        import os
+        from src.supervisor.runner import get_sanitized_env
+        
+        os.environ["CHECK_CMD_1"] = "pytest"
+        os.environ["CHECK_CMD_2"] = "ruff check ."
+        os.environ["CHECK_CMD_CUSTOM"] = "mypy"
+        
+        try:
+            sanitized = get_sanitized_env()
+            
+            assert "CHECK_CMD_1" not in sanitized
+            assert "CHECK_CMD_2" not in sanitized
+            assert "CHECK_CMD_CUSTOM" not in sanitized
+        finally:
+            os.environ.pop("CHECK_CMD_1", None)
+            os.environ.pop("CHECK_CMD_2", None)
+            os.environ.pop("CHECK_CMD_CUSTOM", None)
+    
+    def test_sanitized_env_removes_openai_prefix(self):
+        """Test that OPENAI_ prefixed vars are removed from sanitized env."""
+        import os
+        from src.supervisor.runner import get_sanitized_env
+        
+        os.environ["OPENAI_API_KEY"] = "sk-test"
+        os.environ["OPENAI_ORG_ID"] = "org-test"
+        
+        try:
+            sanitized = get_sanitized_env()
+            
+            assert "OPENAI_API_KEY" not in sanitized
+            assert "OPENAI_ORG_ID" not in sanitized
+        finally:
+            os.environ.pop("OPENAI_API_KEY", None)
+            os.environ.pop("OPENAI_ORG_ID", None)

@@ -1,0 +1,51 @@
+Goal: Fix worktree “invalid reference” on PR updates and make checks deterministic by sanitizing env.
+
+Prompt:
+
+Locate WorkspaceManager.setup_workspace(job_id, clone_url, head_sha, head_ref) (it’s called from src/supervisor/app.py).
+
+Patch it so that before any git worktree add, it always fetches the PR head commit:
+
+Ensure the local repo exists (clone if missing).
+
+Run git fetch --prune origin plus explicit refspecs for:
+
+refs/heads/{head_ref}:refs/remotes/origin/{head_ref}
+
+refs/heads/main:refs/remotes/origin/main (or {base_ref} if available)
+
+Fallback: refs/pull/{pr_number}/head:refs/remotes/pull/{pr_number}/head (only if needed)
+
+Verify head_sha exists with git cat-file -e {head_sha}^{commit}; if missing after fetch, raise a clear error that includes head_ref/head_sha.
+
+Then run git worktree add --force --detach <workspace_path> {head_sha}.
+
+Locate VerificationRunner.run_checks(...) and run all check commands with a sanitized environment:
+
+Copy os.environ, remove keys with prefixes: OPENAI_, GITHUB_, TELEGRAM_, SUPERVISOR_, CHECK_CMD_.
+
+Use that env for subprocess calls.
+
+Update supervisor settings so ruff does not run on . by default; default to:
+
+python -m ruff check src/supervisor tests/test_supervisor.py
+
+Add/adjust unit tests:
+
+Test that setup_workspace calls fetch (or your git wrapper) before worktree add when head_sha changes (simulate “synchronize” by calling twice with different SHAs).
+
+Test that run_checks does not pass SUPERVISOR_ENABLED into subprocess env.
+
+No new endpoints added; do not add endpoint tests.
+
+Quick verification checklist (after implementing)
+
+Push another commit to the PR branch → you should see a new job and no worktree error.
+
+/jobs shows the new job with a workspace path populated.
+
+Pytest failures caused by enabled=True disappear (or at least are now “real” failures, not env bleed).
+
+Ruff runs fast and only on supervisor scope.
+
+If you want “perfection,” this is the right order. Anything else (more features, more endpoints) is just increasing WIP while the constraint is still leaking chaos into every run.

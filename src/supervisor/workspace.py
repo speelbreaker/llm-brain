@@ -30,8 +30,22 @@ class WorkspaceManager:
         repo_url: str,
         head_sha: str,
         head_ref: str,
+        base_ref: str = "main",
+        pr_number: Optional[int] = None,
     ) -> str:
-        """Set up an isolated workspace for a job using git worktree."""
+        """Set up an isolated workspace for a job using git worktree.
+        
+        Always fetches the PR head commit before creating worktree to handle
+        PR updates (synchronize events) where new commits need to be fetched.
+        
+        Args:
+            job_id: Unique job identifier
+            repo_url: Repository clone URL
+            head_sha: Commit SHA to checkout
+            head_ref: Branch name of the PR head
+            base_ref: Base branch name (default: main)
+            pr_number: PR number for fallback fetch refspec
+        """
         self.base_dir.mkdir(parents=True, exist_ok=True)
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         
@@ -43,18 +57,24 @@ class WorkspaceManager:
                 ["git", "clone", "--bare", repo_url, str(bare_repo)],
                 cwd=str(self.cache_dir)
             )
-        else:
-            await self._run_git(
-                ["git", "fetch", "--all"],
-                cwd=str(bare_repo)
-            )
+        
+        await self._fetch_refs(bare_repo, head_ref, base_ref, pr_number)
+        
+        await self._verify_commit_exists(bare_repo, head_sha, head_ref)
         
         workspace_path = self.base_dir / job_id
         if workspace_path.exists():
-            shutil.rmtree(workspace_path)
+            try:
+                await self._run_git(
+                    ["git", "worktree", "remove", str(workspace_path), "--force"],
+                    cwd=str(bare_repo)
+                )
+            except RuntimeError:
+                pass
+            shutil.rmtree(workspace_path, ignore_errors=True)
         
         await self._run_git(
-            ["git", "worktree", "add", str(workspace_path), head_sha],
+            ["git", "worktree", "add", "--force", "--detach", str(workspace_path), head_sha],
             cwd=str(bare_repo)
         )
         
@@ -62,6 +82,73 @@ class WorkspaceManager:
         sentinel.touch()
         
         return str(workspace_path)
+    
+    async def _fetch_refs(
+        self,
+        bare_repo: Path,
+        head_ref: str,
+        base_ref: str,
+        pr_number: Optional[int],
+    ) -> None:
+        """Fetch required refs from origin.
+        
+        Fetches:
+        1. Prune stale refs
+        2. Head branch ref
+        3. Base branch ref
+        4. PR ref as fallback (if pr_number provided)
+        """
+        await self._run_git(
+            ["git", "fetch", "--prune", "origin"],
+            cwd=str(bare_repo)
+        )
+        
+        try:
+            await self._run_git(
+                ["git", "fetch", "origin", f"refs/heads/{head_ref}:refs/remotes/origin/{head_ref}"],
+                cwd=str(bare_repo)
+            )
+        except RuntimeError:
+            logger.debug(f"Could not fetch head ref {head_ref}, may be from a fork")
+        
+        try:
+            await self._run_git(
+                ["git", "fetch", "origin", f"refs/heads/{base_ref}:refs/remotes/origin/{base_ref}"],
+                cwd=str(bare_repo)
+            )
+        except RuntimeError:
+            logger.debug(f"Could not fetch base ref {base_ref}")
+        
+        if pr_number:
+            try:
+                await self._run_git(
+                    ["git", "fetch", "origin", f"refs/pull/{pr_number}/head:refs/remotes/pull/{pr_number}/head"],
+                    cwd=str(bare_repo)
+                )
+            except RuntimeError:
+                logger.debug(f"Could not fetch PR ref for PR #{pr_number}")
+    
+    async def _verify_commit_exists(
+        self,
+        bare_repo: Path,
+        head_sha: str,
+        head_ref: str,
+    ) -> None:
+        """Verify that the commit exists in the local repo.
+        
+        Raises RuntimeError if commit is not found after fetch.
+        """
+        try:
+            await self._run_git(
+                ["git", "cat-file", "-e", f"{head_sha}^{{commit}}"],
+                cwd=str(bare_repo)
+            )
+        except RuntimeError as e:
+            raise RuntimeError(
+                f"Commit {head_sha[:8]} not found after fetch. "
+                f"Branch: {head_ref}. This may indicate a force-push or the commit "
+                f"was from a fork that cannot be fetched. Original error: {e}"
+            )
     
     async def cleanup_workspace(self, job_id: str, bare_repo_name: Optional[str] = None) -> None:
         """Clean up a workspace after job completion.

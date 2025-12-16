@@ -543,10 +543,12 @@ async def run_supervisor_job(job: SupervisorJob, app: FastAPI) -> None:
         
         clone_url = await github_client.get_repo_clone_url(job.repo_full_name)
         workspace_path = await workspace_manager.setup_workspace(
-            job.job_id,
-            clone_url,
-            job.head_sha,
-            job.head_ref,
+            job_id=job.job_id,
+            repo_url=clone_url,
+            head_sha=job.head_sha,
+            head_ref=job.head_ref,
+            base_ref=job.base_ref,
+            pr_number=job.pr_number,
         )
         job.workspace_path = workspace_path
         store.save(job)
