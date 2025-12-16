@@ -13,6 +13,14 @@ from .models import ArbiterDecision, VerificationReport
 logger = logging.getLogger(__name__)
 
 
+class LLMFailure(Exception):
+    """Raised when LLM calls fail (quota, network, etc)."""
+    def __init__(self, message: str, original_error: Optional[Exception] = None):
+        super().__init__(message)
+        self.original_error = original_error
+        self.failure_reason = message
+
+
 DEBATE_SCHEMA = """{
   "role": "optimist|skeptic|arbiter",
   "summary": "string (max 300 chars)",
@@ -38,25 +46,41 @@ class DebateSystem:
         pr_title: str = "",
         pr_body: str = "",
     ) -> ArbiterDecision:
-        """Run the 3-agent debate and return Arbiter's decision."""
+        """Run the 3-agent debate and return Arbiter's decision.
+        
+        Raises:
+            LLMFailure: If LLM calls fail (quota exceeded, network error, etc).
+                The caller should handle this and generate a fallback comment.
+        """
         context = self._build_context(verification, changed_files, pr_title, pr_body)
         
-        optimist_response = await self._call_agent("optimist", context)
-        skeptic_response = await self._call_agent(
-            "skeptic", 
-            context, 
-            optimist_view=optimist_response
-        )
-        arbiter_decision = await self._call_arbiter(
-            context, 
-            optimist_response, 
-            skeptic_response
-        )
-        
-        arbiter_decision.optimist_summary = optimist_response.get("summary", "")[:500]
-        arbiter_decision.skeptic_summary = skeptic_response.get("summary", "")[:500]
-        
-        return arbiter_decision
+        try:
+            optimist_response = await self._call_agent("optimist", context)
+            skeptic_response = await self._call_agent(
+                "skeptic", 
+                context, 
+                optimist_view=optimist_response
+            )
+            arbiter_decision = await self._call_arbiter(
+                context, 
+                optimist_response, 
+                skeptic_response
+            )
+            
+            arbiter_decision.optimist_summary = optimist_response.get("summary", "")[:500]
+            arbiter_decision.skeptic_summary = skeptic_response.get("summary", "")[:500]
+            
+            return arbiter_decision
+        except Exception as e:
+            error_msg = str(e)
+            if "insufficient_quota" in error_msg.lower():
+                raise LLMFailure("OpenAI quota exceeded", e)
+            elif "rate_limit" in error_msg.lower():
+                raise LLMFailure("OpenAI rate limited", e)
+            elif "api" in error_msg.lower() or "openai" in error_msg.lower():
+                raise LLMFailure(f"LLM API error: {error_msg[:100]}", e)
+            else:
+                raise LLMFailure(f"LLM call failed: {error_msg[:100]}", e)
     
     def _build_context(
         self,

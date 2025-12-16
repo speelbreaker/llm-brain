@@ -249,3 +249,72 @@ def format_pr_comment(
         lines.append("_📱 See Telegram for live timeline_")
     
     return "\n".join(lines)
+
+
+def format_fallback_comment(
+    run_number: int,
+    commit_sha: str,
+    checks: list[dict[str, Any]],
+    failure_summary: str = "",
+    llm_error: str = "",
+    telegram_enabled: bool = False,
+) -> str:
+    """Format a PR comment when LLM/OpenAI is unavailable.
+    
+    This generates a deterministic comment containing check results
+    and failure summary without arbiter analysis.
+    """
+    lines = [
+        f"## 🤖 Supervisor Run #{run_number}",
+        "",
+        f"**Commit:** `{commit_sha[:8]}`",
+        "",
+    ]
+    
+    all_passed = all(c.get("passed", False) for c in checks)
+    if all_passed:
+        lines.append("### ✅ All checks passed")
+    else:
+        lines.append("### ❌ Check Results")
+        lines.append("")
+        for check in checks:
+            status = "✅" if check.get("passed") else "❌"
+            cmd = check.get("command", "unknown").split()[0].split("/")[-1]
+            duration = check.get("duration_seconds", 0)
+            lines.append(f"- {status} `{cmd}` ({duration:.1f}s)")
+    
+    lines.append("")
+    
+    if failure_summary and not all_passed:
+        excerpt = failure_summary.strip().split("\n")[-15:]
+        truncated = "\n".join(excerpt)[:800]
+        lines.extend([
+            "<details>",
+            "<summary>Failure excerpt (click to expand)</summary>",
+            "",
+            "```",
+            truncated,
+            "```",
+            "",
+            "</details>",
+            "",
+        ])
+    
+    lines.extend([
+        "---",
+        "",
+        "⚠️ **OpenAI analysis skipped**",
+        "",
+    ])
+    
+    if llm_error:
+        lines.append(f"_Reason: {llm_error[:200]}_")
+        lines.append("")
+    
+    lines.append("Manual review required. Auto-fix not attempted.")
+    lines.append("")
+    
+    if telegram_enabled:
+        lines.append("_📱 See Telegram for live timeline_")
+    
+    return "\n".join(lines)

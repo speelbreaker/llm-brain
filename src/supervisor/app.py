@@ -12,8 +12,8 @@ from pydantic import BaseModel
 
 from .codex_fixer import CodexFixer
 from .config import SupervisorSettings, get_settings
-from .debate import DebateSystem
-from .github import GitHubClient, format_pr_comment, parse_webhook_payload, verify_signature
+from .debate import DebateSystem, LLMFailure
+from .github import GitHubClient, format_pr_comment, format_fallback_comment, parse_webhook_payload, verify_signature
 from .models import (
     ArbiterDecision,
     FixAttempt,
@@ -595,29 +595,55 @@ async def run_supervisor_job(job: SupervisorJob, app: FastAPI) -> None:
         job.update_status(JobStatus.DEBATING)
         store.save(job)
         
-        arbiter_decision = await debate_system.run_debate(
-            verification=verification,
-            changed_files=changed_files,
-            pr_title=pr_title,
-            pr_body=pr_body,
-        )
-        job.arbiter_decision = arbiter_decision
-        store.save(job)
-        
-        await notifier.notify_arbiter_decision(job, arbiter_decision)
-        
-        failure_summary_redacted = redact_secrets(verification.failure_summary, settings)
-        comment = format_pr_comment(
-            run_number=run_number,
-            commit_sha=job.head_sha,
-            checks=[c.model_dump() for c in verification.checks],
-            failure_summary=failure_summary_redacted,
-            arbiter_decision=arbiter_decision.model_dump(),
-            fix_started=arbiter_decision.auto_fix_allowed and settings.enable_codex,
-            telegram_enabled=settings.telegram_enabled,
-        )
-        comment = redact_secrets(comment, settings)
-        await github_client.post_pr_comment(job.repo_full_name, job.pr_number, comment)
+        try:
+            arbiter_decision = await debate_system.run_debate(
+                verification=verification,
+                changed_files=changed_files,
+                pr_title=pr_title,
+                pr_body=pr_body,
+            )
+            job.arbiter_decision = arbiter_decision
+            store.save(job)
+            
+            await notifier.notify_arbiter_decision(job, arbiter_decision)
+            
+            failure_summary_redacted = redact_secrets(verification.failure_summary, settings)
+            comment = format_pr_comment(
+                run_number=run_number,
+                commit_sha=job.head_sha,
+                checks=[c.model_dump() for c in verification.checks],
+                failure_summary=failure_summary_redacted,
+                arbiter_decision=arbiter_decision.model_dump(),
+                fix_started=arbiter_decision.auto_fix_allowed and settings.enable_codex,
+                telegram_enabled=settings.telegram_enabled,
+            )
+            comment = redact_secrets(comment, settings)
+            await github_client.post_pr_comment(job.repo_full_name, job.pr_number, comment)
+        except LLMFailure as llm_err:
+            logger.warning(f"Job {job.job_id}: LLM failed - {llm_err.failure_reason}")
+            
+            failure_summary_redacted = redact_secrets(verification.failure_summary, settings)
+            comment = format_fallback_comment(
+                run_number=run_number,
+                commit_sha=job.head_sha,
+                checks=[c.model_dump() for c in verification.checks],
+                failure_summary=failure_summary_redacted,
+                llm_error=llm_err.failure_reason,
+                telegram_enabled=settings.telegram_enabled,
+            )
+            comment = redact_secrets(comment, settings)
+            await github_client.post_pr_comment(job.repo_full_name, job.pr_number, comment)
+            
+            final_status = JobStatus.FAILED if not verification.all_passed else JobStatus.CHECKS_PASSED
+            job.update_status(final_status)
+            job.final_message = f"LLM unavailable: {llm_err.failure_reason}"
+            store.save(job)
+            await notifier.notify_final_result(
+                job, 
+                success=verification.all_passed,
+                message=f"OpenAI analysis skipped: {llm_err.failure_reason}"
+            )
+            return
         
         if not arbiter_decision.auto_fix_allowed:
             job.update_status(JobStatus.NEEDS_HUMAN)

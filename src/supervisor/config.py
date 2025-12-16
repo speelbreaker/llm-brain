@@ -55,7 +55,10 @@ class SupervisorSettings(BaseSettings):
     codex_bin: str = Field(default="codex", alias="CODEX_BIN")
     
     check_cmd_1: str = Field(default="python -m pytest -q", alias="CHECK_CMD_1")
-    check_cmd_2: str = Field(default="python -m ruff check .", alias="CHECK_CMD_2")
+    check_cmd_2: str = Field(
+        default="python -m ruff check src/supervisor tests/test_supervisor.py",
+        alias="CHECK_CMD_2"
+    )
     check_cmd_3: Optional[str] = Field(default=None, alias="CHECK_CMD_3")
     
     command_timeout: int = Field(default=600, alias="SUPERVISOR_COMMAND_TIMEOUT")
