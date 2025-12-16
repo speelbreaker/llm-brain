@@ -1,12 +1,43 @@
 """Verification runner - executes checks and captures output."""
 
 import asyncio
+import os
 import re
 import time
 from typing import Optional
 
 from .config import SupervisorSettings
 from .models import CheckResult, VerificationReport
+
+
+SENSITIVE_ENV_PREFIXES = ("SUPERVISOR_", "GITHUB_", "TELEGRAM_")
+SENSITIVE_ENV_KEYS = ("OPENAI_API_KEY", "GEMINI_API_KEY", "DATABASE_URL", "SESSION_SECRET")
+SAFE_ENV_KEYS = ("PATH", "HOME", "LANG", "LC_ALL", "USER", "SHELL", "TERM", "PYTHONPATH", "VIRTUAL_ENV")
+
+
+def get_sanitized_env() -> dict[str, str]:
+    """Create a sanitized environment for subprocess execution.
+    
+    Removes sensitive keys to prevent test/lint processes from being
+    influenced by supervisor configuration or accessing secrets.
+    """
+    env = os.environ.copy()
+    
+    keys_to_remove = set()
+    for key in env:
+        if key.startswith(SENSITIVE_ENV_PREFIXES):
+            keys_to_remove.add(key)
+        elif key in SENSITIVE_ENV_KEYS:
+            keys_to_remove.add(key)
+    
+    for key in keys_to_remove:
+        del env[key]
+    
+    for key in SAFE_ENV_KEYS:
+        if key in os.environ:
+            env[key] = os.environ[key]
+    
+    return env
 
 
 class VerificationRunner:
@@ -49,8 +80,13 @@ class VerificationRunner:
         )
     
     async def _run_command(self, command: str, cwd: str) -> CheckResult:
-        """Run a single command with timeout and output capture."""
+        """Run a single command with timeout and output capture.
+        
+        Uses a sanitized environment to prevent subprocess from being
+        influenced by supervisor secrets or configuration.
+        """
         start_time = time.time()
+        sanitized_env = get_sanitized_env()
         
         try:
             process = await asyncio.create_subprocess_shell(
@@ -58,6 +94,7 @@ class VerificationRunner:
                 cwd=cwd,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
+                env=sanitized_env,
             )
             
             try:
