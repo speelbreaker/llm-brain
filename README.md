@@ -377,4 +377,4 @@ In that case, **do not** auto-apply the day's calibration; investigate data or D
 
 ## License
 
-This project is for educational and research purposes only. thanks.
+This project is for educational and research purposes only. thanks. goodbye.
