@@ -20,6 +20,8 @@ jobs:
           python -m pip install --upgrade pip
           pip install pytest
           pip install -r requirements.txt || true
+      - name: Add src to PYTHONPATH     # <---- COPY THIS!
+        run: echo "PYTHONPATH=$(pwd)/src" >> $GITHUB_ENV
       - name: Run Pytest
         run: |
           pytest -q
