@@ -204,11 +204,14 @@ def format_pr_comment(
         for check in checks:
             status = "✅" if check.get("passed") else "❌"
             cmd = check.get("command", "unknown").split()[0].split("/")[-1]
-            lines.append(f"- {status} `{cmd}`")
+            result_text = "Pass" if check.get("passed") else "Fail"
+            lines.append(f"- {status} {result_text} `{cmd}`")
     
     lines.append("")
     
     if failure_summary and not all_passed:
+        lines.append("### Failure Summary")
+        lines.append("")
         excerpt = failure_summary.strip().split("\n")[-15:]
         truncated = "\n".join(excerpt)[:800]
         lines.extend([
@@ -224,14 +227,16 @@ def format_pr_comment(
         ])
     
     if arbiter_decision:
+        lines.append("### Arbiter Decision")
+        lines.append("")
         allowed = arbiter_decision.get("auto_fix_allowed", False)
         risk = arbiter_decision.get("risk_level", "unknown")
         
         if allowed:
-            lines.append(f"**Arbiter:** 🟢 Auto-fix approved (risk: {risk})")
+            lines.append(f"- ✅ Yes — auto-fix approved (risk: {risk})")
         else:
             reason = arbiter_decision.get("stop_reason", "")[:100]
-            lines.append(f"**Arbiter:** 🔴 Auto-fix denied — {reason}")
+            lines.append(f"- ❌ No — auto-fix denied (reason: {reason})")
         lines.append("")
     
     if fix_started:
@@ -241,7 +246,8 @@ def format_pr_comment(
     if final_status:
         lines.extend([
             "---",
-            f"**{final_status}**",
+            "### Final Status",
+            f"{final_status}",
             "",
         ])
     
