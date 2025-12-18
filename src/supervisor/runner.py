@@ -1,9 +1,40 @@
 """Verification runner - executes checks and captures output."""
 
 import asyncio
+import os
 import re
 import time
 from typing import Optional
+
+
+def _sanitized_check_env() -> dict[str, str]:
+    """
+    Build a clean environment for running repo checks inside a PR workspace.
+
+    Why:
+      - The supervisor container runs with SUPERVISOR_ENABLED=1 and LLM secrets/models.
+      - If we leak those into `pytest`/`ruff`, the PR's own tests can behave differently
+        than they would in CI, and tests that expect default settings will fail.
+    """
+    env = os.environ.copy()
+
+    # Remove supervisor + model/provider env that should NEVER influence the repo under test.
+    kill_prefixes = ("SUPERVISOR_", "OPENAI_", "GEMINI_", "GITHUB_")
+    kill_exact = {
+        "MODEL_OPTIMIST",
+        "MODEL_SKEPTIC",
+        "MODEL_ARBITER",
+        "CODEX_MODEL",
+        # common accidental leaks
+        "OTEL_EXPORTER_OTLP_ENDPOINT",
+        "OTEL_SERVICE_NAME",
+    }
+
+    for key in list(env.keys()):
+        if key.startswith(kill_prefixes) or key in kill_exact:
+            env.pop(key, None)
+
+    return env
 
 from .config import SupervisorSettings
 from .models import CheckResult, VerificationReport
@@ -58,6 +89,7 @@ class VerificationRunner:
                 cwd=cwd,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
+                env=_sanitized_check_env(),
             )
             
             try:
