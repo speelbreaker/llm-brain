@@ -39,10 +39,7 @@ class SupervisorSettings(BaseSettings):
     
     openai_api_key: Optional[str] = Field(default=None, alias="OPENAI_API_KEY")
     gemini_api_key: Optional[str] = Field(default=None, alias="GEMINI_API_KEY")
-    gemini_base_url: str = Field(
-        default="https://generativelanguage.googleapis.com/v1beta",
-        alias="GEMINI_BASE_URL"
-    )
+    gemini_model: str = Field(default="gemini-1.5-pro", alias="GEMINI_MODEL")
     
     optimist_provider: str = Field(default="openai", alias="OPTIMIST_PROVIDER")
     skeptic_provider: str = Field(default="openai", alias="SKEPTIC_PROVIDER")
@@ -62,7 +59,11 @@ class SupervisorSettings(BaseSettings):
     
     supervisor_api_url: Optional[str] = Field(default=None, alias="SUPERVISOR_API_URL")
     
-    model_config = {"env_file": ".env", "extra": "ignore"}
+    model_config = {
+        "env_file": ".env",
+        "extra": "ignore",
+        "populate_by_name": True,
+    }
     
     def get_check_commands(self) -> list[str]:
         """Return list of configured check commands."""
