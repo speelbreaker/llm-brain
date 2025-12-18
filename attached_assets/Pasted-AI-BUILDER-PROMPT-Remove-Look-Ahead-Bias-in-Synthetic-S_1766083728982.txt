@@ -1,0 +1,92 @@
+AI BUILDER PROMPT — Remove Look‑Ahead Bias in Synthetic Skew (Historical Backtests Must Not Use “Now” Deribit Skew)
+
+Goal: Eliminate look‑ahead bias where historical backtests apply skew derived from current Deribit data (datetime.now() + live API). After this change, any backtest timestamp as_of must use skew that is either:
+
+time-appropriate (derived from historical/harvested data at/near as_of), or
+disabled / static deterministic fallback (no network), but never “live now” skew.
+This is purely a correctness fix. Do not add new UI.
+
+What is wrong today (must be fixed)
+synthetic_skew.py builds skew anchors by hitting live Deribit and using now = datetime.now(timezone.utc) to filter DTE (synthetic_skew.py:55-75).
+src/backtest/pricing.py:get_sigma_for_option() applies get_skew_factor(...) during backtests, which pulls those live anchors and leaks future info into historical runs (pricing.py:414-469).
+Result: historical simulations may “know” modern skew.
+Required behavior
+Historical backtests must never call the live Deribit skew engine.
+Skew must be time-aware in backtests: derived from harvested snapshots for the as_of timestamp if available, otherwise use a deterministic fallback (flat or configured template).
+Live trading / live chain modes may still use live Deribit skew if desired (that’s not look-ahead).
+Implementation plan (do in one go)
+Step 1 — Add an explicit “as_of” + “source” API for skew
+In synthetic_skew.py:
+
+Change get_skew_factor(...) signature to include:
+as_of: Optional[datetime] = None
+source: Literal["live", "harvested", "none"] = "live"
+Also include min_dte, max_dte already exist; keep them.
+Rules:
+
+If source == "none" or skew_enabled == False → return 1.0.
+If source == "live":
+Use current behavior (Deribit API), but replace datetime.now() with as_of or datetime.now() so it can be deterministic when used intentionally.
+If source == "harvested":
+Do NOT call Deribit.
+Compute anchors from harvested option-chain snapshots closest to as_of.
+Caching:
+
+Split the cache key so backtest time doesn’t reuse “now” anchors:
+For live: cache key can stay (underlying, option_type) (fine).
+For harvested: cache key must include time bucketing, e.g. (underlying, option_type, as_of.date()) or (…, floor_to_hour(as_of)) to avoid mixing days.
+Ensure cache does not grow unbounded: keep only a small LRU or just day-bucket (acceptable).
+Step 2 — Implement harvested skew anchors
+Add new function in synthetic_skew.py:
+
+compute_harvested_skew_anchors(underlying: str, option_type: str, as_of: datetime, min_dte: float, max_dte: float) -> List[SkewAnchor]
+
+Implementation requirements:
+
+Use existing harvested Deribit data stored under live_deribit (the repo already uses this concept in calibration/harvest flows; do not invent a new storage layout).
+Load the closest snapshot at/just before as_of (nearest neighbor backward preferred).
+From that snapshot’s option quotes:
+Filter by option_type and DTE in [min_dte, max_dte] computed relative to as_of.
+Use each option’s mark_iv and delta.
+Find ATM quote (call: delta closest to 0.5; put: delta closest to -0.5).
+For anchor deltas [0.15, 0.25, 0.35, 0.50] compute average mark_iv / atm_iv of quotes near that delta (same as live logic).
+If data missing/insufficient → return _flat_anchors() (deterministic fallback).
+Notes:
+
+Keep all I/O local. No network.
+Be defensive about file parsing; return flat anchors if anything fails.
+Step 3 — Wire pricing to choose skew source
+In src/backtest/pricing.py:get_sigma_for_option():
+
+Add a boolean or literal parameter like:
+skew_source: Literal["live", "harvested", "none"] = "none"
+For backtests (anything that is not explicitly live trading):
+Default should be skew_source="harvested" if harvested data exists, else "none".
+Never default to "live" in backtests.
+When applying skew:
+Call get_skew_factor(..., as_of=as_of, source=skew_source, ...).
+Decide skew source by mode:
+
+If sigma_mode == "mark_iv_x_multiplier" and chain_mode == "live_chain" in a true live run: allow skew_source="live" if needed.
+In historical backtest runs: skew_source must not be live.
+Step 4 — Update call sites (state builder)
+In state_builder.py, when calling get_sigma_for_option():
+
+Pass skew_source="harvested" for backtest/hybrid states where ds is historical/harvested.
+For pure synthetic grid: also use harvested if you want skew realism; otherwise "none".
+Step 5 — Add regression tests
+Create tests that prove “no look-ahead”:
+
+Patch/mocking test: ensure that in backtest mode compute_live_skew_anchors() is never called.
+You can monkeypatch src.synthetic_skew.compute_live_skew_anchors to raise; backtest should still pass and return skew factor 1.0 or harvested factor.
+Determinism test: for a fixed as_of and local harvested snapshot, get_skew_factor(..., source="harvested") returns same result across runs.
+Cache isolation test: two different as_of days should not reuse the same cached anchors (if you use day-bucket keys, verify that).
+Constraints for tests:
+
+No network calls.
+If harvested data isn’t present in repo/test env, use a tiny fixture JSON file placed under tests/fixtures/ and point the loader at it (allow optional data_root parameter in the harvested loader to support tests).
+Acceptance criteria
+Historical backtests never use datetime.now() skew or Deribit live API.
+Skew in backtests is either harvested-time skew (preferred) or flat/deterministic fallback.
+Live trading paths remain allowed to use live skew (optional), but it’s explicit via source="live".
+pytest passes; no new UI changes.

@@ -230,6 +230,7 @@ def _generate_live_chain_candidates(
         return result
     else:
         # For atm_iv or rv modes, get sigma and recalculate
+        # IMPORTANT: Use skew_source="none" to avoid look-ahead bias in backtests
         sigma = get_sigma_for_option(
             config=cfg,
             spot_history=spot_history,
@@ -238,6 +239,7 @@ def _generate_live_chain_candidates(
             option_mark_iv=None,
             abs_delta=0.25,  # Use target delta for base sigma
             regime_state=None,
+            skew_source="none",  # No live skew in backtests
         )
         
         result = []
@@ -251,6 +253,7 @@ def _generate_live_chain_candidates(
                 option_mark_iv=opt.iv,
                 abs_delta=abs_delta,
                 regime_state=None,
+                skew_source="none",  # No live skew in backtests
             )
             
             dte = (opt.expiry - t).total_seconds() / (24 * 3600)
@@ -429,6 +432,7 @@ def build_historical_state(
         # Default: synthetic_grid mode
         if spot is not None and spot > 0:
             # Use new sigma selection logic
+            # IMPORTANT: Use skew_source="none" to avoid look-ahead bias in backtests
             sigma = get_sigma_for_option(
                 config=cfg,
                 spot_history=spot_history,
@@ -437,6 +441,7 @@ def build_historical_state(
                 option_mark_iv=None,
                 abs_delta=cfg.target_delta,
                 regime_state=None,
+                skew_source="none",  # No live skew in backtests
             )
             candidates = _generate_synthetic_candidates(spot, t, cfg, sigma)
 
@@ -571,6 +576,7 @@ def build_historical_agent_state(
             spot_history.append((idx, float(row["close"])))
     
     # Use new sigma selection logic
+    # IMPORTANT: Use skew_source="none" to avoid look-ahead bias in backtests
     sigma = get_sigma_for_option(
         config=cfg,
         spot_history=spot_history,
@@ -579,6 +585,7 @@ def build_historical_agent_state(
         option_mark_iv=None,
         abs_delta=cfg.target_delta,
         regime_state=None,
+        skew_source="none",  # No live skew in backtests
     )
     rv = sigma * 0.8
     

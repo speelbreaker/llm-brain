@@ -378,6 +378,7 @@ def get_sigma_for_option(
     option_mark_iv: Optional[float] = None,
     abs_delta: Optional[float] = None,
     regime_state: Optional[RegimeState] = None,
+    skew_source: str = "none",
 ) -> float:
     """
     Get the sigma (IV) to use for option pricing based on sigma_mode.
@@ -392,27 +393,30 @@ def get_sigma_for_option(
         option_mark_iv: Optional mark IV for mark_iv_x_multiplier mode
         abs_delta: Optional absolute delta for skew adjustment
         regime_state: Optional regime state for AR(1) dynamics
+        skew_source: Skew data source mode:
+            - "none": No skew adjustment (flat, default for backtests)
+            - "harvested": Use historical harvested data (preferred for backtests)
+            - "live": Use live Deribit data (only for live trading, NOT backtests)
         
     Returns:
         Sigma (IV) as decimal for Black-Scholes pricing
+        
+    IMPORTANT: Historical backtests must use skew_source="harvested" or "none"
+    to avoid look-ahead bias. Never use skew_source="live" in backtests.
     """
     from src.synthetic_skew import get_skew_factor
     
     sigma_mode = getattr(config, 'sigma_mode', 'rv_x_multiplier')
     
     if sigma_mode == "mark_iv_x_multiplier":
-        # Use the option's live mark_iv directly, bypass RV completely
         if option_mark_iv is not None and option_mark_iv > 0:
             base_iv = option_mark_iv
-            # Optionally scale by multiplier for stress scenarios
             scaled_iv = base_iv * config.synthetic_iv_multiplier
             return max(0.01, min(scaled_iv, 5.0))
         else:
-            # Fall back to rv_x_multiplier if mark_iv not available
             sigma_mode = "rv_x_multiplier"
     
     if sigma_mode == "atm_iv_x_multiplier":
-        # Pull ATM IV from chain and use as base, apply skew
         atm_iv = None
         if option_chain:
             atm_iv = get_atm_iv_from_chain(
@@ -426,7 +430,6 @@ def get_sigma_for_option(
         if atm_iv is not None:
             base_iv = atm_iv * config.synthetic_iv_multiplier
             
-            # Apply skew if delta is provided
             if abs_delta is not None:
                 skew_factor = get_skew_factor(
                     underlying=config.underlying,
@@ -435,28 +438,26 @@ def get_sigma_for_option(
                     skew_enabled=True,
                     min_dte=float(config.min_dte),
                     max_dte=float(config.max_dte),
+                    as_of=as_of,
+                    source=skew_source,
                 )
                 base_iv = base_iv * skew_factor
             
             return max(0.01, min(base_iv, 5.0))
         else:
-            # Fall back to rv_x_multiplier if ATM IV not available
             sigma_mode = "rv_x_multiplier"
     
-    # Default: rv_x_multiplier - use existing behavior
     rv = compute_realized_volatility(
         spot_history,
         as_of,
         config.synthetic_rv_window_days
     )
     
-    # Check for regime state
     if regime_state is not None and regime_state.regime is not None:
         base_iv = regime_state.iv_atm / 100.0
     else:
         base_iv = rv * config.synthetic_iv_multiplier
     
-    # Apply skew if delta is provided
     if abs_delta is not None:
         skew_factor = get_skew_factor(
             underlying=config.underlying,
@@ -465,6 +466,8 @@ def get_sigma_for_option(
             skew_enabled=True,
             min_dte=float(config.min_dte),
             max_dte=float(config.max_dte),
+            as_of=as_of,
+            source=skew_source,
         )
         base_iv = base_iv * skew_factor
     
@@ -510,6 +513,8 @@ def compute_synthetic_iv_with_skew(
     skew_enabled: bool = True,
     skew_min_dte: float = 3.0,
     skew_max_dte: float = 14.0,
+    as_of: Optional[datetime] = None,
+    skew_source: str = "none",
 ) -> float:
     """
     Compute synthetic annualized IV for the synthetic universe with skew.
@@ -528,9 +533,14 @@ def compute_synthetic_iv_with_skew(
         skew_enabled: Whether to apply skew
         skew_min_dte: Min DTE for skew estimation
         skew_max_dte: Max DTE for skew estimation
+        as_of: Reference time for skew calculation (required for harvested source)
+        skew_source: Skew source mode ("none", "harvested", "live")
 
     Returns:
         sigma (annualized volatility) to plug into Black-Scholes
+        
+    IMPORTANT: Historical backtests must use skew_source="harvested" or "none"
+    to avoid look-ahead bias. Never use skew_source="live" in backtests.
     """
     from src.synthetic_skew import get_skew_factor
 
@@ -543,6 +553,8 @@ def compute_synthetic_iv_with_skew(
         skew_enabled=skew_enabled,
         min_dte=skew_min_dte,
         max_dte=skew_max_dte,
+        as_of=as_of,
+        source=skew_source,
     )
     
     return max(1e-6, base_iv * skew_factor)
