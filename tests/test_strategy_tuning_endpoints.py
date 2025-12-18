@@ -1,4 +1,5 @@
 """Tests for the LLM & Strategy Tuning API endpoints."""
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -67,7 +68,9 @@ class TestLLMStatusEndpoint:
 
     def test_post_llm_status_invalid_decision_mode(self, client):
         """POST /api/llm_status rejects invalid decision_mode values."""
-        response = client.post("/api/llm_status", json={"decision_mode": "invalid_mode"})
+        response = client.post(
+            "/api/llm_status", json={"decision_mode": "invalid_mode"}
+        )
         assert response.status_code == 400
         data = response.json()
         assert data["ok"] is False
@@ -114,14 +117,18 @@ class TestStrategyThresholdsEndpoint:
         """POST /api/strategy_thresholds can update training_profile_mode."""
         original_value = settings.training_profile_mode
         try:
-            response = client.post("/api/strategy_thresholds", json={"training_profile_mode": "ladder"})
+            response = client.post(
+                "/api/strategy_thresholds", json={"training_profile_mode": "ladder"}
+            )
             assert response.status_code == 200
             data = response.json()
             assert data["ok"] is True
             assert data["training_profile_mode"] == "ladder"
             assert settings.training_profile_mode == "ladder"
 
-            response = client.post("/api/strategy_thresholds", json={"training_profile_mode": "single"})
+            response = client.post(
+                "/api/strategy_thresholds", json={"training_profile_mode": "single"}
+            )
             data = response.json()
             assert data["training_profile_mode"] == "single"
         finally:
@@ -129,7 +136,9 @@ class TestStrategyThresholdsEndpoint:
 
     def test_post_strategy_thresholds_invalid_training_profile_mode(self, client):
         """POST /api/strategy_thresholds rejects invalid training_profile_mode."""
-        response = client.post("/api/strategy_thresholds", json={"training_profile_mode": "invalid"})
+        response = client.post(
+            "/api/strategy_thresholds", json={"training_profile_mode": "invalid"}
+        )
         assert response.status_code == 400
         data = response.json()
         assert data["ok"] is False
@@ -144,7 +153,9 @@ class TestStrategyThresholdsEndpoint:
 
     def test_post_strategy_thresholds_delta_min_greater_than_max(self, client):
         """POST /api/strategy_thresholds rejects delta_min > delta_max."""
-        response = client.post("/api/strategy_thresholds", json={"delta_min": 0.5, "delta_max": 0.3})
+        response = client.post(
+            "/api/strategy_thresholds", json={"delta_min": 0.5, "delta_max": 0.3}
+        )
         assert response.status_code == 400
         data = response.json()
         assert data["ok"] is False
@@ -152,7 +163,9 @@ class TestStrategyThresholdsEndpoint:
 
     def test_post_strategy_thresholds_dte_min_greater_than_max(self, client):
         """POST /api/strategy_thresholds rejects dte_min > dte_max."""
-        response = client.post("/api/strategy_thresholds", json={"dte_min": 30, "dte_max": 5})
+        response = client.post(
+            "/api/strategy_thresholds", json={"dte_min": 30, "dte_max": 5}
+        )
         assert response.status_code == 400
         data = response.json()
         assert data["ok"] is False
@@ -177,7 +190,9 @@ class TestRiskLimitsEndpoint:
         """POST /api/risk_limits can update max_margin_used_pct."""
         original_value = settings.max_margin_used_pct
         try:
-            response = client.post("/api/risk_limits", json={"max_margin_used_pct": 75.0})
+            response = client.post(
+                "/api/risk_limits", json={"max_margin_used_pct": 75.0}
+            )
             assert response.status_code == 200
             data = response.json()
             assert data["ok"] is True

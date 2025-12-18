@@ -3,6 +3,7 @@ MarketDataSource implementation using Deribit's public API.
 Suitable for live chain snapshots and OHLC pulls.
 For bulk historical backtest, cache this or use offline data.
 """
+
 from __future__ import annotations
 
 from datetime import datetime, timezone
@@ -26,14 +27,14 @@ def _bs_call_delta(
 ) -> float:
     """
     Compute Black-Scholes call delta.
-    
+
     Args:
         spot: Underlying price
         strike: Option strike price
         t_years: Time to expiry in years
         iv: Implied volatility (as decimal, e.g., 0.80 for 80%)
         r: Risk-free rate (default 0)
-    
+
     Returns:
         Call delta between 0 and 1
     """
@@ -83,7 +84,7 @@ class DeribitDataSource(MarketDataSource):
         Falls back to perpetual futures if index fails.
         """
         index_name = f"{underlying.lower()}_usd"
-        
+
         try:
             res = self.client.get_tradingview_chart_data(
                 instrument_name=index_name,
@@ -131,7 +132,7 @@ class DeribitDataSource(MarketDataSource):
         - attach delta/IV/mark via bulk book summary (1 API call instead of 704)
         - compute delta locally using Black-Scholes
         - filter by settlement currency and margin type
-        
+
         Args:
             underlying: "BTC" or "ETH"
             as_of: Timestamp for filtering expired options
@@ -139,12 +140,12 @@ class DeribitDataSource(MarketDataSource):
             margin_type: "linear" (USDC-settled) or "inverse" (coin-settled)
         """
         instruments = self.client.get_instruments(currency=underlying, kind="option")
-        
+
         summaries = self.client.get_book_summary_by_currency(underlying, kind="option")
         summary_by_name = {s["instrument_name"]: s for s in summaries}
-        
+
         snapshots: List[OptionSnapshot] = []
-        
+
         total = 0
         after_expiry_filter = 0
         after_margin_filter = 0
@@ -158,7 +159,7 @@ class DeribitDataSource(MarketDataSource):
                 continue
 
             total += 1
-            
+
             cur = parts[0]
             expiry_ts = inst.get("expiration_timestamp")
             if expiry_ts is None:
@@ -167,23 +168,23 @@ class DeribitDataSource(MarketDataSource):
 
             if expiry <= as_of:
                 continue
-            
+
             after_expiry_filter += 1
-            
+
             inst_settlement = inst.get("settlement_currency", "").upper()
             is_linear = inst_settlement in ("USDC", "USD")
-            
+
             if margin_type == "linear" and not is_linear:
                 continue
             if margin_type == "inverse" and is_linear:
                 continue
-            
+
             after_margin_filter += 1
-            
+
             if settlement_ccy.upper() != "ANY":
                 if inst_settlement.upper() != settlement_ccy.upper():
                     continue
-            
+
             after_settlement_filter += 1
 
             strike_str = parts[2]
@@ -198,15 +199,15 @@ class DeribitDataSource(MarketDataSource):
             summary = summary_by_name.get(name)
             if not summary:
                 continue
-            
+
             after_summary_filter += 1
-            
+
             mark = summary.get("mark_price")
             iv_pct = summary.get("mark_iv")
             underlying_price = summary.get("underlying_price")
-            
+
             iv = iv_pct / 100.0 if iv_pct else None
-            
+
             delta = None
             if underlying_price and iv and iv > 0:
                 t_years = max((expiry - as_of).total_seconds(), 1) / (365.0 * 24 * 3600)
@@ -235,7 +236,7 @@ class DeribitDataSource(MarketDataSource):
             f"total={total}, after_expiry={after_expiry_filter}, "
             f"after_margin={after_margin_filter}, after_settlement={after_settlement_filter}, "
             f"with_summary={after_summary_filter}, snapshots={len(snapshots)}",
-            flush=True
+            flush=True,
         )
         return snapshots
 

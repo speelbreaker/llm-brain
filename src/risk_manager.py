@@ -2,10 +2,11 @@
 Risk manager module for enforcing trading limits.
 Provides per-trade, per-underlying, and daily trade caps.
 """
+
 from __future__ import annotations
 
 from collections import defaultdict
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Dict, Optional, Sequence, Tuple
 
@@ -13,6 +14,7 @@ from typing import Dict, Optional, Sequence, Tuple
 @dataclass
 class OpenPosition:
     """Represents an open trading position."""
+
     position_id: str
     underlying: str
     estimated_max_loss_pct: float
@@ -22,6 +24,7 @@ class OpenPosition:
 @dataclass
 class CandidateTrade:
     """Represents a proposed trade to be validated."""
+
     underlying: str
     estimated_max_loss_pct: float
     opened_at: datetime
@@ -31,6 +34,7 @@ class CandidateTrade:
 @dataclass
 class RiskConfig:
     """Configuration for risk limits."""
+
     max_risk_per_trade: float = 0.01
     max_risk_per_underlying: float = 0.03
     max_new_trades_per_day: int = 2
@@ -40,6 +44,7 @@ class RiskConfig:
 @dataclass
 class RiskCheckResult:
     """Result of a risk check."""
+
     allowed: bool
     reason: Optional[str] = None
 
@@ -47,13 +52,13 @@ class RiskCheckResult:
 class RiskManager:
     """
     Manages trading risk by enforcing position and exposure limits.
-    
+
     Enforces:
     - Maximum risk per individual trade (~1% of equity)
     - Maximum correlated risk per underlying (~3%)
     - Maximum new trades per day (1-2)
     """
-    
+
     def __init__(self, config: RiskConfig):
         self.config = config
         self._new_trades_by_day: Dict[Tuple[str, date], int] = defaultdict(int)
@@ -79,11 +84,11 @@ class RiskManager:
     ) -> RiskCheckResult:
         """
         Check if a proposed trade is allowed under risk limits.
-        
+
         Args:
             candidate: The proposed trade
             open_positions: Currently open positions
-        
+
         Returns:
             RiskCheckResult with allowed status and reason if blocked
         """
@@ -102,11 +107,14 @@ class RiskManager:
                 ),
             )
 
-        total_underlying_risk = sum(
-            p.estimated_max_loss_pct
-            for p in open_positions
-            if p.underlying == candidate.underlying
-        ) + candidate.estimated_max_loss_pct
+        total_underlying_risk = (
+            sum(
+                p.estimated_max_loss_pct
+                for p in open_positions
+                if p.underlying == candidate.underlying
+            )
+            + candidate.estimated_max_loss_pct
+        )
 
         if total_underlying_risk > cfg.max_risk_per_underlying:
             return RiskCheckResult(
@@ -138,7 +146,7 @@ class RiskManager:
         """
         Check if a trade would be allowed (without recording it).
         For analysis/logging purposes.
-        
+
         Returns:
             Tuple of (allowed, reason)
         """
@@ -154,11 +162,14 @@ class RiskManager:
                 f"exceeds limit {cfg.max_risk_per_trade:.2%}"
             )
 
-        total_underlying_risk = sum(
-            p.estimated_max_loss_pct
-            for p in open_positions
-            if p.underlying == candidate.underlying
-        ) + candidate.estimated_max_loss_pct
+        total_underlying_risk = (
+            sum(
+                p.estimated_max_loss_pct
+                for p in open_positions
+                if p.underlying == candidate.underlying
+            )
+            + candidate.estimated_max_loss_pct
+        )
 
         if total_underlying_risk > cfg.max_risk_per_underlying:
             return False, (
@@ -184,16 +195,16 @@ def maybe_open_trade(
 ) -> Tuple[bool, Optional[str]]:
     """
     Centralized function to check if a trade should be opened.
-    
+
     In training mode on testnet: bypasses risk checks for learning.
     In live/paper mode: enforces all risk checks.
-    
+
     Args:
         candidate: The proposed trade
         open_positions: Currently open positions
         risk_manager: RiskManager instance
         is_training_on_testnet: Whether training mode is enabled on testnet
-    
+
     Returns:
         Tuple of (allowed, reason)
     """

@@ -2,6 +2,7 @@
 Backtest configuration schema with presets and rule toggles.
 Supports ULTRA_SAFE, BALANCED, AGGRESSIVE, and CUSTOM presets.
 """
+
 from __future__ import annotations
 
 from enum import Enum
@@ -24,6 +25,7 @@ class BacktestMode(str, Enum):
 
 class DataSourceType(str, Enum):
     """Data source for backtest market data."""
+
     SYNTHETIC = "synthetic"
     LIVE_DERIBIT = "live_deribit"
     REAL_SCRAPER = "real_scraper"
@@ -147,7 +149,7 @@ class BacktestConfig(BaseModel):
                     "require_ivrv_filter": True,
                     "use_synthetic_iv_and_skew": True,
                     "allow_multi_profile_laddering": True,
-                    "respect_min_premium_filter": True
+                    "respect_min_premium_filter": True,
                 },
                 "thresholds": {
                     "max_margin_used_pct": 60.0,
@@ -156,8 +158,8 @@ class BacktestConfig(BaseModel):
                     "min_ivrv": 1.15,
                     "delta_range": [0.15, 0.35],
                     "dte_range": [3, 21],
-                    "min_premium_usd": 200.0
-                }
+                    "min_premium_usd": 200.0,
+                },
             }
         }
 
@@ -186,7 +188,7 @@ class ResolvedBacktestConfig(BaseModel):
                     "require_ivrv_filter": True,
                     "use_synthetic_iv_and_skew": True,
                     "allow_multi_profile_laddering": True,
-                    "respect_min_premium_filter": True
+                    "respect_min_premium_filter": True,
                 },
                 "thresholds": {
                     "max_margin_used_pct": 60.0,
@@ -195,7 +197,7 @@ class ResolvedBacktestConfig(BaseModel):
                     "min_ivrv": 1.15,
                     "delta_range": [0.15, 0.35],
                     "dte_range": [3, 21],
-                    "min_premium_usd": 200.0
-                }
+                    "min_premium_usd": 200.0,
+                },
             }
         }

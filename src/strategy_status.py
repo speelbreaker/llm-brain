@@ -2,6 +2,7 @@
 Strategy & Safeguards status models and builder.
 Provides a read-only view of current trading configuration.
 """
+
 from __future__ import annotations
 
 from typing import List, Optional, Literal, Dict, Any, Tuple
@@ -11,6 +12,7 @@ from pydantic import BaseModel, Field
 
 class SafeguardStatus(BaseModel):
     """Status of a single safeguard."""
+
     name: str
     status: Literal["ON", "OFF"]
     details: str
@@ -18,6 +20,7 @@ class SafeguardStatus(BaseModel):
 
 class ModeRules(BaseModel):
     """Rules that apply in a specific mode (training or live)."""
+
     description: str
     delta_range: Optional[Tuple[float, float]] = None
     dte_range: Optional[Tuple[int, int]] = None
@@ -27,6 +30,7 @@ class ModeRules(BaseModel):
 
 class StrategyStatus(BaseModel):
     """Complete strategy and safeguards status for UI display."""
+
     mode: Literal["training", "research", "live"]
     network: Literal["testnet", "mainnet"]
     dry_run: bool
@@ -72,7 +76,9 @@ def infer_training_risk_label(strategies: List[str]) -> str:
     return "Unknown"
 
 
-def build_strategy_status(config_snapshot: Optional[Dict[str, Any]] = None) -> StrategyStatus:
+def build_strategy_status(
+    config_snapshot: Optional[Dict[str, Any]] = None,
+) -> StrategyStatus:
     """
     Build a StrategyStatus instance from the current config and optional snapshot.
     Uses src.config.settings as the source of truth.
@@ -81,16 +87,16 @@ def build_strategy_status(config_snapshot: Optional[Dict[str, Any]] = None) -> S
 
     snapshot = config_snapshot or {}
 
-    delta_range = (
-        snapshot.get("effective_delta_range")
-        or (settings.effective_delta_min, settings.effective_delta_max)
+    delta_range = snapshot.get("effective_delta_range") or (
+        settings.effective_delta_min,
+        settings.effective_delta_max,
     )
     if isinstance(delta_range, list):
         delta_range = tuple(delta_range)
 
-    dte_range = (
-        snapshot.get("effective_dte_range")
-        or (settings.effective_dte_min, settings.effective_dte_max)
+    dte_range = snapshot.get("effective_dte_range") or (
+        settings.effective_dte_min,
+        settings.effective_dte_max,
     )
     if isinstance(dte_range, list):
         dte_range = tuple(dte_range)
@@ -137,7 +143,9 @@ def build_strategy_status(config_snapshot: Optional[Dict[str, Any]] = None) -> S
     )
 
     kill_switch = snapshot.get("kill_switch_enabled", settings.kill_switch_enabled)
-    daily_dd_limit = snapshot.get("daily_drawdown_limit_pct", settings.daily_drawdown_limit_pct)
+    daily_dd_limit = snapshot.get(
+        "daily_drawdown_limit_pct", settings.daily_drawdown_limit_pct
+    )
 
     safeguards = [
         SafeguardStatus(
@@ -207,7 +215,9 @@ def build_strategy_status(config_snapshot: Optional[Dict[str, Any]] = None) -> S
         explore_top_k=snapshot.get("explore_top_k", settings.explore_top_k),
         effective_delta_range=delta_range,
         effective_dte_range=dte_range,
-        max_margin_used_pct=snapshot.get("max_margin_used_pct", settings.max_margin_used_pct),
+        max_margin_used_pct=snapshot.get(
+            "max_margin_used_pct", settings.max_margin_used_pct
+        ),
         max_net_delta_abs=snapshot.get("max_net_delta_abs", settings.max_net_delta_abs),
         per_expiry_exposure_limit=per_expiry_limit,
         daily_drawdown_limit_pct=daily_dd_limit,

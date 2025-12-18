@@ -17,10 +17,11 @@ Usage:
         [--out-dir data/exams]
 """
 
+# ruff: noqa: E402
+
 import argparse
-import json
 import sys
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 
 project_root = Path(__file__).parent.parent
@@ -58,9 +59,9 @@ def main():
         default="data/exams",
         help="Output directory for exam dataset (default: data/exams)",
     )
-    
+
     args = parser.parse_args()
-    
+
     try:
         start_date = datetime.strptime(args.start, "%Y-%m-%d").date()
         end_date = datetime.strptime(args.end, "%Y-%m-%d").date()
@@ -68,18 +69,18 @@ def main():
         print(f"ERROR: Invalid date format: {e}")
         print("Use YYYY-MM-DD format.")
         sys.exit(1)
-    
+
     if start_date > end_date:
         print("ERROR: Start date must be before or equal to end date.")
         sys.exit(1)
-    
+
     underlying = args.underlying.upper()
-    
+
     print(f"Building exam dataset for {underlying}")
     print(f"Date range: {args.start} to {args.end}")
     print(f"Data root: {args.data_root}")
     print(f"Output dir: {args.out_dir}")
-    
+
     try:
         df, summary = build_live_deribit_exam_dataset(
             underlying=underlying,
@@ -89,51 +90,54 @@ def main():
             exams_dir=Path(args.out_dir),
             write_files=True,
         )
-        
+
         print("\n" + "=" * 60)
         print("EXAM DATASET SUMMARY")
         print("=" * 60)
         print(f"Underlying:           {summary.get('underlying')}")
         print(f"Files stitched:       {summary.get('num_files')}")
         print(f"Total rows:           {summary.get('num_rows')}")
-        
+
         if summary.get("num_snapshots"):
             print(f"Unique snapshots:     {summary.get('num_snapshots')}")
-        
+
         if summary.get("num_instruments"):
             print(f"Unique instruments:   {summary.get('num_instruments')}")
-        
+
         if summary.get("time_min"):
             print(f"Min harvest_time:     {summary.get('time_min')}")
             print(f"Max harvest_time:     {summary.get('time_max')}")
-        
+
         if summary.get("dte_min") is not None:
             print(f"Min dte_days:         {summary.get('dte_min'):.2f}")
             print(f"Max dte_days:         {summary.get('dte_max'):.2f}")
-        
+
         print(f"\nColumns ({len(summary.get('columns', []))}):")
         for col in summary.get("columns", []):
             print(f"  - {col}")
-        
+
         missing = summary.get("missing_required_columns", [])
         if missing:
             print("\nWARNINGS:")
             for col in missing:
                 print(f"  - Missing required column: {col}")
-        
+
         print("=" * 60)
-        
+
         out_filename = f"{underlying}_{args.start}_{args.end}_live_deribit.parquet"
-        summary_filename = f"{underlying}_{args.start}_{args.end}_live_deribit_summary.json"
+        summary_filename = (
+            f"{underlying}_{args.start}_{args.end}_live_deribit_summary.json"
+        )
         print(f"\nWrote exam dataset to: {args.out_dir}/{out_filename}")
         print(f"Wrote summary to: {args.out_dir}/{summary_filename}")
-        
+
     except ValueError as e:
         print(f"\nERROR: {e}")
         sys.exit(1)
     except Exception as e:
         print(f"\nERROR: Unexpected error: {e}")
         import traceback
+
         traceback.print_exc()
         sys.exit(1)
 

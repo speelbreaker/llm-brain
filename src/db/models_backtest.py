@@ -1,10 +1,10 @@
 """
 SQLAlchemy models for backtest persistence.
 """
+
 from __future__ import annotations
 
-from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict
 
 from sqlalchemy import (
     BigInteger,
@@ -31,35 +31,47 @@ class BacktestRun(Base):
     Represents a single backtest run.
     One row per backtest execution.
     """
+
     __tablename__ = "backtest_runs"
 
     id = Column(BigInteger, primary_key=True, autoincrement=True)
     run_id = Column(String(128), unique=True, nullable=False, index=True)
-    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
-    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
-    
+    created_at = Column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at = Column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
+
     status = Column(String(32), nullable=False, default="queued")
-    
+
     underlying = Column(String(32), nullable=False)
     data_source = Column(String(64), nullable=False, default="synthetic")
     start_ts = Column(DateTime(timezone=True), nullable=False)
     end_ts = Column(DateTime(timezone=True), nullable=False)
     decision_interval_minutes = Column(Integer, nullable=True)
     primary_exit_style = Column(String(64), nullable=True)
-    
+
     initial_equity = Column(Float, nullable=True)
     final_equity_primary = Column(Float, nullable=True)
     net_profit_pct_primary = Column(Float, nullable=True)
     max_drawdown_pct_primary = Column(Float, nullable=True)
     sharpe_primary = Column(Float, nullable=True)
     sortino_primary = Column(Float, nullable=True)
-    
+
     config_json = Column(JSONB, nullable=True)
     notes = Column(Text, nullable=True)
-    
-    metrics = relationship("BacktestMetric", back_populates="run", cascade="all, delete-orphan")
-    chains = relationship("BacktestChain", back_populates="run", cascade="all, delete-orphan")
-    
+
+    metrics = relationship(
+        "BacktestMetric", back_populates="run", cascade="all, delete-orphan"
+    )
+    chains = relationship(
+        "BacktestChain", back_populates="run", cascade="all, delete-orphan"
+    )
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for API responses."""
         return {
@@ -90,16 +102,22 @@ class BacktestMetric(Base):
     Per-run, per-exit-style metrics.
     Each run can have metrics for hold_to_expiry, tp_and_roll, etc.
     """
+
     __tablename__ = "backtest_metrics"
     __table_args__ = (
         UniqueConstraint("run_id", "exit_style", name="uq_backtest_metrics_run_exit"),
     )
 
     id = Column(BigInteger, primary_key=True, autoincrement=True)
-    run_id = Column(BigInteger, ForeignKey("backtest_runs.id", ondelete="CASCADE"), nullable=False, index=True)
+    run_id = Column(
+        BigInteger,
+        ForeignKey("backtest_runs.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
     exit_style = Column(String(64), nullable=False)
     is_primary = Column(Boolean, default=False, nullable=False)
-    
+
     initial_equity = Column(Float, nullable=True)
     final_equity = Column(Float, nullable=True)
     net_profit_usd = Column(Float, nullable=True)
@@ -121,9 +139,9 @@ class BacktestMetric(Base):
     final_pnl = Column(Float, nullable=True)
     final_pnl_vs_hodl = Column(Float, nullable=True)
     avg_pnl = Column(Float, nullable=True)
-    
+
     run = relationship("BacktestRun", back_populates="metrics")
-    
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for API responses."""
         return {
@@ -159,6 +177,7 @@ class BacktestChain(Base):
     Multi-leg chain summaries for a backtest run.
     Stores individual trade chains with their metrics.
     """
+
     __tablename__ = "backtest_chains"
     __table_args__ = (
         Index("ix_backtest_chains_run_id", "run_id"),
@@ -167,30 +186,34 @@ class BacktestChain(Base):
     )
 
     id = Column(BigInteger, primary_key=True, autoincrement=True)
-    run_id = Column(BigInteger, ForeignKey("backtest_runs.id", ondelete="CASCADE"), nullable=False)
+    run_id = Column(
+        BigInteger, ForeignKey("backtest_runs.id", ondelete="CASCADE"), nullable=False
+    )
     exit_style = Column(String(64), nullable=False)
     decision_time = Column(DateTime(timezone=True), nullable=True)
     underlying = Column(String(32), nullable=True)
-    
+
     chain_label = Column(String(256), nullable=True)
     num_legs = Column(Integer, nullable=True)
     num_rolls = Column(Integer, nullable=True)
-    
+
     total_pnl_usd = Column(Float, nullable=True)
     pnl_vs_hodl_usd = Column(Float, nullable=True)
     max_drawdown_pct = Column(Float, nullable=True)
     max_drawdown_usd = Column(Float, nullable=True)
-    
+
     details_json = Column(JSONB, nullable=True)
-    
+
     run = relationship("BacktestRun", back_populates="chains")
-    
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for API responses."""
         return {
             "id": self.id,
             "exit_style": self.exit_style,
-            "decision_time": self.decision_time.isoformat() if self.decision_time else None,
+            "decision_time": self.decision_time.isoformat()
+            if self.decision_time
+            else None,
             "underlying": self.underlying,
             "chain_label": self.chain_label,
             "num_legs": self.num_legs,
@@ -206,33 +229,36 @@ class BacktestChain(Base):
 class BacktestEvent(Base):
     """
     Strategy-level events emitted during a backtest run.
-    
+
     Used to track decisions, entries, exits, and skips with stable keys
     for GregBot and other strategies. Enables post-run analytics by strategy.
     """
+
     __tablename__ = "backtest_events"
     __table_args__ = (
         Index("ix_backtest_events_run_id", "run_id"),
         Index("ix_backtest_events_run_strategy", "run_id", "strategy_key"),
         Index("ix_backtest_events_run_time", "run_id", "event_time"),
     )
-    
+
     id = Column(BigInteger, primary_key=True, autoincrement=True)
-    run_id = Column(BigInteger, ForeignKey("backtest_runs.id", ondelete="CASCADE"), nullable=False)
-    
+    run_id = Column(
+        BigInteger, ForeignKey("backtest_runs.id", ondelete="CASCADE"), nullable=False
+    )
+
     event_time = Column(DateTime(timezone=True), nullable=False)
     selector_name = Column(String(64), nullable=False)
     strategy_key = Column(String(128), nullable=False)
     event_type = Column(String(64), nullable=False)
-    
+
     trade_id = Column(String(128), nullable=True)
     position_id = Column(String(128), nullable=True)
     pnl = Column(Float, nullable=True)
-    
+
     reason_json = Column(JSONB, nullable=True)
-    
+
     run = relationship("BacktestRun")
-    
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for API responses."""
         return {

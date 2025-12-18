@@ -2,6 +2,7 @@
 Strategy approval module for evaluating strategy readiness.
 Determines if a strategy is ready for research, pilot, or production deployment.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -13,6 +14,7 @@ from src.psychology_metrics import PsychologyScore, StrategyStats, VarianceProfi
 @dataclass
 class ApprovalConfig:
     """Configuration for strategy approval thresholds."""
+
     min_trades: int = 200
     min_years: float = 3.0
     require_bull_bear_chop: bool = True
@@ -35,6 +37,7 @@ class ApprovalConfig:
 @dataclass
 class RegimeCoverage:
     """Tracks which market regimes the strategy has been tested in."""
+
     bull: bool
     bear: bool
     chop: bool
@@ -43,6 +46,7 @@ class RegimeCoverage:
 @dataclass
 class ApprovalResult:
     """Result of strategy approval evaluation."""
+
     stage: str
     reason: str
     stats: StrategyStats
@@ -62,12 +66,12 @@ def evaluate_strategy(
 ) -> ApprovalResult:
     """
     Evaluate a strategy's readiness for different deployment stages.
-    
+
     Stages:
     - RESEARCH: Strategy needs more data/testing
     - PILOT: Ready for limited live testing
     - PRODUCTION: Ready for full deployment
-    
+
     Args:
         stats: Strategy statistics
         variance: Monte Carlo variance profile
@@ -77,7 +81,7 @@ def evaluate_strategy(
         walk_forward_ok: Whether walk-forward testing passed
         stress_test_ok: Whether stress testing passed
         cfg: Approval configuration thresholds
-    
+
     Returns:
         ApprovalResult with stage, reason, and metrics
     """
@@ -101,7 +105,9 @@ def evaluate_strategy(
             psych=psych,
         )
 
-    if cfg.require_bull_bear_chop and not (regimes.bull and regimes.bear and regimes.chop):
+    if cfg.require_bull_bear_chop and not (
+        regimes.bull and regimes.bear and regimes.chop
+    ):
         missing = []
         if not regimes.bull:
             missing.append("bull")

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Any, Optional
+from typing import Any
 
 from openai import AsyncOpenAI
 
@@ -85,8 +85,9 @@ class OpenAIProvider(LLMProvider):
     ) -> dict[str, Any]:
         # We try strict JSON mode first; if model rejects it, we retry without response_format.
         sys_msg = (
-            (system + "\n\n") if system else ""
-        ) + "Return ONLY valid JSON. Do not include markdown, code fences, or commentary."
+            ((system + "\n\n") if system else "")
+            + "Return ONLY valid JSON. Do not include markdown, code fences, or commentary."
+        )
 
         if schema_hint:
             prompt2 = f"{prompt}\n\nJSON schema hint:\n{schema_hint}"

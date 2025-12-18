@@ -6,12 +6,13 @@ and uses LLM to summarize and propose next actions.
 
 Never interacts with Deribit or trading - purely a project planning/QA helper.
 """
+
 from __future__ import annotations
 
 import json
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
@@ -36,15 +37,24 @@ def _load_file_snippet(rel_path: str, max_chars: int = 4000) -> str:
 
 class StewardItem(BaseModel):
     """A single actionable item from the steward report."""
-    id: str = Field(..., description="Short identifier, e.g. 'P1-ui-bots-status-badges'")
-    area: str = Field(..., description="Area of the project, e.g. 'UI / Bots', 'Backtesting', 'Healthcheck'")
+
+    id: str = Field(
+        ..., description="Short identifier, e.g. 'P1-ui-bots-status-badges'"
+    )
+    area: str = Field(
+        ...,
+        description="Area of the project, e.g. 'UI / Bots', 'Backtesting', 'Healthcheck'",
+    )
     priority: str = Field(..., description="Priority label like P0/P1/P2/info")
     reason: str = Field(..., description="Why this item matters now")
-    suggested_change: str = Field(..., description="One-sentence description of the concrete change")
+    suggested_change: str = Field(
+        ..., description="One-sentence description of the concrete change"
+    )
 
 
 class StewardReport(BaseModel):
     """The full steward report."""
+
     ok: bool = True
     generated_at: str
     llm_used: bool = False
@@ -97,6 +107,7 @@ def generate_steward_report() -> StewardReport:
 
     try:
         from src.agent_brain_llm import _get_openai_client
+
         client = _get_openai_client()
 
         system_prompt = (

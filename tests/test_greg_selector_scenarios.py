@@ -4,13 +4,10 @@ Greg Selector Scenario Tests - ENTRY_ENGINE v8.0 Positive Cases.
 These tests validate that the selector makes the right choice in canonical
 market environments that Greg Mandolini's strategy targets.
 """
-import pytest
-from typing import Dict, Any
 
 from src.strategies.greg_selector import (
     GregSelectorSensors,
     evaluate_greg_selector,
-    load_greg_spec,
     get_calibration_spec,
 )
 
@@ -61,7 +58,7 @@ class TestHighVRPCalmNeutralSkew:
     def test_straddle_conditions_met_exactly(self):
         """Conditions at exact thresholds for straddle."""
         cal = get_calibration_spec()
-        
+
         sensors = base_metrics(
             vrp_30d=cal["straddle_vrp_min"] + 0.1,
             adx_14d=cal["straddle_adx_max"] - 0.1,
@@ -99,7 +96,7 @@ class TestModerateVRPDriftingMarket:
     def test_strangle_selected_when_vrp_below_straddle_threshold(self):
         """VRP is good but below straddle min - should fall through to strangle."""
         cal = get_calibration_spec()
-        
+
         sensors = base_metrics(
             vrp_30d=cal["straddle_vrp_min"] - 1.0,
             adx_14d=15.0,
@@ -159,7 +156,7 @@ class TestBullishAccumulation:
 
     def test_bull_put_spread_oversold_fear(self):
         """Oversold (low RSI) + fear skew + positive VRP - Bull Put Spread.
-        
+
         Note: Short Put (step 6) requires price > MA200. By setting price_vs_ma200
         to a negative value, we force the selector to skip Short Put and match
         Bull Put Spread at step 7 instead.
@@ -227,7 +224,7 @@ class TestSafetyFilters:
     """
     Safety filters should block trades when market is too trending or choppy.
     """
-    
+
     def test_adx_safety_filter(self):
         """ADX > 35 should trigger NO_TRADE."""
         sensors = base_metrics(
@@ -238,7 +235,7 @@ class TestSafetyFilters:
         decision = evaluate_greg_selector(sensors)
         assert decision.selected_strategy == "NO_TRADE"
         assert decision.step_name == "SAFETY_FILTER"
-    
+
     def test_chop_safety_filter(self):
         """Chop > 0.85 should trigger NO_TRADE."""
         sensors = base_metrics(

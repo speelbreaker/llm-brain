@@ -4,6 +4,7 @@ Sensor computation module for bots.
 Computes technical indicators (ADX, RSI, MA200) and volatility metrics
 from OHLC data and options chain data fetched via Deribit API.
 """
+
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
@@ -24,7 +25,7 @@ def _fetch_ohlc_cached(underlying: str, cache_key: str) -> pd.DataFrame:
     """
     end = datetime.now(timezone.utc)
     start = end - timedelta(days=250)
-    
+
     with DeribitClient() as client:
         index_name = f"{underlying.lower()}_usd"
         try:
@@ -42,10 +43,10 @@ def _fetch_ohlc_cached(underlying: str, cache_key: str) -> pd.DataFrame:
                 end=end,
                 resolution="1D",
             )
-    
+
     if not res.get("ticks"):
         return pd.DataFrame()
-    
+
     timestamps = [
         datetime.fromtimestamp(ts / 1000, tz=timezone.utc) for ts in res["ticks"]
     ]
@@ -64,7 +65,7 @@ def _fetch_ohlc_cached(underlying: str, cache_key: str) -> pd.DataFrame:
 
 def get_ohlc_data(underlying: str) -> pd.DataFrame:
     """Get OHLC data with hourly cache invalidation.
-    
+
     Returns empty DataFrame on network/API errors for offline resilience.
     """
     try:
@@ -83,7 +84,7 @@ def _fetch_hourly_ohlc_cached(underlying: str, cache_key: str) -> pd.DataFrame:
     """
     end = datetime.now(timezone.utc)
     start = end - timedelta(days=30)
-    
+
     with DeribitClient() as client:
         index_name = f"{underlying.lower()}_usd"
         try:
@@ -101,10 +102,10 @@ def _fetch_hourly_ohlc_cached(underlying: str, cache_key: str) -> pd.DataFrame:
                 end=end,
                 resolution="60",
             )
-    
+
     if not res.get("ticks"):
         return pd.DataFrame()
-    
+
     timestamps = [
         datetime.fromtimestamp(ts / 1000, tz=timezone.utc) for ts in res["ticks"]
     ]
@@ -122,7 +123,7 @@ def _fetch_hourly_ohlc_cached(underlying: str, cache_key: str) -> pd.DataFrame:
 
 def get_hourly_ohlc_data(underlying: str) -> pd.DataFrame:
     """Get hourly OHLC data with 10-minute cache invalidation.
-    
+
     Returns empty DataFrame on network/API errors for offline resilience.
     """
     try:
@@ -141,7 +142,7 @@ def _fetch_dvol_cached(underlying: str, cache_key: str) -> Optional[float]:
     """
     end = datetime.now(timezone.utc)
     start = end - timedelta(hours=24)
-    
+
     try:
         with DeribitClient() as client:
             res = client.get_volatility_index_data(
@@ -150,11 +151,11 @@ def _fetch_dvol_cached(underlying: str, cache_key: str) -> Optional[float]:
                 end=end,
                 resolution="3600",
             )
-        
+
         data = res.get("data", [])
         if not data:
             return None
-        
+
         last_point = data[-1]
         dvol_close = last_point[4]
         return float(dvol_close)
@@ -176,12 +177,13 @@ def _fetch_volmex_iv_cached(underlying: str, cache_key: str) -> Optional[float]:
     Returns the most recent index value as a percentage.
     """
     import httpx
-    
+
     asset = underlying.upper()
     if asset not in ("BTC", "ETH"):
         return None
-    
-    query = """
+
+    query = (
+        """
     query impliedVol {
       impliedVolatilitys(limit: 1, query: { asset: %s }, sort: "-timestamp") {
         index
@@ -189,8 +191,10 @@ def _fetch_volmex_iv_cached(underlying: str, cache_key: str) -> Optional[float]:
         timestamp
       }
     }
-    """ % asset
-    
+    """
+        % asset
+    )
+
     try:
         with httpx.Client(timeout=10.0) as http_client:
             response = http_client.post(
@@ -200,15 +204,15 @@ def _fetch_volmex_iv_cached(underlying: str, cache_key: str) -> Optional[float]:
             )
             response.raise_for_status()
             data = response.json()
-        
+
         volatilities = data.get("data", {}).get("impliedVolatilitys", [])
         if not volatilities:
             return None
-        
+
         index_value = volatilities[0].get("index")
         if index_value is None:
             return None
-        
+
         return float(index_value) * 100
     except Exception:
         return None
@@ -222,18 +226,20 @@ def get_volmex_iv(underlying: str) -> Optional[float]:
 
 
 @lru_cache(maxsize=2)
-def _fetch_deribit_historical_volatility_cached(underlying: str, cache_key: str) -> Optional[float]:
+def _fetch_deribit_historical_volatility_cached(
+    underlying: str, cache_key: str
+) -> Optional[float]:
     """
     Fetch official Deribit historical volatility (30-day realized volatility).
     Uses public/get_historical_volatility endpoint.
     Returns the most recent value as a percentage.
     """
     import httpx
-    
+
     currency = underlying.upper()
     if currency not in ("BTC", "ETH"):
         return None
-    
+
     try:
         with httpx.Client(timeout=10.0) as client:
             response = client.get(
@@ -241,11 +247,11 @@ def _fetch_deribit_historical_volatility_cached(underlying: str, cache_key: str)
             )
             response.raise_for_status()
             data = response.json()
-        
+
         result = data.get("result", [])
         if not result:
             return None
-        
+
         latest = result[-1]
         return float(latest[1])
     except Exception:
@@ -259,24 +265,28 @@ def get_deribit_historical_volatility(underlying: str) -> Optional[float]:
     return _fetch_deribit_historical_volatility_cached(underlying, cache_key)
 
 
-def compute_realized_volatility_hourly(closes: pd.Series, hours: int = 720) -> Optional[float]:
+def compute_realized_volatility_hourly(
+    closes: pd.Series, hours: int = 720
+) -> Optional[float]:
     """
     Compute annualized realized volatility from hourly closes.
     Uses last 720 hours (30 days) by default.
     Returns as percentage (e.g., 45.0 for 45%).
-    
+
     Annualization: sqrt(8760) for hours in a year (365 * 24).
     """
     if len(closes) < min(hours, 48) + 1:
         return None
-    
+
     n_hours = min(hours, len(closes) - 1)
-    recent = closes.iloc[-(n_hours + 1):]
-    log_returns = (recent / recent.shift(1)).apply(lambda x: log(x) if x > 0 else 0).dropna()
-    
+    recent = closes.iloc[-(n_hours + 1) :]
+    log_returns = (
+        (recent / recent.shift(1)).apply(lambda x: log(x) if x > 0 else 0).dropna()
+    )
+
     if len(log_returns) < 24:
         return None
-    
+
     hourly_vol = log_returns.std()
     annualized = hourly_vol * sqrt(8760) * 100
     return float(annualized)
@@ -289,21 +299,21 @@ def compute_rsi(closes: pd.Series, period: int = 14) -> Optional[float]:
     """
     if len(closes) < period + 1:
         return None
-    
+
     deltas = closes.diff()
     gains = deltas.where(deltas > 0, 0.0)
     losses = (-deltas).where(deltas < 0, 0.0)
-    
-    avg_gain = gains.iloc[1:period+1].mean()
-    avg_loss = losses.iloc[1:period+1].mean()
-    
+
+    avg_gain = gains.iloc[1 : period + 1].mean()
+    avg_loss = losses.iloc[1 : period + 1].mean()
+
     for i in range(period + 1, len(closes)):
         avg_gain = (avg_gain * (period - 1) + gains.iloc[i]) / period
         avg_loss = (avg_loss * (period - 1) + losses.iloc[i]) / period
-    
+
     if avg_loss == 0:
         return 100.0
-    
+
     rs = avg_gain / avg_loss
     rsi = 100 - (100 / (1 + rs))
     return float(rsi)
@@ -316,30 +326,32 @@ def compute_adx(df: pd.DataFrame, period: int = 14) -> Optional[float]:
     """
     if len(df) < period * 2:
         return None
-    
+
     high = df["high"]
     low = df["low"]
     close = df["close"]
-    
+
     plus_dm = high.diff()
     minus_dm = low.diff().abs() * -1
-    
+
     plus_dm = plus_dm.where((plus_dm > minus_dm.abs()) & (plus_dm > 0), 0.0)
-    minus_dm = minus_dm.abs().where((minus_dm.abs() > plus_dm) & (minus_dm.abs() > 0), 0.0)
-    
+    minus_dm = minus_dm.abs().where(
+        (minus_dm.abs() > plus_dm) & (minus_dm.abs() > 0), 0.0
+    )
+
     tr1 = high - low
     tr2 = (high - close.shift()).abs()
     tr3 = (low - close.shift()).abs()
     tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
-    
+
     atr = tr.rolling(window=period).mean()
-    
+
     plus_di = 100 * (plus_dm.rolling(window=period).mean() / atr)
     minus_di = 100 * (minus_dm.rolling(window=period).mean() / atr)
-    
+
     dx = 100 * (plus_di - minus_di).abs() / (plus_di + minus_di + 1e-10)
     adx = dx.rolling(window=period).mean()
-    
+
     last_adx = adx.iloc[-1]
     if pd.isna(last_adx):
         return None
@@ -367,20 +379,24 @@ def compute_realized_volatility(closes: pd.Series, window: int = 30) -> Optional
     """
     if len(closes) < window + 1:
         return None
-    
-    recent = closes.iloc[-(window + 1):]
-    log_returns = (recent / recent.shift(1)).apply(lambda x: log(x) if x > 0 else 0).dropna()
-    
+
+    recent = closes.iloc[-(window + 1) :]
+    log_returns = (
+        (recent / recent.shift(1)).apply(lambda x: log(x) if x > 0 else 0).dropna()
+    )
+
     if len(log_returns) < 2:
         return None
-    
+
     daily_vol = log_returns.std()
     annualized = daily_vol * sqrt(365) * 100
     return float(annualized)
 
 
 @lru_cache(maxsize=4)
-def _fetch_options_chain_cached(underlying: str, cache_key: str) -> List[Dict[str, Any]]:
+def _fetch_options_chain_cached(
+    underlying: str, cache_key: str
+) -> List[Dict[str, Any]]:
     """
     Fetch active options instruments for an underlying.
     Cached with 10-minute invalidation.
@@ -421,7 +437,7 @@ def compute_term_structure_and_atm_iv(
 ) -> Tuple[Optional[float], Optional[float], Optional[float]]:
     """
     Compute term structure spread and ATM IVs for 7d and 30d tenors.
-    
+
     Returns:
         (term_structure_spread, iv_7d, iv_30d)
     """
@@ -429,12 +445,10 @@ def compute_term_structure_and_atm_iv(
         instruments = get_options_chain(underlying)
     except Exception:
         return None, None, None
-    
+
     if not instruments:
         return None, None, None
-    
-    now = datetime.now(timezone.utc)
-    
+
     expiry_groups: Dict[str, List[Dict]] = {}
     for inst in instruments:
         if inst.get("option_type") != "call":
@@ -445,21 +459,25 @@ def compute_term_structure_and_atm_iv(
         dte = _compute_dte(expiry)
         if dte < 1:
             continue
-        
+
         exp_key = expiry.strftime("%Y-%m-%d")
         if exp_key not in expiry_groups:
             expiry_groups[exp_key] = []
-        expiry_groups[exp_key].append({
-            "instrument_name": inst["instrument_name"],
-            "strike": inst["strike"],
-            "dte": dte,
-            "expiry": expiry,
-        })
-    
+        expiry_groups[exp_key].append(
+            {
+                "instrument_name": inst["instrument_name"],
+                "strike": inst["strike"],
+                "dte": dte,
+                "expiry": expiry,
+            }
+        )
+
     if not expiry_groups:
         return None, None, None
-    
-    def find_closest_expiry(target_dte: int, min_dte: int, max_dte: int) -> Optional[str]:
+
+    def find_closest_expiry(
+        target_dte: int, min_dte: int, max_dte: int
+    ) -> Optional[str]:
         """Find expiry closest to target DTE within range."""
         valid = []
         for exp_key, opts in expiry_groups.items():
@@ -471,29 +489,29 @@ def compute_term_structure_and_atm_iv(
             return None
         valid.sort(key=lambda x: x[2])
         return valid[0][0]
-    
+
     # Expanded ranges to handle limited testnet expiries
     # 7d: look for anything in 2-20 DTE range
     # 30d: look for anything in 14-60 DTE range (broader to catch monthly expiries)
     exp_7d = find_closest_expiry(7, 2, 20)
     exp_30d = find_closest_expiry(30, 14, 60)
-    
+
     iv_7d = None
     iv_30d = None
-    
+
     def get_atm_iv(exp_key: str) -> Optional[float]:
         """Get ATM IV by finding option closest to spot and fetching mark_iv."""
         if exp_key not in expiry_groups:
             return None
-        
+
         options = expiry_groups[exp_key]
         options_sorted = sorted(options, key=lambda o: abs(o["strike"] - spot))
-        
+
         if not options_sorted:
             return None
-        
+
         atm_option = options_sorted[0]
-        
+
         try:
             with DeribitClient() as client:
                 ticker = client.get_ticker(atm_option["instrument_name"])
@@ -502,41 +520,41 @@ def compute_term_structure_and_atm_iv(
                     return float(mark_iv)
         except Exception:
             pass
-        
+
         return None
-    
+
     if exp_7d:
         iv_7d = get_atm_iv(exp_7d)
-    
+
     if exp_30d:
         iv_30d = get_atm_iv(exp_30d)
-    
+
     term_spread = None
     if iv_7d is not None and iv_30d is not None:
         term_spread = iv_7d - iv_30d
-    
+
     return term_spread, iv_7d, iv_30d
 
 
 def compute_skew_25d(underlying: str, spot: float) -> Optional[float]:
     """
     Compute 25-delta skew: IV_25d_put - IV_25d_call.
-    
+
     Uses options with delta closest to +/- 0.25 from a ~30d expiry.
     """
     try:
         instruments = get_options_chain(underlying)
     except Exception:
         return None
-    
+
     if not instruments:
         return None
-    
+
     # Expanded ranges to handle limited testnet expiries
     target_dte = 30
     min_dte = 14
     max_dte = 60
-    
+
     valid_options = []
     for inst in instruments:
         expiry = _parse_option_expiry(inst["instrument_name"])
@@ -544,89 +562,96 @@ def compute_skew_25d(underlying: str, spot: float) -> Optional[float]:
             continue
         dte = _compute_dte(expiry)
         if min_dte <= dte <= max_dte:
-            valid_options.append({
-                "instrument_name": inst["instrument_name"],
-                "strike": inst["strike"],
-                "option_type": inst.get("option_type"),
-                "dte": dte,
-            })
-    
+            valid_options.append(
+                {
+                    "instrument_name": inst["instrument_name"],
+                    "strike": inst["strike"],
+                    "option_type": inst.get("option_type"),
+                    "dte": dte,
+                }
+            )
+
     if not valid_options:
         return None
-    
+
     best_dte = min(valid_options, key=lambda o: abs(o["dte"] - target_dte))["dte"]
     options_at_expiry = [o for o in valid_options if o["dte"] == best_dte]
-    
+
     calls = [o for o in options_at_expiry if o["option_type"] == "call"]
     puts = [o for o in options_at_expiry if o["option_type"] == "put"]
-    
+
     if not calls or not puts:
         return None
-    
+
     def find_25d_option(options: List[Dict], is_call: bool) -> Optional[Dict]:
         """Find option closest to 25-delta."""
         if is_call:
             target_strike = spot * 1.05
         else:
             target_strike = spot * 0.95
-        
+
         sorted_opts = sorted(options, key=lambda o: abs(o["strike"] - target_strike))
         return sorted_opts[0] if sorted_opts else None
-    
+
     call_25d = find_25d_option(calls, is_call=True)
     put_25d = find_25d_option(puts, is_call=False)
-    
+
     if not call_25d or not put_25d:
         return None
-    
+
     try:
         with DeribitClient() as client:
             call_ticker = client.get_ticker(call_25d["instrument_name"])
             put_ticker = client.get_ticker(put_25d["instrument_name"])
-            
+
             call_iv = call_ticker.get("mark_iv")
             put_iv = put_ticker.get("mark_iv")
-            
-            if call_iv is not None and put_iv is not None and call_iv > 0 and put_iv > 0:
+
+            if (
+                call_iv is not None
+                and put_iv is not None
+                and call_iv > 0
+                and put_iv > 0
+            ):
                 return float(put_iv - call_iv)
     except Exception:
         pass
-    
+
     return None
 
 
 def compute_iv_rank_lite(iv_30d: Optional[float], underlying: str) -> Optional[float]:
     """
     Compute a lite IV rank based on historical IV range.
-    
+
     Uses a heuristic based on typical crypto IV ranges:
     - BTC: typical range 40-100%
     - ETH: typical range 50-120%
-    
+
     Returns value in [0, 1] range.
     """
     if iv_30d is None or iv_30d <= 0:
         return None
-    
+
     if underlying.upper() == "BTC":
         iv_low = 35.0
         iv_high = 100.0
     else:
         iv_low = 45.0
         iv_high = 120.0
-    
+
     if iv_30d <= iv_low:
         return 0.0
     if iv_30d >= iv_high:
         return 1.0
-    
+
     rank = (iv_30d - iv_low) / (iv_high - iv_low)
     return float(rank)
 
 
 class SensorBundle:
     """Container for computed sensor values for an underlying."""
-    
+
     def __init__(self, underlying: str):
         self.underlying = underlying
         self.vrp_30d: Optional[float] = None
@@ -648,7 +673,7 @@ class SensorBundle:
         self.front_rv_iv_ratio: Optional[float] = None
         self.predicted_funding_rate: Optional[float] = None
         self._missing: List[str] = []
-    
+
     def to_dict(self) -> Dict[str, Optional[float]]:
         """Return sensor values as dictionary (v6.0 compatible)."""
         return {
@@ -666,36 +691,36 @@ class SensorBundle:
             "price_vs_ma200": self.price_vs_ma200,
             "predicted_funding_rate": self.predicted_funding_rate,
         }
-    
+
     def to_debug_dict(self) -> Dict[str, Any]:
         """Return sensor values with debug inputs and intermediate calculations for each sensor."""
         underlying = self.underlying.upper()
         iv_low = 35.0 if underlying == "BTC" else 45.0
         iv_high = 100.0 if underlying == "BTC" else 120.0
-        
+
         vrp_diff = None
         if self.iv_30d is not None and self.rv_30d is not None:
             vrp_diff = self.iv_30d - self.rv_30d
-        
+
         chop_ratio = None
         if self.rv_7d is not None and self.iv_30d is not None and self.iv_30d > 0:
             chop_ratio = self.rv_7d / self.iv_30d
-        
+
         term_diff = None
         if self.iv_7d is not None and self.iv_30d is not None:
             term_diff = self.iv_7d - self.iv_30d
-        
+
         iv_rank_numerator = None
         iv_rank_denominator = iv_high - iv_low
         if self.iv_30d is not None:
             iv_rank_numerator = self.iv_30d - iv_low
-        
+
         price_ratio = None
         price_pct = None
         if self.spot is not None and self.ma200 is not None and self.ma200 > 0:
             price_ratio = self.spot / self.ma200
             price_pct = (price_ratio - 1) * 100
-        
+
         return {
             "vrp_30d": {
                 "value": self.vrp_30d,
@@ -770,7 +795,7 @@ class SensorBundle:
                 },
             },
         }
-    
+
     @property
     def missing_sensors(self) -> List[str]:
         """List of sensor names that are missing data."""
@@ -785,40 +810,52 @@ def compute_sensors_for_underlying(
 ) -> SensorBundle:
     """
     Compute all Greg sensors for a given underlying.
-    
+
     IV source: DVOL (Deribit Volatility Index) via public/get_volatility_index_data
     RV source: Hourly price data via public/get_tradingview_chart_data (resolution=60)
-    
+
     Args:
         underlying: "BTC" or "ETH"
         iv_30d: Override for 30-day IV (if None, uses DVOL)
         iv_7d: Override for 7-day IV (for term structure)
         skew: Current 25-delta skew
-    
+
     Returns:
         SensorBundle with computed values
     """
     bundle = SensorBundle(underlying)
-    
+
     try:
         df = get_ohlc_data(underlying)
     except Exception:
         bundle._missing = [
-            "vrp_30d", "chop_factor_7d", "iv_rank_6m", "term_structure_spread",
-            "skew_25d", "adx_14d", "rsi_14d", "price_vs_ma200"
+            "vrp_30d",
+            "chop_factor_7d",
+            "iv_rank_6m",
+            "term_structure_spread",
+            "skew_25d",
+            "adx_14d",
+            "rsi_14d",
+            "price_vs_ma200",
         ]
         return bundle
-    
+
     if df.empty or len(df) < 30:
         bundle._missing = [
-            "vrp_30d", "chop_factor_7d", "iv_rank_6m", "term_structure_spread",
-            "skew_25d", "adx_14d", "rsi_14d", "price_vs_ma200"
+            "vrp_30d",
+            "chop_factor_7d",
+            "iv_rank_6m",
+            "term_structure_spread",
+            "skew_25d",
+            "adx_14d",
+            "rsi_14d",
+            "price_vs_ma200",
         ]
         return bundle
-    
+
     closes = df["close"]
     bundle.spot = float(closes.iloc[-1])
-    
+
     deribit_rv = get_deribit_historical_volatility(underlying)
     if deribit_rv is not None:
         bundle.rv_30d = deribit_rv
@@ -829,21 +866,21 @@ def compute_sensors_for_underlying(
             bundle.rv_30d = compute_realized_volatility_hourly(hourly_closes, hours=720)
         else:
             bundle.rv_30d = compute_realized_volatility(closes, window=30)
-    
+
     hourly_df = get_hourly_ohlc_data(underlying)
     if not hourly_df.empty and len(hourly_df) >= 48:
         hourly_closes = hourly_df["close"]
         bundle.rv_7d = compute_realized_volatility_hourly(hourly_closes, hours=168)
     else:
         bundle.rv_7d = compute_realized_volatility(closes, window=7)
-    
+
     dvol = get_dvol(underlying)
     if iv_30d is None and dvol is not None:
         iv_30d = dvol
-    
+
     volmex_iv = get_volmex_iv(underlying)
     bundle.iv_volmex = volmex_iv
-    
+
     if iv_30d is None:
         term_spread_live, iv_7d_live, iv_30d_live = compute_term_structure_and_atm_iv(
             underlying, bundle.spot
@@ -858,37 +895,37 @@ def compute_sensors_for_underlying(
         )
         if iv_7d is None and iv_7d_live is not None:
             iv_7d = iv_7d_live
-    
+
     bundle.iv_30d = iv_30d
     bundle.iv_7d = iv_7d
-    
+
     if iv_30d is not None and bundle.rv_30d is not None:
         bundle.vrp_30d = iv_30d - bundle.rv_30d
     else:
         bundle._missing.append("vrp_30d")
-    
+
     if bundle.rv_7d is not None and iv_30d is not None and iv_30d > 0:
         bundle.chop_factor_7d = bundle.rv_7d / iv_30d
     else:
         bundle._missing.append("chop_factor_7d")
-    
+
     if iv_7d is not None and bundle.rv_7d is not None:
         bundle.vrp_7d = iv_7d - bundle.rv_7d
     else:
         bundle._missing.append("vrp_7d")
-    
+
     if bundle.rv_7d is not None and iv_7d is not None and iv_7d > 0:
         bundle.front_rv_iv_ratio = bundle.rv_7d / iv_7d
     else:
         bundle._missing.append("front_rv_iv_ratio")
-    
+
     if term_spread_live is not None:
         bundle.term_structure_spread = term_spread_live
     elif iv_7d is not None and iv_30d is not None:
         bundle.term_structure_spread = iv_7d - iv_30d
     else:
         bundle._missing.append("term_structure_spread")
-    
+
     if skew is not None and skew != 0:
         bundle.skew_25d = skew
     else:
@@ -897,22 +934,22 @@ def compute_sensors_for_underlying(
             bundle.skew_25d = skew_live
         else:
             bundle._missing.append("skew_25d")
-    
+
     bundle.iv_rank_6m = compute_iv_rank_lite(iv_30d, underlying)
     if bundle.iv_rank_6m is None:
         bundle._missing.append("iv_rank_6m")
-    
+
     bundle.adx_14d = compute_adx(df, period=14)
     if bundle.adx_14d is None:
         bundle._missing.append("adx_14d")
-    
+
     bundle.rsi_14d = compute_rsi(closes, period=14)
     if bundle.rsi_14d is None:
         bundle._missing.append("rsi_14d")
-    
+
     bundle.ma200 = compute_ma200(closes)
     bundle.price_vs_ma200 = compute_price_vs_ma200(bundle.spot, bundle.ma200)
     if bundle.price_vs_ma200 is None:
         bundle._missing.append("price_vs_ma200")
-    
+
     return bundle

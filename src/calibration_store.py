@@ -10,11 +10,12 @@ with a fallback to (underlying,) for simpler use cases.
 The "applied" multipliers (source of truth for UI "Current Applied Multipliers")
 are tracked with timestamps so the UI can show when calibration was last applied.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple
 import threading
 
 
@@ -28,6 +29,7 @@ _simple_overrides: Dict[str, float] = {}
 @dataclass
 class AppliedMultiplierState:
     """Tracks the currently applied multiplier with metadata."""
+
     global_multiplier: float = 1.0
     band_multipliers: Dict[str, float] = field(default_factory=dict)
     skew_anchor_ratios: Dict[str, float] = field(default_factory=dict)
@@ -48,13 +50,13 @@ def set_iv_multiplier_override(
 ) -> None:
     """
     Set an IV multiplier override.
-    
+
     Args:
         underlying: Asset symbol (BTC, ETH)
         value: The IV multiplier value to use
         dte_min: Optional minimum DTE for granular override
         dte_max: Optional maximum DTE for granular override
-    
+
     If dte_min and dte_max are provided, stores a granular override.
     Otherwise, stores a simple underlying-only override.
     """
@@ -73,9 +75,9 @@ def get_iv_multiplier_override(
 ) -> Optional[float]:
     """
     Get the IV multiplier override.
-    
+
     Looks up granular override first, then falls back to simple override.
-    
+
     Returns:
         The override value, or None if no override is set.
     """
@@ -106,7 +108,7 @@ def clear_iv_multiplier_override(
 def get_all_overrides() -> Dict[str, Dict]:
     """
     Get all current IV multiplier overrides.
-    
+
     Returns:
         Dictionary with 'granular' and 'simple' override mappings.
     """
@@ -132,7 +134,7 @@ def set_skew_anchor_ratios(
 ) -> None:
     """
     Set skew anchor ratio overrides for an underlying.
-    
+
     Args:
         underlying: Asset symbol (BTC, ETH)
         anchor_ratios: Dict mapping delta strings to ratios, e.g. {"0.15": 0.96, "0.25": 0.94}
@@ -144,7 +146,7 @@ def set_skew_anchor_ratios(
 def get_skew_anchor_ratios(underlying: str) -> Dict[str, float]:
     """
     Get the skew anchor ratio overrides for an underlying.
-    
+
     Returns:
         Dict mapping delta strings to ratios, or empty dict if no overrides set.
     """
@@ -155,18 +157,21 @@ def get_skew_anchor_ratios(underlying: str) -> Dict[str, float]:
 def get_current_skew_ratios(underlying: str) -> Dict[str, float]:
     """
     Get the currently active skew ratios for an underlying.
-    
+
     First checks runtime overrides, then falls back to settings defaults.
     This is the source of truth for UI "Current Ratio" column.
     """
     with _lock:
-        if underlying.upper() in _skew_overrides and _skew_overrides[underlying.upper()]:
+        if (
+            underlying.upper() in _skew_overrides
+            and _skew_overrides[underlying.upper()]
+        ):
             return dict(_skew_overrides[underlying.upper()])
-        
+
         state = _applied_state.get(underlying.upper())
         if state and state.skew_anchor_ratios:
             return dict(state.skew_anchor_ratios)
-    
+
     return {"0.15": 1.0, "0.25": 1.0, "0.35": 1.0}
 
 
@@ -180,12 +185,12 @@ def set_applied_multiplier(
 ) -> None:
     """
     Set the applied multiplier for an underlying.
-    
+
     This is the source of truth for the "Current Applied Multipliers" UI panel.
     Called when:
     - A live calibration is applied via policy
     - User clicks "Force-Apply Latest"
-    
+
     NOTE: Auto-calibrate (harvested) should NOT call this.
     """
     with _lock:
@@ -198,7 +203,7 @@ def set_applied_multiplier(
             applied_reason=applied_reason,
         )
         _simple_overrides[underlying.upper()] = global_multiplier
-        
+
         if skew_anchor_ratios:
             _skew_overrides[underlying.upper()] = dict(skew_anchor_ratios)
 
@@ -206,7 +211,7 @@ def set_applied_multiplier(
 def get_applied_multiplier(underlying: str) -> AppliedMultiplierState:
     """
     Get the applied multiplier state for an underlying.
-    
+
     Returns the state with current values and metadata.
     If no calibration has been applied, returns default (1.0).
     """
@@ -220,7 +225,7 @@ def get_applied_multiplier(underlying: str) -> AppliedMultiplierState:
 def get_all_applied_multipliers() -> Dict[str, Dict[str, Any]]:
     """
     Get all applied multiplier states for all underlyings.
-    
+
     Returns a dict keyed by underlying with multiplier details.
     """
     with _lock:
@@ -230,7 +235,9 @@ def get_all_applied_multipliers() -> Dict[str, Dict[str, Any]]:
                 "global_multiplier": state.global_multiplier,
                 "band_multipliers": state.band_multipliers,
                 "skew_anchor_ratios": state.skew_anchor_ratios,
-                "last_updated": state.last_updated.isoformat() if state.last_updated else None,
+                "last_updated": state.last_updated.isoformat()
+                if state.last_updated
+                else None,
                 "source": state.source,
                 "applied_reason": state.applied_reason,
             }

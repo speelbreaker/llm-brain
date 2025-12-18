@@ -4,6 +4,7 @@ Delta-hedging engine for Greg's neutral short-vol strategies.
 This module computes net delta across options and perps, and proposes
 hedge orders to maintain delta-neutrality per the strategy rules.
 """
+
 from __future__ import annotations
 
 import json
@@ -24,6 +25,7 @@ HedgeMode = Literal["DYNAMIC_DELTA", "LIGHT_DELTA", "LOOSE_DELTA", "NONE"]
 @dataclass
 class HedgeRules:
     """Hedge configuration for a strategy type."""
+
     mode: HedgeMode
     delta_abs_threshold: float
     target_delta: float = 0.0
@@ -35,7 +37,7 @@ class HedgeRules:
     def from_dict(cls, data: Optional[Dict[str, Any]]) -> "HedgeRules":
         if data is None:
             return cls(mode="NONE", delta_abs_threshold=999.0)
-        
+
         mode_raw = data.get("mode", "NONE")
         if mode_raw == "delta_hedge_perp":
             mode = "DYNAMIC_DELTA"
@@ -43,7 +45,7 @@ class HedgeRules:
             mode = mode_raw
         else:
             mode = "NONE"
-        
+
         return cls(
             mode=mode,
             delta_abs_threshold=data.get("delta_abs_threshold", 0.15),
@@ -57,6 +59,7 @@ class HedgeRules:
 @dataclass
 class HedgeOrder:
     """A proposed hedge order."""
+
     underlying: str
     instrument: str
     side: Literal["buy", "sell"]
@@ -84,6 +87,7 @@ class HedgeOrder:
 @dataclass
 class HedgeResult:
     """Result of a hedge execution."""
+
     success: bool
     order: Optional[HedgeOrder]
     executed: bool
@@ -107,6 +111,7 @@ class HedgeResult:
 @dataclass
 class GregPosition:
     """Representation of a Greg strategy position for hedging."""
+
     position_id: str
     strategy_type: str
     underlying: str
@@ -137,7 +142,7 @@ def load_greg_hedge_rules() -> Dict[str, Any]:
     if not GREG_POSITION_RULES_PATH.exists():
         logger.warning(f"Greg rules file not found: {GREG_POSITION_RULES_PATH}")
         return {}
-    
+
     try:
         with open(GREG_POSITION_RULES_PATH, "r") as f:
             return json.load(f)
@@ -149,10 +154,10 @@ def load_greg_hedge_rules() -> Dict[str, Any]:
 class HedgeEngine:
     """
     Delta-hedging engine for Greg's neutral short-vol strategies.
-    
+
     Computes net delta and proposes/executes hedge orders using perpetuals.
     """
-    
+
     def __init__(
         self,
         dry_run: bool = True,
@@ -165,14 +170,17 @@ class HedgeEngine:
         self._lock = Lock()
         self._last_hedge_time: Dict[str, datetime] = {}
         self._hedge_history: List[HedgeResult] = []
-        
+
         self._global_defs = self._rules.get("global_definitions", {})
-        self._hedge_instruments = self._global_defs.get("hedge_instrument", {
-            "BTC": "BTC-PERPETUAL",
-            "ETH": "ETH-PERPETUAL",
-        })
+        self._hedge_instruments = self._global_defs.get(
+            "hedge_instrument",
+            {
+                "BTC": "BTC-PERPETUAL",
+                "ETH": "ETH-PERPETUAL",
+            },
+        )
         self._perp_delta = self._global_defs.get("perp_delta_per_contract", 1.0)
-        
+
         logger.info(f"HedgeEngine initialized (dry_run={dry_run})")
 
     def get_hedge_rules(self, strategy_type: str) -> HedgeRules:
@@ -189,11 +197,11 @@ class HedgeEngine:
     ) -> float:
         """
         Compute net delta for a position.
-        
+
         Args:
             option_deltas: List of delta values for each option leg
             perp_delta: Delta from existing perp hedge (positive = long, negative = short)
-        
+
         Returns:
             Net delta of the position
         """
@@ -203,7 +211,7 @@ class HedgeEngine:
     def compute_net_delta_for_position(self, position: GregPosition) -> float:
         """
         Compute net delta from a GregPosition object.
-        
+
         Each leg's delta is weighted by its size (contracts).
         For example: delta=-0.5, size=2 -> contribution = -1.0
         """
@@ -212,7 +220,7 @@ class HedgeEngine:
             delta = leg.get("delta", 0.0)
             size = leg.get("size", 1.0)
             option_deltas.append(delta * size)
-        
+
         perp_delta = position.hedge_perp_size * self._perp_delta
         return self.compute_net_delta(option_deltas, perp_delta)
 
@@ -223,37 +231,37 @@ class HedgeEngine:
     ) -> Optional[HedgeOrder]:
         """
         Build a hedge order if net delta exceeds threshold.
-        
+
         For DYNAMIC/LIGHT hedging:
           - If abs(net_delta) <= trigger threshold: return None (no hedge needed)
           - Else: compute hedge size to bring delta to target (usually 0)
         """
         if hedge_rules.mode == "NONE":
             return None
-        
+
         net_delta = self.compute_net_delta_for_position(position)
         threshold = hedge_rules.delta_abs_threshold
         target = hedge_rules.target_delta
-        
+
         if abs(net_delta) <= threshold:
             logger.debug(
                 f"[{position.position_id}] No hedge needed: |{net_delta:.4f}| <= {threshold}"
             )
             return None
-        
+
         hedge_delta_needed = target - net_delta
-        
+
         if abs(hedge_delta_needed) < 0.001:
             return None
-        
+
         underlying = position.underlying.upper()
         instrument = self._hedge_instruments.get(underlying, f"{underlying}-PERPETUAL")
-        
+
         side: Literal["buy", "sell"] = "buy" if hedge_delta_needed > 0 else "sell"
         size = abs(hedge_delta_needed)
-        
+
         net_delta_after = net_delta + hedge_delta_needed
-        
+
         order = HedgeOrder(
             underlying=underlying,
             instrument=instrument,
@@ -264,19 +272,19 @@ class HedgeEngine:
             strategy_position_id=position.position_id,
             strategy_type=position.strategy_type,
         )
-        
+
         logger.info(
             f"[HEDGE] strategy={position.strategy_type} underlying={underlying} "
             f"net_delta_before={net_delta:+.4f}, hedge_size={'-' if side == 'sell' else '+'}{size:.4f} {instrument}, "
             f"net_delta_after≈{net_delta_after:.4f}"
         )
-        
+
         return order
 
     def apply_hedge(self, order: HedgeOrder) -> HedgeResult:
         """
         Apply a hedge order.
-        
+
         In DRY_RUN mode: logs the action without sending real orders.
         In LIVE mode: places the order via deribit_client and tags it.
         """
@@ -287,7 +295,7 @@ class HedgeEngine:
             )
             print(msg)
             logger.info(msg)
-            
+
             result = HedgeResult(
                 success=True,
                 order=order,
@@ -298,7 +306,7 @@ class HedgeEngine:
             with self._lock:
                 self._hedge_history.append(result)
             return result
-        
+
         if self._client is None:
             error_msg = "Cannot execute hedge: no deribit_client configured"
             logger.error(error_msg)
@@ -310,7 +318,7 @@ class HedgeEngine:
                 message=error_msg,
                 error=error_msg,
             )
-        
+
         try:
             order_result = self._client.place_order(
                 instrument_name=order.instrument,
@@ -319,7 +327,7 @@ class HedgeEngine:
                 order_type="market",
                 label=f"hedge_{order.strategy_position_id[:20]}",
             )
-            
+
             order_id = order_result.get("order", {}).get("order_id")
             msg = (
                 f"[HEDGE EXECUTED] {order.side.upper()} {order.size:.4f} {order.instrument} "
@@ -327,7 +335,7 @@ class HedgeEngine:
             )
             print(msg)
             logger.info(msg)
-            
+
             result = HedgeResult(
                 success=True,
                 order=order,
@@ -338,9 +346,11 @@ class HedgeEngine:
             )
             with self._lock:
                 self._hedge_history.append(result)
-                self._last_hedge_time[order.strategy_position_id] = datetime.now(timezone.utc)
+                self._last_hedge_time[order.strategy_position_id] = datetime.now(
+                    timezone.utc
+                )
             return result
-            
+
         except Exception as e:
             error_msg = f"Hedge order failed: {e}"
             logger.error(error_msg)
@@ -356,24 +366,26 @@ class HedgeEngine:
     def step(self, position: GregPosition) -> Optional[HedgeResult]:
         """
         Main entry point for hedging a single position.
-        
+
         Determines strategy type, loads hedge rules, computes net delta,
         and possibly constructs and sends hedge order.
         """
         if not position.is_hedgeable:
-            logger.debug(f"Position {position.position_id} is not hedgeable (type={position.strategy_type})")
+            logger.debug(
+                f"Position {position.position_id} is not hedgeable (type={position.strategy_type})"
+            )
             return None
-        
+
         hedge_rules = self.get_hedge_rules(position.strategy_type)
-        
+
         if hedge_rules.mode == "NONE":
             return None
-        
+
         order = self.build_hedge_order(position, hedge_rules)
-        
+
         if order is None:
             return None
-        
+
         return self.apply_hedge(order)
 
     def hedge_all_positions(
@@ -382,7 +394,7 @@ class HedgeEngine:
     ) -> List[HedgeResult]:
         """
         Process all open Greg positions and apply hedges where needed.
-        
+
         Returns list of HedgeResults for any hedges that were applied.
         """
         results = []

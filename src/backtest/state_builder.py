@@ -12,28 +12,29 @@ The key principle: both live and backtest builders use the same state_core
 logic for constructing AgentState, ensuring no drift between simulation
 and live trading.
 """
+
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta
 from dataclasses import replace
-from typing import Dict, Any, List, Optional, Tuple
+from typing import Dict, Any, List
 
 from .deribit_data_source import DeribitDataSource
-from .market_context_backtest import compute_market_context_from_ds, market_context_to_dict
+from .market_context_backtest import (
+    compute_market_context_from_ds,
+    market_context_to_dict,
+)
 from .types import OptionSnapshot, CallSimulationConfig, LiveChainDebugSample
-from .pricing import bs_call_delta, get_synthetic_iv, get_sigma_for_option, bs_call_price
+from .pricing import bs_call_delta, get_sigma_for_option, bs_call_price
 from src.utils.expiry import parse_deribit_expiry
-from src.models import AgentState, MarketContext
+from src.models import AgentState
 from src.state_core import (
     RawOption,
     RawPortfolio,
     RawMarketSnapshot,
     build_agent_state_from_raw,
-    _calculate_dte,
     _calculate_dte_float,
-    _calculate_moneyness,
-    _calculate_otm_pct,
 )
 
 logger = logging.getLogger(__name__)
@@ -47,24 +48,24 @@ def _generate_synthetic_candidates(
 ) -> List[OptionSnapshot]:
     """
     Generate synthetic call option candidates for backtest.
-    
+
     Creates options at various strikes around spot with synthetic expiry
     set to target_dte days from the decision time t.
-    
+
     Args:
         spot: Current spot price
         t: Decision time
         cfg: Simulation configuration
         sigma: Implied volatility to use for delta computation
-    
+
     Returns:
         List of synthetic OptionSnapshot candidates filtered by delta range
     """
     candidates: List[OptionSnapshot] = []
-    
+
     synthetic_expiry = t + timedelta(days=cfg.target_dte)
     t_years = cfg.target_dte / 365.0
-    
+
     if cfg.underlying == "BTC":
         if spot >= 50000:
             step = 1000
@@ -79,24 +80,24 @@ def _generate_synthetic_candidates(
             step = 25
         else:
             step = 10
-    
+
     base_strike = round(spot / step) * step
     num_strikes_above = 20
     num_strikes_below = 5
-    
+
     for i in range(-num_strikes_below, num_strikes_above + 1):
         strike = base_strike + i * step
         if strike <= 0:
             continue
-        
+
         delta = bs_call_delta(spot, strike, t_years, sigma, cfg.risk_free_rate)
-        
+
         if delta < cfg.delta_min or delta > cfg.delta_max:
             continue
-        
+
         expiry_str = synthetic_expiry.strftime("%d%b%y").upper()
         instrument_name = f"{cfg.underlying}-{expiry_str}-{int(strike)}-C"
-        
+
         candidate = OptionSnapshot(
             instrument_name=instrument_name,
             underlying=cfg.underlying,
@@ -110,7 +111,7 @@ def _generate_synthetic_candidates(
             margin_type=cfg.option_margin_type,
         )
         candidates.append(candidate)
-    
+
     return candidates
 
 
@@ -124,10 +125,10 @@ def _generate_live_chain_candidates(
 ):
     """
     Generate option candidates from live Deribit chain.
-    
+
     Fetches real expiries and strikes from Deribit, filters by DTE/delta/margin,
     and uses the configured sigma_mode to set IV for each option.
-    
+
     Args:
         ds: DeribitDataSource instance
         spot: Current spot price
@@ -136,26 +137,26 @@ def _generate_live_chain_candidates(
         spot_history: List of (datetime, price) tuples for RV calculation
         collect_debug_samples: If True, collect debug samples comparing Deribit marks
                                vs BS-calculated prices (only for mark_iv_x_multiplier mode)
-        
+
     Returns:
         If collect_debug_samples is False: List[OptionSnapshot] (candidates only)
         If collect_debug_samples is True: Tuple of (candidates list, debug samples list)
     """
     debug_samples: List[LiveChainDebugSample] = []
-    
+
     all_options: List[OptionSnapshot] = ds.list_option_chain(
         underlying=cfg.underlying,
         as_of=t,
         settlement_ccy=cfg.option_settlement_ccy,
         margin_type=cfg.option_margin_type,
     )
-    
+
     if not all_options:
         logger.warning(f"No live options available for {cfg.underlying} at {t}")
         if collect_debug_samples:
             return [], []
         return []
-    
+
     # Filter by DTE and delta
     filtered = _filter_option_chain(
         all_options=all_options,
@@ -165,16 +166,16 @@ def _generate_live_chain_candidates(
         delta_min=cfg.delta_min,
         delta_max=cfg.delta_max,
     )
-    
+
     # For mark_iv_x_multiplier mode, use each option's own mark_iv
     # For other modes, we may want to recalculate sigma
-    sigma_mode = getattr(cfg, 'sigma_mode', 'rv_x_multiplier')
-    
+    sigma_mode = getattr(cfg, "sigma_mode", "rv_x_multiplier")
+
     if sigma_mode == "mark_iv_x_multiplier":
         # Use each option's live mark_iv directly, scaled by multiplier
         result = []
         multiplier = cfg.synthetic_iv_multiplier
-        
+
         for opt in filtered:
             if opt.iv is not None and opt.iv > 0:
                 # If multiplier is 1.0 (or very close), preserve Deribit's actual data
@@ -182,46 +183,58 @@ def _generate_live_chain_candidates(
                 if abs(multiplier - 1.0) < 1e-6:
                     # Preserve original Deribit mark values - no recalculation
                     result.append(opt)
-                    
+
                     # Collect debug samples: compare Deribit mark vs BS-calculated price
                     if collect_debug_samples and len(debug_samples) < 5:
                         if opt.mark_price is not None and opt.mark_price > 0:
                             dte = (opt.expiry - t).total_seconds() / (24 * 3600)
                             t_years = max(dte / 365.0, 1e-6)
-                            bs_price = bs_call_price(spot, opt.strike, t_years, opt.iv, cfg.risk_free_rate)
+                            bs_price = bs_call_price(
+                                spot, opt.strike, t_years, opt.iv, cfg.risk_free_rate
+                            )
                             deribit_mark = opt.mark_price
                             if deribit_mark > 0:
-                                abs_diff_pct = abs(bs_price - deribit_mark) / deribit_mark * 100.0
+                                abs_diff_pct = (
+                                    abs(bs_price - deribit_mark) / deribit_mark * 100.0
+                                )
                             else:
                                 abs_diff_pct = 0.0
-                            debug_samples.append(LiveChainDebugSample(
-                                instrument_name=opt.instrument_name,
-                                dte_days=dte,
-                                strike=opt.strike,
-                                deribit_mark_price=deribit_mark,
-                                engine_price=bs_price,
-                                abs_diff_pct=abs_diff_pct,
-                            ))
+                            debug_samples.append(
+                                LiveChainDebugSample(
+                                    instrument_name=opt.instrument_name,
+                                    dte_days=dte,
+                                    strike=opt.strike,
+                                    deribit_mark_price=deribit_mark,
+                                    engine_price=bs_price,
+                                    abs_diff_pct=abs_diff_pct,
+                                )
+                            )
                 else:
                     # Only recalculate when applying a stress multiplier
                     scaled_iv = opt.iv * multiplier
                     dte = (opt.expiry - t).total_seconds() / (24 * 3600)
                     t_years = max(dte / 365.0, 1e-6)
-                    mark_price = bs_call_price(spot, opt.strike, t_years, scaled_iv, cfg.risk_free_rate)
-                    delta = bs_call_delta(spot, opt.strike, t_years, scaled_iv, cfg.risk_free_rate)
-                    
-                    result.append(OptionSnapshot(
-                        instrument_name=opt.instrument_name,
-                        underlying=opt.underlying,
-                        kind=opt.kind,
-                        strike=opt.strike,
-                        expiry=opt.expiry,
-                        delta=delta,
-                        iv=scaled_iv,
-                        mark_price=mark_price,
-                        settlement_ccy=opt.settlement_ccy,
-                        margin_type=opt.margin_type,
-                    ))
+                    mark_price = bs_call_price(
+                        spot, opt.strike, t_years, scaled_iv, cfg.risk_free_rate
+                    )
+                    delta = bs_call_delta(
+                        spot, opt.strike, t_years, scaled_iv, cfg.risk_free_rate
+                    )
+
+                    result.append(
+                        OptionSnapshot(
+                            instrument_name=opt.instrument_name,
+                            underlying=opt.underlying,
+                            kind=opt.kind,
+                            strike=opt.strike,
+                            expiry=opt.expiry,
+                            delta=delta,
+                            iv=scaled_iv,
+                            mark_price=mark_price,
+                            settlement_ccy=opt.settlement_ccy,
+                            margin_type=opt.margin_type,
+                        )
+                    )
             else:
                 # No valid IV - pass through as-is (will fall back to RV in scoring)
                 result.append(opt)
@@ -230,7 +243,7 @@ def _generate_live_chain_candidates(
         return result
     else:
         # For atm_iv or rv modes, get sigma and recalculate
-        sigma = get_sigma_for_option(
+        get_sigma_for_option(
             config=cfg,
             spot_history=spot_history,
             as_of=t,
@@ -239,7 +252,7 @@ def _generate_live_chain_candidates(
             abs_delta=0.25,  # Use target delta for base sigma
             regime_state=None,
         )
-        
+
         result = []
         for opt in filtered:
             abs_delta = abs(opt.delta) if opt.delta else 0.25
@@ -252,24 +265,30 @@ def _generate_live_chain_candidates(
                 abs_delta=abs_delta,
                 regime_state=None,
             )
-            
+
             dte = (opt.expiry - t).total_seconds() / (24 * 3600)
             t_years = max(dte / 365.0, 1e-6)
-            mark_price = bs_call_price(spot, opt.strike, t_years, opt_sigma, cfg.risk_free_rate)
-            delta = bs_call_delta(spot, opt.strike, t_years, opt_sigma, cfg.risk_free_rate)
-            
-            result.append(OptionSnapshot(
-                instrument_name=opt.instrument_name,
-                underlying=opt.underlying,
-                kind=opt.kind,
-                strike=opt.strike,
-                expiry=opt.expiry,
-                delta=delta,
-                iv=opt_sigma,
-                mark_price=mark_price,
-                settlement_ccy=opt.settlement_ccy,
-                margin_type=opt.margin_type,
-            ))
+            mark_price = bs_call_price(
+                spot, opt.strike, t_years, opt_sigma, cfg.risk_free_rate
+            )
+            delta = bs_call_delta(
+                spot, opt.strike, t_years, opt_sigma, cfg.risk_free_rate
+            )
+
+            result.append(
+                OptionSnapshot(
+                    instrument_name=opt.instrument_name,
+                    underlying=opt.underlying,
+                    kind=opt.kind,
+                    strike=opt.strike,
+                    expiry=opt.expiry,
+                    delta=delta,
+                    iv=opt_sigma,
+                    mark_price=mark_price,
+                    settlement_ccy=opt.settlement_ccy,
+                    margin_type=opt.margin_type,
+                )
+            )
         if collect_debug_samples:
             return result, []
         return result
@@ -285,7 +304,7 @@ def _filter_option_chain(
 ) -> List[OptionSnapshot]:
     """
     Filter option chain using shared logic from state_core.
-    
+
     Args:
         all_options: Full option chain
         t: Reference time for DTE calculation
@@ -293,40 +312,42 @@ def _filter_option_chain(
         max_dte: Maximum DTE filter
         delta_min: Minimum delta filter
         delta_max: Maximum delta filter
-    
+
     Returns:
         Filtered list of OptionSnapshot
     """
     candidates: List[OptionSnapshot] = []
-    
+
     for opt in all_options:
         if opt.kind != "call":
             continue
-        
+
         expiry = getattr(opt, "expiry", None)
         if expiry is None:
-            instrument = getattr(opt, "instrument_name", None) or getattr(opt, "symbol", "")
+            instrument = getattr(opt, "instrument_name", None) or getattr(
+                opt, "symbol", ""
+            )
             expiry = parse_deribit_expiry(str(instrument))
-        
+
         if expiry is None:
             continue
-        
+
         dte = _calculate_dte_float(expiry, t)
         if dte < min_dte or dte > max_dte:
             continue
-        
+
         if opt.delta is None:
             continue
         delta_abs = abs(float(opt.delta))
         if delta_abs < delta_min or delta_abs > delta_max:
             continue
-        
+
         if getattr(opt, "expiry", None) is None:
             opt_with_expiry = replace(opt, expiry=expiry)
             candidates.append(opt_with_expiry)
         else:
             candidates.append(opt)
-    
+
     return candidates
 
 
@@ -338,7 +359,7 @@ def build_historical_state(
 ) -> Dict[str, Any]:
     """
     Build a historical state dict at time t for simulate_policy.
-    
+
     Returns a dict with:
       {
         "time": t,
@@ -348,13 +369,13 @@ def build_historical_state(
         "portfolio": { ... optional ... },
         "live_chain_debug_samples": [LiveChainDebugSample, ...] (if collect_debug_samples=True)
       }
-      
+
     Args:
         ds: DeribitDataSource instance
         cfg: CallSimulationConfig with target parameters
         t: Decision time for state construction
         collect_debug_samples: If True and using live_chain + mark_iv mode, collect debug samples
-        
+
     Returns:
         State dict suitable for scoring and policy evaluation
     """
@@ -377,7 +398,7 @@ def build_historical_state(
     mc_dict = market_context_to_dict(mc_obj)
 
     candidates: List[OptionSnapshot] = []
-    
+
     # Get spot history for RV calculation (needed for sigma modes)
     rv_lookback = t - timedelta(days=cfg.synthetic_rv_window_days + 7)
     rv_df = ds.get_spot_ohlc(
@@ -390,11 +411,11 @@ def build_historical_state(
     if not rv_df.empty:
         for idx, row in rv_df.iterrows():
             spot_history.append((idx, float(row["close"])))
-    
+
     # Get chain_mode from config (defaults to synthetic_grid for backward compatibility)
-    chain_mode = getattr(cfg, 'chain_mode', 'synthetic_grid')
+    chain_mode = getattr(cfg, "chain_mode", "synthetic_grid")
     debug_samples: List[LiveChainDebugSample] = []
-    
+
     if cfg.pricing_mode == "deribit_live":
         # Full live mode - use Deribit chain directly
         all_options: List[OptionSnapshot] = ds.list_option_chain(
@@ -403,7 +424,7 @@ def build_historical_state(
             settlement_ccy=cfg.option_settlement_ccy,
             margin_type=cfg.option_margin_type,
         )
-        
+
         candidates = _filter_option_chain(
             all_options=all_options,
             t=t,
@@ -417,13 +438,11 @@ def build_historical_state(
         if spot is not None and spot > 0:
             if collect_debug_samples:
                 candidates, debug_samples = _generate_live_chain_candidates(
-                    ds, spot, t, cfg, spot_history, 
-                    collect_debug_samples=True
+                    ds, spot, t, cfg, spot_history, collect_debug_samples=True
                 )
             else:
                 candidates = _generate_live_chain_candidates(
-                    ds, spot, t, cfg, spot_history, 
-                    collect_debug_samples=False
+                    ds, spot, t, cfg, spot_history, collect_debug_samples=False
                 )
     else:
         # Default: synthetic_grid mode
@@ -453,10 +472,10 @@ def build_historical_state(
         "candidate_options": candidates,
         "portfolio": portfolio,
     }
-    
+
     if debug_samples:
         result["live_chain_debug_samples"] = debug_samples
-    
+
     return result
 
 
@@ -466,7 +485,7 @@ def create_state_builder(
 ):
     """
     Factory function to create a state_builder callable for simulate_policy.
-    
+
     Usage:
         state_builder = create_state_builder(ds, cfg)
         result = simulator.simulate_policy(
@@ -475,9 +494,10 @@ def create_state_builder(
             exit_style="hold_to_expiry",
         )
     """
+
     def state_builder(t: datetime) -> Dict[str, Any]:
         return build_historical_state(ds, cfg, t)
-    
+
     return state_builder
 
 
@@ -490,7 +510,7 @@ def _option_snapshot_to_raw_option(
 ) -> RawOption:
     """
     Convert OptionSnapshot to RawOption for state_core.
-    
+
     Args:
         opt: OptionSnapshot from data source
         spot: Current spot price
@@ -499,16 +519,16 @@ def _option_snapshot_to_raw_option(
         reference_time: The decision timestamp (NOT datetime.now()) for DTE calculation
     """
     from .pricing import bs_call_price
-    
+
     expiry = opt.expiry
     dte = _calculate_dte_float(expiry, reference_time) if expiry else 0
-    
+
     iv = opt.iv if opt.iv else 0.6
     mark_price = opt.mark_price
     if mark_price is None and spot > 0 and expiry:
         t_years = dte / 365.0 if dte > 0 else 0.001
         mark_price = bs_call_price(spot, opt.strike, t_years, iv, 0.05)
-    
+
     return RawOption(
         instrument_name=opt.instrument_name,
         expiry=expiry or reference_time,
@@ -532,20 +552,20 @@ def build_historical_agent_state(
 ) -> AgentState:
     """
     Build a historical AgentState at time t using the shared state_core.
-    
+
     This function uses the SAME build_agent_state_from_raw() logic as the
     live agent, ensuring no drift between backtest and live state construction.
-    
+
     Args:
         ds: DeribitDataSource instance
         cfg: CallSimulationConfig with target parameters
         t: Decision time for state construction
-        
+
     Returns:
         AgentState suitable for strategy.propose_actions()
     """
     underlying = cfg.underlying
-    
+
     lookback_hours = 24
     spot_lookback = t - timedelta(hours=lookback_hours)
     spot_df = ds.get_spot_ohlc(
@@ -555,9 +575,9 @@ def build_historical_agent_state(
         timeframe=cfg.timeframe,
     )
     spot = float(spot_df["close"].iloc[-1]) if not spot_df.empty else 0.0
-    
+
     mc_obj = compute_market_context_from_ds(ds, underlying=underlying, as_of=t)
-    
+
     rv_lookback = t - timedelta(days=cfg.synthetic_rv_window_days + 7)
     rv_df = ds.get_spot_ohlc(
         underlying=underlying,
@@ -569,7 +589,7 @@ def build_historical_agent_state(
     if not rv_df.empty:
         for idx, row in rv_df.iterrows():
             spot_history.append((idx, float(row["close"])))
-    
+
     # Use new sigma selection logic
     sigma = get_sigma_for_option(
         config=cfg,
@@ -581,10 +601,10 @@ def build_historical_agent_state(
         regime_state=None,
     )
     rv = sigma * 0.8
-    
+
     # Get chain_mode from config
-    chain_mode = getattr(cfg, 'chain_mode', 'synthetic_grid')
-    
+    chain_mode = getattr(cfg, "chain_mode", "synthetic_grid")
+
     options: List[OptionSnapshot] = []
     if cfg.pricing_mode == "deribit_live":
         # Full live mode
@@ -610,12 +630,11 @@ def build_historical_agent_state(
         # Default: synthetic_grid mode
         if spot > 0:
             options = _generate_synthetic_candidates(spot, t, cfg, sigma)
-    
+
     raw_options = [
-        _option_snapshot_to_raw_option(opt, spot, underlying, rv, t)
-        for opt in options
+        _option_snapshot_to_raw_option(opt, spot, underlying, rv, t) for opt in options
     ]
-    
+
     raw_portfolio = RawPortfolio(
         equity_usd=100000.0,
         margin_used_pct=0.0,
@@ -625,7 +644,7 @@ def build_historical_agent_state(
         margin_available_usd=100000.0,
         net_delta=0.0,
     )
-    
+
     raw_snapshot = RawMarketSnapshot(
         timestamp=t,
         underlyings=[underlying],
@@ -635,7 +654,7 @@ def build_historical_agent_state(
         realized_vol={underlying: rv * 100},
         market_context=mc_obj,
     )
-    
+
     return build_agent_state_from_raw(
         raw_snapshot,
         delta_min=cfg.delta_min,
@@ -654,16 +673,17 @@ def create_agent_state_builder(
 ):
     """
     Factory function to create a typed AgentState builder for strategies.
-    
+
     This returns the SAME AgentState type as the live agent uses,
     enabling direct use of Strategy.propose_actions().
-    
+
     Usage:
         state_builder = create_agent_state_builder(ds, cfg)
         agent_state = state_builder(t)
         actions = strategy.propose_actions(agent_state)
     """
+
     def state_builder(t: datetime) -> AgentState:
         return build_historical_agent_state(ds, cfg, t)
-    
+
     return state_builder

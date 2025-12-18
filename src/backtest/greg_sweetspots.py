@@ -4,6 +4,7 @@ Greg Sweet Spots Sweep - Automated environment analysis.
 Provides a single function to run the full Greg environment sweet spot sweep
 from the UI without requiring CLI invocation.
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -13,8 +14,6 @@ from src.backtest.environment_heatmap import (
     run_full_heatmap_analysis,
     save_sweetspots_json,
     save_sweetspots_markdown,
-    AVAILABLE_METRICS,
-    GREG_STRATEGIES,
 )
 
 DEFAULT_UNDERLYINGS: Sequence[str] = ("BTC", "ETH")

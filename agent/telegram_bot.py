@@ -3,9 +3,9 @@ Telegram bot for the Code Review Agent.
 
 Handles commands and delegates to ReviewService.
 """
+
 from __future__ import annotations
 
-import asyncio
 import io
 import logging
 import os
@@ -14,11 +14,28 @@ from typing import Optional
 
 from telegram import Update
 from telegram.error import BadRequest
-from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
+from telegram.ext import (
+    Application,
+    CommandHandler,
+    ContextTypes,
+    MessageHandler,
+    filters,
+)
 
 from agent.chat_controller import ChatController
-from agent.chat_tools import open_file, search_repo, run_pytest, run_health_checks, run_enhanced_security_scans
-from agent.codex_remote import run_codex_remote, check_runner_health, run_codex_job_async, fetch_codex_job
+from agent.chat_tools import (
+    open_file,
+    search_repo,
+    run_pytest,
+    run_health_checks,
+    run_enhanced_security_scans,
+)
+from agent.codex_remote import (
+    run_codex_remote,
+    check_runner_health,
+    run_codex_job_async,
+    fetch_codex_job,
+)
 from agent.config import settings
 from agent.review_service import ReviewService
 from agent.storage import init_db, get_recent_check_runs, save_check_run
@@ -28,8 +45,8 @@ logger = logging.getLogger(__name__)
 
 def escape_markdown(text: str) -> str:
     """Escape special characters for Telegram Markdown."""
-    escape_chars = r'_*[]()~`>#+-=|{}.!'
-    return re.sub(f'([{re.escape(escape_chars)}])', r'\\\1', text)
+    escape_chars = r"_*[]()~`>#+-=|{}.!"
+    return re.sub(f"([{re.escape(escape_chars)}])", r"\\\1", text)
 
 
 async def reply_safe(
@@ -39,12 +56,12 @@ async def reply_safe(
     parse_mode: str | None = None,
 ):
     """Send a reply with automatic fallback for robustness.
-    
+
     Handles:
     - Markdown parse errors -> falls back to plain text
     - Missing message object -> uses context.bot.send_message
     - Any BadRequest -> logs warning and retries without parse_mode
-    
+
     Args:
         update: Telegram Update object
         text: Message text to send
@@ -53,7 +70,7 @@ async def reply_safe(
     """
     chat_id = update.effective_chat.id if update.effective_chat else None
     message = update.effective_message
-    
+
     async def _send_plain(chat_id_: int, text_: str) -> bool:
         """Last resort: send via context.bot.send_message without parse_mode."""
         if context and chat_id_:
@@ -63,12 +80,14 @@ async def reply_safe(
             except Exception as e2:
                 logger.error(f"reply_safe: context.bot.send_message failed: {e2}")
         return False
-    
+
     try:
         if message:
             await message.reply_text(text, parse_mode=parse_mode)
         elif chat_id and context:
-            await context.bot.send_message(chat_id=chat_id, text=text, parse_mode=parse_mode)
+            await context.bot.send_message(
+                chat_id=chat_id, text=text, parse_mode=parse_mode
+            )
         else:
             logger.error("reply_safe: No message or chat_id available")
     except BadRequest as e:
@@ -105,23 +124,21 @@ def _unauthorized_response() -> str:
 
 class TelegramBot:
     """Telegram bot for code review."""
-    
+
     def __init__(self):
         if not settings or not settings.telegram_bot_token:
             raise ValueError("TELEGRAM_BOT_TOKEN is required")
-        
+
         self.review_service = ReviewService()
         self.chat_controller = ChatController()
         self.application: Optional[Application] = None
-    
+
     def build_application(self) -> Application:
         """Build the Telegram application with handlers."""
         self.application = (
-            Application.builder()
-            .token(settings.telegram_bot_token)
-            .build()
+            Application.builder().token(settings.telegram_bot_token).build()
         )
-        
+
         self.application.add_handler(CommandHandler("start", self.cmd_start))
         self.application.add_handler(CommandHandler("help", self.cmd_help))
         self.application.add_handler(CommandHandler("status", self.cmd_status))
@@ -138,36 +155,46 @@ class TelegramBot:
         self.application.add_handler(CommandHandler("health", self.cmd_health))
         self.application.add_handler(CommandHandler("history", self.cmd_history))
         self.application.add_handler(CommandHandler("codex", self.cmd_codex))
-        self.application.add_handler(CommandHandler("codex_short", self.cmd_codex_short))
-        self.application.add_handler(CommandHandler("codex_debug", self.cmd_codex_debug))
-        self.application.add_handler(CommandHandler("codex_status", self.cmd_codex_status))
-        self.application.add_handler(CommandHandler("review_latest", self.cmd_review_latest))
-        self.application.add_handler(CommandHandler("audit_latest", self.cmd_audit_latest))
+        self.application.add_handler(
+            CommandHandler("codex_short", self.cmd_codex_short)
+        )
+        self.application.add_handler(
+            CommandHandler("codex_debug", self.cmd_codex_debug)
+        )
+        self.application.add_handler(
+            CommandHandler("codex_status", self.cmd_codex_status)
+        )
+        self.application.add_handler(
+            CommandHandler("review_latest", self.cmd_review_latest)
+        )
+        self.application.add_handler(
+            CommandHandler("audit_latest", self.cmd_audit_latest)
+        )
         self.application.add_handler(CommandHandler("fix_prompt", self.cmd_fix_prompt))
         self.application.add_handler(CommandHandler("codex_job", self.cmd_codex_job))
-        
-        self.application.add_handler(MessageHandler(
-            filters.TEXT & ~filters.COMMAND,
-            self.handle_message
-        ))
-        
-        self.application.add_handler(MessageHandler(
-            filters.VOICE,
-            self.handle_voice
-        ))
-        
+
+        self.application.add_handler(
+            MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_message)
+        )
+
+        self.application.add_handler(MessageHandler(filters.VOICE, self.handle_voice))
+
         return self.application
-    
-    async def cmd_start(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+
+    async def cmd_start(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ) -> None:
         """Handle /start command."""
         if not _is_authorized(update):
             await reply_safe(update, _unauthorized_response(), context)
             return
-        
+
         model_fast = settings.openai_model_fast if settings else "gpt-5.2-pro"
         model_review = settings.openai_model_review if settings else "gpt-5.2-pro"
-        model_transcribe = settings.openai_transcribe_model if settings else "gpt-4o-mini-transcribe"
-        
+        model_transcribe = (
+            settings.openai_transcribe_model if settings else "gpt-4o-mini-transcribe"
+        )
+
         text = f"""Code Review Agent + Auditor
 
 I review code, run tests, scan for security issues, and answer questions.
@@ -207,19 +234,23 @@ High-Autonomy Review:
 /fix_prompt <issue> - Get Builder prompt
 
 Or just type any question (or send a voice note)!"""
-        
+
         await reply_safe(update, text, context)
-    
-    async def cmd_help(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+
+    async def cmd_help(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ) -> None:
         """Handle /help command."""
         if not _is_authorized(update):
             await reply_safe(update, _unauthorized_response(), context)
             return
-        
+
         model_fast = settings.openai_model_fast if settings else "gpt-5.2-pro"
         model_review = settings.openai_model_review if settings else "gpt-5.2-pro"
-        model_transcribe = settings.openai_transcribe_model if settings else "gpt-4o-mini-transcribe"
-        
+        model_transcribe = (
+            settings.openai_transcribe_model if settings else "gpt-4o-mini-transcribe"
+        )
+
         text = f"""Code Review Agent + Repo Q&A
 
 Models:
@@ -270,20 +301,22 @@ HIGH - Strongly recommended
 MEDIUM - Fix soon
 LOW - Nice to have
 INFO - Observations"""
-        
+
         await reply_safe(update, text, context)
-    
-    async def cmd_status(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+
+    async def cmd_status(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ) -> None:
         """Handle /status command."""
         if not _is_authorized(update):
             await reply_safe(update, _unauthorized_response(), context)
             return
-        
+
         try:
             status = self.review_service.get_status()
-            
+
             parts = ["Status", ""]
-            
+
             last_review = status.get("last_review")
             if last_review and last_review.get("id"):
                 severity = last_review.get("severity", "INFO")
@@ -292,116 +325,126 @@ INFO - Observations"""
                 parts.append(f"- Last review: {created} on {target} ({severity})")
             else:
                 parts.append("- Last review: None yet")
-            
+
             mode = status.get("change_detection_mode", "unknown")
             git_ok = "OK" if status.get("git_available") else "N/A"
             parts.append(f"- Change detection: {mode} (git: {git_ok})")
-            
+
             parts.append(f"- Reviews stored: {status.get('review_count', 0)}")
-            
+
             llm_ok = "OK" if status.get("llm_available") else "N/A"
             parts.append(f"- LLM backend: {llm_ok}")
-            
+
             if status.get("current_head"):
                 parts.append(f"- Current HEAD: {status['current_head']}")
-            
+
             if status.get("last_reviewed_commit"):
                 parts.append(f"- Last reviewed: {status['last_reviewed_commit']}")
-            
+
             await reply_safe(update, "\n".join(parts), context)
-            
+
         except Exception as e:
             logger.error(f"Error in /status: {e}")
             await reply_safe(update, f"Error getting status: {str(e)[:200]}", context)
-    
-    async def cmd_review(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+
+    async def cmd_review(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ) -> None:
         """Handle /review command."""
         if not _is_authorized(update):
             await reply_safe(update, _unauthorized_response(), context)
             return
-        
+
         await reply_safe(update, "Analyzing changes...", context)
-        
+
         try:
             user_id = update.effective_user.id
             result = self.review_service.review_latest_changes(user_id)
-            
+
             if not result.has_changes:
                 await reply_safe(update, "No new changes since last review.", context)
                 return
-            
+
             await reply_safe(update, result.summary_md, context)
-            
+
         except Exception as e:
             logger.error(f"Error in /review: {e}")
             await reply_safe(update, f"Error during review: {str(e)[:200]}", context)
-    
-    async def cmd_diff(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+
+    async def cmd_diff(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ) -> None:
         """Handle /diff command."""
         if not _is_authorized(update):
             await reply_safe(update, _unauthorized_response(), context)
             return
-        
+
         try:
             summary = self.review_service.get_diff_summary_for_last_review()
-            
+
             if not summary:
                 await reply_safe(update, "No reviews yet. Run /review first.", context)
                 return
-            
+
             await reply_safe(update, summary, context)
-            
+
         except Exception as e:
             logger.error(f"Error in /diff: {e}")
             await reply_safe(update, f"Error getting diff: {str(e)[:200]}", context)
-    
-    async def cmd_risks(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+
+    async def cmd_risks(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ) -> None:
         """Handle /risks command."""
         if not _is_authorized(update):
             await reply_safe(update, _unauthorized_response(), context)
             return
-        
+
         try:
             risks = self.review_service.get_risks_for_last_review()
-            
+
             if not risks:
                 await reply_safe(update, "No reviews yet. Run /review first.", context)
                 return
-            
+
             if len(risks) > 4000:
                 risks = risks[:4000] + "\n...(truncated)"
-            
+
             await reply_safe(update, risks, context)
-            
+
         except Exception as e:
             logger.error(f"Error in /risks: {e}")
             await reply_safe(update, f"Error getting risks: {str(e)[:200]}", context)
-    
-    async def cmd_next(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+
+    async def cmd_next(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ) -> None:
         """Handle /next command."""
         if not _is_authorized(update):
             await reply_safe(update, _unauthorized_response(), context)
             return
-        
+
         try:
             actions = self.review_service.get_next_actions_for_last_review()
-            
+
             if not actions:
                 await reply_safe(update, "No reviews yet. Run /review first.", context)
                 return
-            
+
             await reply_safe(update, actions, context)
-            
+
         except Exception as e:
             logger.error(f"Error in /next: {e}")
             await reply_safe(update, f"Error getting actions: {str(e)[:200]}", context)
-    
-    async def cmd_clear(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+
+    async def cmd_clear(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ) -> None:
         """Handle /clear command - clears chat session."""
         if not _is_authorized(update):
             await reply_safe(update, _unauthorized_response(), context)
             return
-        
+
         try:
             chat_id = str(update.effective_chat.id)
             self.chat_controller.clear_session(chat_id)
@@ -409,112 +452,119 @@ INFO - Observations"""
         except Exception as e:
             logger.error(f"Error in /clear: {e}")
             await reply_safe(update, f"Error: {str(e)[:100]}", context)
-    
+
     async def cmd_ask(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle /ask <question> - forces Repo Q&A flow."""
         if not _is_authorized(update):
             await reply_safe(update, _unauthorized_response(), context)
             return
-        
+
         question = " ".join(context.args) if context.args else ""
         if not question:
-            await reply_safe(update,
+            await reply_safe(
+                update,
                 "Usage: /ask <question>\n\n"
                 "Examples:\n"
                 "- /ask where is the Telegram bot created?\n"
                 "- /ask how does search_repo work?\n"
                 "- /ask what files handle authentication?",
-                context
+                context,
             )
             return
-        
+
         chat_id = str(update.effective_chat.id)
         await reply_safe(update, "Searching the codebase...", context)
-        
+
         try:
             response = self.chat_controller.process_message(chat_id, question)
-            
+
             if response.tools_used:
                 tools_info = f"Used: {', '.join(response.tools_used)}\n\n"
             else:
                 tools_info = ""
-            
+
             reply_text = tools_info + response.text
-            
+
             if len(reply_text) > 4000:
                 reply_text = reply_text[:4000] + "\n\n... (truncated)"
-            
+
             await reply_safe(update, reply_text, context)
-            
+
         except Exception as e:
             logger.error(f"Error in /ask: {e}")
             await reply_safe(update, f"Error: {str(e)[:200]}", context)
-    
-    async def cmd_search(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+
+    async def cmd_search(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ) -> None:
         """Handle /search <query> - direct search without LLM routing."""
         if not _is_authorized(update):
             await reply_safe(update, _unauthorized_response(), context)
             return
-        
+
         query = " ".join(context.args) if context.args else ""
         if not query:
-            await reply_safe(update,
+            await reply_safe(
+                update,
                 "Usage: /search <query>\n\n"
                 "Examples:\n"
                 "- /search TelegramBot\n"
                 "- /search def process_message\n"
                 "- /search async def cmd_",
-                context
+                context,
             )
             return
-        
+
         await reply_safe(update, f"Searching for: {query}...", context)
-        
+
         try:
             result = search_repo(query, limit=15)
-            
+
             if not result.success:
                 await reply_safe(update, f"Search failed: {result.output}", context)
                 return
-            
+
             output = f"Search results for '{query}':\n\n{result.output}"
-            
+
             if len(output) > 4000:
                 output = output[:4000] + "\n\n... (truncated)"
-            
+
             await reply_safe(update, output, context)
-            
+
         except Exception as e:
             logger.error(f"Error in /search: {e}")
             await reply_safe(update, f"Error: {str(e)[:200]}", context)
-    
-    async def cmd_open(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+
+    async def cmd_open(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ) -> None:
         """Handle /open <path>:<start>-<end> - open file excerpt."""
         if not _is_authorized(update):
             await reply_safe(update, _unauthorized_response(), context)
             return
-        
+
         args = " ".join(context.args) if context.args else ""
         if not args:
-            await reply_safe(update,
+            await reply_safe(
+                update,
                 "Usage: /open <path>:<start>-<end>\n\n"
                 "Examples:\n"
                 "- /open agent/telegram_bot.py:1-50\n"
                 "- /open src/config.py:100-150\n"
                 "- /open agent/chat_tools.py (shows lines 1-50)",
-                context
+                context,
             )
             return
-        
+
         path = args
         start_line = 1
         end_line = 50
-        
+
         if ":" in args:
             parts = args.rsplit(":", 1)
             path = parts[0]
             line_spec = parts[1]
-            
+
             if "-" in line_spec:
                 try:
                     start_str, end_str = line_spec.split("-", 1)
@@ -528,179 +578,220 @@ INFO - Observations"""
                     end_line = start_line + 50
                 except ValueError:
                     pass
-        
+
         await reply_safe(update, f"Opening {path}...", context)
-        
+
         try:
             result = open_file(path, start_line, end_line)
-            
+
             if not result.success:
                 await reply_safe(update, f"Error: {result.output}", context)
                 return
-            
+
             output = result.output
-            
+
             if len(output) > 4000:
                 output = output[:4000] + "\n\n... (truncated)"
-            
+
             await reply_safe(update, output, context)
-            
+
         except Exception as e:
             logger.error(f"Error in /open: {e}")
             await reply_safe(update, f"Error: {str(e)[:200]}", context)
-    
-    async def cmd_smoke(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+
+    async def cmd_smoke(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ) -> None:
         """Handle /smoke command - run pytest tests."""
         if not _is_authorized(update):
             await reply_safe(update, _unauthorized_response(), context)
             return
-        
+
         await reply_safe(update, "Running pytest tests...", context)
-        
+
         try:
             import time
+
             start_time = time.time()
-            
+
             test_path = " ".join(context.args) if context.args else None
             result = run_pytest(test_path=test_path)
-            
+
             duration = time.time() - start_time
-            
+
             save_check_run(
                 check_type="pytest",
                 status="passed" if result.success else "failed",
                 duration_seconds=duration,
                 summary=result.output[:500] if result.output else "No output",
             )
-            
+
             output = result.output
             if len(output) > 4000:
                 output = output[:4000] + "\n\n... (truncated)"
-            
+
             await reply_safe(update, output, context)
-            
+
         except Exception as e:
             logger.error(f"Error in /smoke: {e}")
             await reply_safe(update, f"Error running tests: {str(e)[:200]}", context)
-    
-    async def cmd_security(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+
+    async def cmd_security(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ) -> None:
         """Handle /security command - run comprehensive security scans."""
         if not _is_authorized(update):
             await reply_safe(update, _unauthorized_response(), context)
             return
-        
-        await reply_safe(update, "Running security scans (pip-audit, bandit, ruff)...", context)
-        
+
+        await reply_safe(
+            update, "Running security scans (pip-audit, bandit, ruff)...", context
+        )
+
         try:
             import time
+
             start_time = time.time()
-            
+
             result = run_enhanced_security_scans()
-            
+
             duration = time.time() - start_time
-            
+
             save_check_run(
                 check_type="security",
                 status="passed" if result.success else "issues_found",
                 duration_seconds=duration,
                 summary=result.output[:500] if result.output else "No output",
             )
-            
+
             output = result.output
             if len(output) > 4000:
                 output = output[:4000] + "\n\n... (truncated)"
-            
+
             await reply_safe(update, output, context)
-            
+
         except Exception as e:
             logger.error(f"Error in /security: {e}")
-            await reply_safe(update, f"Error running security scan: {str(e)[:200]}", context)
-    
-    async def cmd_health(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+            await reply_safe(
+                update, f"Error running security scan: {str(e)[:200]}", context
+            )
+
+    async def cmd_health(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ) -> None:
         """Handle /health command - run in-process app health checks."""
         if not _is_authorized(update):
             await reply_safe(update, _unauthorized_response(), context)
             return
-        
+
         await reply_safe(update, "Running health checks...", context)
-        
+
         try:
             import time
+
             start_time = time.time()
-            
+
             result = run_health_checks()
-            
+
             duration = time.time() - start_time
-            
+
             save_check_run(
                 check_type="health",
                 status="passed" if result.success else "failed",
                 duration_seconds=duration,
                 summary=result.output[:500] if result.output else "No output",
             )
-            
+
             output = result.output
             if len(output) > 4000:
                 output = output[:4000] + "\n\n... (truncated)"
-            
+
             await reply_safe(update, output, context)
-            
+
         except Exception as e:
             logger.error(f"Error in /health: {e}")
-            await reply_safe(update, f"Error running health checks: {str(e)[:200]}", context)
-    
-    async def cmd_history(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+            await reply_safe(
+                update, f"Error running health checks: {str(e)[:200]}", context
+            )
+
+    async def cmd_history(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ) -> None:
         """Handle /history command - show recent check runs."""
         if not _is_authorized(update):
             await reply_safe(update, _unauthorized_response(), context)
             return
-        
+
         try:
             check_type = context.args[0] if context.args else None
             runs = get_recent_check_runs(limit=10, check_type=check_type)
-            
+
             if not runs:
-                await reply_safe(update, "No check runs recorded yet. Try /smoke, /security, or /health first.", context)
+                await reply_safe(
+                    update,
+                    "No check runs recorded yet. Try /smoke, /security, or /health first.",
+                    context,
+                )
                 return
-            
+
             lines = ["Recent Check Runs", ""]
-            
+
             for run in runs:
-                status_icon = "[OK]" if run.status in ("passed", "success") else "[FAIL]" if run.status == "failed" else "[WARN]"
+                status_icon = (
+                    "[OK]"
+                    if run.status in ("passed", "success")
+                    else "[FAIL]"
+                    if run.status == "failed"
+                    else "[WARN]"
+                )
                 created = run.created_at[:16].replace("T", " ")
-                duration = f"{run.duration_seconds:.1f}s" if run.duration_seconds else "N/A"
+                duration = (
+                    f"{run.duration_seconds:.1f}s" if run.duration_seconds else "N/A"
+                )
                 lines.append(f"{status_icon} {run.check_type} - {created} ({duration})")
-            
+
             if check_type:
                 lines.append(f"\nFiltered by: {check_type}")
             else:
-                lines.append("\nUse /history <type> to filter (pytest, security, health)")
-            
+                lines.append(
+                    "\nUse /history <type> to filter (pytest, security, health)"
+                )
+
             await reply_safe(update, "\n".join(lines), context)
-            
+
         except Exception as e:
             logger.error(f"Error in /history: {e}")
             await reply_safe(update, f"Error: {str(e)[:200]}", context)
-    
-    async def cmd_codex_status(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+
+    async def cmd_codex_status(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ) -> None:
         """Handle /codex_status command - check remote Codex runner health."""
         if not _is_authorized(update):
             await reply_safe(update, _unauthorized_response(), context)
             return
-        
+
         try:
             status = await check_runner_health()
-            await reply_safe(update, f"Codex Runner: {status}", context, parse_mode=None)
+            await reply_safe(
+                update, f"Codex Runner: {status}", context, parse_mode=None
+            )
         except Exception as e:
             logger.error(f"Error in /codex_status: {e}")
             await reply_safe(update, f"Error: {str(e)[:200]}", context, parse_mode=None)
-    
-    async def _reply_long_text(self, update: Update, context: ContextTypes.DEFAULT_TYPE, text: str, chunk_size: int = 3500) -> None:
+
+    async def _reply_long_text(
+        self,
+        update: Update,
+        context: ContextTypes.DEFAULT_TYPE,
+        text: str,
+        chunk_size: int = 3500,
+    ) -> None:
         """Split long text into chunks and send sequentially."""
         if len(text) <= chunk_size:
             await reply_safe(update, text, context, parse_mode=None)
             return
-        
+
         chunks = []
         while text:
             if len(text) <= chunk_size:
@@ -711,232 +802,294 @@ INFO - Observations"""
                 split_pos = chunk_size
             chunks.append(text[:split_pos])
             text = text[split_pos:].lstrip()
-        
+
         for i, chunk in enumerate(chunks):
             if len(chunks) > 1:
-                chunk = f"[{i+1}/{len(chunks)}]\n{chunk}"
+                chunk = f"[{i + 1}/{len(chunks)}]\n{chunk}"
             await reply_safe(update, chunk, context, parse_mode=None)
-    
-    async def _run_codex_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE, mode: str) -> None:
+
+    async def _run_codex_command(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE, mode: str
+    ) -> None:
         """Common handler for codex commands."""
         if not _is_authorized(update):
             await reply_safe(update, _unauthorized_response(), context)
             return
-        
+
         if not context.args:
-            await reply_safe(update,
+            await reply_safe(
+                update,
                 f"Usage: /codex{'_' + mode if mode != 'normal' else ''} <task>\n\n"
                 "Examples:\n"
                 "- /codex explain this function\n"
                 "- /codex write a test for UserService\n"
                 "- /codex how do I add authentication?",
                 context,
-                parse_mode=None
+                parse_mode=None,
             )
             return
-        
+
         task = " ".join(context.args)
         mode_label = f" ({mode})" if mode != "normal" else ""
-        await reply_safe(update, f"Running Codex{mode_label}: {task[:50]}...", context, parse_mode=None)
-        
+        await reply_safe(
+            update,
+            f"Running Codex{mode_label}: {task[:50]}...",
+            context,
+            parse_mode=None,
+        )
+
         try:
             result = await run_codex_remote(task, mode=mode)
             await self._reply_long_text(update, context, result)
         except Exception as e:
             logger.error(f"Error in /codex ({mode}): {e}")
             await reply_safe(update, f"Error: {str(e)[:200]}", context, parse_mode=None)
-    
-    async def cmd_codex(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+
+    async def cmd_codex(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ) -> None:
         """Handle /codex command - run Codex AI task on remote runner."""
         await self._run_codex_command(update, context, mode="normal")
-    
-    async def cmd_codex_short(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+
+    async def cmd_codex_short(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ) -> None:
         """Handle /codex_short command - concise Codex output."""
         await self._run_codex_command(update, context, mode="short")
-    
-    async def cmd_codex_debug(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+
+    async def cmd_codex_debug(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ) -> None:
         """Handle /codex_debug command - full debug output."""
         await self._run_codex_command(update, context, mode="debug")
-    
-    async def cmd_review_latest(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+
+    async def cmd_review_latest(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ) -> None:
         """Handle /review_latest command - code review with tests via remote Codex (async job)."""
         if not _is_authorized(update):
             await reply_safe(update, _unauthorized_response(), context)
             return
-        
+
         task = " ".join(context.args) if context.args else "the latest changes"
-        await reply_safe(update, "Starting async code review job...", context, parse_mode=None)
-        
+        await reply_safe(
+            update, "Starting async code review job...", context, parse_mode=None
+        )
+
         try:
             result, job_id = await run_codex_job_async(task, mode="review")
             await self._reply_long_text(update, context, result)
         except Exception as e:
             logger.error(f"Error in /review_latest: {e}")
-            await reply_safe(update, f"Error: {str(e)[:200]}\nTry /codex_debug for details.", context, parse_mode=None)
-    
-    async def cmd_audit_latest(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+            await reply_safe(
+                update,
+                f"Error: {str(e)[:200]}\nTry /codex_debug for details.",
+                context,
+                parse_mode=None,
+            )
+
+    async def cmd_audit_latest(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ) -> None:
         """Handle /audit_latest command - security audit via remote Codex (async job)."""
         if not _is_authorized(update):
             await reply_safe(update, _unauthorized_response(), context)
             return
-        
-        task = " ".join(context.args) if context.args else "the codebase for security issues"
-        await reply_safe(update, "Starting async security audit job...", context, parse_mode=None)
-        
+
+        task = (
+            " ".join(context.args)
+            if context.args
+            else "the codebase for security issues"
+        )
+        await reply_safe(
+            update, "Starting async security audit job...", context, parse_mode=None
+        )
+
         try:
             result, job_id = await run_codex_job_async(task, mode="audit")
             await self._reply_long_text(update, context, result)
         except Exception as e:
             logger.error(f"Error in /audit_latest: {e}")
-            await reply_safe(update, f"Error: {str(e)[:200]}\nTry /codex_debug for details.", context, parse_mode=None)
-    
-    async def cmd_fix_prompt(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+            await reply_safe(
+                update,
+                f"Error: {str(e)[:200]}\nTry /codex_debug for details.",
+                context,
+                parse_mode=None,
+            )
+
+    async def cmd_fix_prompt(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ) -> None:
         """Handle /fix_prompt command - generate Builder-ready prompt."""
         if not _is_authorized(update):
             await reply_safe(update, _unauthorized_response(), context)
             return
-        
+
         if not context.args:
-            await reply_safe(update,
+            await reply_safe(
+                update,
                 "Usage: /fix_prompt <issue description>\n\n"
                 "Example: /fix_prompt fix the login validation bug",
-                context, parse_mode=None)
+                context,
+                parse_mode=None,
+            )
             return
-        
+
         task = " ".join(context.args)
-        await reply_safe(update, "Generating Builder prompt...", context, parse_mode=None)
-        
+        await reply_safe(
+            update, "Generating Builder prompt...", context, parse_mode=None
+        )
+
         try:
             result = await run_codex_remote(task, mode="fix_prompt")
             await self._reply_long_text(update, context, result)
         except Exception as e:
             logger.error(f"Error in /fix_prompt: {e}")
-            await reply_safe(update, f"Error: {str(e)[:200]}\nTry /codex_debug for details.", context, parse_mode=None)
-    
-    async def cmd_codex_job(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+            await reply_safe(
+                update,
+                f"Error: {str(e)[:200]}\nTry /codex_debug for details.",
+                context,
+                parse_mode=None,
+            )
+
+    async def cmd_codex_job(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ) -> None:
         """Handle /codex_job <id> - fetch status or result of an async Codex job."""
         if not _is_authorized(update):
             await reply_safe(update, _unauthorized_response(), context)
             return
-        
+
         if not context.args:
-            await reply_safe(update,
+            await reply_safe(
+                update,
                 "Usage: /codex_job <job_id>\n\n"
                 "Fetch the status or result of an async Codex job.\n"
                 "Job IDs are returned when /review_latest or /audit_latest times out.",
-                context, parse_mode=None)
+                context,
+                parse_mode=None,
+            )
             return
-        
+
         job_id = context.args[0]
         await reply_safe(update, f"Fetching job {job_id}...", context, parse_mode=None)
-        
+
         try:
             result = await fetch_codex_job(job_id)
             await self._reply_long_text(update, context, result)
         except Exception as e:
             logger.error(f"Error in /codex_job: {e}")
             await reply_safe(update, f"Error: {str(e)[:200]}", context, parse_mode=None)
-    
-    async def handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+
+    async def handle_message(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ) -> None:
         """Handle non-command text messages via chat controller."""
         if not _is_authorized(update):
             await reply_safe(update, _unauthorized_response(), context)
             return
-        
+
         message = update.effective_message
         user_message = message.text if message else None
         if not user_message:
             return
-        
+
         chat_id = str(update.effective_chat.id)
-        
+
         await reply_safe(update, "Thinking...", context)
-        
+
         try:
             response = self.chat_controller.process_message(chat_id, user_message)
-            
+
             if response.tools_used:
                 tools_info = f"Used: {', '.join(response.tools_used)}\n\n"
             else:
                 tools_info = ""
-            
+
             reply_text = tools_info + response.text
-            
+
             if len(reply_text) > 4000:
                 reply_text = reply_text[:4000] + "\n\n... (truncated)"
-            
+
             await reply_safe(update, reply_text, context)
-            
+
         except Exception as e:
             logger.error(f"Error in chat: {e}")
             await reply_safe(update, f"Error: {str(e)[:200]}", context)
-    
-    async def handle_voice(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+
+    async def handle_voice(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ) -> None:
         """Handle voice messages - transcribe and process as text."""
         if not _is_authorized(update):
             await reply_safe(update, _unauthorized_response(), context)
             return
-        
+
         voice = update.message.voice if update.message else None
         if not voice:
             return
-        
+
         await reply_safe(update, "Transcribing voice...", context)
-        
+
         try:
             file = await context.bot.get_file(voice.file_id)
-            
+
             voice_data = io.BytesIO()
             await file.download_to_memory(voice_data)
             voice_data.seek(0)
             voice_data.name = "voice.ogg"
-            
+
             from openai import OpenAI
+
             api_key = settings.openai_api_key if settings else None
             base_url = os.environ.get("AI_INTEGRATIONS_OPENAI_BASE_URL")
             client = OpenAI(api_key=api_key, base_url=base_url)
-            
-            transcribe_model = settings.openai_transcribe_model if settings else "gpt-4o-mini-transcribe"
-            
+
+            transcribe_model = (
+                settings.openai_transcribe_model
+                if settings
+                else "gpt-4o-mini-transcribe"
+            )
+
             transcription = client.audio.transcriptions.create(
                 model=transcribe_model,
                 file=voice_data,
             )
-            
+
             transcript = transcription.text.strip()
-            
+
             if not transcript:
                 await reply_safe(update, "Could not transcribe voice message.", context)
                 return
-            
+
             await reply_safe(update, f'Heard: "{transcript}"\n\nProcessing...', context)
-            
+
             chat_id = str(update.effective_chat.id)
             response = self.chat_controller.process_message(chat_id, transcript)
-            
+
             if response.tools_used:
                 tools_info = f"Used: {', '.join(response.tools_used)}\n\n"
             else:
                 tools_info = ""
-            
+
             reply_text = tools_info + response.text
-            
+
             if len(reply_text) > 4000:
                 reply_text = reply_text[:4000] + "\n\n... (truncated)"
-            
+
             await reply_safe(update, reply_text, context)
-            
+
         except Exception as e:
             logger.error(f"Error processing voice: {e}")
             await reply_safe(update, f"Error processing voice: {str(e)[:200]}", context)
-    
+
     def run_polling(self) -> None:
         """Run the bot with polling (blocking)."""
         init_db()
         app = self.build_application()
         logger.info("Starting Telegram bot with polling...")
         app.run_polling(allowed_updates=Update.ALL_TYPES)
-    
+
     async def start_polling_async(self) -> None:
         """Start polling in async context."""
         init_db()
@@ -945,7 +1098,7 @@ INFO - Observations"""
         await app.start()
         await app.updater.start_polling(allowed_updates=Update.ALL_TYPES)
         logger.info("Telegram bot polling started")
-    
+
     async def stop_async(self) -> None:
         """Stop the bot."""
         if self.application:
@@ -958,13 +1111,13 @@ def run_bot() -> None:
     """Entry point to run the bot standalone."""
     logging.basicConfig(
         level=logging.INFO,
-        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     )
-    
+
     if not settings:
         print("ERROR: TELEGRAM_BOT_TOKEN not configured")
         return
-    
+
     bot = TelegramBot()
     bot.run_polling()
 

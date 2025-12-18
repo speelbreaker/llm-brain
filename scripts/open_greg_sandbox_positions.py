@@ -11,6 +11,7 @@ Usage:
     python scripts/open_greg_sandbox_positions.py --btc-size 0.01 --eth-size 0.1
     python scripts/open_greg_sandbox_positions.py --clear
 """
+
 from __future__ import annotations
 
 import argparse
@@ -75,7 +76,9 @@ def main() -> int:
     print()
 
     if not settings.dry_run and settings.deribit_env != "testnet":
-        print("ERROR: Refusing to run sandbox opener on non-testnet / non-DRY_RUN environment.")
+        print(
+            "ERROR: Refusing to run sandbox opener on non-testnet / non-DRY_RUN environment."
+        )
         print()
         print(f"  Current environment: {settings.deribit_env}")
         print(f"  Dry run mode: {settings.dry_run}")
@@ -94,14 +97,16 @@ def main() -> int:
         if not sandbox:
             print("No sandbox positions found.")
             return 0
-        
+
         print(f"Found {len(sandbox)} sandbox positions:")
         print()
         for pos in sandbox:
             status = "OPEN" if pos.is_open() else "CLOSED"
             print(f"  [{status}] {pos.position_id}")
             print(f"         underlying={pos.underlying} strategy={pos.strategy_type}")
-            print(f"         legs={pos.num_legs} origin={pos.origin} run_id={pos.run_id}")
+            print(
+                f"         legs={pos.num_legs} origin={pos.origin} run_id={pos.run_id}"
+            )
             print()
         return 0
 
@@ -128,10 +133,10 @@ def main() -> int:
 
     for underlying in underlyings:
         size = args.btc_size if underlying == "BTC" else args.eth_size
-        
+
         for strategy_type in GREG_STRATEGIES:
             print(f"  -> {underlying} / {strategy_type} / size={size}")
-            
+
             result = open_greg_strategy_position(
                 tracker=tracker,
                 underlying=underlying,
@@ -141,9 +146,11 @@ def main() -> int:
                 origin="GREG_SANDBOX",
                 run_id=run_id,
             )
-            
+
             if result.success:
-                print(f"     OK position_id={result.position_id} legs={result.num_legs}")
+                print(
+                    f"     OK position_id={result.position_id} legs={result.num_legs}"
+                )
                 success_count += 1
             else:
                 print(f"     FAILED: {result.error}")
@@ -153,16 +160,16 @@ def main() -> int:
     print("-" * 60)
     print(f"Summary: {success_count} succeeded, {fail_count} failed")
     print()
-    
+
     if fail_count > 0:
         print("Some positions failed to create. Check the errors above.")
         return 1
-    
+
     print(f"[GREG_SANDBOX] Done. Created {success_count} sandbox positions.")
     print()
     print("These positions can now be viewed in the Greg dashboard and tested")
     print("with the position management and hedge engine.")
-    
+
     return 0
 
 

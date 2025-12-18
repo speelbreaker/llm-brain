@@ -2,6 +2,7 @@
 Preset defaults and config resolution helper for backtests.
 Provides ULTRA_SAFE, BALANCED, AGGRESSIVE preset configurations.
 """
+
 from __future__ import annotations
 
 from typing import Optional
@@ -117,10 +118,12 @@ def resolve_backtest_config(config: BacktestConfig) -> ResolvedBacktestConfig:
     )
 
 
-def get_preset_config(preset: BacktestPreset, mode: Optional[BacktestMode] = None) -> ResolvedBacktestConfig:
+def get_preset_config(
+    preset: BacktestPreset, mode: Optional[BacktestMode] = None
+) -> ResolvedBacktestConfig:
     """Get a fully resolved config for a given preset with no overrides."""
     default_mode = mode if mode is not None else BacktestMode.TRAINING
-    
+
     if preset == BacktestPreset.CUSTOM:
         return ResolvedBacktestConfig(
             preset=preset,
@@ -128,7 +131,7 @@ def get_preset_config(preset: BacktestPreset, mode: Optional[BacktestMode] = Non
             rule_toggles=PRESET_RULES[BacktestPreset.BALANCED].model_copy(),
             thresholds=PRESET_THRESHOLDS[BacktestPreset.BALANCED].model_copy(),
         )
-    
+
     return ResolvedBacktestConfig(
         preset=preset,
         mode=default_mode,

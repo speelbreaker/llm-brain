@@ -8,9 +8,15 @@ from .base import LLMProvider
 class FallbackLLMProvider(LLMProvider):
     """Try providers in order until one succeeds."""
 
-    def __init__(self, providers: Iterable[LLMProvider], models: Iterable[str | None] | None = None):
+    def __init__(
+        self,
+        providers: Iterable[LLMProvider],
+        models: Iterable[str | None] | None = None,
+    ):
         self.providers = list(providers)
-        self.models = list(models) if models is not None else [None] * len(self.providers)
+        self.models = (
+            list(models) if models is not None else [None] * len(self.providers)
+        )
         if len(self.models) < len(self.providers):
             # Pad overrides so lookups are safe even if fewer models are supplied.
             self.models.extend([None] * (len(self.providers) - len(self.models)))
@@ -36,7 +42,9 @@ class FallbackLLMProvider(LLMProvider):
                     max_tokens=max_tokens,
                     temperature=temperature,
                 )
-            except Exception as exc:  # pragma: no cover - error path is validated via tests
+            except (
+                Exception
+            ) as exc:  # pragma: no cover - error path is validated via tests
                 last_error = exc
         raise last_error or RuntimeError("No provider succeeded")
 
@@ -59,7 +67,9 @@ class FallbackLLMProvider(LLMProvider):
                     max_tokens=max_tokens,
                     temperature=temperature,
                 )
-            except Exception as exc:  # pragma: no cover - error path is validated via tests
+            except (
+                Exception
+            ) as exc:  # pragma: no cover - error path is validated via tests
                 last_error = exc
         raise last_error or RuntimeError("No provider succeeded")
 

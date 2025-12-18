@@ -1,15 +1,15 @@
 """
 SQLAlchemy model for calibration history persistence.
 """
+
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Dict, List, Literal, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from sqlalchemy import (
     BigInteger,
-    Boolean,
     Column,
     DateTime,
     Float,
@@ -37,39 +37,42 @@ def assess_calibration_realism(
 ) -> Tuple[str, str]:
     """
     Assess whether a calibration result is realistic.
-    
+
     Returns:
         (status, reason) where status is 'ok', 'degraded', or 'failed'.
-        
+
     Status levels:
     - 'ok': Calibration is within thresholds and data quality is good
     - 'degraded': Calibration is within thresholds but data quality has issues
-    - 'failed': Calibration is unrealistic (multiplier at boundary, MAE too high) 
+    - 'failed': Calibration is unrealistic (multiplier at boundary, MAE too high)
                 or data quality failed completely
     """
     if data_quality_status == "failed":
         return ("failed", "Data quality failed (schema/coverage issues)")
-    
+
     issues = []
-    
+
     if multiplier <= MIN_REASONABLE_MULT:
         issues.append(f"multiplier at lower boundary ({multiplier:.4f})")
     elif multiplier >= MAX_REASONABLE_MULT:
         issues.append(f"multiplier at upper boundary ({multiplier:.4f})")
-    
-    if vega_weighted_mae_pct is not None and vega_weighted_mae_pct > MAX_VEGA_WEIGHTED_MAE:
+
+    if (
+        vega_weighted_mae_pct is not None
+        and vega_weighted_mae_pct > MAX_VEGA_WEIGHTED_MAE
+    ):
         issues.append(f"vMAE too high ({vega_weighted_mae_pct:.1f}%)")
-    
+
     if mae_pct is not None and mae_pct > MAX_UNWEIGHTED_MAE:
         issues.append(f"MAE too high ({mae_pct:.1f}%)")
-    
+
     if issues:
         reason = "Unrealistic auto-calibration: " + ", ".join(issues)
         return ("failed", reason)
-    
+
     if data_quality_status == "degraded":
         return ("degraded", "Data quality degraded; use with caution")
-    
+
     return ("ok", "Calibration within thresholds")
 
 
@@ -78,6 +81,7 @@ class CalibrationHistory(Base):
     Stores auto-calculated IV multipliers over time.
     Keyed by underlying and DTE range.
     """
+
     __tablename__ = "calibration_history"
     __table_args__ = (
         Index("ix_calibration_history_underlying", "underlying"),
@@ -92,8 +96,10 @@ class CalibrationHistory(Base):
     multiplier = Column(Float, nullable=False)
     mae_pct = Column(Float, nullable=False)
     num_samples = Column(Integer, nullable=False)
-    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
-    
+    created_at = Column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
     vega_weighted_mae_pct = Column(Float, nullable=True)
     bias_pct = Column(Float, nullable=True)
     source = Column(String(32), nullable=True, default="harvested")
@@ -123,6 +129,7 @@ class CalibrationHistory(Base):
 @dataclass
 class CalibrationHistoryEntry:
     """Data class for calibration history entries."""
+
     underlying: str
     dte_min: int
     dte_max: int
@@ -142,7 +149,7 @@ class CalibrationHistoryEntry:
 def insert_calibration_history(entry: CalibrationHistoryEntry) -> int:
     """
     Insert a new calibration history entry.
-    
+
     Returns:
         The ID of the inserted row.
     """
@@ -174,34 +181,31 @@ def get_latest_calibration(
 ) -> Optional[CalibrationHistoryEntry]:
     """
     Get the most recent calibration for the given underlying and DTE range.
-    
+
     Args:
         underlying: BTC or ETH
         dte_min: Minimum DTE for calibration range
         dte_max: Maximum DTE for calibration range
         skip_failed: If True, skip entries with status='failed' and return the latest OK/degraded entry
-    
+
     Returns:
         CalibrationHistoryEntry or None if not found.
     """
     with get_db_session() as db:
-        query = (
-            db.query(CalibrationHistory)
-            .filter(
-                CalibrationHistory.underlying == underlying.upper(),
-                CalibrationHistory.dte_min == dte_min,
-                CalibrationHistory.dte_max == dte_max,
-            )
+        query = db.query(CalibrationHistory).filter(
+            CalibrationHistory.underlying == underlying.upper(),
+            CalibrationHistory.dte_min == dte_min,
+            CalibrationHistory.dte_max == dte_max,
         )
-        
+
         if skip_failed:
             query = query.filter(CalibrationHistory.status != "failed")
-        
+
         row = query.order_by(CalibrationHistory.created_at.desc()).first()
-        
+
         if row is None:
             return None
-        
+
         return CalibrationHistoryEntry(
             id=row.id,
             underlying=row.underlying,
@@ -226,7 +230,7 @@ def list_recent_calibrations(
 ) -> List[CalibrationHistoryEntry]:
     """
     List recent calibration entries for the given underlying.
-    
+
     Returns:
         List of CalibrationHistoryEntry ordered by created_at descending.
     """
@@ -238,7 +242,7 @@ def list_recent_calibrations(
             .limit(limit)
             .all()
         )
-        
+
         return [
             CalibrationHistoryEntry(
                 id=row.id,

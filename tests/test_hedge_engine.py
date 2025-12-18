@@ -1,14 +1,13 @@
 """
 Unit tests for the Delta Hedging Engine.
 """
+
 import pytest
-from datetime import datetime, timezone
 
 from src.hedging.hedge_engine import (
     HedgeEngine,
     HedgeRules,
     HedgeOrder,
-    HedgeResult,
     GregPosition,
     load_greg_hedge_rules,
 )
@@ -16,7 +15,7 @@ from src.hedging.hedge_engine import (
 
 class TestHedgeRules:
     """Tests for HedgeRules dataclass."""
-    
+
     def test_from_dict_dynamic_delta(self):
         """Test parsing DYNAMIC_DELTA mode."""
         data = {
@@ -29,19 +28,19 @@ class TestHedgeRules:
         assert rules.mode == "DYNAMIC_DELTA"
         assert rules.delta_abs_threshold == 0.15
         assert rules.target_delta == 0.0
-    
+
     def test_from_dict_none_mode(self):
         """Test parsing NONE mode."""
         data = {"mode": "NONE"}
         rules = HedgeRules.from_dict(data)
         assert rules.mode == "NONE"
-    
+
     def test_from_dict_none_input(self):
         """Test handling None input."""
         rules = HedgeRules.from_dict(None)
         assert rules.mode == "NONE"
         assert rules.delta_abs_threshold == 999.0
-    
+
     def test_from_dict_legacy_mode(self):
         """Test handling legacy mode names."""
         data = {"mode": "delta_hedge_perp"}
@@ -51,7 +50,7 @@ class TestHedgeRules:
 
 class TestGregPosition:
     """Tests for GregPosition dataclass."""
-    
+
     def test_is_hedgeable_straddle(self):
         """Test straddle is hedgeable."""
         pos = GregPosition(
@@ -61,7 +60,7 @@ class TestGregPosition:
             option_legs=[],
         )
         assert pos.is_hedgeable is True
-    
+
     def test_is_hedgeable_strangle(self):
         """Test strangle is hedgeable."""
         pos = GregPosition(
@@ -71,7 +70,7 @@ class TestGregPosition:
             option_legs=[],
         )
         assert pos.is_hedgeable is True
-    
+
     def test_is_hedgeable_calendar(self):
         """Test calendar is hedgeable."""
         pos = GregPosition(
@@ -81,7 +80,7 @@ class TestGregPosition:
             option_legs=[],
         )
         assert pos.is_hedgeable is True
-    
+
     def test_is_hedgeable_iron_fly(self):
         """Test iron fly is hedgeable."""
         pos = GregPosition(
@@ -91,7 +90,7 @@ class TestGregPosition:
             option_legs=[],
         )
         assert pos.is_hedgeable is True
-    
+
     def test_not_hedgeable_short_put(self):
         """Test short put is NOT hedgeable."""
         pos = GregPosition(
@@ -101,7 +100,7 @@ class TestGregPosition:
             option_legs=[],
         )
         assert pos.is_hedgeable is False
-    
+
     def test_not_hedgeable_credit_spread(self):
         """Test credit spreads are NOT hedgeable."""
         pos = GregPosition(
@@ -115,22 +114,22 @@ class TestGregPosition:
 
 class TestHedgeEngine:
     """Tests for HedgeEngine class."""
-    
+
     @pytest.fixture
     def engine(self):
         """Create a test engine."""
         return HedgeEngine(dry_run=True)
-    
+
     def test_compute_net_delta_options_only(self, engine):
         """Test net delta with options only."""
         delta = engine.compute_net_delta([0.5, -0.3, 0.1], perp_delta=0.0)
         assert delta == pytest.approx(0.3, abs=0.001)
-    
+
     def test_compute_net_delta_with_perp(self, engine):
         """Test net delta with perp hedge."""
         delta = engine.compute_net_delta([0.5, -0.3], perp_delta=-0.2)
         assert delta == pytest.approx(0.0, abs=0.001)
-    
+
     def test_compute_net_delta_for_position(self, engine):
         """Test net delta computation from GregPosition."""
         pos = GregPosition(
@@ -145,7 +144,7 @@ class TestHedgeEngine:
         )
         delta = engine.compute_net_delta_for_position(pos)
         assert delta == pytest.approx(0.0, abs=0.001)
-    
+
     def test_compute_net_delta_for_position_with_perp(self, engine):
         """Test net delta with existing perp hedge."""
         pos = GregPosition(
@@ -160,7 +159,7 @@ class TestHedgeEngine:
         )
         delta = engine.compute_net_delta_for_position(pos)
         assert delta == pytest.approx(0.0, abs=0.001)
-    
+
     def test_compute_net_delta_for_position_weighted_by_size(self, engine):
         """Test net delta is weighted by contract size."""
         pos = GregPosition(
@@ -175,7 +174,7 @@ class TestHedgeEngine:
         )
         delta = engine.compute_net_delta_for_position(pos)
         assert delta == pytest.approx(-0.50, abs=0.001)
-    
+
     def test_compute_net_delta_for_position_default_size(self, engine):
         """Test net delta defaults to size=1 if not specified."""
         pos = GregPosition(
@@ -190,7 +189,7 @@ class TestHedgeEngine:
         )
         delta = engine.compute_net_delta_for_position(pos)
         assert delta == pytest.approx(0.0, abs=0.001)
-    
+
     def test_build_hedge_order_no_hedge_needed(self, engine):
         """Test no hedge when delta within threshold."""
         pos = GregPosition(
@@ -210,7 +209,7 @@ class TestHedgeEngine:
         )
         order = engine.build_hedge_order(pos, rules)
         assert order is None
-    
+
     def test_build_hedge_order_hedge_needed(self, engine):
         """Test hedge order when delta exceeds threshold."""
         pos = GregPosition(
@@ -236,7 +235,7 @@ class TestHedgeEngine:
         assert order.size == pytest.approx(0.30, abs=0.01)
         assert order.net_delta_before == pytest.approx(0.30, abs=0.01)
         assert order.net_delta_after == pytest.approx(0.0, abs=0.01)
-    
+
     def test_build_hedge_order_buy_side(self, engine):
         """Test hedge order creates buy order for negative delta."""
         pos = GregPosition(
@@ -260,7 +259,7 @@ class TestHedgeEngine:
         assert order.instrument == "ETH-PERPETUAL"
         assert order.side == "buy"
         assert order.size == pytest.approx(0.20, abs=0.01)
-    
+
     def test_build_hedge_order_none_mode(self, engine):
         """Test no hedge when mode is NONE."""
         pos = GregPosition(
@@ -276,7 +275,7 @@ class TestHedgeEngine:
         )
         order = engine.build_hedge_order(pos, rules)
         assert order is None
-    
+
     def test_apply_hedge_dry_run(self, engine):
         """Test hedge application in dry run mode."""
         order = HedgeOrder(
@@ -294,7 +293,7 @@ class TestHedgeEngine:
         assert result.dry_run is True
         assert result.executed is False
         assert result.order is order
-    
+
     def test_apply_hedge_no_client(self):
         """Test hedge fails without client in live mode."""
         engine = HedgeEngine(dry_run=False, deribit_client=None)
@@ -311,7 +310,7 @@ class TestHedgeEngine:
         result = engine.apply_hedge(order)
         assert result.success is False
         assert result.error is not None
-    
+
     def test_step_non_hedgeable_position(self, engine):
         """Test step returns None for non-hedgeable position."""
         pos = GregPosition(
@@ -322,7 +321,7 @@ class TestHedgeEngine:
         )
         result = engine.step(pos)
         assert result is None
-    
+
     def test_step_hedgeable_position(self, engine):
         """Test step processes hedgeable position."""
         pos = GregPosition(
@@ -339,7 +338,7 @@ class TestHedgeEngine:
         assert result is not None
         assert result.success is True
         assert result.dry_run is True
-    
+
     def test_hedge_all_positions(self, engine):
         """Test hedging multiple positions."""
         positions = [
@@ -365,7 +364,7 @@ class TestHedgeEngine:
         results = engine.hedge_all_positions(positions)
         assert len(results) == 1
         assert results[0].order.strategy_position_id == "test-2"
-    
+
     def test_get_hedge_history(self, engine):
         """Test hedge history retrieval."""
         pos = GregPosition(
@@ -378,7 +377,7 @@ class TestHedgeEngine:
         history = engine.get_hedge_history(limit=10)
         assert len(history) == 1
         assert history[0]["order"]["strategy_position_id"] == "test-7"
-    
+
     def test_set_dry_run(self, engine):
         """Test dry run toggle."""
         assert engine.dry_run is True
@@ -390,13 +389,13 @@ class TestHedgeEngine:
 
 class TestLoadGregHedgeRules:
     """Tests for loading Greg hedge rules from JSON."""
-    
+
     def test_load_rules_file(self):
         """Test loading rules from file."""
         rules = load_greg_hedge_rules()
         assert "strategies" in rules
         assert "global_definitions" in rules
-    
+
     def test_straddle_rules(self):
         """Test straddle hedge rules are correct."""
         rules = load_greg_hedge_rules()
@@ -404,7 +403,7 @@ class TestLoadGregHedgeRules:
         hedge = straddle.get("hedge", {})
         assert hedge.get("mode") == "DYNAMIC_DELTA"
         assert hedge.get("delta_abs_threshold") == 0.15
-    
+
     def test_short_put_rules(self):
         """Test short put has no hedging."""
         rules = load_greg_hedge_rules()

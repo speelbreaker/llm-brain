@@ -2,10 +2,10 @@
 Logging utilities for structured JSON logs.
 Captures agent state, decisions, and execution results for training.
 """
+
 from __future__ import annotations
 
 import json
-import os
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -83,7 +83,7 @@ def log_decision(
 ) -> None:
     """
     Log a complete decision cycle to JSONL file.
-    
+
     Args:
         agent_state: Current agent state
         proposed_action: Action proposed by policy/LLM
@@ -95,7 +95,9 @@ def log_decision(
     """
     log_entry = {
         "log_timestamp": datetime.utcnow().isoformat(),
-        "strategy_id": proposed_action.get("strategy_id", final_action.get("strategy_id", "covered_call_v1")),
+        "strategy_id": proposed_action.get(
+            "strategy_id", final_action.get("strategy_id", "covered_call_v1")
+        ),
         "state": _compress_agent_state(agent_state),
         "proposed_action": proposed_action,
         "risk_check": {
@@ -113,12 +115,12 @@ def log_decision(
             "kill_switch_enabled": settings.kill_switch_enabled,
         },
     }
-    
+
     if additional_info:
         log_entry["additional"] = additional_info
-    
+
     log_file = _get_log_file_path()
-    
+
     try:
         with open(log_file, "a", encoding="utf-8") as f:
             f.write(json.dumps(log_entry) + "\n")
@@ -139,9 +141,9 @@ def log_error(
         "error_message": error_message,
         "context": context or {},
     }
-    
+
     log_file = _get_log_file_path()
-    
+
     try:
         with open(log_file, "a", encoding="utf-8") as f:
             f.write(json.dumps(log_entry) + "\n")
@@ -155,24 +157,24 @@ def get_recent_logs(
 ) -> list[dict[str, Any]]:
     """
     Retrieve recent log entries.
-    
+
     Args:
         count: Number of entries to retrieve
         date_str: Optional date string (YYYYMMDD) to read from specific file
-    
+
     Returns:
         List of log entry dicts (most recent last)
     """
     log_dir = _ensure_log_dir()
-    
+
     if date_str:
         log_file = log_dir / f"agent_decisions_{date_str}.jsonl"
     else:
         log_file = _get_log_file_path()
-    
+
     if not log_file.exists():
         return []
-    
+
     entries = []
     try:
         with open(log_file, "r", encoding="utf-8") as f:
@@ -186,7 +188,7 @@ def get_recent_logs(
     except Exception as e:
         print(f"Warning: Failed to read logs: {e}")
         return []
-    
+
     return entries[-count:]
 
 
@@ -200,22 +202,22 @@ def print_decision_summary(
     print("\n" + "=" * 60)
     print(f"Proposed Action: {proposed_action.get('action', 'N/A')}")
     print(f"Reasoning: {proposed_action.get('reasoning', 'N/A')}")
-    
+
     if proposed_action.get("params"):
         print(f"Parameters: {proposed_action['params']}")
-    
+
     if risk_allowed:
         print("Risk Check: PASSED")
     else:
         print(f"Risk Check: BLOCKED - {', '.join(risk_reasons)}")
-    
+
     exec_status = execution_result.get("status", "N/A")
     print(f"Execution Status: {exec_status}")
-    
+
     if execution_result.get("message"):
         print(f"Execution: {execution_result['message']}")
-    
+
     if execution_result.get("errors"):
         print(f"Errors: {execution_result['errors']}")
-    
+
     print("=" * 60 + "\n")

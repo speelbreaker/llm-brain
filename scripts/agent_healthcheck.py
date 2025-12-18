@@ -15,6 +15,7 @@ Exit codes:
     0 - All checks passed (OK or WARN)
     1 - At least one check failed (FAIL)
 """
+
 from __future__ import annotations
 
 import sys

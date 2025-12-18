@@ -23,7 +23,9 @@ ACTIVE_SENTINEL = ".supervisor_active"
 
 
 def _safe_ref_name(s: str) -> str:
-    return "".join(ch if ch.isalnum() or ch in ("-", "_", ".", "/") else "_" for ch in (s or ""))
+    return "".join(
+        ch if ch.isalnum() or ch in ("-", "_", ".", "/") else "_" for ch in (s or "")
+    )
 
 
 class WorkspaceManager:
@@ -60,11 +62,16 @@ class WorkspaceManager:
         # Ensure bare mirror exists
         if not bare_repo.exists():
             logger.info("Cloning bare repo to %s", bare_repo)
-            await self._run_git(["git", "clone", "--bare", repo_url, str(bare_repo)], cwd=str(self.cache_dir))
+            await self._run_git(
+                ["git", "clone", "--bare", repo_url, str(bare_repo)],
+                cwd=str(self.cache_dir),
+            )
         else:
             # Ensure origin URL is correct (in case repo_url changed)
             try:
-                await self._run_git(["git", "remote", "set-url", "origin", repo_url], cwd=str(bare_repo))
+                await self._run_git(
+                    ["git", "remote", "set-url", "origin", repo_url], cwd=str(bare_repo)
+                )
             except Exception:
                 pass
 
@@ -73,7 +80,13 @@ class WorkspaceManager:
         base_ref = _safe_ref_name(base_ref)
         try:
             await self._run_git(
-                ["git", "fetch", "--prune", "origin", f"+refs/heads/{base_ref}:refs/heads/{base_ref}"],
+                [
+                    "git",
+                    "fetch",
+                    "--prune",
+                    "origin",
+                    f"+refs/heads/{base_ref}:refs/heads/{base_ref}",
+                ],
                 cwd=str(bare_repo),
             )
         except Exception as e:
@@ -83,7 +96,12 @@ class WorkspaceManager:
         if pr_number is not None:
             try:
                 await self._run_git(
-                    ["git", "fetch", "origin", f"+refs/pull/{pr_number}/head:refs/heads/pr/{pr_number}"],
+                    [
+                        "git",
+                        "fetch",
+                        "origin",
+                        f"+refs/pull/{pr_number}/head:refs/heads/pr/{pr_number}",
+                    ],
                     cwd=str(bare_repo),
                 )
             except Exception as e:
@@ -94,14 +112,21 @@ class WorkspaceManager:
             hr = _safe_ref_name(head_ref)
             try:
                 await self._run_git(
-                    ["git", "fetch", "origin", f"+refs/heads/{hr}:refs/heads/pr_head/{hr}"],
+                    [
+                        "git",
+                        "fetch",
+                        "origin",
+                        f"+refs/heads/{hr}:refs/heads/pr_head/{hr}",
+                    ],
                     cwd=str(bare_repo),
                 )
             except Exception as e:
                 logger.warning("Fetch head_ref %s failed: %s", hr, e)
 
         # Verify SHA exists locally before attempting worktree add
-        await self._run_git(["git", "cat-file", "-e", f"{head_sha}^{{commit}}"], cwd=str(bare_repo))
+        await self._run_git(
+            ["git", "cat-file", "-e", f"{head_sha}^{{commit}}"], cwd=str(bare_repo)
+        )
 
         # Create fresh worktree
         workspace_path = self.base_dir / job_id
@@ -110,14 +135,24 @@ class WorkspaceManager:
 
         logger.info("Creating worktree at %s", workspace_path)
         await self._run_git(
-            ["git", "worktree", "add", "--detach", "--force", str(workspace_path), head_sha],
+            [
+                "git",
+                "worktree",
+                "add",
+                "--detach",
+                "--force",
+                str(workspace_path),
+                head_sha,
+            ],
             cwd=str(bare_repo),
         )
 
         (workspace_path / ACTIVE_SENTINEL).touch()
         return str(workspace_path)
 
-    async def cleanup_workspace(self, job_id: str, bare_repo_name: Optional[str] = None) -> None:
+    async def cleanup_workspace(
+        self, job_id: str, bare_repo_name: Optional[str] = None
+    ) -> None:
         workspace_path = self.base_dir / job_id
         try:
             sentinel = workspace_path / ACTIVE_SENTINEL
@@ -130,7 +165,10 @@ class WorkspaceManager:
             bare_repo = self.cache_dir / f"{bare_repo_name}.git"
             if bare_repo.exists():
                 try:
-                    await self._run_git(["git", "worktree", "remove", str(workspace_path), "--force"], cwd=str(bare_repo))
+                    await self._run_git(
+                        ["git", "worktree", "remove", str(workspace_path), "--force"],
+                        cwd=str(bare_repo),
+                    )
                 except Exception:
                     pass
 
@@ -198,14 +236,22 @@ class WorkspaceManager:
         except Exception:
             return DiffStats()
 
-    async def commit_and_push(self, workspace_path: str, message: str, branch: str) -> Optional[str]:
+    async def commit_and_push(
+        self, workspace_path: str, message: str, branch: str
+    ) -> Optional[str]:
         await self._run_git(["git", "add", "-A"], cwd=workspace_path)
-        status = await self._run_git(["git", "status", "--porcelain"], cwd=workspace_path)
+        status = await self._run_git(
+            ["git", "status", "--porcelain"], cwd=workspace_path
+        )
         if not status.strip():
             return None
         await self._run_git(["git", "commit", "-m", message], cwd=workspace_path)
-        commit_sha = (await self._run_git(["git", "rev-parse", "HEAD"], cwd=workspace_path)).strip()
-        await self._run_git(["git", "push", "origin", f"HEAD:{branch}"], cwd=workspace_path)
+        commit_sha = (
+            await self._run_git(["git", "rev-parse", "HEAD"], cwd=workspace_path)
+        ).strip()
+        await self._run_git(
+            ["git", "push", "origin", f"HEAD:{branch}"], cwd=workspace_path
+        )
         return commit_sha
 
     async def _run_git(self, cmd: list[str], cwd: str) -> str:

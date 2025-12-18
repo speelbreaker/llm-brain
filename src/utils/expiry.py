@@ -3,6 +3,7 @@
 This module centralizes all expiry date parsing logic to ensure
 consistent behavior across the live agent, backtests, and position tracking.
 """
+
 from __future__ import annotations
 
 import re
@@ -10,9 +11,18 @@ from datetime import datetime, timezone
 from typing import Optional
 
 MONTH_MAP = {
-    "JAN": 1, "FEB": 2, "MAR": 3, "APR": 4,
-    "MAY": 5, "JUN": 6, "JUL": 7, "AUG": 8,
-    "SEP": 9, "OCT": 10, "NOV": 11, "DEC": 12,
+    "JAN": 1,
+    "FEB": 2,
+    "MAR": 3,
+    "APR": 4,
+    "MAY": 5,
+    "JUN": 6,
+    "JUL": 7,
+    "AUG": 8,
+    "SEP": 9,
+    "OCT": 10,
+    "NOV": 11,
+    "DEC": 12,
 }
 
 
@@ -40,10 +50,10 @@ def parse_deribit_expiry(
     Examples:
         >>> parse_deribit_expiry("BTC-27DEC24-100000-C")
         datetime(2024, 12, 27, 8, 0, 0, tzinfo=timezone.utc)
-        
+
         >>> parse_deribit_expiry("BTC-2025-01-03-90000-C")
         datetime(2025, 1, 3, 8, 0, 0, tzinfo=timezone.utc)
-        
+
         >>> parse_deribit_expiry("6DEC24")
         datetime(2024, 12, 6, 8, 0, 0, tzinfo=timezone.utc)
     """

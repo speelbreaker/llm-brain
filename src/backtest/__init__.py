@@ -5,6 +5,7 @@ Provides historical data analysis and ML training data generation.
 NOTE: When option_margin_type="linear" and option_settlement_ccy="USDC" (defaults),
 all prices (spot, option mark_price) and PnL are in USD/USDC.
 """
+
 from .types import (
     CallSimulationConfig,
     SimulatedTrade,

@@ -1,8 +1,6 @@
 """
 Tests for option type filtering and default bands in extended calibration.
 """
-import pytest
-from datetime import datetime, timezone
 
 from src.calibration_config import (
     CalibrationConfig,
@@ -15,22 +13,22 @@ from src.calibration_config import (
 
 class TestCalibrationConfig:
     """Tests for CalibrationConfig option_types field."""
-    
+
     def test_default_option_types_is_calls_only(self):
         """Default option_types should be ['C'] for backward compatibility."""
         config = CalibrationConfig(underlying="BTC")
         assert config.option_types == ["C"]
-    
+
     def test_custom_option_types_calls_only(self):
         """Should accept calls only."""
         config = CalibrationConfig(underlying="BTC", option_types=["C"])
         assert config.option_types == ["C"]
-    
+
     def test_custom_option_types_puts_only(self):
         """Should accept puts only."""
         config = CalibrationConfig(underlying="BTC", option_types=["P"])
         assert config.option_types == ["P"]
-    
+
     def test_custom_option_types_both(self):
         """Should accept both calls and puts."""
         config = CalibrationConfig(underlying="BTC", option_types=["C", "P"])
@@ -40,31 +38,31 @@ class TestCalibrationConfig:
 
 class TestDefaultTermBands:
     """Tests for DEFAULT_TERM_BANDS constant."""
-    
+
     def test_default_bands_exist(self):
         """Default bands should be defined."""
         assert DEFAULT_TERM_BANDS is not None
         assert len(DEFAULT_TERM_BANDS) == 3
-    
+
     def test_default_bands_names(self):
         """Default bands should have weekly, monthly, quarterly names."""
         names = [b.name for b in DEFAULT_TERM_BANDS]
         assert "weekly" in names
         assert "monthly" in names
         assert "quarterly" in names
-    
+
     def test_weekly_band_range(self):
         """Weekly band should be 3-10 DTE."""
         weekly = next(b for b in DEFAULT_TERM_BANDS if b.name == "weekly")
         assert weekly.min_dte == 3
         assert weekly.max_dte == 10
-    
+
     def test_monthly_band_range(self):
         """Monthly band should be 20-40 DTE."""
         monthly = next(b for b in DEFAULT_TERM_BANDS if b.name == "monthly")
         assert monthly.min_dte == 20
         assert monthly.max_dte == 40
-    
+
     def test_quarterly_band_range(self):
         """Quarterly band should be 60-100 DTE."""
         quarterly = next(b for b in DEFAULT_TERM_BANDS if b.name == "quarterly")
@@ -74,7 +72,7 @@ class TestDefaultTermBands:
 
 class TestOptionTypeMetrics:
     """Tests for OptionTypeMetrics model."""
-    
+
     def test_create_call_metrics(self):
         """Should create metrics for calls."""
         metrics = OptionTypeMetrics(
@@ -86,7 +84,7 @@ class TestOptionTypeMetrics:
         assert metrics.option_type == "C"
         assert metrics.count == 100
         assert metrics.mae_pct == 2.5
-    
+
     def test_create_put_metrics(self):
         """Should create metrics for puts."""
         metrics = OptionTypeMetrics(
@@ -97,7 +95,7 @@ class TestOptionTypeMetrics:
         )
         assert metrics.option_type == "P"
         assert metrics.count == 50
-    
+
     def test_metrics_with_bands(self):
         """Should include band-level metrics."""
         band = DteBandResult(
@@ -123,7 +121,7 @@ class TestOptionTypeMetrics:
 
 class TestDteBandResultWithOptionType:
     """Tests for DteBandResult with option_type field."""
-    
+
     def test_band_with_call_type(self):
         """Band can have call option type."""
         band = DteBandResult(
@@ -136,7 +134,7 @@ class TestDteBandResultWithOptionType:
             option_type="C",
         )
         assert band.option_type == "C"
-    
+
     def test_band_with_put_type(self):
         """Band can have put option type."""
         band = DteBandResult(
@@ -149,7 +147,7 @@ class TestDteBandResultWithOptionType:
             option_type="P",
         )
         assert band.option_type == "P"
-    
+
     def test_band_without_option_type(self):
         """Band can exist without option type (backward compatible)."""
         band = DteBandResult(
@@ -165,7 +163,7 @@ class TestDteBandResultWithOptionType:
 
 class TestCalibrationConfigBackwardCompatibility:
     """Tests to ensure backward compatibility."""
-    
+
     def test_old_style_config_works(self):
         """Config without option_types should work."""
         config = CalibrationConfig(
@@ -176,7 +174,7 @@ class TestCalibrationConfigBackwardCompatibility:
         )
         assert config.underlying == "BTC"
         assert config.option_types == ["C"]
-    
+
     def test_old_style_config_with_bands_works(self):
         """Config with bands but without option_types should work."""
         bands = [BandConfig(name="short", min_dte=3, max_dte=7)]

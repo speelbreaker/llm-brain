@@ -42,10 +42,14 @@ def fetch_run(db, run_id: str) -> Optional[BacktestRun]:
 
 def fetch_metrics(db, run_numeric_id: int, exit_style: str) -> Optional[BacktestMetric]:
     """Fetch metrics for a run by numeric ID and exit style."""
-    return db.query(BacktestMetric).filter(
-        BacktestMetric.run_id == run_numeric_id,
-        BacktestMetric.exit_style == exit_style,
-    ).first()
+    return (
+        db.query(BacktestMetric)
+        .filter(
+            BacktestMetric.run_id == run_numeric_id,
+            BacktestMetric.exit_style == exit_style,
+        )
+        .first()
+    )
 
 
 def get_metric_value(metrics: BacktestMetric, field: str) -> float:
@@ -53,7 +57,7 @@ def get_metric_value(metrics: BacktestMetric, field: str) -> float:
     if hasattr(metrics, field):
         val = getattr(metrics, field)
         return float(val) if val is not None else 0.0
-    if hasattr(metrics, 'metrics_json') and metrics.metrics_json:
+    if hasattr(metrics, "metrics_json") and metrics.metrics_json:
         return float(metrics.metrics_json.get(field, 0.0))
     return 0.0
 
@@ -105,25 +109,27 @@ def print_diff_report(
     print(f"  Period B: {run_b.start_ts} -> {run_b.end_ts}")
     print(f"  Decision interval: {run_a.decision_interval_minutes} minutes")
     print()
-    
+
     col_metric = 24
     col_val = 20
-    
+
     header = f"{'Metric':<{col_metric}} {'A (' + run_a.data_source + ')':<{col_val}} {'B (' + run_b.data_source + ')':<{col_val}} {'Diff (B - A)':<{col_val}}"
     print(header)
     print("-" * len(header))
-    
+
     for field, fmt_type in METRICS_FIELDS:
         val_a = get_metric_value(metrics_a, field)
         val_b = get_metric_value(metrics_b, field)
         diff = val_b - val_a
-        
+
         str_a = format_value(val_a, fmt_type)
         str_b = format_value(val_b, fmt_type)
         str_diff = format_diff(diff, fmt_type)
-        
-        print(f"{field:<{col_metric}} {str_a:<{col_val}} {str_b:<{col_val}} {str_diff:<{col_val}}")
-    
+
+        print(
+            f"{field:<{col_metric}} {str_a:<{col_val}} {str_b:<{col_val}} {str_diff:<{col_val}}"
+        )
+
     print("=" * 80)
     print()
 
@@ -147,26 +153,26 @@ def main():
         default=None,
         help="Exit style to compare (default: use primary_exit_style from runs)",
     )
-    
+
     args = parser.parse_args()
-    
+
     with get_db_session() as db:
         run_a = fetch_run(db, args.run_a)
         if not run_a:
             print(f"ERROR: Run A not found: {args.run_a}", file=sys.stderr)
             sys.exit(1)
-        
+
         run_b = fetch_run(db, args.run_b)
         if not run_b:
             print(f"ERROR: Run B not found: {args.run_b}", file=sys.stderr)
             sys.exit(1)
-        
+
         if args.exit_style:
             exit_style = args.exit_style
         else:
             exit_style_a = run_a.primary_exit_style
             exit_style_b = run_b.primary_exit_style
-            
+
             if exit_style_a != exit_style_b:
                 print(
                     f"ERROR: Runs have different primary exit styles "
@@ -175,9 +181,9 @@ def main():
                     file=sys.stderr,
                 )
                 sys.exit(1)
-            
+
             exit_style = exit_style_a
-        
+
         metrics_a = fetch_metrics(db, run_a.id, exit_style)
         if not metrics_a:
             print(
@@ -186,7 +192,7 @@ def main():
                 file=sys.stderr,
             )
             sys.exit(1)
-        
+
         metrics_b = fetch_metrics(db, run_b.id, exit_style)
         if not metrics_b:
             print(
@@ -195,9 +201,9 @@ def main():
                 file=sys.stderr,
             )
             sys.exit(1)
-        
+
         print_diff_report(run_a, run_b, metrics_a, metrics_b, exit_style)
-    
+
     sys.exit(0)
 
 

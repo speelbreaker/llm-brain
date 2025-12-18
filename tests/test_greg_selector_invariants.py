@@ -4,8 +4,6 @@ Greg Selector Invariant Tests - "Never do this" rules.
 These tests validate that the Greg selector never makes dangerous decisions,
 regardless of how tempting the other conditions look.
 """
-import pytest
-from typing import Dict, Any, Optional
 
 from src.strategies.greg_selector import (
     GregSelectorSensors,
@@ -181,7 +179,7 @@ class TestSafetyFilterOverridesEverything:
         """ADX exactly at safety threshold - should trigger NO_TRADE."""
         cal = get_calibration_spec()
         safety_adx = cal["safety_adx_high"]
-        
+
         sensors = base_metrics(
             vrp_30d=25.0,
             adx_14d=safety_adx + 0.01,
@@ -201,7 +199,7 @@ class TestCalibrationLoadsCorrectly:
     def test_calibration_has_required_keys(self):
         """All calibration keys should be present in the spec."""
         cal = get_calibration_spec()
-        
+
         required_keys = [
             "skew_neutral_threshold",
             "min_vrp_floor",
@@ -219,7 +217,7 @@ class TestCalibrationLoadsCorrectly:
             "iron_fly_iv_rank_min",
             "iron_fly_vrp_min",
         ]
-        
+
         for key in required_keys:
             assert key in cal, f"Missing calibration key: {key}"
             assert isinstance(cal[key], (int, float)), (

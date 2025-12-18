@@ -5,6 +5,7 @@ Defines what configuration fields each selector/strategy supports,
 enabling the UI to show only applicable controls and the engine
 to apply correct overrides.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field, asdict
@@ -14,6 +15,7 @@ from typing import Any, Dict, List, Optional
 @dataclass
 class FieldHint:
     """UX hint for a configuration field."""
+
     field_name: str
     disabled: bool = False
     readonly: bool = False
@@ -25,23 +27,23 @@ class FieldHint:
 @dataclass
 class StrategyCapabilities:
     """Defines what configuration options a strategy supports."""
-    
+
     selector_name: str
     display_name: str
     description: str
-    
+
     supports_exit_style: bool = True
     supports_dte_range: bool = True
     supports_delta_range: bool = True
     supports_targets: bool = True
-    
+
     config_owner_fields: List[str] = field(default_factory=list)
     user_fields: List[str] = field(default_factory=list)
-    
+
     strategy_defaults_summary: Dict[str, Any] = field(default_factory=dict)
-    
+
     field_hints: List[FieldHint] = field(default_factory=list)
-    
+
     def to_dict(self) -> Dict[str, Any]:
         d = asdict(self)
         d["field_hints"] = [asdict(h) for h in self.field_hints]
@@ -169,11 +171,11 @@ def list_available_strategies() -> List[Dict[str, Any]]:
 @dataclass
 class ConfigValidationResult:
     """Result of validating and applying strategy overrides to config."""
-    
+
     effective_config: Dict[str, Any]
     warnings: List[str] = field(default_factory=list)
     overrides_applied: Dict[str, Any] = field(default_factory=dict)
-    
+
     def to_dict(self) -> Dict[str, Any]:
         return {
             "effective_config": self.effective_config,
@@ -199,16 +201,16 @@ def apply_strategy_overrides(
 ) -> ConfigValidationResult:
     """
     Apply strategy-specific overrides to user config.
-    
+
     For strategies that own certain fields (like GregBot), this will:
     1. Override those fields with strategy defaults
     2. Generate warnings if user provided conflicting values
     3. Return the effective config that will actually be used
-    
+
     Args:
         selector_name: The strategy/selector name
         user_config: User-provided configuration dict
-        
+
     Returns:
         ConfigValidationResult with effective_config, warnings, and overrides_applied
     """
@@ -216,7 +218,7 @@ def apply_strategy_overrides(
     effective_config = user_config.copy()
     warnings: List[str] = []
     overrides_applied: Dict[str, Any] = {}
-    
+
     if caps is None:
         warnings.append(f"Unknown selector '{selector_name}', using as-is")
         return ConfigValidationResult(
@@ -224,11 +226,11 @@ def apply_strategy_overrides(
             warnings=warnings,
             overrides_applied=overrides_applied,
         )
-    
+
     if selector_name == "gregbot":
         for field_name, default_value in GREGBOT_DEFAULTS.items():
             user_value = user_config.get(field_name)
-            
+
             if user_value is not None and user_value != default_value:
                 if field_name == "exit_style":
                     warnings.append(
@@ -245,14 +247,14 @@ def apply_strategy_overrides(
                         f"'{field_name}' range is controlled by GregBot. "
                         f"Ignoring user value '{user_value}'."
                     )
-                
+
                 overrides_applied[field_name] = {
                     "user_value": user_value,
                     "effective_value": default_value,
                 }
-            
+
             effective_config[field_name] = default_value
-    
+
     return ConfigValidationResult(
         effective_config=effective_config,
         warnings=warnings,

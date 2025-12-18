@@ -2,6 +2,7 @@
 Psychology metrics module for strategy evaluation.
 Computes expectancy, Monte Carlo variance, and psychology-friendliness scores.
 """
+
 from __future__ import annotations
 
 import math
@@ -17,6 +18,7 @@ class TradeResult:
     Generic trade or chain result.
     Treat one "trade" as one completed options chain if that fits better.
     """
+
     timestamp: datetime
     pnl_pct: float
     is_win: bool
@@ -27,6 +29,7 @@ class TradeResult:
 @dataclass
 class StrategyStats:
     """Computed statistics for a trading strategy."""
+
     n_trades: int
     win_rate: float
     avg_win: float
@@ -41,6 +44,7 @@ class StrategyStats:
 @dataclass
 class VarianceProfile:
     """Monte Carlo simulation results showing variance characteristics."""
+
     sims: int
     trades_per_sim: int
     median_final_return: float
@@ -55,6 +59,7 @@ class VarianceProfile:
 @dataclass
 class PsychologyScore:
     """Psychology-friendliness score for a strategy."""
+
     score: float
     components: Dict[str, float]
 
@@ -65,14 +70,14 @@ def compute_strategy_stats(
 ) -> StrategyStats:
     """
     Compute strategy statistics from a sequence of trade results.
-    
+
     Args:
         trades: Sequence of TradeResult objects
         initial_equity: Starting equity (default 1.0 for percentage-based)
-    
+
     Returns:
         StrategyStats with computed metrics
-    
+
     Raises:
         ValueError: If no trades provided
     """
@@ -98,7 +103,7 @@ def compute_strategy_stats(
     cur_wins = 0
 
     for t in trades:
-        equity *= (1 + t.pnl_pct)
+        equity *= 1 + t.pnl_pct
         peak = max(peak, equity)
         dd = (equity - peak) / peak
         max_dd = min(max_dd, dd)
@@ -136,7 +141,7 @@ def _simulate_equity(
 ) -> tuple[float, float, int]:
     """
     Simulate equity curve from a sequence of returns.
-    
+
     Returns:
         Tuple of (final_equity, max_drawdown, max_loss_streak)
     """
@@ -147,7 +152,7 @@ def _simulate_equity(
     cur_loss_streak = 0
 
     for r in returns:
-        equity *= (1 + r)
+        equity *= 1 + r
         peak = max(peak, equity)
         dd = (equity - peak) / peak
         max_dd = min(max_dd, dd)
@@ -171,17 +176,17 @@ def run_monte_carlo(
 ) -> VarianceProfile:
     """
     Run Monte Carlo simulation to assess strategy variance.
-    
+
     Args:
         trades: Historical trade results
         sims: Number of simulations to run
         trades_per_sim: Number of trades per simulation (default: same as input)
         bootstrap: If True, sample with replacement; if False, shuffle
         seed: Random seed for reproducibility
-    
+
     Returns:
         VarianceProfile with simulation results
-    
+
     Raises:
         ValueError: If no trades provided
     """
@@ -254,31 +259,30 @@ def compute_psychology_score(
 ) -> PsychologyScore:
     """
     Compute a psychology-friendliness score for a strategy.
-    
+
     This measures how "smooth" and "human-tolerable" a strategy is:
     - High win rate is psychologically easier
     - Low loss streaks reduce emotional stress
     - Low drawdowns prevent panic selling
-    
+
     Args:
         stats: Strategy statistics
         variance: Monte Carlo variance profile
         target_expectancy_per_trade: Target expectancy for scoring (default 0.1%)
-    
+
     Returns:
         PsychologyScore with overall score (0-100 range) and components
     """
     win_rate_score = min(max((stats.win_rate - 0.4) / 0.4, 0.0), 1.0)
-    exp_score = min(max(stats.expectancy_per_trade / target_expectancy_per_trade, 0.0), 1.5)
+    exp_score = min(
+        max(stats.expectancy_per_trade / target_expectancy_per_trade, 0.0), 1.5
+    )
 
     streak_penalty = min(variance.worst_max_loss_streak / 10.0, 2.0)
     dd_penalty = min(abs(variance.worst_max_dd) / 0.3, 2.0)
 
     raw_score = (
-        0.4 * win_rate_score +
-        0.3 * exp_score -
-        0.2 * streak_penalty -
-        0.1 * dd_penalty
+        0.4 * win_rate_score + 0.3 * exp_score - 0.2 * streak_penalty - 0.1 * dd_penalty
     )
 
     final_score = max(raw_score, -2.0) + 2.0

@@ -12,7 +12,9 @@ class StubChatCompletions:
     def __init__(self):
         self.calls: list[dict] = []
 
-    async def create(self, model, messages, response_format=None, max_tokens=None, temperature=None):
+    async def create(
+        self, model, messages, response_format=None, max_tokens=None, temperature=None
+    ):
         self.calls.append(
             {
                 "model": model,
@@ -47,7 +49,9 @@ async def test_openai_json_fallback_retries_without_response_format():
     stub = StubClient()
     provider.client = stub
 
-    result = await provider.generate_json("hi", model="gpt-fake", max_tokens=10, temperature=0)
+    result = await provider.generate_json(
+        "hi", model="gpt-fake", max_tokens=10, temperature=0
+    )
 
     assert result == {"ok": True}
     assert len(stub.completions.calls) == 2

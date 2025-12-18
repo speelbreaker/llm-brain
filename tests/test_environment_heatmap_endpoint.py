@@ -1,7 +1,7 @@
 """
 Tests for the environment heatmap API endpoint.
 """
-import pytest
+
 from fastapi.testclient import TestClient
 
 from src.web_app import app
@@ -25,12 +25,12 @@ def test_environment_heatmap_basic():
         "y_step": 5,
         "y_points": 3,
     }
-    
+
     response = client.post("/api/environment_heatmap", json=payload)
-    
+
     assert response.status_code == 200
     data = response.json()
-    
+
     assert data["ok"] is True
     assert data["underlying"] == "BTC"
     assert data["x_metric"] == "vrp_30d"
@@ -38,7 +38,7 @@ def test_environment_heatmap_basic():
     assert "x_labels" in data
     assert "y_labels" in data
     assert "grid" in data
-    
+
     assert len(data["x_labels"]) == 3
     assert len(data["y_labels"]) == 3
     assert len(data["grid"]) == 3
@@ -60,12 +60,12 @@ def test_environment_heatmap_eth():
         "y_step": 0.2,
         "y_points": 4,
     }
-    
+
     response = client.post("/api/environment_heatmap", json=payload)
-    
+
     assert response.status_code == 200
     data = response.json()
-    
+
     assert data["ok"] is True
     assert data["underlying"] == "ETH"
     assert len(data["x_labels"]) == 4
@@ -93,13 +93,13 @@ def test_environment_heatmap_grid_values_sum():
         "y_step": 10,
         "y_points": 5,
     }
-    
+
     response = client.post("/api/environment_heatmap", json=payload)
-    
+
     assert response.status_code == 200
     data = response.json()
-    
+
     assert data["ok"] is True
-    
+
     total = sum(sum(row) for row in data["grid"])
     assert total <= 100.1

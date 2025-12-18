@@ -6,6 +6,7 @@ Uses SQLite for persistent storage of:
 - Metadata (last reviewed commit, etc.)
 - File snapshots (for fallback change detection)
 """
+
 from __future__ import annotations
 
 import json
@@ -21,6 +22,7 @@ from agent.config import settings
 @dataclass
 class ReviewRecord:
     """A stored review record."""
+
     id: int
     created_at: str
     initiator_telegram_id: str
@@ -33,7 +35,7 @@ class ReviewRecord:
     issues_json: str
     next_steps_json: str
     diff_summary_json: Optional[str] = None
-    
+
     @property
     def issues(self) -> List[Dict[str, Any]]:
         """Parse issues from JSON."""
@@ -41,7 +43,7 @@ class ReviewRecord:
             return json.loads(self.issues_json) if self.issues_json else []
         except json.JSONDecodeError:
             return []
-    
+
     @property
     def next_steps(self) -> List[str]:
         """Parse next steps from JSON."""
@@ -49,7 +51,7 @@ class ReviewRecord:
             return json.loads(self.next_steps_json) if self.next_steps_json else []
         except json.JSONDecodeError:
             return []
-    
+
     @property
     def diff_summary(self) -> List[Dict[str, Any]]:
         """Parse diff summary from JSON."""
@@ -62,6 +64,7 @@ class ReviewRecord:
 @dataclass
 class Finding:
     """A structured finding from code analysis."""
+
     id: int
     check_run_id: Optional[int]
     severity: str
@@ -75,6 +78,7 @@ class Finding:
 @dataclass
 class CheckRun:
     """A record of a check run (tests, security scan, etc.)."""
+
     id: int
     check_type: str
     status: str
@@ -103,7 +107,7 @@ def init_db() -> None:
     """Initialize the database schema."""
     conn = _get_conn()
     cur = conn.cursor()
-    
+
     cur.execute("""
         CREATE TABLE IF NOT EXISTS reviews (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -120,14 +124,14 @@ def init_db() -> None:
             diff_summary_json TEXT
         )
     """)
-    
+
     cur.execute("""
         CREATE TABLE IF NOT EXISTS meta (
             key TEXT PRIMARY KEY,
             value TEXT
         )
     """)
-    
+
     cur.execute("""
         CREATE TABLE IF NOT EXISTS snapshots (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -136,7 +140,7 @@ def init_db() -> None:
             data_json TEXT
         )
     """)
-    
+
     cur.execute("""
         CREATE TABLE IF NOT EXISTS chat_sessions (
             chat_id TEXT PRIMARY KEY,
@@ -145,7 +149,7 @@ def init_db() -> None:
             updated_at TEXT NOT NULL
         )
     """)
-    
+
     cur.execute("""
         CREATE TABLE IF NOT EXISTS check_runs (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -157,7 +161,7 @@ def init_db() -> None:
             created_at TEXT NOT NULL
         )
     """)
-    
+
     cur.execute("""
         CREATE TABLE IF NOT EXISTS findings (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -171,7 +175,7 @@ def init_db() -> None:
             FOREIGN KEY (check_run_id) REFERENCES check_runs(id)
         )
     """)
-    
+
     conn.commit()
     conn.close()
 
@@ -210,33 +214,36 @@ def save_review(
     """Save a review record and return its ID."""
     conn = _get_conn()
     cur = conn.cursor()
-    
+
     now = datetime.now(timezone.utc).isoformat()
-    
-    cur.execute("""
+
+    cur.execute(
+        """
         INSERT INTO reviews (
             created_at, initiator_telegram_id, target_type, target_ref,
             git_head, change_detector_mode, overall_severity,
             summary_md, issues_json, next_steps_json, diff_summary_json
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    """, (
-        now,
-        str(initiator_id),
-        target_type,
-        target_ref,
-        git_head,
-        change_detector_mode,
-        overall_severity,
-        summary_md,
-        json.dumps(issues),
-        json.dumps(next_steps),
-        json.dumps(diff_summary) if diff_summary else None,
-    ))
-    
+    """,
+        (
+            now,
+            str(initiator_id),
+            target_type,
+            target_ref,
+            git_head,
+            change_detector_mode,
+            overall_severity,
+            summary_md,
+            json.dumps(issues),
+            json.dumps(next_steps),
+            json.dumps(diff_summary) if diff_summary else None,
+        ),
+    )
+
     review_id = cur.lastrowid or 0
     conn.commit()
     conn.close()
-    
+
     return review_id
 
 
@@ -254,10 +261,10 @@ def get_last_review() -> Optional[ReviewRecord]:
     """)
     row = cur.fetchone()
     conn.close()
-    
+
     if not row:
         return None
-    
+
     return ReviewRecord(
         id=row[0],
         created_at=row[1],
@@ -288,18 +295,21 @@ def save_snapshot(label: str, data: Dict[str, Any]) -> int:
     """Save a file snapshot."""
     conn = _get_conn()
     cur = conn.cursor()
-    
+
     now = datetime.now(timezone.utc).isoformat()
-    
-    cur.execute("""
+
+    cur.execute(
+        """
         INSERT INTO snapshots (created_at, label, data_json)
         VALUES (?, ?, ?)
-    """, (now, label, json.dumps(data)))
-    
+    """,
+        (now, label, json.dumps(data)),
+    )
+
     snapshot_id = cur.lastrowid or 0
     conn.commit()
     conn.close()
-    
+
     return snapshot_id
 
 
@@ -307,18 +317,21 @@ def get_last_snapshot(label: str) -> Optional[Dict[str, Any]]:
     """Get the most recent snapshot for a label."""
     conn = _get_conn()
     cur = conn.cursor()
-    cur.execute("""
+    cur.execute(
+        """
         SELECT data_json FROM snapshots
         WHERE label = ?
         ORDER BY id DESC
         LIMIT 1
-    """, (label,))
+    """,
+        (label,),
+    )
     row = cur.fetchone()
     conn.close()
-    
+
     if not row or not row[0]:
         return None
-    
+
     try:
         return json.loads(row[0])
     except json.JSONDecodeError:
@@ -328,6 +341,7 @@ def get_last_snapshot(label: str) -> Optional[Dict[str, Any]]:
 @dataclass
 class ChatSession:
     """A chat session with message history."""
+
     chat_id: str
     messages: List[Dict[str, str]]
     context: Dict[str, Any]
@@ -338,24 +352,27 @@ def get_chat_session(chat_id: str) -> Optional[ChatSession]:
     """Get a chat session by ID."""
     conn = _get_conn()
     cur = conn.cursor()
-    cur.execute("""
+    cur.execute(
+        """
         SELECT chat_id, messages_json, context_json, updated_at
         FROM chat_sessions
         WHERE chat_id = ?
-    """, (str(chat_id),))
+    """,
+        (str(chat_id),),
+    )
     row = cur.fetchone()
     conn.close()
-    
+
     if not row:
         return None
-    
+
     try:
         messages = json.loads(row[1]) if row[1] else []
         context = json.loads(row[2]) if row[2] else {}
     except json.JSONDecodeError:
         messages = []
         context = {}
-    
+
     return ChatSession(
         chat_id=row[0],
         messages=messages,
@@ -372,19 +389,22 @@ def save_chat_session(
     """Save or update a chat session."""
     conn = _get_conn()
     cur = conn.cursor()
-    
+
     now = datetime.now(timezone.utc).isoformat()
-    
-    cur.execute("""
+
+    cur.execute(
+        """
         INSERT OR REPLACE INTO chat_sessions (chat_id, messages_json, context_json, updated_at)
         VALUES (?, ?, ?, ?)
-    """, (
-        str(chat_id),
-        json.dumps(messages[-20:]),
-        json.dumps(context or {}),
-        now,
-    ))
-    
+    """,
+        (
+            str(chat_id),
+            json.dumps(messages[-20:]),
+            json.dumps(context or {}),
+            now,
+        ),
+    )
+
     conn.commit()
     conn.close()
 
@@ -408,18 +428,21 @@ def save_check_run(
     """Save a check run record and return its ID."""
     conn = _get_conn()
     cur = conn.cursor()
-    
+
     now = datetime.now(timezone.utc).isoformat()
-    
-    cur.execute("""
+
+    cur.execute(
+        """
         INSERT INTO check_runs (check_type, status, duration_seconds, artifact_path, summary, created_at)
         VALUES (?, ?, ?, ?, ?, ?)
-    """, (check_type, status, duration_seconds, artifact_path, summary, now))
-    
+    """,
+        (check_type, status, duration_seconds, artifact_path, summary, now),
+    )
+
     check_run_id = cur.lastrowid or 0
     conn.commit()
     conn.close()
-    
+
     return check_run_id
 
 
@@ -434,45 +457,64 @@ def save_finding(
     """Save a finding record and return its ID."""
     conn = _get_conn()
     cur = conn.cursor()
-    
+
     now = datetime.now(timezone.utc).isoformat()
-    
-    cur.execute("""
+
+    cur.execute(
+        """
         INSERT INTO findings (check_run_id, severity, category, evidence, why_it_matters, recommended_fix, created_at)
         VALUES (?, ?, ?, ?, ?, ?, ?)
-    """, (check_run_id, severity, category, evidence, why_it_matters, recommended_fix, now))
-    
+    """,
+        (
+            check_run_id,
+            severity,
+            category,
+            evidence,
+            why_it_matters,
+            recommended_fix,
+            now,
+        ),
+    )
+
     finding_id = cur.lastrowid or 0
     conn.commit()
     conn.close()
-    
+
     return finding_id
 
 
-def get_recent_check_runs(limit: int = 10, check_type: Optional[str] = None) -> List[CheckRun]:
+def get_recent_check_runs(
+    limit: int = 10, check_type: Optional[str] = None
+) -> List[CheckRun]:
     """Get recent check runs, optionally filtered by type."""
     conn = _get_conn()
     cur = conn.cursor()
-    
+
     if check_type:
-        cur.execute("""
+        cur.execute(
+            """
             SELECT id, check_type, status, duration_seconds, artifact_path, summary, created_at
             FROM check_runs
             WHERE check_type = ?
             ORDER BY id DESC
             LIMIT ?
-        """, (check_type, limit))
+        """,
+            (check_type, limit),
+        )
     else:
-        cur.execute("""
+        cur.execute(
+            """
             SELECT id, check_type, status, duration_seconds, artifact_path, summary, created_at
             FROM check_runs
             ORDER BY id DESC
             LIMIT ?
-        """, (limit,))
-    
+        """,
+            (limit,),
+        )
+
     rows = cur.fetchall()
     conn.close()
-    
+
     return [
         CheckRun(
             id=row[0],
@@ -491,8 +533,9 @@ def get_findings_for_check_run(check_run_id: int) -> List[Finding]:
     """Get all findings for a specific check run."""
     conn = _get_conn()
     cur = conn.cursor()
-    
-    cur.execute("""
+
+    cur.execute(
+        """
         SELECT id, check_run_id, severity, category, evidence, why_it_matters, recommended_fix, created_at
         FROM findings
         WHERE check_run_id = ?
@@ -504,11 +547,13 @@ def get_findings_for_check_run(check_run_id: int) -> List[Finding]:
                 WHEN 'Low' THEN 4 
                 ELSE 5 
             END
-    """, (check_run_id,))
-    
+    """,
+        (check_run_id,),
+    )
+
     rows = cur.fetchall()
     conn.close()
-    
+
     return [
         Finding(
             id=row[0],
@@ -524,30 +569,38 @@ def get_findings_for_check_run(check_run_id: int) -> List[Finding]:
     ]
 
 
-def get_recent_findings(limit: int = 20, severity: Optional[str] = None) -> List[Finding]:
+def get_recent_findings(
+    limit: int = 20, severity: Optional[str] = None
+) -> List[Finding]:
     """Get recent findings, optionally filtered by severity."""
     conn = _get_conn()
     cur = conn.cursor()
-    
+
     if severity:
-        cur.execute("""
+        cur.execute(
+            """
             SELECT id, check_run_id, severity, category, evidence, why_it_matters, recommended_fix, created_at
             FROM findings
             WHERE severity = ?
             ORDER BY id DESC
             LIMIT ?
-        """, (severity, limit))
+        """,
+            (severity, limit),
+        )
     else:
-        cur.execute("""
+        cur.execute(
+            """
             SELECT id, check_run_id, severity, category, evidence, why_it_matters, recommended_fix, created_at
             FROM findings
             ORDER BY id DESC
             LIMIT ?
-        """, (limit,))
-    
+        """,
+            (limit,),
+        )
+
     rows = cur.fetchall()
     conn.close()
-    
+
     return [
         Finding(
             id=row[0],

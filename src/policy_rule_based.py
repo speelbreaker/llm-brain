@@ -3,9 +3,9 @@ Rule-based policy module.
 Implements deterministic decision logic for covered call strategy.
 Supports research mode with exploration and production mode with strict filtering.
 """
+
 from __future__ import annotations
 
-import math
 import random
 from typing import Any
 
@@ -20,19 +20,19 @@ def _get_open_covered_calls(
 ) -> list[OptionPosition]:
     """Get list of open short call positions (covered calls)."""
     covered_calls = []
-    
+
     for pos in agent_state.portfolio.option_positions:
         if pos.side != Side.SELL:
             continue
-        
+
         if pos.option_type.value != "call":
             continue
-        
+
         if underlying and pos.underlying != underlying:
             continue
-        
+
         covered_calls.append(pos)
-    
+
     return covered_calls
 
 
@@ -40,14 +40,14 @@ def score_candidate(candidate: CandidateOption, cfg: Settings) -> float:
     """
     Score a candidate covered call using the centralized scoring function.
     Higher score = better candidate.
-    
+
     Uses the shared scoring module (src/scoring/candidates.py) to ensure
     consistent scoring across live agent, backtests, and training.
-    
+
     Args:
         candidate: The candidate option to score
         cfg: Settings configuration
-    
+
     Returns:
         Score value (higher is better)
     """
@@ -60,7 +60,7 @@ def score_candidate(candidate: CandidateOption, cfg: Settings) -> float:
         "premium_usd": candidate.premium_usd,
         "ivrv": candidate.ivrv,
     }
-    
+
     return score_option_candidate(
         features,
         profile="live",
@@ -78,11 +78,11 @@ def choose_candidate_with_exploration(
 ) -> tuple[CandidateOption | None, bool]:
     """
     Choose a candidate, with optional exploration in research mode.
-    
+
     Args:
         candidates: List of candidate options
         cfg: Settings configuration
-    
+
     Returns:
         Tuple of (chosen candidate or None, whether this was an exploration choice)
     """
@@ -116,19 +116,19 @@ def _select_best_candidate(
     """
     Select the best candidate option for opening a covered call.
     Uses scoring and exploration logic based on mode.
-    
+
     Args:
         candidates: List of candidate options
         underlying: Filter to specific underlying (optional)
         exclude_symbols: Symbols to exclude (optional)
         config: Settings configuration
-    
+
     Returns:
         Best candidate or None if no suitable candidates
     """
     cfg = config or settings
     exclude = set(exclude_symbols or [])
-    
+
     filtered = []
     for c in candidates:
         if underlying and c.underlying != underlying:
@@ -138,17 +138,18 @@ def _select_best_candidate(
         if c.ivrv < cfg.effective_ivrv_min:
             continue
         filtered.append(c)
-    
+
     if not filtered:
         filtered = [
-            c for c in candidates
+            c
+            for c in candidates
             if (not underlying or c.underlying == underlying)
             and c.symbol not in exclude
         ]
-    
+
     if not filtered:
         return None
-    
+
     chosen, _ = choose_candidate_with_exploration(filtered, cfg)
     return chosen
 
@@ -160,29 +161,28 @@ def _should_roll_position(
 ) -> tuple[bool, str]:
     """
     Determine if a position should be rolled.
-    
+
     Roll conditions:
     1. DTE < 1 day (near expiry)
     2. Position is ITM (assignment risk)
     3. Position is ATM with low IV (not much premium left)
     """
-    cfg = config or settings
-    
+
     dte = position.expiry_dte or 0
-    
+
     if dte < 1:
         return True, f"Near expiry (DTE={dte})"
-    
+
     if position.moneyness == "ITM":
         if dte <= 2:
             return True, f"ITM with low DTE ({dte} days) - assignment risk"
-    
+
     spot = agent_state.spot.get(position.underlying, 0)
     if spot > 0 and position.strike > 0:
         pct_from_strike = (position.strike - spot) / spot * 100
         if pct_from_strike < 2.0 and dte <= 1:
             return True, f"ATM (only {pct_from_strike:.1f}% OTM) with low DTE"
-    
+
     return False, ""
 
 
@@ -193,36 +193,39 @@ def decide_action(
     """
     Decide the next action based on current state using rule-based logic.
     Uses research vs production mode and exploration settings.
-    
+
     Decision flow:
     1. Check for positions that need rolling
     2. If no open covered calls and good candidates exist, open new position
     3. Otherwise, do nothing
-    
+
     Args:
         agent_state: Current agent state
         config: Settings configuration
-    
+
     Returns:
         Dict with keys: action, params, reasoning, mode, policy_version
     """
     cfg = config or settings
-    
+
     for underlying in cfg.underlyings:
         covered_calls = _get_open_covered_calls(agent_state, underlying)
-        
+
         for cc in covered_calls:
             should_roll, roll_reason = _should_roll_position(cc, agent_state, cfg)
-            
+
             if should_roll:
                 candidates = [
-                    c for c in agent_state.candidate_options
+                    c
+                    for c in agent_state.candidate_options
                     if c.underlying == underlying and c.symbol != cc.symbol
                 ]
-                
+
                 if candidates:
-                    new_candidate, was_exploration = choose_candidate_with_exploration(candidates, cfg)
-                    
+                    new_candidate, was_exploration = choose_candidate_with_exploration(
+                        candidates, cfg
+                    )
+
                     if new_candidate:
                         explore_tag = "Exploratory " if was_exploration else ""
                         return {
@@ -234,15 +237,15 @@ def decide_action(
                                 "size": cc.size,
                             },
                             "reasoning": f"{explore_tag}Rolling {cc.symbol}: {roll_reason}. "
-                                       f"New position: {new_candidate.symbol} "
-                                       f"(DTE={new_candidate.dte}, delta={new_candidate.delta:.2f}, "
-                                       f"premium=${new_candidate.premium_usd:.2f}, IVRV={new_candidate.ivrv:.2f}). "
-                                       f"Mode={cfg.mode}, policy={cfg.policy_version}.",
+                            f"New position: {new_candidate.symbol} "
+                            f"(DTE={new_candidate.dte}, delta={new_candidate.delta:.2f}, "
+                            f"premium=${new_candidate.premium_usd:.2f}, IVRV={new_candidate.ivrv:.2f}). "
+                            f"Mode={cfg.mode}, policy={cfg.policy_version}.",
                             "mode": cfg.mode,
                             "policy_version": cfg.policy_version,
                             "decision_source": "rule_based",
                         }
-                
+
                 return {
                     "action": ActionType.CLOSE_COVERED_CALL.value,
                     "params": {
@@ -251,35 +254,36 @@ def decide_action(
                         "size": cc.size,
                     },
                     "reasoning": f"Closing {cc.symbol}: {roll_reason}. "
-                               f"No suitable candidates available for rolling. "
-                               f"Mode={cfg.mode}, policy={cfg.policy_version}.",
+                    f"No suitable candidates available for rolling. "
+                    f"Mode={cfg.mode}, policy={cfg.policy_version}.",
                     "mode": cfg.mode,
                     "policy_version": cfg.policy_version,
                     "decision_source": "rule_based",
                 }
-    
+
     for underlying in cfg.underlyings:
         covered_calls = _get_open_covered_calls(agent_state, underlying)
         existing_symbols = {cc.symbol for cc in covered_calls}
         existing_count = len(covered_calls)
-        
+
         # Exclude already-open symbols to avoid duplicates
         candidates = [
-            c for c in agent_state.candidate_options
+            c
+            for c in agent_state.candidate_options
             if c.underlying == underlying and c.symbol not in existing_symbols
         ]
-        
+
         if not candidates:
             continue
-        
+
         # In training mode on testnet: ALWAYS allow opening new positions if candidates exist
         # Only block if we've reached the absolute max training limit
         if cfg.is_training_on_testnet:
             if existing_count >= cfg.max_calls_per_underlying_training:
                 continue
-            
+
             remaining_slots = cfg.max_calls_per_underlying_training - existing_count
-            
+
             # In ladder training mode, sort by premium (most aggressive)
             if cfg.training_profile_mode == "ladder":
                 candidates.sort(
@@ -289,8 +293,10 @@ def decide_action(
                 chosen = candidates[0]
                 was_exploration = False
             else:
-                chosen, was_exploration = choose_candidate_with_exploration(candidates, cfg)
-            
+                chosen, was_exploration = choose_candidate_with_exploration(
+                    candidates, cfg
+                )
+
             if chosen:
                 explore_tag = "Exploratory " if was_exploration else ""
                 return {
@@ -301,12 +307,12 @@ def decide_action(
                         "size": cfg.default_order_size,
                     },
                     "reasoning": f"[TRAINING] {explore_tag}OPEN_COVERED_CALL on {chosen.symbol}: "
-                               f"DTE={chosen.dte}, delta={chosen.delta:.2f}, "
-                               f"premium=${chosen.premium_usd:.2f}, IVRV={chosen.ivrv:.2f}. "
-                               f"Existing calls for {underlying}: {existing_count}, "
-                               f"remaining training slots: {remaining_slots}. "
-                               f"Mode={cfg.mode}, policy={cfg.policy_version}, "
-                               f"profile_mode={cfg.training_profile_mode}.",
+                    f"DTE={chosen.dte}, delta={chosen.delta:.2f}, "
+                    f"premium=${chosen.premium_usd:.2f}, IVRV={chosen.ivrv:.2f}. "
+                    f"Existing calls for {underlying}: {existing_count}, "
+                    f"remaining training slots: {remaining_slots}. "
+                    f"Mode={cfg.mode}, policy={cfg.policy_version}, "
+                    f"profile_mode={cfg.training_profile_mode}.",
                     "mode": cfg.mode,
                     "policy_version": cfg.policy_version,
                     "decision_source": "rule_based",
@@ -315,9 +321,9 @@ def decide_action(
             # Non-training mode: only open if no existing calls for this underlying
             if covered_calls:
                 continue
-            
+
             chosen, was_exploration = choose_candidate_with_exploration(candidates, cfg)
-            
+
             if chosen:
                 explore_tag = "Exploratory " if was_exploration else ""
                 return {
@@ -328,19 +334,19 @@ def decide_action(
                         "size": cfg.default_order_size,
                     },
                     "reasoning": f"{explore_tag}OPEN_COVERED_CALL on {chosen.symbol}: "
-                               f"DTE={chosen.dte}, delta={chosen.delta:.2f}, "
-                               f"premium=${chosen.premium_usd:.2f}, IVRV={chosen.ivrv:.2f}. "
-                               f"Mode={cfg.mode}, policy={cfg.policy_version}.",
+                    f"DTE={chosen.dte}, delta={chosen.delta:.2f}, "
+                    f"premium=${chosen.premium_usd:.2f}, IVRV={chosen.ivrv:.2f}. "
+                    f"Mode={cfg.mode}, policy={cfg.policy_version}.",
                     "mode": cfg.mode,
                     "policy_version": cfg.policy_version,
                     "decision_source": "rule_based",
                 }
-    
+
     existing_positions = []
     for underlying in cfg.underlyings:
         ccs = _get_open_covered_calls(agent_state, underlying)
         existing_positions.extend([cc.symbol for cc in ccs])
-    
+
     if cfg.is_training_on_testnet:
         # In training mode, we only reach here if ALL underlyings are at max positions
         # or there are no valid candidates left
@@ -350,7 +356,7 @@ def decide_action(
             if len(ccs) < cfg.max_calls_per_underlying_training:
                 all_at_max = False
                 break
-        
+
         if all_at_max and existing_positions:
             reasoning = (
                 f"[TRAINING] All underlyings at max positions ({cfg.max_calls_per_underlying_training}). "
@@ -361,12 +367,14 @@ def decide_action(
         else:
             reasoning = f"[TRAINING] No new candidates (all symbols open or filtered). profile_mode={cfg.training_profile_mode}."
     elif existing_positions:
-        reasoning = f"Existing positions: {', '.join(existing_positions)}. No action needed."
+        reasoning = (
+            f"Existing positions: {', '.join(existing_positions)}. No action needed."
+        )
     elif not agent_state.candidate_options:
         reasoning = "No candidate options available that meet criteria."
     else:
         reasoning = "No suitable opportunities identified."
-    
+
     return {
         "action": ActionType.DO_NOTHING.value,
         "params": {},

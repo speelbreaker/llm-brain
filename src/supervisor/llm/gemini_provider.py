@@ -105,7 +105,9 @@ class GeminiProvider(LLMProvider):
         system: str | None = None,
     ) -> dict[str, Any]:
         system_msg = system or "Return ONLY valid JSON. No markdown. No prose."
-        prompt2 = f"{prompt}\n\nJSON schema hint:\n{schema_hint}" if schema_hint else prompt
+        prompt2 = (
+            f"{prompt}\n\nJSON schema hint:\n{schema_hint}" if schema_hint else prompt
+        )
         txt = await self.generate(
             prompt2,
             model=model,

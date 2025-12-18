@@ -3,8 +3,7 @@ Tests for the IV sanity check module.
 
 These tests use mocking to avoid running actual backtests.
 """
-import pytest
-from datetime import datetime, timezone
+
 from unittest.mock import patch, MagicMock
 
 from scripts.iv_sanity_check import (
@@ -14,7 +13,9 @@ from scripts.iv_sanity_check import (
 )
 
 
-def make_backtest_result(num_trades: int, net_profit_pct: float, error: str | None = None):
+def make_backtest_result(
+    num_trades: int, net_profit_pct: float, error: str | None = None
+):
     """Create a mock backtest result."""
     return {
         "num_trades": num_trades,
@@ -40,7 +41,7 @@ class TestIVSanitySelectorResult:
             reason="ok",
         )
         d = result.to_dict()
-        
+
         assert d["selector"] == "generic"
         assert d["iv_low"] == 0.8
         assert d["iv_high"] == 1.2
@@ -61,9 +62,9 @@ class TestCheckSelectorGeneric:
             make_backtest_result(num_trades=5, net_profit_pct=1.0),
             make_backtest_result(num_trades=5, net_profit_pct=3.0),
         ]
-        
+
         result = _check_selector("generic", 0.8, 1.2)
-        
+
         assert result.passed is True
         assert result.reason == "ok"
         assert result.num_trades_low == 5
@@ -77,9 +78,9 @@ class TestCheckSelectorGeneric:
             make_backtest_result(num_trades=3, net_profit_pct=1.0),
             make_backtest_result(num_trades=7, net_profit_pct=1.0),
         ]
-        
+
         result = _check_selector("generic", 0.8, 1.2)
-        
+
         assert result.passed is True
         assert result.num_trades_low == 3
         assert result.num_trades_high == 7
@@ -90,9 +91,9 @@ class TestCheckSelectorGeneric:
             make_backtest_result(num_trades=5, net_profit_pct=1.0),
             make_backtest_result(num_trades=5, net_profit_pct=1.2),
         ]
-        
+
         result = _check_selector("generic", 0.8, 1.2)
-        
+
         assert result.passed is False
         assert "No differentiation" in result.reason
 
@@ -102,9 +103,9 @@ class TestCheckSelectorGeneric:
             make_backtest_result(num_trades=0, net_profit_pct=0.0),
             make_backtest_result(num_trades=0, net_profit_pct=0.0),
         ]
-        
+
         result = _check_selector("generic", 0.8, 1.2)
-        
+
         assert result.passed is False
         assert "No trades" in result.reason
 
@@ -114,9 +115,9 @@ class TestCheckSelectorGeneric:
             make_backtest_result(num_trades=0, net_profit_pct=0.0, error="API timeout"),
             make_backtest_result(num_trades=5, net_profit_pct=1.0),
         ]
-        
+
         result = _check_selector("generic", 0.8, 1.2)
-        
+
         assert result.passed is False
         assert "low IV backtest error" in result.reason
 
@@ -130,9 +131,9 @@ class TestCheckSelectorGregBot:
             make_backtest_result(num_trades=4, net_profit_pct=0.8),
             make_backtest_result(num_trades=6, net_profit_pct=2.0),
         ]
-        
+
         result = _check_selector("gregbot", 0.9, 1.1)
-        
+
         assert result.passed is True
         assert result.reason == "ok"
 
@@ -142,9 +143,9 @@ class TestCheckSelectorGregBot:
             make_backtest_result(num_trades=5, net_profit_pct=1.0),
             make_backtest_result(num_trades=4, net_profit_pct=1.0),
         ]
-        
+
         result = _check_selector("gregbot", 0.9, 1.1)
-        
+
         assert result.passed is False
         assert "GregBot not responding" in result.reason
 
@@ -158,21 +159,31 @@ class TestRunIVSanityCheck:
         mock_ds.return_value = MagicMock()
         mock_check.side_effect = [
             IVSanitySelectorResult(
-                selector="generic", iv_low=0.8, iv_high=1.2,
-                num_trades_low=5, num_trades_high=6,
-                net_profit_pct_low=1.0, net_profit_pct_high=2.5,
-                passed=True, reason="ok"
+                selector="generic",
+                iv_low=0.8,
+                iv_high=1.2,
+                num_trades_low=5,
+                num_trades_high=6,
+                net_profit_pct_low=1.0,
+                net_profit_pct_high=2.5,
+                passed=True,
+                reason="ok",
             ),
             IVSanitySelectorResult(
-                selector="gregbot", iv_low=0.9, iv_high=1.1,
-                num_trades_low=4, num_trades_high=5,
-                net_profit_pct_low=0.8, net_profit_pct_high=1.8,
-                passed=True, reason="ok"
+                selector="gregbot",
+                iv_low=0.9,
+                iv_high=1.1,
+                num_trades_low=4,
+                num_trades_high=5,
+                net_profit_pct_low=0.8,
+                net_profit_pct_high=1.8,
+                passed=True,
+                reason="ok",
             ),
         ]
-        
+
         result = run_iv_sanity_check()
-        
+
         assert result["status"] == "ok"
         assert "All IV sanity checks passed" in result["summary"]
         assert len(result["selectors"]) == 2
@@ -184,21 +195,31 @@ class TestRunIVSanityCheck:
         mock_ds.return_value = MagicMock()
         mock_check.side_effect = [
             IVSanitySelectorResult(
-                selector="generic", iv_low=0.8, iv_high=1.2,
-                num_trades_low=0, num_trades_high=0,
-                net_profit_pct_low=0.0, net_profit_pct_high=0.0,
-                passed=False, reason="No trades"
+                selector="generic",
+                iv_low=0.8,
+                iv_high=1.2,
+                num_trades_low=0,
+                num_trades_high=0,
+                net_profit_pct_low=0.0,
+                net_profit_pct_high=0.0,
+                passed=False,
+                reason="No trades",
             ),
             IVSanitySelectorResult(
-                selector="gregbot", iv_low=0.9, iv_high=1.1,
-                num_trades_low=0, num_trades_high=0,
-                net_profit_pct_low=0.0, net_profit_pct_high=0.0,
-                passed=False, reason="No trades"
+                selector="gregbot",
+                iv_low=0.9,
+                iv_high=1.1,
+                num_trades_low=0,
+                num_trades_high=0,
+                net_profit_pct_low=0.0,
+                net_profit_pct_high=0.0,
+                passed=False,
+                reason="No trades",
             ),
         ]
-        
+
         result = run_iv_sanity_check()
-        
+
         assert result["status"] == "failed"
         assert "All checks failed" in result["summary"]
 
@@ -208,29 +229,39 @@ class TestRunIVSanityCheck:
         mock_ds.return_value = MagicMock()
         mock_check.side_effect = [
             IVSanitySelectorResult(
-                selector="generic", iv_low=0.8, iv_high=1.2,
-                num_trades_low=5, num_trades_high=6,
-                net_profit_pct_low=1.0, net_profit_pct_high=2.5,
-                passed=True, reason="ok"
+                selector="generic",
+                iv_low=0.8,
+                iv_high=1.2,
+                num_trades_low=5,
+                num_trades_high=6,
+                net_profit_pct_low=1.0,
+                net_profit_pct_high=2.5,
+                passed=True,
+                reason="ok",
             ),
             IVSanitySelectorResult(
-                selector="gregbot", iv_low=0.9, iv_high=1.1,
-                num_trades_low=0, num_trades_high=0,
-                net_profit_pct_low=0.0, net_profit_pct_high=0.0,
-                passed=False, reason="No trades"
+                selector="gregbot",
+                iv_low=0.9,
+                iv_high=1.1,
+                num_trades_low=0,
+                num_trades_high=0,
+                net_profit_pct_low=0.0,
+                net_profit_pct_high=0.0,
+                passed=False,
+                reason="No trades",
             ),
         ]
-        
+
         result = run_iv_sanity_check()
-        
+
         assert result["status"] == "degraded"
         assert "Partial pass" in result["summary"]
 
     @patch("scripts.iv_sanity_check.DeribitDataSource")
     def test_data_source_error_returns_failed(self, mock_ds):
         mock_ds.side_effect = Exception("Connection refused")
-        
+
         result = run_iv_sanity_check()
-        
+
         assert result["status"] == "failed"
         assert "Failed to initialize data source" in result["summary"]

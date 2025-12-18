@@ -2,9 +2,9 @@
 
 import json
 import logging
-from typing import Any, Literal, Optional
+from typing import Literal, Optional
 
-from pydantic import BaseModel, ValidationError
+from pydantic import ValidationError
 
 from .config import SupervisorSettings
 from .llm import get_provider_for_role, DebateResponse
@@ -26,11 +26,11 @@ DEBATE_SCHEMA = """{
 
 class DebateSystem:
     """Runs Optimist/Skeptic/Arbiter debate with multi-provider support."""
-    
+
     def __init__(self, settings: SupervisorSettings):
         self.settings = settings
         self.max_context_chars = 4000
-    
+
     async def run_debate(
         self,
         verification: VerificationReport,
@@ -40,24 +40,20 @@ class DebateSystem:
     ) -> ArbiterDecision:
         """Run the 3-agent debate and return Arbiter's decision."""
         context = self._build_context(verification, changed_files, pr_title, pr_body)
-        
+
         optimist_response = await self._call_agent("optimist", context)
         skeptic_response = await self._call_agent(
-            "skeptic", 
-            context, 
-            optimist_view=optimist_response
+            "skeptic", context, optimist_view=optimist_response
         )
         arbiter_decision = await self._call_arbiter(
-            context, 
-            optimist_response, 
-            skeptic_response
+            context, optimist_response, skeptic_response
         )
-        
+
         arbiter_decision.optimist_summary = optimist_response.get("summary", "")[:500]
         arbiter_decision.skeptic_summary = skeptic_response.get("summary", "")[:500]
-        
+
         return arbiter_decision
-    
+
     def _build_context(
         self,
         verification: VerificationReport,
@@ -72,25 +68,29 @@ class DebateSystem:
             "",
             f"Changed files ({len(changed_files)}):",
         ]
-        
+
         for f in changed_files[:20]:
             parts.append(f"  - {f}")
-        
+
         if len(changed_files) > 20:
             parts.append(f"  ... and {len(changed_files) - 20} more")
-        
-        parts.extend([
-            "",
-            "Verification Results:",
-            f"  All passed: {verification.all_passed}",
-            f"  Failing tests: {', '.join(verification.failing_tests[:5])}",
-            "",
-            "Failure Summary:",
-            verification.failure_summary[:1500] if verification.failure_summary else "None",
-        ])
-        
-        return "\n".join(parts)[:self.max_context_chars]
-    
+
+        parts.extend(
+            [
+                "",
+                "Verification Results:",
+                f"  All passed: {verification.all_passed}",
+                f"  Failing tests: {', '.join(verification.failing_tests[:5])}",
+                "",
+                "Failure Summary:",
+                verification.failure_summary[:1500]
+                if verification.failure_summary
+                else "None",
+            ]
+        )
+
+        return "\n".join(parts)[: self.max_context_chars]
+
     async def _call_agent(
         self,
         role: Literal["optimist", "skeptic"],
@@ -99,12 +99,12 @@ class DebateSystem:
     ) -> dict:
         """Call an agent (Optimist or Skeptic) with retry for JSON validation."""
         provider, model = get_provider_for_role(role, self.settings)
-        
+
         if role == "optimist":
             prompt = self._build_optimist_prompt(context)
         else:
             prompt = self._build_skeptic_prompt(context, optimist_view or {})
-        
+
         for attempt in range(2):
             try:
                 result = await provider.generate_json(
@@ -120,19 +120,21 @@ class DebateSystem:
                 agent_role = payload.pop("role", role)
                 response = DebateResponse(role=agent_role, **payload)
                 return response.model_dump()
-                
+
             except (json.JSONDecodeError, ValidationError) as e:
-                logger.warning(f"JSON validation failed for {role} (attempt {attempt + 1}): {e}")
+                logger.warning(
+                    f"JSON validation failed for {role} (attempt {attempt + 1}): {e}"
+                )
                 if attempt == 0:
                     prompt = f"{prompt}\n\nIMPORTANT: Return ONLY valid JSON matching the schema."
                 continue
-        
+
         return {
             "role": role,
             "summary": "Failed to generate valid response",
             "bullets": [],
         }
-    
+
     async def _call_arbiter(
         self,
         context: str,
@@ -142,7 +144,7 @@ class DebateSystem:
         """Call the Arbiter agent to make final decision with retry."""
         provider, model = get_provider_for_role("arbiter", self.settings)
         prompt = self._build_arbiter_prompt(context, optimist_view, skeptic_view)
-        
+
         for attempt in range(2):
             try:
                 result = await provider.generate_json(
@@ -164,20 +166,22 @@ class DebateSystem:
                     stop_reason=response.stop_reason,
                     arbiter_reasoning=response.summary,
                 )
-                
+
             except (json.JSONDecodeError, ValidationError) as e:
-                logger.warning(f"JSON validation failed for arbiter (attempt {attempt + 1}): {e}")
+                logger.warning(
+                    f"JSON validation failed for arbiter (attempt {attempt + 1}): {e}"
+                )
                 if attempt == 0:
                     prompt = f"{prompt}\n\nIMPORTANT: Return ONLY valid JSON matching the schema."
                 continue
-        
+
         return ArbiterDecision(
             auto_fix_allowed=False,
             risk_level="unknown",
             stop_reason="debate_output_invalid",
             arbiter_reasoning="Failed to parse arbiter response",
         )
-    
+
     def _build_optimist_prompt(self, context: str) -> str:
         """Build the Optimist agent prompt."""
         return f"""You are the OPTIMIST in a code review debate. Your role is to:
@@ -201,7 +205,7 @@ Be concise. Max 3 bullet points. Focus on solutions."""
         """Build the Skeptic agent prompt."""
         optimist_summary = optimist_view.get("summary", "")
         optimist_bullets = optimist_view.get("bullets", [])
-        
+
         return f"""You are the SKEPTIC in a code review debate. Your role is to:
 1. Find hidden risks and edge cases
 2. Challenge the Optimist's assumptions
@@ -212,7 +216,7 @@ Context:
 
 Optimist's view:
 Summary: {optimist_summary}
-Points: {', '.join(optimist_bullets[:3])}
+Points: {", ".join(optimist_bullets[:3])}
 
 Respond with JSON matching this schema:
 {{
@@ -236,12 +240,12 @@ Context:
 {context}
 
 Optimist's view:
-{optimist_view.get('summary', '')}
-{', '.join(optimist_view.get('bullets', [])[:3])}
+{optimist_view.get("summary", "")}
+{", ".join(optimist_view.get("bullets", [])[:3])}
 
 Skeptic's view:
-{skeptic_view.get('summary', '')}
-{', '.join(skeptic_view.get('bullets', [])[:3])}
+{skeptic_view.get("summary", "")}
+{", ".join(skeptic_view.get("bullets", [])[:3])}
 
 Respond with JSON matching this schema:
 {{

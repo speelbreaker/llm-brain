@@ -2,6 +2,7 @@
 Deribit API client for live trading.
 Extends DeribitBaseClient with authentication for private endpoints.
 """
+
 from __future__ import annotations
 
 import time
@@ -17,12 +18,12 @@ __all__ = ["DeribitClient", "DeribitAPIError"]
 class DeribitClient(DeribitBaseClient):
     """
     Deribit API client with authentication for live trading.
-    
+
     Extends DeribitBaseClient with:
     - OAuth2 authentication (client credentials flow)
     - Private endpoint support (positions, orders, account)
     """
-    
+
     def __init__(
         self,
         base_url: Optional[str] = None,
@@ -35,11 +36,11 @@ class DeribitClient(DeribitBaseClient):
         )
         self.client_id = client_id or settings.deribit_client_id
         self.client_secret = client_secret or settings.deribit_client_secret
-        
+
         self._access_token: Optional[str] = None
         self._refresh_token: Optional[str] = None
         self._token_expiry: float = 0
-    
+
     def _make_request(
         self,
         method: str,
@@ -53,17 +54,19 @@ class DeribitClient(DeribitBaseClient):
             return self._make_jsonrpc_request(method, params, headers)
         else:
             return self._make_public_request(method, params)
-    
+
     def _ensure_authenticated(self) -> None:
         """Ensure we have a valid access token."""
         if not self.client_id or not self.client_secret:
-            raise DeribitAPIError(-1, "Client ID and secret are required for private endpoints")
-        
+            raise DeribitAPIError(
+                -1, "Client ID and secret are required for private endpoints"
+            )
+
         if self._access_token and time.time() < self._token_expiry - 60:
             return
-        
+
         self._authenticate()
-    
+
     def _authenticate(self) -> None:
         """Authenticate and get access token."""
         params = {
@@ -71,24 +74,24 @@ class DeribitClient(DeribitBaseClient):
             "client_id": self.client_id,
             "client_secret": self.client_secret,
         }
-        
+
         result = self._make_public_request("public/auth", params)
-        
+
         self._access_token = result["access_token"]
         self._refresh_token = result.get("refresh_token")
         self._token_expiry = time.time() + result.get("expires_in", 900)
-    
+
     def get_index_price(self, currency: str) -> float:
         """Get the current index (spot) price for a currency."""
         params = {"index_name": f"{currency.lower()}_usd"}
         result = self._make_request("public/get_index_price", params)
         return result["index_price"]
-    
+
     def get_ticker(self, instrument_name: str) -> dict[str, Any]:
         """Get ticker data for an instrument."""
         params = {"instrument_name": instrument_name}
         return self._make_request("public/ticker", params)
-    
+
     def get_instruments(
         self,
         currency: str,
@@ -102,7 +105,7 @@ class DeribitClient(DeribitBaseClient):
             "expired": str(expired).lower(),
         }
         return self._make_request("public/get_instruments", params)
-    
+
     def get_order_book(
         self,
         instrument_name: str,
@@ -114,12 +117,12 @@ class DeribitClient(DeribitBaseClient):
             "depth": depth,
         }
         return self._make_request("public/get_order_book", params)
-    
+
     def get_account_summary(self, currency: str) -> dict[str, Any]:
         """Get account summary (private endpoint)."""
         params = {"currency": currency.upper()}
         return self._make_request("private/get_account_summary", params, private=True)
-    
+
     def get_positions(
         self,
         currency: str,
@@ -131,7 +134,7 @@ class DeribitClient(DeribitBaseClient):
             "kind": kind,
         }
         return self._make_request("private/get_positions", params, private=True)
-    
+
     def place_order(
         self,
         instrument_name: str,
@@ -145,7 +148,7 @@ class DeribitClient(DeribitBaseClient):
     ) -> dict[str, Any]:
         """
         Place an order (private endpoint).
-        
+
         Args:
             instrument_name: Instrument to trade
             side: 'buy' or 'sell'
@@ -161,31 +164,33 @@ class DeribitClient(DeribitBaseClient):
             "amount": amount,
             "type": order_type,
         }
-        
+
         if post_only:
             params["post_only"] = True
         if reduce_only:
             params["reduce_only"] = True
-        
+
         if price is not None:
             params["price"] = price
-        
+
         if label:
             params["label"] = label
-        
+
         method = f"private/{side}"
         return self._make_request(method, params, private=True)
-    
+
     def cancel_order(self, order_id: str) -> dict[str, Any]:
         """Cancel an order by ID (private endpoint)."""
         params = {"order_id": order_id}
         return self._make_request("private/cancel", params, private=True)
-    
+
     def cancel_all_by_instrument(self, instrument_name: str) -> int:
         """Cancel all orders for an instrument (private endpoint)."""
         params = {"instrument_name": instrument_name}
-        return self._make_request("private/cancel_all_by_instrument", params, private=True)
-    
+        return self._make_request(
+            "private/cancel_all_by_instrument", params, private=True
+        )
+
     def get_tradingview_chart_data(
         self,
         instrument_name: str,
@@ -195,19 +200,19 @@ class DeribitClient(DeribitBaseClient):
     ) -> dict[str, Any]:
         """
         Get TradingView-style OHLCV chart data.
-        
+
         Args:
             instrument_name: Instrument or index name (e.g. "btc_usd", "BTC-PERPETUAL")
             start: Start datetime
             end: End datetime
             resolution: Candle resolution ('1', '5', '15', '60', '240', '1D')
-        
+
         Returns:
             Dict with keys: ticks, open, high, low, close, volume
         """
         start_ms = int(start.timestamp() * 1000)
         end_ms = int(end.timestamp() * 1000)
-        
+
         params = {
             "instrument_name": instrument_name,
             "start_timestamp": start_ms,
@@ -215,7 +220,7 @@ class DeribitClient(DeribitBaseClient):
             "resolution": resolution,
         }
         return self._make_request("public/get_tradingview_chart_data", params)
-    
+
     def get_volatility_index_data(
         self,
         currency: str,
@@ -225,19 +230,19 @@ class DeribitClient(DeribitBaseClient):
     ) -> dict[str, Any]:
         """
         Get DVOL (Deribit Volatility Index) historical data.
-        
+
         Args:
             currency: Currency code (e.g. "BTC", "ETH")
             start: Start datetime
             end: End datetime
             resolution: Resolution in seconds ('60', '3600', '43200', '1D')
-        
+
         Returns:
             Dict with keys: data (list of [timestamp, open, high, low, close])
         """
         start_ms = int(start.timestamp() * 1000)
         end_ms = int(end.timestamp() * 1000)
-        
+
         params = {
             "currency": currency,
             "start_timestamp": start_ms,

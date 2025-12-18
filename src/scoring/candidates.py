@@ -8,22 +8,24 @@ This module provides a single scoring function used by:
 By centralizing scoring logic, we ensure consistent candidate ranking
 across all modes of operation.
 """
+
 from __future__ import annotations
 
 import math
 from typing import Any, Literal, Mapping, TypedDict
 
 ScoringProfile = Literal[
-    "backtest",      # Full backtest scoring with market context
-    "live",          # Live trading scoring
+    "backtest",  # Full backtest scoring with market context
+    "live",  # Live trading scoring
     "conservative",  # Training: low delta preference
-    "moderate",      # Training: mid delta preference
-    "aggressive",    # Training: high delta preference
+    "moderate",  # Training: mid delta preference
+    "aggressive",  # Training: high delta preference
 ]
 
 
 class ScoringConfig(TypedDict, total=False):
     """Configuration for scoring function."""
+
     target_delta: float
     target_dte: float
     ivrv_min: float
@@ -103,10 +105,6 @@ def score_option_candidate(
     target_delta = config.get("target_delta", 0.25)
     target_dte = config.get("target_dte", 7.0)
     ivrv_min = config.get("ivrv_min", 1.0)
-
-    delta = float(features.get("delta", 0.0))
-    dte = float(features.get("dte", 7.0))
-    ivrv = float(features.get("ivrv", 1.0))
 
     if profile == "backtest":
         return _score_backtest(features, target_delta, target_dte)
@@ -222,10 +220,6 @@ def _score_training_profile(
 
     delta_distance = abs(delta - target_delta)
 
-    score = (
-        premium_usd / 100.0
-        - delta_distance * 10
-        + (ivrv - 1.0) * 5
-    )
+    score = premium_usd / 100.0 - delta_distance * 10 + (ivrv - 1.0) * 5
 
     return score

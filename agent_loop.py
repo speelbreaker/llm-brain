@@ -3,6 +3,7 @@
 Main agent loop script.
 Runs the options trading agent with configurable decision mode (rule-based or LLM).
 """
+
 from __future__ import annotations
 
 import signal
@@ -24,14 +25,12 @@ from src.reconciliation import (
     reconcile_positions,
     format_reconciliation_summary,
     run_reconciliation_once,
-    get_reconciliation_status,
 )
 from src.position_tracker import position_tracker
-from src.strategies import build_default_registry, StrategyRegistry
+from src.strategies import build_default_registry
 from src.policy_rule_based import decide_action as rule_decide_action
 from src.agent_brain_llm import choose_action_with_llm
 from src.healthcheck import (
-    run_agent_healthcheck,
     format_healthcheck_banner,
     run_and_cache_healthcheck,
     set_agent_paused_due_to_health,
@@ -72,10 +71,16 @@ def _build_status_snapshot(
             "portfolio": {
                 "balances": agent_state.portfolio.balances if agent_state else {},
                 "equity_usd": agent_state.portfolio.equity_usd if agent_state else 0,
-                "margin_used_pct": agent_state.portfolio.margin_used_pct if agent_state else 0,
-                "margin_available_usd": agent_state.portfolio.margin_available_usd if agent_state else 0,
+                "margin_used_pct": agent_state.portfolio.margin_used_pct
+                if agent_state
+                else 0,
+                "margin_available_usd": agent_state.portfolio.margin_available_usd
+                if agent_state
+                else 0,
                 "net_delta": agent_state.portfolio.net_delta if agent_state else 0,
-                "positions_count": len(agent_state.portfolio.option_positions) if agent_state else 0,
+                "positions_count": len(agent_state.portfolio.option_positions)
+                if agent_state
+                else 0,
                 "positions": [
                     {
                         "symbol": p.symbol,
@@ -89,7 +94,9 @@ def _build_status_snapshot(
                         "unrealized_pnl": p.unrealized_pnl,
                         "delta": p.delta,
                     }
-                    for p in (agent_state.portfolio.option_positions if agent_state else [])
+                    for p in (
+                        agent_state.portfolio.option_positions if agent_state else []
+                    )
                 ],
             },
             "vol_state": {
@@ -98,7 +105,9 @@ def _build_status_snapshot(
                 "eth_iv": agent_state.vol_state.eth_iv if agent_state else 0,
                 "eth_ivrv": agent_state.vol_state.eth_ivrv if agent_state else 1,
             },
-            "candidates_count": len(agent_state.candidate_options) if agent_state else 0,
+            "candidates_count": len(agent_state.candidate_options)
+            if agent_state
+            else 0,
             "top_candidates": [
                 {
                     "symbol": c.symbol,
@@ -126,18 +135,28 @@ def _build_status_snapshot(
             "decision_mode": settings.decision_mode,
             "training_mode": settings.is_training_enabled,
             "training_on_testnet": settings.is_training_on_testnet,
-            "training_strategies": settings.training_strategies if settings.is_training_enabled else [],
+            "training_strategies": settings.training_strategies
+            if settings.is_training_enabled
+            else [],
             "explore_prob": settings.explore_prob,
             "explore_top_k": settings.explore_top_k,
-            "effective_delta_range": [settings.effective_delta_min, settings.effective_delta_max],
-            "effective_dte_range": [settings.effective_dte_min, settings.effective_dte_max],
+            "effective_delta_range": [
+                settings.effective_delta_min,
+                settings.effective_delta_max,
+            ],
+            "effective_dte_range": [
+                settings.effective_dte_min,
+                settings.effective_dte_max,
+            ],
             "max_margin_used_pct": settings.max_margin_used_pct,
             "max_net_delta_abs": settings.max_net_delta_abs,
             "daily_drawdown_limit_pct": settings.daily_drawdown_limit_pct,
             "kill_switch_enabled": settings.kill_switch_enabled,
         },
         "decision_source": final_action.get("decision_source", "unknown"),
-        "strategy_id": final_action.get("strategy_id", proposed_action.get("strategy_id", "covered_call_v1")),
+        "strategy_id": final_action.get(
+            "strategy_id", proposed_action.get("strategy_id", "covered_call_v1")
+        ),
         "decision_mode": settings.decision_mode,
         "rule_action": rule_action,
         "llm_action": llm_action,
@@ -156,17 +175,18 @@ def run_agent_loop_forever(
       - executes or simulates,
       - logs to JSONL,
       - if status_callback is provided, calls it with a compact snapshot.
-    
+
     Args:
         status_callback: Optional callback to receive status updates each iteration.
     """
     global shutdown_requested
-    
+
     import threading
+
     if threading.current_thread() is threading.main_thread():
         signal.signal(signal.SIGINT, signal_handler)
         signal.signal(signal.SIGTERM, signal_handler)
-    
+
     print("=" * 60)
     print(f"Options Trading Agent - Deribit {settings.deribit_env.upper()}")
     print("=" * 60)
@@ -178,16 +198,20 @@ def run_agent_loop_forever(
     if settings.is_training_enabled:
         print(f"  Profile Mode: {settings.training_profile_mode.upper()}")
         print(f"  Strategies: {', '.join(settings.training_strategies)}")
-        print(f"  Max Calls per Underlying: {settings.max_calls_per_underlying_training}")
+        print(
+            f"  Max Calls per Underlying: {settings.max_calls_per_underlying_training}"
+        )
         if settings.is_training_on_testnet:
-            print(f"  Risk Checks: BYPASSED (training on testnet)")
+            print("  Risk Checks: BYPASSED (training on testnet)")
         else:
-            print(f"  Risk Checks: ENFORCED (mainnet)")
+            print("  Risk Checks: ENFORCED (mainnet)")
     print(f"Dry Run: {settings.dry_run}")
     print(f"Explore Probability: {settings.explore_prob * 100:.0f}%")
     print(f"Loop Interval: {settings.loop_interval_sec} seconds")
     print(f"Underlyings: {', '.join(settings.underlyings)}")
-    print(f"Delta Range: {settings.effective_delta_min:.2f} - {settings.effective_delta_max:.2f}")
+    print(
+        f"Delta Range: {settings.effective_delta_min:.2f} - {settings.effective_delta_max:.2f}"
+    )
     print(f"DTE Range: {settings.effective_dte_min} - {settings.effective_dte_max}")
     print(f"Max Margin: {settings.max_margin_used_pct}%")
     print(f"Max Delta: {settings.max_net_delta_abs}")
@@ -195,9 +219,9 @@ def run_agent_loop_forever(
     print(f"Kill Switch: {'ENABLED' if settings.kill_switch_enabled else 'Disabled'}")
     print(f"Position Reconcile: {settings.position_reconcile_action.upper()}")
     print("=" * 60)
-    
+
     global last_health_recheck_time
-    
+
     if settings.health_check_on_startup:
         print("\n[Startup] Running healthcheck...")
         try:
@@ -205,33 +229,43 @@ def run_agent_loop_forever(
             healthcheck_result = cached_health.details
             print(format_healthcheck_banner(healthcheck_result))
             last_health_recheck_time = time.time()
-            
+
             if cached_health.overall_status == "FAIL":
                 severity = cached_health.worst_severity
                 sev_str = severity.value if severity else "unknown"
-                
+
                 if not settings.is_testnet:
                     if severity == HealthSeverity.FATAL:
                         print("\n" + "!" * 60)
-                        print(f"FATAL HEALTH FAILURE ON MAINNET - ABORTING AGENT START")
+                        print("FATAL HEALTH FAILURE ON MAINNET - ABORTING AGENT START")
                         print("!" * 60)
                         print("Fix the issues above before running on mainnet.")
                         sys.exit(1)
                     elif severity == HealthSeverity.TRANSIENT:
-                        print(f"\n[WARNING] TRANSIENT health issue ({sev_str}). Proceeding with caution on mainnet...")
+                        print(
+                            f"\n[WARNING] TRANSIENT health issue ({sev_str}). Proceeding with caution on mainnet..."
+                        )
                     else:
                         print("\n" + "!" * 60)
-                        print(f"HEALTHCHECK FAILED ON MAINNET (severity: {sev_str}) - ABORTING")
+                        print(
+                            f"HEALTHCHECK FAILED ON MAINNET (severity: {sev_str}) - ABORTING"
+                        )
                         print("!" * 60)
                         sys.exit(1)
                 elif settings.auto_kill_on_health_fail:
                     if severity == HealthSeverity.TRANSIENT:
-                        print(f"\n[WARNING] TRANSIENT health issue on testnet ({sev_str}). Continuing...")
+                        print(
+                            f"\n[WARNING] TRANSIENT health issue on testnet ({sev_str}). Continuing..."
+                        )
                     else:
-                        print(f"\n[WARNING] Health FAIL (severity: {sev_str}) on testnet, auto_kill armed...")
+                        print(
+                            f"\n[WARNING] Health FAIL (severity: {sev_str}) on testnet, auto_kill armed..."
+                        )
                         set_agent_paused_due_to_health(True)
                 else:
-                    print(f"\n[WARNING] Healthcheck failed (severity: {sev_str}) but continuing on testnet...")
+                    print(
+                        f"\n[WARNING] Healthcheck failed (severity: {sev_str}) but continuing on testnet..."
+                    )
             elif cached_health.overall_status == "WARN":
                 print("\n[INFO] Starting agent with WARN health status...")
         except Exception as e:
@@ -241,13 +275,13 @@ def run_agent_loop_forever(
                 sys.exit(1)
     else:
         print("\n[Startup] Healthcheck disabled (health_check_on_startup=False)")
-    
+
     client = DeribitClient()
-    
+
     strategy_registry = build_default_registry(settings)
     active_strategies = strategy_registry.get_active_strategies()
     print(f"Strategies: {[s.name for s in active_strategies]}")
-    
+
     startup_reconciliation_failed = False
     if settings.position_reconcile_on_startup:
         print("\n[Startup] Running position reconciliation...")
@@ -258,22 +292,30 @@ def run_agent_loop_forever(
                 settings=settings,
             )
             if startup_diff.is_clean:
-                print(f"[Startup] Positions IN SYNC (exchange={startup_diff.exchange_count}, local={startup_diff.local_count})")
+                print(
+                    f"[Startup] Positions IN SYNC (exchange={startup_diff.exchange_count}, local={startup_diff.local_count})"
+                )
             else:
                 print("\n" + "!" * 60)
                 print("STARTUP RECONCILIATION FAILED - POSITION MISMATCH DETECTED")
                 print("!" * 60)
                 diff_dict = startup_diff.to_dict()
                 if diff_dict["untracked_on_exchange"]:
-                    print(f"  Untracked on exchange: {', '.join(diff_dict['untracked_on_exchange'])}")
+                    print(
+                        f"  Untracked on exchange: {', '.join(diff_dict['untracked_on_exchange'])}"
+                    )
                 if diff_dict["missing_on_exchange"]:
-                    print(f"  Missing on exchange: {', '.join(diff_dict['missing_on_exchange'])}")
+                    print(
+                        f"  Missing on exchange: {', '.join(diff_dict['missing_on_exchange'])}"
+                    )
                 if diff_dict["size_mismatches"]:
-                    print(f"  Size mismatches:")
+                    print("  Size mismatches:")
                     for m in diff_dict["size_mismatches"]:
-                        print(f"    {m['symbol']}: local={m['local']:.4f}, exchange={m['exchange']:.4f}")
+                        print(
+                            f"    {m['symbol']}: local={m['local']:.4f}, exchange={m['exchange']:.4f}"
+                        )
                 print("!" * 60)
-                
+
                 if settings.position_reconcile_action == "halt":
                     startup_reconciliation_failed = True
                     print("Agent will NOT trade until positions are reconciled.")
@@ -288,51 +330,62 @@ def run_agent_loop_forever(
             print(f"[Startup] Reconciliation error: {e}")
             traceback.print_exc()
             log_error("startup_reconciliation_error", str(e))
-    
+
     print("\nStarting agent loop...\n")
-    
+
     iteration = 0
-    
+
     try:
         while not shutdown_requested:
             iteration += 1
             loop_start = time.time()
-            
-            print(f"\n{'='*60}")
+
+            print(f"\n{'=' * 60}")
             print(f"Iteration {iteration} - {datetime.utcnow().isoformat()}")
-            print(f"{'='*60}")
-            
+            print(f"{'=' * 60}")
+
             if is_agent_paused_due_to_health():
-                print("\n[HEALTH GUARD] Agent paused due to health failure. Skipping trading.")
+                print(
+                    "\n[HEALTH GUARD] Agent paused due to health failure. Skipping trading."
+                )
                 print("[HEALTH GUARD] Will re-check health on next interval.")
                 time.sleep(settings.loop_interval_sec)
-                
+
                 if settings.health_recheck_interval_seconds > 0:
                     recheck_health = run_and_cache_healthcheck(settings)
                     last_health_recheck_time = time.time()
                     severity = recheck_health.worst_severity
-                    
+
                     if recheck_health.overall_status != "FAIL":
-                        print(f"[HEALTH GUARD] Health restored to {recheck_health.overall_status}. Resuming trading.")
+                        print(
+                            f"[HEALTH GUARD] Health restored to {recheck_health.overall_status}. Resuming trading."
+                        )
                         set_agent_paused_due_to_health(False)
                     elif severity == HealthSeverity.TRANSIENT:
-                        print(f"[HEALTH GUARD] TRANSIENT issue ({recheck_health.summary}). Resuming trading.")
+                        print(
+                            f"[HEALTH GUARD] TRANSIENT issue ({recheck_health.summary}). Resuming trading."
+                        )
                         set_agent_paused_due_to_health(False)
                     else:
                         sev_str = severity.value if severity else "unknown"
-                        print(f"[HEALTH GUARD] Health still FAIL (severity: {sev_str}): {recheck_health.summary}")
+                        print(
+                            f"[HEALTH GUARD] Health still FAIL (severity: {sev_str}): {recheck_health.summary}"
+                        )
                 continue
-            
-            if (settings.health_recheck_interval_seconds > 0 and 
-                settings.auto_kill_on_health_fail and
-                time.time() - last_health_recheck_time > settings.health_recheck_interval_seconds):
+
+            if (
+                settings.health_recheck_interval_seconds > 0
+                and settings.auto_kill_on_health_fail
+                and time.time() - last_health_recheck_time
+                > settings.health_recheck_interval_seconds
+            ):
                 print("\n[HEALTH] Running periodic health re-check...")
                 try:
                     recheck_health = run_and_cache_healthcheck(settings)
                     last_health_recheck_time = time.time()
-                    
+
                     severity = recheck_health.worst_severity
-                    
+
                     if recheck_health.overall_status == "FAIL":
                         if severity == HealthSeverity.FATAL:
                             print("\n" + "!" * 60)
@@ -343,23 +396,29 @@ def run_agent_loop_forever(
                             time.sleep(settings.loop_interval_sec)
                             continue
                         elif severity == HealthSeverity.TRANSIENT:
-                            print(f"[HEALTH] TRANSIENT issue detected ({recheck_health.summary}). Will retry.")
+                            print(
+                                f"[HEALTH] TRANSIENT issue detected ({recheck_health.summary}). Will retry."
+                            )
                         else:
                             print("\n" + "!" * 60)
                             print("AGENT PAUSED - System Health FAIL during runtime")
-                            print(f"Summary: {recheck_health.summary} (severity: {severity.value if severity else 'unknown'})")
+                            print(
+                                f"Summary: {recheck_health.summary} (severity: {severity.value if severity else 'unknown'})"
+                            )
                             print("!" * 60)
                             set_agent_paused_due_to_health(True)
                             time.sleep(settings.loop_interval_sec)
                             continue
                     elif recheck_health.overall_status == "WARN":
                         sev_str = f", severity: {severity.value}" if severity else ""
-                        print(f"[HEALTH] Health status: WARN ({recheck_health.summary}{sev_str})")
+                        print(
+                            f"[HEALTH] Health status: WARN ({recheck_health.summary}{sev_str})"
+                        )
                     else:
-                        print(f"[HEALTH] Health status: OK")
+                        print("[HEALTH] Health status: OK")
                 except Exception as e:
                     print(f"[HEALTH] Re-check error: {e}")
-            
+
             agent_state = None
             proposed_action = {
                 "action": ActionType.DO_NOTHING.value,
@@ -370,23 +429,29 @@ def run_agent_loop_forever(
             allowed = False
             reasons: list = []
             execution_result: Dict[str, Any] = {"status": "pending"}
-            
+
             try:
                 print("Fetching agent state...")
                 agent_state = build_agent_state(client, settings)
-                
-                print(f"Spot: BTC=${agent_state.spot.get('BTC', 0):,.0f}, "
-                      f"ETH=${agent_state.spot.get('ETH', 0):,.0f}")
-                print(f"Portfolio: ${agent_state.portfolio.equity_usd:,.2f} equity, "
-                      f"{agent_state.portfolio.margin_used_pct:.1f}% margin used")
+
+                print(
+                    f"Spot: BTC=${agent_state.spot.get('BTC', 0):,.0f}, "
+                    f"ETH=${agent_state.spot.get('ETH', 0):,.0f}"
+                )
+                print(
+                    f"Portfolio: ${agent_state.portfolio.equity_usd:,.2f} equity, "
+                    f"{agent_state.portfolio.margin_used_pct:.1f}% margin used"
+                )
                 print(f"Positions: {len(agent_state.portfolio.option_positions)}")
                 print(f"Candidates: {len(agent_state.candidate_options)}")
-                
+
                 if agent_state.candidate_options:
                     print("\nTop Candidates:")
                     for i, c in enumerate(agent_state.candidate_options[:3], 1):
-                        print(f"  {i}. {c.symbol} - DTE:{c.dte}, "
-                              f"delta:{c.delta:.2f}, premium:${c.premium_usd:.2f}")
+                        print(
+                            f"  {i}. {c.symbol} - DTE:{c.dte}, "
+                            f"delta:{c.delta:.2f}, premium:${c.premium_usd:.2f}"
+                        )
 
             except DeribitAPIError as e:
                 error_msg = f"Failed to build agent state: {e}"
@@ -398,15 +463,25 @@ def run_agent_loop_forever(
                 error_msg = f"Unexpected error building state: {e}"
                 print(f"ERROR: {error_msg}")
                 traceback.print_exc()
-                log_error("state_build_error", error_msg, {"traceback": traceback.format_exc()})
+                log_error(
+                    "state_build_error",
+                    error_msg,
+                    {"traceback": traceback.format_exc()},
+                )
                 time.sleep(settings.loop_interval_sec)
                 continue
 
-            reconciliation_stats: Dict[str, Any] = {"divergent": False, "is_clean": True}
+            reconciliation_stats: Dict[str, Any] = {
+                "divergent": False,
+                "is_clean": True,
+            }
             reconciliation_halted = startup_reconciliation_failed
             reconciliation_status = "clean"
-            
-            if settings.position_reconcile_on_each_loop and not startup_reconciliation_failed:
+
+            if (
+                settings.position_reconcile_on_each_loop
+                and not startup_reconciliation_failed
+            ):
                 try:
                     exchange_positions = [
                         {
@@ -422,10 +497,10 @@ def run_agent_loop_forever(
                         }
                         for p in agent_state.portfolio.option_positions
                     ]
-                    
+
                     local_payload = position_tracker.get_open_positions_payload()
                     local_positions = local_payload.get("positions", [])
-                    
+
                     _, reconciliation_stats = reconcile_positions(
                         exchange_positions=exchange_positions,
                         local_positions=local_positions,
@@ -433,31 +508,47 @@ def run_agent_loop_forever(
                         tolerance_usd=settings.position_reconcile_tolerance_usd,
                         spot_prices=agent_state.spot,
                     )
-                    
-                    reconciliation_status = "clean" if reconciliation_stats.get("is_clean", not reconciliation_stats["divergent"]) else "out_of_sync"
-                    
+
+                    reconciliation_status = (
+                        "clean"
+                        if reconciliation_stats.get(
+                            "is_clean", not reconciliation_stats["divergent"]
+                        )
+                        else "out_of_sync"
+                    )
+
                     if reconciliation_stats["divergent"]:
-                        print(f"\n{format_reconciliation_summary(reconciliation_stats)}")
-                        
+                        print(
+                            f"\n{format_reconciliation_summary(reconciliation_stats)}"
+                        )
+
                         if settings.position_reconcile_action == "halt":
                             reconciliation_halted = True
                             print("Trading HALTED due to position divergence.")
                         else:
-                            rebuilt_count = position_tracker.rebuild_from_exchange(exchange_positions)
-                            print(f"Auto-healed: rebuilt {rebuilt_count} positions from exchange.")
+                            rebuilt_count = position_tracker.rebuild_from_exchange(
+                                exchange_positions
+                            )
+                            print(
+                                f"Auto-healed: rebuilt {rebuilt_count} positions from exchange."
+                            )
                     else:
-                        print(f"\nPositions: IN SYNC (exchange={reconciliation_stats['exchange_count']}, local={reconciliation_stats['local_count']})")
-                        
+                        print(
+                            f"\nPositions: IN SYNC (exchange={reconciliation_stats['exchange_count']}, local={reconciliation_stats['local_count']})"
+                        )
+
                 except Exception as e:
                     print(f"Reconciliation error (continuing): {e}")
                     log_error("reconciliation_error", str(e))
             elif startup_reconciliation_failed:
                 reconciliation_status = "startup_failed"
-                print("\n[Reconciliation] Skipped - startup check failed, trading blocked.")
-            
+                print(
+                    "\n[Reconciliation] Skipped - startup check failed, trading blocked."
+                )
+
             training_actions: list = []
             is_training = settings.is_training_enabled
-            
+
             if reconciliation_halted:
                 final_action = {
                     "action": ActionType.DO_NOTHING.value,
@@ -467,8 +558,11 @@ def run_agent_loop_forever(
                 }
                 allowed = False
                 reasons = ["Position divergence - trading halted"]
-                execution_result = {"status": "halted", "message": "Position divergence"}
-                
+                execution_result = {
+                    "status": "halted",
+                    "message": "Position divergence",
+                }
+
                 snapshot = _build_status_snapshot(
                     agent_state=agent_state,
                     proposed_action=final_action,
@@ -479,7 +573,7 @@ def run_agent_loop_forever(
                 )
                 snapshot["reconciliation"] = reconciliation_stats
                 snapshot["reconciliation_status"] = reconciliation_status
-                
+
                 try:
                     log_decision(
                         agent_state=agent_state,
@@ -491,7 +585,7 @@ def run_agent_loop_forever(
                     )
                 except Exception:
                     pass
-                
+
                 decision_entry = {
                     "timestamp": datetime.utcnow().isoformat(),
                     "decision_source": "reconciliation_halt",
@@ -503,32 +597,36 @@ def run_agent_loop_forever(
                     "reconciliation_status": reconciliation_status,
                 }
                 decisions_store.add(decision_entry)
-                
+
                 if status_callback:
                     status_callback(snapshot)
-                
+
                 elapsed = time.time() - loop_start
                 sleep_time = max(0, settings.loop_interval_sec - elapsed)
-                print(f"\nIteration complete in {elapsed:.1f}s, sleeping {sleep_time:.0f}s...")
+                print(
+                    f"\nIteration complete in {elapsed:.1f}s, sleeping {sleep_time:.0f}s..."
+                )
                 time.sleep(sleep_time)
                 continue
 
             rule_action: Optional[Dict[str, Any]] = None
             llm_action: Optional[Dict[str, Any]] = None
             decision_source = "unknown"
-            
+
             try:
                 print("\nMaking decision...")
-                
+
                 if is_training:
                     all_proposed_actions: list[dict[str, Any]] = []
                     for strategy in strategy_registry.get_active_strategies():
                         actions = strategy.propose_actions(agent_state)
                         all_proposed_actions.extend(actions)
-                    
+
                     if len(all_proposed_actions) > 1:
                         training_actions = all_proposed_actions
-                        print(f"Training mode: {len(training_actions)} actions across profiles")
+                        print(
+                            f"Training mode: {len(training_actions)} actions across profiles"
+                        )
                         for ta in training_actions:
                             strat = ta.get("strategy", "?")
                             sym = ta.get("params", {}).get("symbol", "?")
@@ -536,7 +634,9 @@ def run_agent_loop_forever(
                             delta = diag.get("delta", 0)
                             dte = diag.get("dte", 0)
                             premium = diag.get("premium_usd", 0)
-                            print(f"  [{strat}] {sym} Δ={delta:.3f} DTE={dte} ${premium:.2f}")
+                            print(
+                                f"  [{strat}] {sym} Δ={delta:.3f} DTE={dte} ${premium:.2f}"
+                            )
                         proposed_action = training_actions[0]
                         decision_source = "training_mode"
                     elif all_proposed_actions:
@@ -554,18 +654,20 @@ def run_agent_loop_forever(
                 else:
                     rule_action = rule_decide_action(agent_state, settings)
                     rule_action["strategy_id"] = "covered_call_v1"
-                    print(f"Rule-based proposed: {rule_action.get('action', 'DO_NOTHING')}")
-                    
+                    print(
+                        f"Rule-based proposed: {rule_action.get('action', 'DO_NOTHING')}"
+                    )
+
                     should_compute_llm = (
-                        settings.llm_enabled and 
-                        settings.decision_mode in ("llm_only", "hybrid_shadow")
+                        settings.llm_enabled
+                        and settings.decision_mode in ("llm_only", "hybrid_shadow")
                     )
                     should_compute_shadow = (
-                        settings.llm_enabled and 
-                        settings.llm_shadow_enabled and
-                        settings.decision_mode == "rule_only"
+                        settings.llm_enabled
+                        and settings.llm_shadow_enabled
+                        and settings.decision_mode == "rule_only"
                     )
-                    
+
                     if should_compute_llm or should_compute_shadow:
                         try:
                             llm_action = choose_action_with_llm(
@@ -573,40 +675,50 @@ def run_agent_loop_forever(
                                 agent_state.candidate_options,
                             )
                             llm_action["strategy_id"] = "covered_call_v1"
-                            print(f"LLM proposed: {llm_action.get('action', 'DO_NOTHING')} (validated={llm_action.get('validated', 'N/A')})")
+                            print(
+                                f"LLM proposed: {llm_action.get('action', 'DO_NOTHING')} (validated={llm_action.get('validated', 'N/A')})"
+                            )
                         except Exception as e:
-                            log_error("llm_decision_error", str(e), {"traceback": traceback.format_exc()})
+                            log_error(
+                                "llm_decision_error",
+                                str(e),
+                                {"traceback": traceback.format_exc()},
+                            )
                             print(f"LLM error (using rule fallback): {e}")
                             llm_action = None
-                    
+
                     if settings.decision_mode == "rule_only":
                         proposed_action = rule_action.copy()
                         decision_source = "rule_based"
-                        
+
                     elif settings.decision_mode == "llm_only":
-                        if llm_action is not None and llm_action.get("validated", False):
+                        if llm_action is not None and llm_action.get(
+                            "validated", False
+                        ):
                             proposed_action = llm_action.copy()
                             decision_source = "llm"
                         else:
                             proposed_action = rule_action.copy()
                             decision_source = "llm_fallback_to_rule"
                             print("LLM invalid/failed, falling back to rule-based")
-                            
+
                     elif settings.decision_mode == "hybrid_shadow":
                         proposed_action = rule_action.copy()
                         decision_source = "rule_based_shadow_llm"
                     else:
                         proposed_action = rule_action.copy()
                         decision_source = "rule_based"
-                    
+
                     proposed_action["decision_source"] = decision_source
                     training_actions = []
-                
+
             except Exception as e:
                 error_msg = f"Decision error: {e}"
                 print(f"ERROR: {error_msg}")
                 traceback.print_exc()
-                log_error("decision_error", error_msg, {"traceback": traceback.format_exc()})
+                log_error(
+                    "decision_error", error_msg, {"traceback": traceback.format_exc()}
+                )
                 proposed_action = {
                     "action": ActionType.DO_NOTHING.value,
                     "params": {},
@@ -614,10 +726,12 @@ def run_agent_loop_forever(
                 }
                 training_actions = []
                 decision_source = "error_fallback"
-            
+
             try:
-                allowed, reasons = check_action_allowed(agent_state, proposed_action, settings)
-                
+                allowed, reasons = check_action_allowed(
+                    agent_state, proposed_action, settings
+                )
+
                 if not allowed:
                     print(f"Risk blocked: {', '.join(reasons)}")
                     final_action = {
@@ -627,7 +741,7 @@ def run_agent_loop_forever(
                     }
                 else:
                     final_action = proposed_action
-                
+
             except Exception as e:
                 error_msg = f"Risk check error: {e}"
                 print(f"ERROR: {error_msg}")
@@ -639,11 +753,13 @@ def run_agent_loop_forever(
                     "params": {},
                     "reasoning": f"Risk check error: {e}",
                 }
-            
+
             try:
                 if is_training and training_actions:
                     print(f"\nExecuting {len(training_actions)} training actions...")
-                    execution_result = execute_actions(client, training_actions, settings)
+                    execution_result = execute_actions(
+                        client, training_actions, settings
+                    )
                     print(f"Training execution: {execution_result.get('status')}")
                     for r in execution_result.get("results", []):
                         strat = r.get("strategy", "?")
@@ -652,26 +768,30 @@ def run_agent_loop_forever(
                         print(f"  [{strat}] {sym}: {status}")
                 else:
                     final_action_type = final_action.get("action", "DO_NOTHING")
-                    
+
                     if final_action_type != ActionType.DO_NOTHING.value:
                         print(f"\nExecuting: {final_action_type}")
-                        execution_result = execute_action(client, final_action, settings)
+                        execution_result = execute_action(
+                            client, final_action, settings
+                        )
                     else:
                         execution_result = {
                             "status": "skipped",
                             "message": "Action is DO_NOTHING",
                         }
-                
+
             except Exception as e:
                 error_msg = f"Execution error: {e}"
                 print(f"ERROR: {error_msg}")
                 traceback.print_exc()
-                log_error("execution_error", error_msg, {"traceback": traceback.format_exc()})
+                log_error(
+                    "execution_error", error_msg, {"traceback": traceback.format_exc()}
+                )
                 execution_result = {
                     "status": "error",
                     "message": error_msg,
                 }
-            
+
             snapshot = _build_status_snapshot(
                 agent_state=agent_state,
                 proposed_action=proposed_action,
@@ -683,7 +803,7 @@ def run_agent_loop_forever(
                 llm_action=llm_action,
             )
             snapshot["reconciliation"] = reconciliation_stats
-            
+
             if is_training and training_actions:
                 for ta in training_actions:
                     ta_result = None
@@ -719,7 +839,9 @@ def run_agent_loop_forever(
                     "timestamp": datetime.utcnow().isoformat(),
                     "decision_source": decision_source,
                     "decision_mode": settings.decision_mode,
-                    "strategy_id": proposed_action.get("strategy_id", "covered_call_v1"),
+                    "strategy_id": proposed_action.get(
+                        "strategy_id", "covered_call_v1"
+                    ),
                     "proposed_action": proposed_action,
                     "final_action": final_action,
                     "rule_action": rule_action,
@@ -735,7 +857,7 @@ def run_agent_loop_forever(
                     },
                 }
                 decisions_store.add(decision_entry)
-            
+
             try:
                 log_decision(
                     agent_state=agent_state,
@@ -747,37 +869,37 @@ def run_agent_loop_forever(
                 )
             except Exception as e:
                 print(f"Warning: Failed to log decision: {e}")
-            
+
             if status_callback is not None:
                 try:
                     status_callback(snapshot)
                 except Exception as e:
                     print(f"Warning: Status callback failed: {e}")
-            
+
             print_decision_summary(
                 proposed_action=proposed_action,
                 risk_allowed=allowed,
                 risk_reasons=reasons,
                 execution_result=execution_result,
             )
-            
+
             loop_duration = time.time() - loop_start
             sleep_time = max(0, settings.loop_interval_sec - loop_duration)
-            
+
             if sleep_time > 0 and not shutdown_requested:
                 print(f"Sleeping for {sleep_time:.0f} seconds...")
-                
+
                 sleep_chunk = min(sleep_time, 10)
                 remaining = sleep_time
                 while remaining > 0 and not shutdown_requested:
                     time.sleep(min(remaining, sleep_chunk))
                     remaining -= sleep_chunk
-    
+
     except Exception as e:
         print(f"\nFatal error in agent loop: {e}")
         traceback.print_exc()
         log_error("fatal_error", str(e), {"traceback": traceback.format_exc()})
-    
+
     finally:
         print("\nShutting down...")
         client.close()
@@ -796,7 +918,7 @@ def main() -> None:
     print("Running on Deribit TESTNET only")
     print("This is NOT financial advice")
     print("=" * 60 + "\n")
-    
+
     run_agent_loop_forever()
 
 

@@ -11,11 +11,12 @@ Selectors tested:
 For each selector, runs two backtests with low and high IV multipliers,
 then validates that results differ meaningfully (not stuck/broken).
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, asdict
 from datetime import datetime, timezone, timedelta
-from typing import Any, Callable, Dict, List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from src.backtest.covered_call_simulator import CoveredCallSimulator
 from src.backtest.deribit_data_source import DeribitDataSource
@@ -29,6 +30,7 @@ SelectorName = Literal["generic", "gregbot"]
 @dataclass
 class IVSanitySelectorResult:
     """Result of IV sanity check for a single selector."""
+
     selector: SelectorName
     iv_low: float
     iv_high: float
@@ -50,7 +52,7 @@ def _build_base_config() -> Dict[str, Any]:
     """
     start_date = datetime(2025, 12, 7, 0, 0, 0, tzinfo=timezone.utc)
     end_date = datetime(2025, 12, 13, 0, 0, 0, tzinfo=timezone.utc)
-    
+
     return {
         "underlying": "BTC_USDC",
         "start": start_date,
@@ -78,7 +80,9 @@ def _build_base_config() -> Dict[str, Any]:
     }
 
 
-def _generate_decision_times(start: datetime, end: datetime, interval_hours: int = 24) -> List[datetime]:
+def _generate_decision_times(
+    start: datetime, end: datetime, interval_hours: int = 24
+) -> List[datetime]:
     """Generate decision times between start and end at given hour intervals."""
     times: List[datetime] = []
     current = start
@@ -109,24 +113,24 @@ def _run_single_backtest(
 ) -> Dict[str, Any]:
     """
     Run a single backtest with the given IV multiplier.
-    
+
     The selector controls scoring parameters:
     - generic: target_delta=0.25, delta range [0.15, 0.35] (conservative)
     - gregbot: target_delta=0.35, delta range [0.25, 0.45] (aggressive)
-    
+
     Returns dict with:
     - num_trades: int
     - net_profit_pct: float
     - metrics: full metrics dict from simulator
     - error: str if any error occurred
-    
+
     This function is designed to be easily mocked in tests.
     """
     try:
         ds = data_source or DeribitDataSource()
         base_cfg = _build_base_config()
         selector_params = SELECTOR_PARAMS[selector]
-        
+
         cfg = CallSimulationConfig(
             underlying=base_cfg["underlying"],
             start=base_cfg["start"],
@@ -152,24 +156,22 @@ def _run_single_backtest(
             sigma_mode=base_cfg["sigma_mode"],
             synthetic_iv_multiplier=iv_multiplier,
         )
-        
+
         sim = CoveredCallSimulator(ds, cfg)
-        
+
         decision_times = _generate_decision_times(
-            base_cfg["start"], 
-            base_cfg["end"], 
-            interval_hours=24
+            base_cfg["start"], base_cfg["end"], interval_hours=24
         )
-        
+
         def state_builder(t: datetime) -> Dict[str, Any]:
             return build_historical_state(ds, cfg, t)
-        
+
         result = sim.simulate_policy_with_scoring(
             decision_times=decision_times,
             state_builder=state_builder,
             exit_style="hold_to_expiry",
         )
-        
+
         return {
             "num_trades": len(result.trades),
             "net_profit_pct": result.metrics.get("net_profit_pct", 0.0),
@@ -193,14 +195,14 @@ def _check_selector(
 ) -> IVSanitySelectorResult:
     """
     Run IV sanity check for a single selector.
-    
+
     Pass/Fail logic (using net_profit_pct for comparison):
     - Generic: FAIL if num_trades_low == num_trades_high AND abs(net_profit_pct_diff) < 0.5
     - GregBot: FAIL if num_trades_high <= num_trades_low AND net_profit_pct_high <= net_profit_pct_low + 0.5
     """
     result_low = _run_single_backtest(selector, iv_low, data_source)
     result_high = _run_single_backtest(selector, iv_high, data_source)
-    
+
     if result_low.get("error"):
         return IVSanitySelectorResult(
             selector=selector,
@@ -213,7 +215,7 @@ def _check_selector(
             passed=False,
             reason=f"low IV backtest error: {result_low['error']}",
         )
-    
+
     if result_high.get("error"):
         return IVSanitySelectorResult(
             selector=selector,
@@ -226,29 +228,32 @@ def _check_selector(
             passed=False,
             reason=f"high IV backtest error: {result_high['error']}",
         )
-    
+
     num_trades_low = result_low["num_trades"]
     num_trades_high = result_high["num_trades"]
     net_profit_pct_low = result_low["net_profit_pct"]
     net_profit_pct_high = result_high["net_profit_pct"]
     profit_pct_diff = abs(net_profit_pct_high - net_profit_pct_low)
-    
+
     passed = True
     reason = "ok"
-    
+
     if selector == "generic":
         if num_trades_low == num_trades_high and profit_pct_diff < 0.5:
             passed = False
             reason = f"No differentiation: trades={num_trades_low}, net_profit_pct_diff={profit_pct_diff:.2f}%"
     else:
-        if num_trades_high <= num_trades_low and net_profit_pct_high <= net_profit_pct_low + 0.5:
+        if (
+            num_trades_high <= num_trades_low
+            and net_profit_pct_high <= net_profit_pct_low + 0.5
+        ):
             passed = False
             reason = f"GregBot not responding to IV: trades_high={num_trades_high} <= trades_low={num_trades_low}, net_profit_pct_high={net_profit_pct_high:.2f}% <= net_profit_pct_low+0.5={net_profit_pct_low + 0.5:.2f}%"
-    
+
     if num_trades_low == 0 and num_trades_high == 0:
         passed = False
         reason = "No trades executed in either scenario"
-    
+
     return IVSanitySelectorResult(
         selector=selector,
         iv_low=iv_low,
@@ -265,7 +270,7 @@ def _check_selector(
 def run_iv_sanity_check() -> Dict[str, Any]:
     """
     Run IV sanity checks for all selectors and aggregate results.
-    
+
     Returns dict with:
     - status: "ok" | "degraded" | "failed"
     - selectors: list of selector results
@@ -273,7 +278,7 @@ def run_iv_sanity_check() -> Dict[str, Any]:
     - checked_at: ISO timestamp
     """
     checked_at = datetime.now(timezone.utc).isoformat()
-    
+
     try:
         ds = DeribitDataSource()
     except Exception as e:
@@ -283,20 +288,20 @@ def run_iv_sanity_check() -> Dict[str, Any]:
             "summary": f"Failed to initialize data source: {e}",
             "checked_at": checked_at,
         }
-    
+
     selector_configs = [
         ("generic", 0.8, 1.2),
         ("gregbot", 0.9, 1.1),
     ]
-    
+
     results = []
     for selector, iv_low, iv_high in selector_configs:
         result = _check_selector(selector, iv_low, iv_high, ds)
         results.append(result)
-    
+
     all_passed = all(r.passed for r in results)
     none_passed = not any(r.passed for r in results)
-    
+
     if all_passed:
         status = "ok"
         summary = "All IV sanity checks passed"
@@ -309,7 +314,7 @@ def run_iv_sanity_check() -> Dict[str, Any]:
         passed_list = [r.selector for r in results if r.passed]
         failed_list = [r.selector for r in results if not r.passed]
         summary = f"Partial pass: {passed_list} ok, {failed_list} failed"
-    
+
     return {
         "status": status,
         "selectors": [r.to_dict() for r in results],
@@ -320,5 +325,6 @@ def run_iv_sanity_check() -> Dict[str, Any]:
 
 if __name__ == "__main__":
     import json
+
     result = run_iv_sanity_check()
     print(json.dumps(result, indent=2))

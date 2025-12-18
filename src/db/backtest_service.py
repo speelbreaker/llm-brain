@@ -2,6 +2,7 @@
 Database-backed backtest service.
 Handles creating, updating, and querying backtest runs in PostgreSQL.
 """
+
 from __future__ import annotations
 
 import uuid
@@ -10,7 +11,6 @@ from typing import Any, Dict, List, Optional
 
 from sqlalchemy.orm import Session
 
-from src.db import get_db_session
 from src.db.models_backtest import BacktestRun, BacktestMetric, BacktestChain
 
 
@@ -33,7 +33,7 @@ def create_backtest_run(
 ) -> BacktestRun:
     """Create a new backtest run in queued status."""
     run_id = generate_run_id(underlying)
-    
+
     run = BacktestRun(
         run_id=run_id,
         status="queued",
@@ -45,7 +45,7 @@ def create_backtest_run(
         primary_exit_style=primary_exit_style,
         config_json=config_json,
     )
-    
+
     db.add(run)
     db.commit()
     db.refresh(run)
@@ -77,8 +77,8 @@ def save_run_metrics(
 ) -> None:
     """Save metrics for a backtest run (one row per exit style)."""
     for exit_style, metrics in metrics_by_style.items():
-        is_primary = (exit_style == primary_exit_style)
-        
+        is_primary = exit_style == primary_exit_style
+
         metric = BacktestMetric(
             run_id=run.id,
             exit_style=exit_style,
@@ -106,7 +106,7 @@ def save_run_metrics(
             avg_pnl=metrics.get("avg_pnl"),
         )
         db.add(metric)
-        
+
         if is_primary:
             run.primary_exit_style = exit_style
             run.initial_equity = metrics.get("initial_equity")
@@ -115,7 +115,7 @@ def save_run_metrics(
             run.max_drawdown_pct_primary = metrics.get("max_drawdown_pct")
             run.sharpe_primary = metrics.get("sharpe_ratio")
             run.sortino_primary = metrics.get("sortino_ratio")
-    
+
     db.commit()
 
 
@@ -131,10 +131,12 @@ def save_run_chains(
             decision_time = None
             if chain_data.get("open_time"):
                 try:
-                    decision_time = datetime.fromisoformat(chain_data["open_time"].replace("Z", "+00:00"))
+                    decision_time = datetime.fromisoformat(
+                        chain_data["open_time"].replace("Z", "+00:00")
+                    )
                 except (ValueError, TypeError):
                     pass
-            
+
             chain = BacktestChain(
                 run_id=run.id,
                 exit_style=exit_style,
@@ -150,7 +152,7 @@ def save_run_chains(
                 details_json=chain_data,
             )
             db.add(chain)
-    
+
     db.commit()
 
 
@@ -164,7 +166,7 @@ def complete_run(
     """Mark a run as finished and save all metrics and chains."""
     save_run_metrics(db, run, metrics_by_style, primary_exit_style)
     save_run_chains(db, run, chains_by_style, run.underlying)
-    
+
     run.status = "finished"
     db.commit()
     db.refresh(run)
@@ -188,12 +190,12 @@ def list_runs(
 ) -> List[BacktestRun]:
     """List backtest runs with optional filters."""
     query = db.query(BacktestRun).order_by(BacktestRun.created_at.desc())
-    
+
     if underlying:
         query = query.filter(BacktestRun.underlying == underlying)
     if status:
         query = query.filter(BacktestRun.status == status)
-    
+
     return query.limit(limit).all()
 
 
@@ -207,17 +209,19 @@ def get_run_with_details(db: Session, run_id: str) -> Optional[Dict[str, Any]]:
     run = db.query(BacktestRun).filter(BacktestRun.run_id == run_id).first()
     if not run:
         return None
-    
+
     metrics_dict = {}
     for metric in run.metrics:
         metrics_dict[metric.exit_style] = metric.to_dict()
-    
+
     chains_dict: Dict[str, List[Dict[str, Any]]] = {}
-    for chain in sorted(run.chains, key=lambda c: c.decision_time or datetime.min, reverse=True)[:50]:
+    for chain in sorted(
+        run.chains, key=lambda c: c.decision_time or datetime.min, reverse=True
+    )[:50]:
         if chain.exit_style not in chains_dict:
             chains_dict[chain.exit_style] = []
         chains_dict[chain.exit_style].append(chain.to_dict())
-    
+
     return {
         "run": run.to_dict(),
         "metrics": metrics_dict,

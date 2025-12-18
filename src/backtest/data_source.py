@@ -2,6 +2,7 @@
 Generic interface for market data used by the backtest simulator.
 Implementations can be live Deribit API, offline CSV, Tardis, etc.
 """
+
 from __future__ import annotations
 
 from datetime import datetime

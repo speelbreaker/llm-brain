@@ -53,25 +53,29 @@ def main():
         default=7,
         help="Target DTE in days (default: 7)",
     )
-    
+
     args = parser.parse_args()
-    
+
     underlying = args.underlying.upper()
     target_date = args.date
-    
+
     try:
         date_dt = datetime.strptime(target_date, "%Y-%m-%d")
     except ValueError:
         print(f"ERROR: Invalid date format: {target_date}")
         sys.exit(1)
-    
-    data_path = Path(f"data/real_scraper/{underlying}/{target_date}/{underlying}_{target_date}.parquet")
+
+    data_path = Path(
+        f"data/real_scraper/{underlying}/{target_date}/{underlying}_{target_date}.parquet"
+    )
     if not data_path.exists():
         print(f"ERROR: Real Scraper data not found at: {data_path}")
-        print(f"\nPlease import the data first using:")
-        print(f"  python scripts/import_real_scraper_deribit.py --underlying {underlying} --date {target_date} --input <path-to-csv>")
+        print("\nPlease import the data first using:")
+        print(
+            f"  python scripts/import_real_scraper_deribit.py --underlying {underlying} --date {target_date} --input <path-to-csv>"
+        )
         sys.exit(1)
-    
+
     print("=" * 60)
     print("REAL_SCRAPER BACKTEST")
     print("=" * 60)
@@ -82,22 +86,28 @@ def main():
     print(f"Target DTE:         {args.target_dte} days")
     print(f"Data file:          {data_path}")
     print("=" * 60)
-    
+
     from src.backtest.types import CallSimulationConfig
-    from src.backtest.data_source import Timeframe
-    from src.backtest.covered_call_simulator import CoveredCallSimulator, always_trade_policy
+    from src.backtest.covered_call_simulator import (
+        CoveredCallSimulator,
+        always_trade_policy,
+    )
     from src.backtest.real_scraper_data_source import RealScraperDataSource
     from src.db import get_db_session, init_db
     from src.db.backtest_service import create_backtest_run, complete_run, fail_run
-    
+
     init_db()
-    
-    start_ts = datetime(date_dt.year, date_dt.month, date_dt.day, 0, 0, 0, tzinfo=timezone.utc)
-    end_ts = datetime(date_dt.year, date_dt.month, date_dt.day, 23, 59, 59, tzinfo=timezone.utc)
-    
+
+    start_ts = datetime(
+        date_dt.year, date_dt.month, date_dt.day, 0, 0, 0, tzinfo=timezone.utc
+    )
+    end_ts = datetime(
+        date_dt.year, date_dt.month, date_dt.day, 23, 59, 59, tzinfo=timezone.utc
+    )
+
     timestamp = datetime.utcnow().strftime("%Y-%m-%dT%H-%M-%SZ")
     run_id = f"{timestamp}_{underlying}_{uuid.uuid4().hex[:8]}"
-    
+
     config_dict = {
         "underlying": underlying,
         "start": target_date,
@@ -107,11 +117,11 @@ def main():
         "target_delta": args.target_delta,
         "target_dte": args.target_dte,
     }
-    
+
     print(f"\nCreating backtest run: {run_id}")
-    
+
     with get_db_session() as session:
-        db_run = create_backtest_run(
+        create_backtest_run(
             session=session,
             run_id=run_id,
             underlying=underlying,
@@ -122,7 +132,7 @@ def main():
             config_json=config_dict,
         )
         session.commit()
-    
+
     config = CallSimulationConfig(
         underlying=underlying,
         start=start_ts,
@@ -132,22 +142,22 @@ def main():
         target_delta=args.target_delta,
         target_dte=args.target_dte,
     )
-    
+
     ds = RealScraperDataSource(underlying=underlying, start_ts=start_ts, end_ts=end_ts)
     simulator = CoveredCallSimulator(data_source=ds, config=config)
-    
+
     try:
         print("\nRunning simulation...")
         result = simulator.simulate_policy(policy=always_trade_policy, size=1.0)
-        
+
         trades = result.trades if hasattr(result, "trades") else []
         total_pnl = sum(t.pnl for t in trades) if trades else 0.0
         num_trades = len(trades)
-        
-        print(f"\nSimulation complete:")
+
+        print("\nSimulation complete:")
         print(f"  Trades executed: {num_trades}")
         print(f"  Total PnL:       {total_pnl:.4f}")
-        
+
         metrics_by_style = {
             "default": {
                 "initial_equity": None,
@@ -161,7 +171,7 @@ def main():
                 "sortino_ratio": 0.0,
             }
         }
-        
+
         with get_db_session() as session:
             complete_run(
                 session=session,
@@ -171,29 +181,32 @@ def main():
                 primary_exit_style="default",
             )
             session.commit()
-        
-        print(f"\n" + "=" * 60)
+
+        print("\n" + "=" * 60)
         print("BACKTEST RESULTS")
         print("=" * 60)
         print(f"Run ID:            {run_id}")
-        print(f"Status:            finished")
-        print(f"Data source:       real_scraper")
-        print(f"\nMetrics (default exit style):")
+        print("Status:            finished")
+        print("Data source:       real_scraper")
+        print("\nMetrics (default exit style):")
         for key, value in metrics_by_style["default"].items():
             print(f"  {key}: {value}")
         print("=" * 60)
-        
-        print(f"\nVerify in database:")
-        print(f"  psql $DATABASE_URL -c \"SELECT run_id, status, data_source FROM backtest_runs WHERE run_id = '{run_id}';\"")
-        
+
+        print("\nVerify in database:")
+        print(
+            f"  psql $DATABASE_URL -c \"SELECT run_id, status, data_source FROM backtest_runs WHERE run_id = '{run_id}';\""
+        )
+
     except Exception as e:
         import traceback
+
         traceback.print_exc()
-        
+
         with get_db_session() as session:
             fail_run(session, run_id, str(e))
             session.commit()
-        
+
         print(f"\nBacktest failed: {e}")
         sys.exit(1)
     finally:

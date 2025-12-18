@@ -11,6 +11,7 @@ Usage:
 Options:
     --heal    Auto-heal local positions from exchange (default: dry-run report only)
 """
+
 from __future__ import annotations
 
 import argparse
@@ -56,24 +57,28 @@ def main() -> int:
     try:
         positions_btc = client.get_positions("BTC")
         positions_eth = client.get_positions("ETH")
-        
+
         exchange_positions = []
         for p in positions_btc + positions_eth:
             if abs(float(p.get("size", 0))) > 0:
-                exchange_positions.append({
-                    "symbol": p.get("instrument_name", ""),
-                    "size": abs(float(p.get("size", 0))),
-                    "direction": p.get("direction", "sell"),
-                    "average_price": float(p.get("average_price", 0) or 0),
-                    "mark_price": float(p.get("mark_price", 0) or 0),
-                    "unrealized_pnl": float(p.get("total_profit_loss", 0) or 0),
-                    "delta": float(p.get("delta", 0) or 0),
-                    "underlying": "BTC" if "BTC" in p.get("instrument_name", "") else "ETH",
-                    "option_type": p.get("option_type", "call"),
-                })
-        
+                exchange_positions.append(
+                    {
+                        "symbol": p.get("instrument_name", ""),
+                        "size": abs(float(p.get("size", 0))),
+                        "direction": p.get("direction", "sell"),
+                        "average_price": float(p.get("average_price", 0) or 0),
+                        "mark_price": float(p.get("mark_price", 0) or 0),
+                        "unrealized_pnl": float(p.get("total_profit_loss", 0) or 0),
+                        "delta": float(p.get("delta", 0) or 0),
+                        "underlying": "BTC"
+                        if "BTC" in p.get("instrument_name", "")
+                        else "ETH",
+                        "option_type": p.get("option_type", "call"),
+                    }
+                )
+
         print(f"Found {len(exchange_positions)} positions on exchange")
-        
+
     except Exception as e:
         print(f"ERROR: Failed to fetch exchange positions: {e}")
         return 1
@@ -100,8 +105,10 @@ def main() -> int:
             print("Applying auto-heal...")
             rebuilt_count = position_tracker.rebuild_from_exchange(exchange_positions)
             print(f"Rebuilt {rebuilt_count} positions from exchange.")
-            print("NOTE: Chain history has been reset. PnL tracking will restart from current state.")
-            
+            print(
+                "NOTE: Chain history has been reset. PnL tracking will restart from current state."
+            )
+
             print("\nVerifying reconciliation...")
             local_payload = position_tracker.get_open_positions_payload()
             local_positions = local_payload.get("positions", [])
@@ -113,7 +120,9 @@ def main() -> int:
             if verify_stats["divergent"]:
                 print(f"WARNING: Still divergent after heal: {verify_stats}")
             else:
-                print(f"SUCCESS: Now in sync ({verify_stats['exchange_count']} positions)")
+                print(
+                    f"SUCCESS: Now in sync ({verify_stats['exchange_count']} positions)"
+                )
         else:
             print("To auto-heal, run with --heal flag:")
             print("  python scripts/reconcile_positions_once.py --heal")

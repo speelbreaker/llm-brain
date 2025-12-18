@@ -4,6 +4,7 @@ Position reconciliation between local tracker and Deribit exchange.
 Compares bot-managed positions with live exchange positions and either
 halts trading on divergence or auto-heals local state to match exchange.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -15,12 +16,13 @@ DivergenceAction = Literal["halt", "auto_heal"]
 @dataclass
 class PositionSizeMismatch:
     """Represents a size mismatch between local and exchange positions."""
+
     instrument_name: str
     side: str
     size_tracker: float
     size_exchange: float
     diff_usd: float = 0.0
-    
+
     @property
     def size_diff(self) -> float:
         """Absolute difference in size."""
@@ -30,13 +32,14 @@ class PositionSizeMismatch:
 @dataclass
 class PositionReconciliationDiff:
     """Result of comparing local tracker positions vs exchange positions."""
+
     untracked_on_exchange: List[Dict[str, Any]] = field(default_factory=list)
     missing_on_exchange: List[Dict[str, Any]] = field(default_factory=list)
     size_mismatches: List[PositionSizeMismatch] = field(default_factory=list)
     exchange_count: int = 0
     local_count: int = 0
     tolerance_usd: float = 10.0
-    
+
     @property
     def is_clean(self) -> bool:
         """True only when no mismatches are found."""
@@ -45,7 +48,7 @@ class PositionReconciliationDiff:
             and len(self.missing_on_exchange) == 0
             and len(self.size_mismatches) == 0
         )
-    
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for logging/serialization."""
         return {
@@ -101,7 +104,7 @@ def diff_positions(
 ) -> PositionReconciliationDiff:
     """
     Compare tracked (local) positions against exchange positions.
-    
+
     Args:
         tracked: Local position tracker positions.
             Expected: [{"symbol": str, "quantity": float, "side": str, ...}, ...]
@@ -109,12 +112,12 @@ def diff_positions(
             Expected: [{"symbol": str, "size": float, "direction": str, ...}, ...]
         tolerance_usd: Size mismatch tolerance in USD equivalent.
         spot_prices: Optional spot prices for USD conversion (e.g., {"BTC": 100000}).
-    
+
     Returns:
         PositionReconciliationDiff with categorized mismatches.
     """
     spot_prices = spot_prices or {"BTC": 100000.0, "ETH": 3500.0}
-    
+
     exchange_by_key: Dict[str, Dict[str, Any]] = {}
     for pos in exchange:
         symbol = pos.get("symbol", "") or pos.get("instrument_name", "")
@@ -126,7 +129,7 @@ def diff_positions(
         direction = pos.get("direction", "") or pos.get("side", "sell")
         key = _get_position_key(symbol, direction)
         exchange_by_key[key] = {**pos, "symbol": normalize_symbol(symbol)}
-    
+
     tracked_by_key: Dict[str, Dict[str, Any]] = {}
     for pos in tracked:
         symbol = pos.get("symbol", "")
@@ -138,34 +141,34 @@ def diff_positions(
         side = pos.get("side", "SHORT")
         key = _get_position_key(symbol, side)
         tracked_by_key[key] = {**pos, "symbol": normalize_symbol(symbol)}
-    
+
     diff = PositionReconciliationDiff(
         exchange_count=len(exchange_by_key),
         local_count=len(tracked_by_key),
         tolerance_usd=tolerance_usd,
     )
-    
+
     for key, ex_pos in exchange_by_key.items():
         if key not in tracked_by_key:
             diff.untracked_on_exchange.append(ex_pos)
-    
+
     for key, tr_pos in tracked_by_key.items():
         if key not in exchange_by_key:
             diff.missing_on_exchange.append(tr_pos)
-    
+
     for key in set(exchange_by_key.keys()) & set(tracked_by_key.keys()):
         ex_pos = exchange_by_key[key]
         tr_pos = tracked_by_key[key]
-        
+
         exchange_size = abs(float(ex_pos.get("size", 0)))
         tracker_size = abs(float(tr_pos.get("quantity", 0) or tr_pos.get("size", 0)))
         size_diff = abs(exchange_size - tracker_size)
-        
+
         symbol = ex_pos.get("symbol", "")
         underlying = _extract_underlying(symbol)
         spot = spot_prices.get(underlying, 100000.0)
         diff_usd = size_diff * spot
-        
+
         if diff_usd > tolerance_usd:
             direction = ex_pos.get("direction", "") or ex_pos.get("side", "sell")
             side = "SHORT" if direction.lower() in ("sell", "short") else "LONG"
@@ -178,7 +181,7 @@ def diff_positions(
                     diff_usd=diff_usd,
                 )
             )
-    
+
     return diff
 
 
@@ -219,7 +222,7 @@ def reconcile_positions(
         tolerance_usd=tolerance_usd,
         spot_prices=spot_prices,
     )
-    
+
     stats: Dict[str, Any] = {
         "divergent": not diff.is_clean,
         "is_clean": diff.is_clean,
@@ -242,15 +245,19 @@ def reconcile_positions(
         symbol = pos.get("symbol", "") or pos.get("instrument_name", "")
         if not symbol or abs(float(pos.get("size", 0))) <= 0:
             continue
-        
+
         new_pos = {
             "symbol": normalize_symbol(symbol),
             "underlying": pos.get("underlying", _extract_underlying(symbol)),
             "side": "SHORT" if pos.get("direction") == "sell" else "LONG",
             "quantity": abs(float(pos.get("size", 0))),
-            "entry_price": float(pos.get("average_price", 0) or pos.get("avg_price", 0) or 0),
+            "entry_price": float(
+                pos.get("average_price", 0) or pos.get("avg_price", 0) or 0
+            ),
             "mark_price": float(pos.get("mark_price", 0) or 0),
-            "unrealized_pnl": float(pos.get("unrealized_pnl", 0) or pos.get("total_profit_loss", 0) or 0),
+            "unrealized_pnl": float(
+                pos.get("unrealized_pnl", 0) or pos.get("total_profit_loss", 0) or 0
+            ),
             "delta": float(pos.get("delta", 0) or 0),
             "option_type": pos.get("option_type", "call").upper(),
             "strategy_type": "COVERED_CALL",
@@ -272,11 +279,15 @@ def format_reconciliation_summary(stats: Dict[str, Any]) -> str:
 
     missing_in_local = stats.get("missing_in_local", [])
     if missing_in_local:
-        lines.append(f"  Missing in local ({len(missing_in_local)}): {', '.join(missing_in_local)}")
+        lines.append(
+            f"  Missing in local ({len(missing_in_local)}): {', '.join(missing_in_local)}"
+        )
 
     missing_in_exchange = stats.get("missing_in_exchange", [])
     if missing_in_exchange:
-        lines.append(f"  Missing on exchange ({len(missing_in_exchange)}): {', '.join(missing_in_exchange)}")
+        lines.append(
+            f"  Missing on exchange ({len(missing_in_exchange)}): {', '.join(missing_in_exchange)}"
+        )
 
     size_mismatches = stats.get("size_mismatches", [])
     if size_mismatches:
@@ -286,7 +297,9 @@ def format_reconciliation_summary(stats: Dict[str, Any]) -> str:
                 sym, local_sz, ex_sz = item
                 lines.append(f"    {sym}: local={local_sz:.4f}, exchange={ex_sz:.4f}")
             elif isinstance(item, dict):
-                lines.append(f"    {item['symbol']}: local={item['local']:.4f}, exchange={item['exchange']:.4f}")
+                lines.append(
+                    f"    {item['symbol']}: local={item['local']:.4f}, exchange={item['exchange']:.4f}"
+                )
 
     return "\n".join(lines)
 
@@ -299,13 +312,13 @@ def run_reconciliation_once(
 ) -> PositionReconciliationDiff:
     """
     Run a single reconciliation check between exchange and local tracker.
-    
+
     Args:
         deribit_client: DeribitClient instance for fetching exchange positions.
         position_tracker: PositionTracker instance for local positions.
         settings: Settings instance with reconciliation config.
         spot_prices: Optional spot prices for USD conversion.
-    
+
     Returns:
         PositionReconciliationDiff with comparison results.
     """
@@ -316,17 +329,17 @@ def run_reconciliation_once(
             exchange_positions_raw.extend(positions)
         except Exception as e:
             print(f"[Reconciliation] Failed to fetch positions for {currency}: {e}")
-    
+
     local_payload = position_tracker.get_open_positions_payload()
     local_positions = local_payload.get("positions", [])
-    
+
     diff = diff_positions(
         tracked=local_positions,
         exchange=exchange_positions_raw,
         tolerance_usd=settings.position_reconcile_tolerance_usd,
         spot_prices=spot_prices,
     )
-    
+
     return diff
 
 

@@ -30,10 +30,14 @@ def fetch_run(db, run_id: str) -> Optional[BacktestRun]:
 
 def fetch_metrics(db, run_numeric_id: int, exit_style: str) -> Optional[BacktestMetric]:
     """Fetch metrics for a run by numeric ID and exit style."""
-    return db.query(BacktestMetric).filter(
-        BacktestMetric.run_id == run_numeric_id,
-        BacktestMetric.exit_style == exit_style,
-    ).first()
+    return (
+        db.query(BacktestMetric)
+        .filter(
+            BacktestMetric.run_id == run_numeric_id,
+            BacktestMetric.exit_style == exit_style,
+        )
+        .first()
+    )
 
 
 def get_metric_value(metrics: BacktestMetric, field: str) -> float:
@@ -41,7 +45,7 @@ def get_metric_value(metrics: BacktestMetric, field: str) -> float:
     if hasattr(metrics, field):
         val = getattr(metrics, field)
         return float(val) if val is not None else 0.0
-    if hasattr(metrics, 'metrics_json') and metrics.metrics_json:
+    if hasattr(metrics, "metrics_json") and metrics.metrics_json:
         return float(metrics.metrics_json.get(field, 0.0))
     return 0.0
 
@@ -78,12 +82,12 @@ def compute_diff_for_runs(
 ) -> Dict[str, Any]:
     """
     Compute diff metrics between two backtest runs.
-    
+
     Args:
         run_id_a: Run ID of first backtest (typically synthetic)
         run_id_b: Run ID of second backtest (typically live_deribit)
         exit_style: Exit style to compare (defaults to primary_exit_style)
-        
+
     Returns:
         Dict with structure:
         {
@@ -95,7 +99,7 @@ def compute_diff_for_runs(
                 ...
             }
         }
-        
+
     Raises:
         ValueError if runs or metrics not found
     """
@@ -103,17 +107,17 @@ def compute_diff_for_runs(
         run_a = fetch_run(db, run_id_a)
         if not run_a:
             raise ValueError(f"Run A not found: {run_id_a}")
-        
+
         run_b = fetch_run(db, run_id_b)
         if not run_b:
             raise ValueError(f"Run B not found: {run_id_b}")
-        
+
         if exit_style:
             effective_exit_style = exit_style
         else:
             exit_style_a = run_a.primary_exit_style
             exit_style_b = run_b.primary_exit_style
-            
+
             if exit_style_a != exit_style_b:
                 raise ValueError(
                     f"Runs have different primary exit styles "
@@ -121,21 +125,21 @@ def compute_diff_for_runs(
                     f"Please specify exit_style explicitly."
                 )
             effective_exit_style = exit_style_a
-        
+
         metrics_a = fetch_metrics(db, run_a.id, effective_exit_style)
         if not metrics_a:
             raise ValueError(
                 f"Metrics not found for run A ({run_id_a}) "
                 f"with exit_style={effective_exit_style}"
             )
-        
+
         metrics_b = fetch_metrics(db, run_b.id, effective_exit_style)
         if not metrics_b:
             raise ValueError(
                 f"Metrics not found for run B ({run_id_b}) "
                 f"with exit_style={effective_exit_style}"
             )
-        
+
         run_a_metadata = {
             "run_id": run_a.run_id,
             "underlying": run_a.underlying,
@@ -144,7 +148,7 @@ def compute_diff_for_runs(
             "end_ts": run_a.end_ts.isoformat() if run_a.end_ts else None,
             "decision_interval_minutes": run_a.decision_interval_minutes,
         }
-        
+
         run_b_metadata = {
             "run_id": run_b.run_id,
             "underlying": run_b.underlying,
@@ -153,20 +157,20 @@ def compute_diff_for_runs(
             "end_ts": run_b.end_ts.isoformat() if run_b.end_ts else None,
             "decision_interval_minutes": run_b.decision_interval_minutes,
         }
-        
+
         metrics_dict = {}
         for field, fmt_type in METRICS_FIELDS:
             val_a = get_metric_value(metrics_a, field)
             val_b = get_metric_value(metrics_b, field)
             diff = val_b - val_a
-            
+
             metrics_dict[field] = {
                 "a": val_a,
                 "b": val_b,
                 "diff": diff,
                 "fmt_type": fmt_type,
             }
-        
+
         return {
             "run_a": run_a_metadata,
             "run_b": run_b_metadata,
@@ -178,7 +182,7 @@ def compute_diff_for_runs(
 def print_diff_report_from_data(diff_data: Dict[str, Any]) -> None:
     """
     Print a formatted diff report from computed diff data.
-    
+
     Args:
         diff_data: Output from compute_diff_for_runs()
     """
@@ -186,7 +190,7 @@ def print_diff_report_from_data(diff_data: Dict[str, Any]) -> None:
     run_b = diff_data["run_b"]
     exit_style = diff_data["exit_style"]
     metrics = diff_data["metrics"]
-    
+
     print()
     print("=" * 80)
     print("BACKTEST DIFF REPORT")
@@ -201,26 +205,28 @@ def print_diff_report_from_data(diff_data: Dict[str, Any]) -> None:
     print(f"  Period B: {run_b['start_ts']} -> {run_b['end_ts']}")
     print(f"  Decision interval: {run_a['decision_interval_minutes']} minutes")
     print()
-    
+
     col_metric = 24
     col_val = 20
-    
+
     header = f"{'Metric':<{col_metric}} {'A (' + run_a['data_source'] + ')':<{col_val}} {'B (' + run_b['data_source'] + ')':<{col_val}} {'Diff (B - A)':<{col_val}}"
     print(header)
     print("-" * len(header))
-    
+
     for field, _ in METRICS_FIELDS:
         m = metrics[field]
         val_a = m["a"]
         val_b = m["b"]
         diff = m["diff"]
         fmt_type = m["fmt_type"]
-        
+
         str_a = format_value(val_a, fmt_type)
         str_b = format_value(val_b, fmt_type)
         str_diff = format_diff(diff, fmt_type)
-        
-        print(f"{field:<{col_metric}} {str_a:<{col_val}} {str_b:<{col_val}} {str_diff:<{col_val}}")
-    
+
+        print(
+            f"{field:<{col_metric}} {str_a:<{col_val}} {str_b:<{col_val}} {str_diff:<{col_val}}"
+        )
+
     print("=" * 80)
     print()

@@ -8,6 +8,7 @@ Features:
 - Recent decision summaries
 - Architecture documentation context
 """
+
 from __future__ import annotations
 
 import argparse
@@ -30,14 +31,14 @@ def _get_openai_client() -> OpenAI:
     """Get OpenAI client configured for Replit AI Integrations."""
     api_key = os.environ.get("AI_INTEGRATIONS_OPENAI_API_KEY")
     base_url = os.environ.get("AI_INTEGRATIONS_OPENAI_BASE_URL")
-    
+
     if not api_key or not base_url:
         raise RuntimeError(
             "Chat requires Replit AI Integrations to be configured. "
             "The AI_INTEGRATIONS_OPENAI_API_KEY and AI_INTEGRATIONS_OPENAI_BASE_URL "
             "environment variables are not set."
         )
-    
+
     return OpenAI(api_key=api_key, base_url=base_url)
 
 
@@ -95,35 +96,41 @@ def _summarize_decisions(limit: int = 10) -> str:
     decisions = decisions_store.get_all()[:limit]
     if not decisions:
         return "No recent decisions recorded."
-    
+
     action_counts: Dict[str, int] = {}
     symbols_traded: List[str] = []
     reasonings: List[str] = []
-    
+
     for d in decisions:
         final = d.get("final_action", {})
         proposed = d.get("proposed_action", {})
-        action = final.get("action") or proposed.get("action") or d.get("action", "UNKNOWN")
+        action = (
+            final.get("action") or proposed.get("action") or d.get("action", "UNKNOWN")
+        )
         action_counts[action] = action_counts.get(action, 0) + 1
-        
-        params = final.get("params", {}) or proposed.get("params", {}) or d.get("params", {})
+
+        params = (
+            final.get("params", {}) or proposed.get("params", {}) or d.get("params", {})
+        )
         if params and "symbol" in params:
             symbols_traded.append(params["symbol"])
-        
+
         reasoning = final.get("reasoning") or proposed.get("reasoning", "")
         if reasoning and len(reasonings) < 3:
             reasonings.append(reasoning[:100])
-    
+
     parts = [f"{count}x {action}" for action, count in action_counts.items()]
     summary = f"Last {len(decisions)} decisions: " + ", ".join(parts)
-    
+
     if symbols_traded:
         unique_symbols = list(dict.fromkeys(symbols_traded[:5]))
         summary += f". Symbols: {', '.join(unique_symbols)}"
-    
+
     if reasonings:
-        summary += "\n\nRecent reasoning:\n" + "\n".join(f"- {r}..." for r in reasonings)
-    
+        summary += "\n\nRecent reasoning:\n" + "\n".join(
+            f"- {r}..." for r in reasonings
+        )
+
     return summary
 
 
@@ -131,7 +138,7 @@ def _format_positions_summary(positions: List[Dict[str, Any]], limit: int = 5) -
     """Format open positions as a compact summary."""
     if not positions:
         return "No open positions."
-    
+
     lines = []
     for p in positions[:limit]:
         symbol = p.get("symbol", "?")
@@ -139,18 +146,20 @@ def _format_positions_summary(positions: List[Dict[str, Any]], limit: int = 5) -
         pnl = p.get("unrealized_pnl", 0) or 0
         pnl_pct = p.get("unrealized_pnl_pct", 0) or 0
         dte = p.get("dte", "?")
-        lines.append(f"  - {symbol}: qty={qty}, PnL=${pnl:.2f} ({pnl_pct:+.2f}%), DTE={dte}")
-    
+        lines.append(
+            f"  - {symbol}: qty={qty}, PnL=${pnl:.2f} ({pnl_pct:+.2f}%), DTE={dte}"
+        )
+
     if len(positions) > limit:
         lines.append(f"  ... and {len(positions) - limit} more positions")
-    
+
     return "\n".join(lines)
 
 
 def _load_docs_summary() -> str:
     """Load and truncate architecture documentation files."""
     docs_parts = []
-    
+
     for filename in DOCS_FILES:
         path = Path(filename)
         if path.exists():
@@ -161,10 +170,10 @@ def _load_docs_summary() -> str:
                 docs_parts.append(f"### {filename}\n{content}")
             except Exception:
                 pass
-    
+
     if not docs_parts:
         return "No documentation files available."
-    
+
     return "\n\n".join(docs_parts)
 
 
@@ -182,7 +191,7 @@ def _enrich_positions_with_live_data(
         symbol = p.get("symbol")
         if symbol:
             live_by_symbol[symbol] = p
-    
+
     enriched_positions: List[Dict[str, Any]] = []
     for pos in raw_positions:
         enriched = dict(pos)
@@ -190,28 +199,30 @@ def _enrich_positions_with_live_data(
         underlying = enriched.get("underlying", "BTC")
         spot = float(spot_prices.get(underlying, 0.0))
         live_data = live_by_symbol.get(symbol, {})
-        
+
         if live_data:
             live_mark = float(live_data.get("mark_price") or 0.0)
             live_pnl = float(live_data.get("unrealized_pnl") or 0.0)
             entry_price_btc = float(enriched.get("entry_price") or 0.0)
             qty = abs(float(enriched.get("quantity") or 1.0))
-            
+
             if live_mark > 0:
                 enriched["mark_price"] = live_mark
                 enriched["unrealized_pnl"] = live_pnl
                 if entry_price_btc > 0 and qty > 0 and spot > 0:
                     notional_usd = entry_price_btc * qty * spot
-                    enriched["unrealized_pnl_pct"] = (live_pnl / notional_usd) * 100.0 if notional_usd > 0 else 0.0
-        
+                    enriched["unrealized_pnl_pct"] = (
+                        (live_pnl / notional_usd) * 100.0 if notional_usd > 0 else 0.0
+                    )
+
         enriched_positions.append(enriched)
-    
+
     total_pnl = sum(float(p.get("unrealized_pnl", 0.0)) for p in enriched_positions)
     totals = {
         "positions_count": len(enriched_positions),
         "unrealized_pnl": total_pnl,
     }
-    
+
     return enriched_positions, totals
 
 
@@ -221,23 +232,25 @@ def build_chat_context() -> Dict[str, Any]:
     - /status snapshot (mode, training, llm_enabled, positions, PnL, etc.)
     - recent decisions (last N from decisions_store)
     - optional summarized docs for architecture/safety questions
-    
+
     Note: All stores return copies to avoid race conditions with background agent.
     """
     import copy
-    
+
     current_status = copy.deepcopy(status_store.get())
-    
+
     state = current_status.get("state", {})
     portfolio = state.get("portfolio", {})
     spot = state.get("spot", {})
     live_positions = portfolio.get("positions", [])
-    
+
     raw_positions_data = copy.deepcopy(position_tracker.get_open_positions_payload())
     raw_positions = raw_positions_data.get("positions", [])
-    
-    positions, totals = _enrich_positions_with_live_data(raw_positions, live_positions, spot)
-    
+
+    positions, totals = _enrich_positions_with_live_data(
+        raw_positions, live_positions, spot
+    )
+
     context = {
         "environment": {
             "deribit_env": getattr(settings, "deribit_env", "testnet"),
@@ -260,7 +273,7 @@ def build_chat_context() -> Dict[str, Any]:
         "positions_summary": _format_positions_summary(positions, 5),
         "docs_summary": _load_docs_summary(),
     }
-    
+
     return context
 
 
@@ -283,13 +296,13 @@ def chat_with_agent(question: str, log_limit: int = 20) -> str:
     """
     Use the OpenAI API to answer a question about the agent's behavior
     based on real-time state, positions, and recent decisions.
-    
+
     Maintains multi-turn conversation history via chat_store.
     """
     ctx = build_chat_context()
-    
+
     history = chat_store.get_history()
-    
+
     env = ctx["environment"]
     system_prompt = f"""You are an assistant embedded inside an options trading bot dashboard.
 
@@ -307,43 +320,43 @@ Important:
 - Be concise but thorough. Use the context provided.
 
 Current Runtime State:
-- Deribit Environment: {env.get('deribit_env', 'testnet').upper()}
-- Mode: {env.get('mode', 'research')}
-- Training Mode: {'ENABLED' if env.get('training_mode') else 'DISABLED'}
-- LLM Decisions: {'ENABLED' if env.get('llm_enabled') else 'DISABLED (rule-based)'}
-- Exploration Probability: {env.get('explore_prob', 0):.0%}
-- Dry Run: {'YES' if env.get('dry_run') else 'NO'}
+- Deribit Environment: {env.get("deribit_env", "testnet").upper()}
+- Mode: {env.get("mode", "research")}
+- Training Mode: {"ENABLED" if env.get("training_mode") else "DISABLED"}
+- LLM Decisions: {"ENABLED" if env.get("llm_enabled") else "DISABLED (rule-based)"}
+- Exploration Probability: {env.get("explore_prob", 0):.0%}
+- Dry Run: {"YES" if env.get("dry_run") else "NO"}
 
 Portfolio:
-- Equity: ${ctx['portfolio'].get('equity_usd') or 0:,.2f}
-- Margin Used: {ctx['portfolio'].get('margin_used_pct') or 0:.2f}%
-- Net Delta: {ctx['portfolio'].get('net_delta') or 0:.4f}
+- Equity: ${ctx["portfolio"].get("equity_usd") or 0:,.2f}
+- Margin Used: {ctx["portfolio"].get("margin_used_pct") or 0:.2f}%
+- Net Delta: {ctx["portfolio"].get("net_delta") or 0:.4f}
 
-Spot Prices: {ctx['spot_prices']}
+Spot Prices: {ctx["spot_prices"]}
 
-Open Positions ({ctx['positions_count']}):
-{ctx['positions_summary']}
+Open Positions ({ctx["positions_count"]}):
+{ctx["positions_summary"]}
 
-Total Unrealized PnL: ${ctx['total_unrealized_pnl_usd']:,.2f}
+Total Unrealized PnL: ${ctx["total_unrealized_pnl_usd"]:,.2f}
 
 Recent Decisions:
-{ctx['recent_decisions_summary']}
+{ctx["recent_decisions_summary"]}
 
 {_build_rules_text()}
 
 Project Documentation (truncated):
-{ctx['docs_summary']}
+{ctx["docs_summary"]}
 """
-    
+
     messages: List[Dict[str, Any]] = [{"role": "system", "content": system_prompt}]
-    
+
     for msg in history:
         messages.append({"role": msg["role"], "content": msg["content"]})
-    
+
     messages.append({"role": "user", "content": question})
-    
+
     client = _get_openai_client()
-    
+
     model_name = getattr(settings, "llm_chat_model_name", None) or getattr(
         settings, "llm_model_name", "gpt-4.1-mini"
     )
@@ -358,7 +371,7 @@ Project Documentation (truncated):
         answer = response.choices[0].message.content or ""
     except Exception:
         answer = "I had trouble reading the model's response."
-    
+
     chat_store.append("user", question)
     chat_store.append("assistant", answer)
 

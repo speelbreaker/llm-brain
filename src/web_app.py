@@ -2,34 +2,36 @@
 FastAPI web application for the Options Trading Agent.
 Provides live status, chat interface, Live Agent Dashboard, and Backtesting Lab.
 """
+
 from __future__ import annotations
 
 import os
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional, cast
 
 import httpx
 
-from fastapi import FastAPI, Body, HTTPException
+from fastapi import Body, FastAPI, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, Field
-from typing import cast
 
 from agent_loop import run_agent_loop_forever
 from src.status_store import status_store
 from src.decisions_store import decisions_store
-from src.chat_with_agent import chat_with_agent_full, get_chat_messages, clear_chat_history
-from src.config import settings
+from src.chat_with_agent import (
+    chat_with_agent_full,
+    get_chat_messages,
+    clear_chat_history,
+)
+from src.config import settings, GregTradingMode
 from src.position_tracker import position_tracker
-from src.calibration import run_calibration
 from src.calibration_extended import run_calibration_extended, CalibrationConfig
 from src.strategy_status import build_strategy_status, StrategyStatus
 from src.rules_summary import build_rules_summary, build_rules_summary_from_settings
 from src.backtest.config_schema import (
     BacktestConfig,
-    ResolvedBacktestConfig,
     BacktestPreset,
 )
 from src.backtest.config_presets import resolve_backtest_config, get_preset_config
@@ -44,6 +46,7 @@ app = FastAPI(
 
 def _agent_thread_target() -> None:
     """Run the agent loop forever, updating status_store each iteration."""
+
     def status_callback(snapshot: Dict[str, Any]) -> None:
         status_store.update(snapshot)
 
@@ -52,33 +55,37 @@ def _agent_thread_target() -> None:
 
 def _healthcheck_scheduler_target() -> None:
     """Background thread that runs periodic healthchecks.
-    
+
     Always runs an initial healthcheck on startup to populate the cache.
     Then runs periodic checks if interval > 0.
     """
     import time
     from src.healthcheck import run_and_cache_healthcheck
-    
+
     interval = settings.health_recheck_interval_seconds
-    
+
     print("[Healthcheck] Running initial healthcheck on startup...")
     try:
         result = run_and_cache_healthcheck()
-        print(f"[Healthcheck] Initial check: {result.overall_status} - {result.summary}")
+        print(
+            f"[Healthcheck] Initial check: {result.overall_status} - {result.summary}"
+        )
     except Exception as e:
         print(f"[Healthcheck] Initial check failed: {e}")
-    
+
     if interval <= 0:
         print("[Healthcheck] Periodic checks disabled (interval <= 0)")
         return
-    
+
     print(f"[Healthcheck] Periodic scheduler running (interval={interval}s)")
-    
+
     while True:
         time.sleep(interval)
         try:
             result = run_and_cache_healthcheck()
-            print(f"[Healthcheck] Periodic check: {result.overall_status} - {result.summary}")
+            print(
+                f"[Healthcheck] Periodic check: {result.overall_status} - {result.summary}"
+            )
         except Exception as e:
             print(f"[Healthcheck] Periodic check failed: {e}")
 
@@ -88,15 +95,18 @@ def start_background_agent() -> None:
     """Start the agent loop in a background thread on FastAPI startup."""
     try:
         from src.db import init_db
+
         init_db()
     except Exception as e:
         print(f"[DB] Warning: Could not initialize database: {e}")
-    
+
     thread = threading.Thread(target=_agent_thread_target, daemon=True)
     thread.start()
     print("Agent loop started in background thread")
-    
-    healthcheck_thread = threading.Thread(target=_healthcheck_scheduler_target, daemon=True)
+
+    healthcheck_thread = threading.Thread(
+        target=_healthcheck_scheduler_target, daemon=True
+    )
     healthcheck_thread.start()
     print("Healthcheck scheduler started in background thread")
 
@@ -111,12 +121,16 @@ def get_status() -> JSONResponse:
 @app.get("/health")
 def health_check() -> JSONResponse:
     """Health check endpoint for deployment."""
-    return JSONResponse(content={"status": "healthy", "service": "options-trading-agent"})
+    return JSONResponse(
+        content={"status": "healthy", "service": "options-trading-agent"}
+    )
 
 
 @app.post("/chat")
 def chat_endpoint(
-    payload: Dict[str, Any] = Body(..., example={"question": "Why did you pick the 97k call?"}),
+    payload: Dict[str, Any] = Body(
+        ..., example={"question": "Why did you pick the 97k call?"}
+    ),
 ) -> JSONResponse:
     """Ask the agent a question about its recent behavior. Returns full conversation history."""
     question = payload.get("question", "").strip()
@@ -128,7 +142,13 @@ def chat_endpoint(
 
     try:
         result = chat_with_agent_full(question, log_limit=20)
-        return JSONResponse(content={"question": question, "answer": result["answer"], "messages": result["messages"]})
+        return JSONResponse(
+            content={
+                "question": question,
+                "answer": result["answer"],
+                "messages": result["messages"],
+            }
+        )
     except Exception as e:
         return JSONResponse(
             status_code=500,
@@ -154,48 +174,54 @@ def get_agent_decisions() -> JSONResponse:
     """Return recent agent decisions for the dashboard."""
     decisions = decisions_store.get_all()
     last_update = decisions_store.get_last_update()
-    
-    return JSONResponse(content={
-        "mode": "llm" if settings.llm_enabled else "rule_based",
-        "llm_enabled": settings.llm_enabled,
-        "dry_run": settings.dry_run,
-        "training_mode": settings.is_training_enabled,
-        "last_update": last_update.isoformat() if last_update else None,
-        "decisions": decisions,
-    })
+
+    return JSONResponse(
+        content={
+            "mode": "llm" if settings.llm_enabled else "rule_based",
+            "llm_enabled": settings.llm_enabled,
+            "dry_run": settings.dry_run,
+            "training_mode": settings.is_training_enabled,
+            "last_update": last_update.isoformat() if last_update else None,
+            "decisions": decisions,
+        }
+    )
 
 
 @app.get("/api/training/status")
 def get_training_status() -> JSONResponse:
     """Get current training mode status."""
-    return JSONResponse(content={
-        "enabled": settings.is_training_enabled,
-        "training_mode": settings.training_mode,
-        "strategies": settings.training_strategies,
-        "is_research": settings.is_research,
-        "dry_run": settings.dry_run,
-    })
+    return JSONResponse(
+        content={
+            "enabled": settings.is_training_enabled,
+            "training_mode": settings.training_mode,
+            "strategies": settings.training_strategies,
+            "is_research": settings.is_research,
+            "dry_run": settings.dry_run,
+        }
+    )
 
 
 @app.post("/api/training/toggle")
 def toggle_training_mode(payload: Dict[str, Any] = Body(...)) -> JSONResponse:
     """Toggle training mode on/off."""
     enable = payload.get("enable", False)
-    
+
     if enable:
         if not settings.is_research:
             return JSONResponse(
                 status_code=400,
                 content={"error": "Training mode requires RESEARCH mode"},
             )
-    
+
     settings.training_mode = enable
-    
-    return JSONResponse(content={
-        "enabled": settings.is_training_enabled,
-        "training_mode": settings.training_mode,
-        "strategies": settings.training_strategies,
-    })
+
+    return JSONResponse(
+        content={
+            "enabled": settings.is_training_enabled,
+            "training_mode": settings.training_mode,
+            "strategies": settings.training_strategies,
+        }
+    )
 
 
 @app.get("/api/strategy-status", response_model=StrategyStatus)
@@ -221,7 +247,11 @@ def get_rules_summary() -> JSONResponse:
 def get_backtest_presets() -> JSONResponse:
     """Get all available backtest preset configurations."""
     presets = {}
-    for preset in [BacktestPreset.ULTRA_SAFE, BacktestPreset.BALANCED, BacktestPreset.AGGRESSIVE]:
+    for preset in [
+        BacktestPreset.ULTRA_SAFE,
+        BacktestPreset.BALANCED,
+        BacktestPreset.AGGRESSIVE,
+    ]:
         cfg = get_preset_config(preset)
         presets[preset.value] = {
             "preset": cfg.preset.value,
@@ -229,8 +259,12 @@ def get_backtest_presets() -> JSONResponse:
             "rule_toggles": cfg.rule_toggles.model_dump(),
             "thresholds": {
                 **cfg.thresholds.model_dump(),
-                "delta_range": list(cfg.thresholds.delta_range) if cfg.thresholds.delta_range else None,
-                "dte_range": list(cfg.thresholds.dte_range) if cfg.thresholds.dte_range else None,
+                "delta_range": list(cfg.thresholds.delta_range)
+                if cfg.thresholds.delta_range
+                else None,
+                "dte_range": list(cfg.thresholds.dte_range)
+                if cfg.thresholds.dte_range
+                else None,
             },
         }
     return JSONResponse(content=presets)
@@ -240,12 +274,12 @@ def get_backtest_presets() -> JSONResponse:
 def get_strategy_capabilities(selector: str = "generic_covered_call") -> JSONResponse:
     """
     Get capability metadata for a selector/strategy.
-    
+
     Returns what configuration fields the strategy supports, owns, or ignores.
     The UI uses this to show/hide relevant configuration controls.
     """
     from src.backtest.strategy_caps import get_strategy_caps, list_available_strategies
-    
+
     caps = get_strategy_caps(selector)
     if caps is None:
         return JSONResponse(
@@ -253,9 +287,9 @@ def get_strategy_capabilities(selector: str = "generic_covered_call") -> JSONRes
             content={
                 "error": f"Unknown selector: {selector}",
                 "available": [s["selector_name"] for s in list_available_strategies()],
-            }
+            },
         )
-    
+
     return JSONResponse(content=caps.to_dict())
 
 
@@ -263,7 +297,7 @@ def get_strategy_capabilities(selector: str = "generic_covered_call") -> JSONRes
 def get_strategy_capabilities_by_name(selector_name: str) -> JSONResponse:
     """Get capability metadata for a specific selector by path."""
     from src.backtest.strategy_caps import get_strategy_caps, list_available_strategies
-    
+
     caps = get_strategy_caps(selector_name)
     if caps is None:
         return JSONResponse(
@@ -271,9 +305,9 @@ def get_strategy_capabilities_by_name(selector_name: str) -> JSONResponse:
             content={
                 "error": f"Unknown selector: {selector_name}",
                 "available": [s["selector_name"] for s in list_available_strategies()],
-            }
+            },
         )
-    
+
     return JSONResponse(content=caps.to_dict())
 
 
@@ -281,6 +315,7 @@ def get_strategy_capabilities_by_name(selector_name: str) -> JSONResponse:
 def list_backtest_strategies() -> JSONResponse:
     """List all available backtest strategies with their capabilities."""
     from src.backtest.strategy_caps import list_available_strategies
+
     return JSONResponse(content={"strategies": list_available_strategies()})
 
 
@@ -292,19 +327,25 @@ def resolve_backtest_config_endpoint(config: BacktestConfig) -> JSONResponse:
     """
     resolved = resolve_backtest_config(config)
     summary = build_rules_summary(resolved)
-    return JSONResponse(content={
-        "resolved_config": {
-            "preset": resolved.preset.value,
-            "mode": resolved.mode.value,
-            "rule_toggles": resolved.rule_toggles.model_dump(),
-            "thresholds": {
-                **resolved.thresholds.model_dump(),
-                "delta_range": list(resolved.thresholds.delta_range) if resolved.thresholds.delta_range else None,
-                "dte_range": list(resolved.thresholds.dte_range) if resolved.thresholds.dte_range else None,
+    return JSONResponse(
+        content={
+            "resolved_config": {
+                "preset": resolved.preset.value,
+                "mode": resolved.mode.value,
+                "rule_toggles": resolved.rule_toggles.model_dump(),
+                "thresholds": {
+                    **resolved.thresholds.model_dump(),
+                    "delta_range": list(resolved.thresholds.delta_range)
+                    if resolved.thresholds.delta_range
+                    else None,
+                    "dte_range": list(resolved.thresholds.dte_range)
+                    if resolved.thresholds.dte_range
+                    else None,
+                },
             },
-        },
-        "rules_summary": summary,
-    })
+            "rules_summary": summary,
+        }
+    )
 
 
 @app.get("/api/positions/open")
@@ -319,16 +360,16 @@ def get_open_positions() -> JSONResponse:
     portfolio = state.get("portfolio") or {}
     live_positions = portfolio.get("positions") or []
     spot_prices = state.get("spot") or {}
-    
+
     live_by_symbol: Dict[str, Dict[str, Any]] = {}
     for p in live_positions:
         symbol = p.get("symbol")
         if symbol:
             live_by_symbol[symbol] = p
-    
+
     payload = position_tracker.get_open_positions_payload()
     bot_positions = payload.get("positions") or []
-    
+
     if bot_positions:
         enriched_positions: List[Dict[str, Any]] = []
         for pos in bot_positions:
@@ -337,22 +378,26 @@ def get_open_positions() -> JSONResponse:
             underlying = enriched.get("underlying", "BTC")
             spot = float(spot_prices.get(underlying, 0.0))
             live_data = live_by_symbol.get(symbol, {})
-            
+
             if live_data:
                 live_mark = float(live_data.get("mark_price") or 0.0)
                 live_pnl = float(live_data.get("unrealized_pnl") or 0.0)
                 entry_price_btc = float(enriched.get("entry_price") or 0.0)
                 qty = abs(float(enriched.get("quantity") or 1.0))
-                
+
                 if live_mark > 0:
                     enriched["mark_price"] = live_mark
                     enriched["unrealized_pnl"] = live_pnl
                     if entry_price_btc > 0 and qty > 0 and spot > 0:
                         notional_usd = entry_price_btc * qty * spot
-                        enriched["unrealized_pnl_pct"] = (live_pnl / notional_usd) * 100.0 if notional_usd > 0 else 0.0
-            
+                        enriched["unrealized_pnl_pct"] = (
+                            (live_pnl / notional_usd) * 100.0
+                            if notional_usd > 0
+                            else 0.0
+                        )
+
             enriched_positions.append(enriched)
-        
+
         total_pnl = sum(float(p.get("unrealized_pnl", 0.0)) for p in enriched_positions)
         total_notional_usd = 0.0
         for p in enriched_positions:
@@ -361,15 +406,17 @@ def get_open_positions() -> JSONResponse:
             entry = abs(float(p.get("entry_price", 0.0)))
             qty = abs(float(p.get("quantity", 0.0)))
             total_notional_usd += entry * qty * spot
-        
+
         totals = {
             "positions_count": len(enriched_positions),
             "unrealized_pnl": total_pnl,
-            "unrealized_pnl_pct": (total_pnl / total_notional_usd * 100.0) if total_notional_usd > 0 else 0.0,
+            "unrealized_pnl_pct": (total_pnl / total_notional_usd * 100.0)
+            if total_notional_usd > 0
+            else 0.0,
         }
-        
+
         return JSONResponse(content={"positions": enriched_positions, "totals": totals})
-    
+
     positions: List[Dict[str, Any]] = []
     for p in live_positions:
         try:
@@ -380,29 +427,33 @@ def get_open_positions() -> JSONResponse:
             size = abs(float(p.get("size", 0.0)))
             underlying = p.get("underlying", "BTC")
             spot = float(spot_prices.get(underlying, 0.0))
-            notional_usd = entry * size * spot if entry > 0 and size > 0 and spot > 0 else 1.0
+            notional_usd = (
+                entry * size * spot if entry > 0 and size > 0 and spot > 0 else 1.0
+            )
             pnl_pct = (pnl / notional_usd * 100.0) if notional_usd > 0 else 0.0
-            
-            positions.append({
-                "position_id": f"live-{p.get('symbol')}",
-                "underlying": underlying,
-                "symbol": p.get("symbol"),
-                "option_type": option_type,
-                "strategy_type": "LIVE_POSITION",
-                "side": "SHORT" if side == "sell" else "LONG",
-                "quantity": size,
-                "entry_price": entry,
-                "mark_price": float(p.get("mark_price") or 0.0),
-                "unrealized_pnl": pnl,
-                "unrealized_pnl_pct": pnl_pct,
-                "entry_time": None,
-                "expiry": None,
-                "dte": float(p.get("expiry_dte") or 0.0),
-                "num_rolls": 0,
-                "mode": "LIVE",
-                "entry_mode": "NATURAL",
-                "exit_style": "unknown",
-            })
+
+            positions.append(
+                {
+                    "position_id": f"live-{p.get('symbol')}",
+                    "underlying": underlying,
+                    "symbol": p.get("symbol"),
+                    "option_type": option_type,
+                    "strategy_type": "LIVE_POSITION",
+                    "side": "SHORT" if side == "sell" else "LONG",
+                    "quantity": size,
+                    "entry_price": entry,
+                    "mark_price": float(p.get("mark_price") or 0.0),
+                    "unrealized_pnl": pnl,
+                    "unrealized_pnl_pct": pnl_pct,
+                    "entry_time": None,
+                    "expiry": None,
+                    "dte": float(p.get("expiry_dte") or 0.0),
+                    "num_rolls": 0,
+                    "mode": "LIVE",
+                    "entry_mode": "NATURAL",
+                    "exit_style": "unknown",
+                }
+            )
         except Exception:
             continue
 
@@ -416,7 +467,9 @@ def get_open_positions() -> JSONResponse:
     totals = {
         "positions_count": len(positions),
         "unrealized_pnl": total_pnl,
-        "unrealized_pnl_pct": (total_pnl / total_notional_usd * 100.0) if total_notional_usd > 0 else 0.0,
+        "unrealized_pnl_pct": (total_pnl / total_notional_usd * 100.0)
+        if total_notional_usd > 0
+        else 0.0,
     }
 
     return JSONResponse(content={"positions": positions, "totals": totals})
@@ -447,7 +500,7 @@ def get_calibration(
             status_code=400,
             content={"error": "underlying must be BTC or ETH"},
         )
-    
+
     try:
         config = CalibrationConfig(
             underlying=underlying,
@@ -460,7 +513,7 @@ def get_calibration(
             fit_skew=True,
         )
         result = run_calibration_extended(config)
-        
+
         term_structure_bands = None
         try:
             broad_config = CalibrationConfig(
@@ -504,7 +557,7 @@ def get_calibration(
                 }
                 for b in result.bands
             ]
-        
+
         by_option_type_data = None
         if result.by_option_type:
             by_option_type_data = {
@@ -521,6 +574,7 @@ def get_calibration(
         skew_fit_data = None
         if result.recommended_skew:
             from src.calibration_store import get_current_skew_ratios
+
             current_ratios = get_current_skew_ratios(underlying)
             current_skew = {
                 "anchor_ratios": current_ratios,
@@ -535,9 +589,15 @@ def get_calibration(
                 },
                 "current_skew": current_skew,
                 "skew_misfit": {
-                    "anchor_diffs": result.skew_misfit.anchor_diffs if result.skew_misfit else {},
-                    "max_abs_diff": result.skew_misfit.max_abs_diff if result.skew_misfit else 0.0,
-                } if result.skew_misfit else None,
+                    "anchor_diffs": result.skew_misfit.anchor_diffs
+                    if result.skew_misfit
+                    else {},
+                    "max_abs_diff": result.skew_misfit.max_abs_diff
+                    if result.skew_misfit
+                    else 0.0,
+                }
+                if result.skew_misfit
+                else None,
             }
 
         payload = {
@@ -567,22 +627,38 @@ def get_calibration(
     except ValueError as e:
         return JSONResponse(
             status_code=400,
-            content={"error": "validation_error", "message": str(e), "error_type": "validation"},
+            content={
+                "error": "validation_error",
+                "message": str(e),
+                "error_type": "validation",
+            },
         )
-    except httpx.TimeoutException as e:
+    except httpx.TimeoutException:
         return JSONResponse(
             status_code=504,
-            content={"error": "deribit_timeout", "message": "Deribit API timeout, please retry", "error_type": "timeout"},
+            content={
+                "error": "deribit_timeout",
+                "message": "Deribit API timeout, please retry",
+                "error_type": "timeout",
+            },
         )
     except httpx.HTTPError as e:
         return JSONResponse(
             status_code=502,
-            content={"error": "deribit_error", "message": f"Deribit API error: {str(e)}", "error_type": "api_error"},
+            content={
+                "error": "deribit_error",
+                "message": f"Deribit API error: {str(e)}",
+                "error_type": "api_error",
+            },
         )
     except Exception as e:
         return JSONResponse(
             status_code=500,
-            content={"error": "calibration_failed", "message": str(e), "error_type": "internal"},
+            content={
+                "error": "calibration_failed",
+                "message": str(e),
+                "error_type": "internal",
+            },
         )
 
 
@@ -599,32 +675,37 @@ def get_calibration_history(
             status_code=400,
             content={"error": "underlying must be BTC or ETH"},
         )
-    
+
     try:
         from src.db.models_calibration import list_recent_calibrations
+
         entries = list_recent_calibrations(underlying=underlying, limit=limit)
-        
-        return JSONResponse(content={
-            "underlying": underlying,
-            "entries": [
-                {
-                    "id": e.id,
-                    "created_at": e.created_at.isoformat() if e.created_at else None,
-                    "dte_min": e.dte_min,
-                    "dte_max": e.dte_max,
-                    "lookback_days": e.lookback_days,
-                    "multiplier": e.multiplier,
-                    "mae_pct": e.mae_pct,
-                    "vega_weighted_mae_pct": e.vega_weighted_mae_pct,
-                    "bias_pct": e.bias_pct,
-                    "num_samples": e.num_samples,
-                    "source": e.source,
-                    "status": e.status,
-                    "reason": e.reason,
-                }
-                for e in entries
-            ],
-        })
+
+        return JSONResponse(
+            content={
+                "underlying": underlying,
+                "entries": [
+                    {
+                        "id": e.id,
+                        "created_at": e.created_at.isoformat()
+                        if e.created_at
+                        else None,
+                        "dte_min": e.dte_min,
+                        "dte_max": e.dte_max,
+                        "lookback_days": e.lookback_days,
+                        "multiplier": e.multiplier,
+                        "mae_pct": e.mae_pct,
+                        "vega_weighted_mae_pct": e.vega_weighted_mae_pct,
+                        "bias_pct": e.bias_pct,
+                        "num_samples": e.num_samples,
+                        "source": e.source,
+                        "status": e.status,
+                        "reason": e.reason,
+                    }
+                    for e in entries
+                ],
+            }
+        )
     except Exception as e:
         return JSONResponse(
             status_code=500,
@@ -636,32 +717,35 @@ def get_calibration_history(
 def use_latest_calibration(request: dict) -> JSONResponse:
     """
     Apply the latest calibration multiplier from history as a runtime override.
-    
+
     Also updates the "Current Applied Multipliers" panel via set_applied_multiplier.
-    
+
     Body: {"underlying": "BTC", "dte_min": 3, "dte_max": 10}
     """
     underlying = request.get("underlying", "BTC")
     dte_min = request.get("dte_min", 3)
     dte_max = request.get("dte_max", 10)
-    
+
     if underlying not in ("BTC", "ETH"):
         return JSONResponse(
             status_code=400,
             content={"error": "underlying must be BTC or ETH"},
         )
-    
+
     try:
         from src.db.models_calibration import get_latest_calibration
-        from src.calibration_store import set_iv_multiplier_override, set_applied_multiplier
-        
+        from src.calibration_store import (
+            set_iv_multiplier_override,
+            set_applied_multiplier,
+        )
+
         entry = get_latest_calibration(
             underlying=underlying,
             dte_min=dte_min,
             dte_max=dte_max,
             skip_failed=True,
         )
-        
+
         if entry is None:
             return JSONResponse(
                 status_code=400,
@@ -670,9 +754,9 @@ def use_latest_calibration(request: dict) -> JSONResponse:
                     "message": f"No valid calibration found for {underlying} in {dte_min}-{dte_max} DTE range. All calibrations may have failed guardrails. Run a new calibration.",
                 },
             )
-        
+
         set_iv_multiplier_override(underlying, entry.multiplier, dte_min, dte_max)
-        
+
         set_applied_multiplier(
             underlying=underlying,
             global_multiplier=entry.multiplier,
@@ -680,17 +764,21 @@ def use_latest_calibration(request: dict) -> JSONResponse:
             source=entry.source or "harvested",
             applied_reason=f"User force-applied from {dte_min}-{dte_max} DTE band",
         )
-        
-        return JSONResponse(content={
-            "status": "ok",
-            "underlying": underlying,
-            "dte_min": dte_min,
-            "dte_max": dte_max,
-            "multiplier": entry.multiplier,
-            "mae_pct": entry.mae_pct,
-            "num_samples": entry.num_samples,
-            "created_at": entry.created_at.isoformat() if entry.created_at else None,
-        })
+
+        return JSONResponse(
+            content={
+                "status": "ok",
+                "underlying": underlying,
+                "dte_min": dte_min,
+                "dte_max": dte_max,
+                "multiplier": entry.multiplier,
+                "mae_pct": entry.mae_pct,
+                "num_samples": entry.num_samples,
+                "created_at": entry.created_at.isoformat()
+                if entry.created_at
+                else None,
+            }
+        )
     except Exception as e:
         return JSONResponse(
             status_code=500,
@@ -702,29 +790,29 @@ def use_latest_calibration(request: dict) -> JSONResponse:
 def apply_calibration_direct(request: dict) -> JSONResponse:
     """
     Apply a calibration multiplier directly from the frontend (from "Run Calibration" result).
-    
+
     Body: {"underlying": "BTC", "dte_min": 3, "dte_max": 10, "multiplier": 1.106, "mae_pct": 19.75, "num_samples": 36}
     """
     from src.db.models_calibration import MIN_REASONABLE_MULT, MAX_REASONABLE_MULT
     from src.calibration_store import set_iv_multiplier_override
-    
+
     underlying = request.get("underlying", "BTC")
     dte_min = request.get("dte_min", 3)
     dte_max = request.get("dte_max", 10)
     multiplier = request.get("multiplier")
-    
+
     if underlying not in ("BTC", "ETH"):
         return JSONResponse(
             status_code=400,
             content={"error": "underlying must be BTC or ETH"},
         )
-    
+
     if multiplier is None:
         return JSONResponse(
             status_code=400,
             content={"error": "multiplier is required"},
         )
-    
+
     if multiplier < MIN_REASONABLE_MULT or multiplier > MAX_REASONABLE_MULT:
         return JSONResponse(
             status_code=400,
@@ -733,17 +821,19 @@ def apply_calibration_direct(request: dict) -> JSONResponse:
                 "message": f"Multiplier {multiplier:.4f} is outside guardrail bounds ({MIN_REASONABLE_MULT}-{MAX_REASONABLE_MULT}).",
             },
         )
-    
+
     try:
         set_iv_multiplier_override(underlying, multiplier, dte_min, dte_max)
-        
-        return JSONResponse(content={
-            "status": "ok",
-            "underlying": underlying,
-            "dte_min": dte_min,
-            "dte_max": dte_max,
-            "multiplier": multiplier,
-        })
+
+        return JSONResponse(
+            content={
+                "status": "ok",
+                "underlying": underlying,
+                "dte_min": dte_min,
+                "dte_max": dte_max,
+                "multiplier": multiplier,
+            }
+        )
     except Exception as e:
         return JSONResponse(
             status_code=500,
@@ -758,6 +848,7 @@ def get_calibration_overrides() -> JSONResponse:
     """
     try:
         from src.calibration_store import get_all_overrides
+
         overrides = get_all_overrides()
         return JSONResponse(content={"overrides": overrides})
     except Exception as e:
@@ -775,21 +866,24 @@ def get_calibration_policy() -> JSONResponse:
     """
     try:
         from src.calibration_update_policy import get_policy
+
         policy = get_policy()
-        return JSONResponse(content={
-            "min_delta_global": policy.min_delta_global,
-            "min_delta_band": policy.min_delta_band,
-            "min_sample_size": policy.min_sample_size,
-            "min_vega_sum": policy.min_vega_sum,
-            "smoothing_window_days": policy.smoothing_window_days,
-            "ewma_alpha": policy.ewma_alpha,
-            "explanation": (
-                f"The system smooths calibration results over the last {policy.smoothing_window_days} days "
-                f"and only updates IV multipliers when: (1) The change is larger than {policy.min_delta_global} "
-                f"(e.g., 0.03), and (2) There are at least {policy.min_sample_size} samples with sufficient vega "
-                f"({policy.min_vega_sum}+). This prevents overreacting to noisy days and keeps the synthetic universe stable."
-            ),
-        })
+        return JSONResponse(
+            content={
+                "min_delta_global": policy.min_delta_global,
+                "min_delta_band": policy.min_delta_band,
+                "min_sample_size": policy.min_sample_size,
+                "min_vega_sum": policy.min_vega_sum,
+                "smoothing_window_days": policy.smoothing_window_days,
+                "ewma_alpha": policy.ewma_alpha,
+                "explanation": (
+                    f"The system smooths calibration results over the last {policy.smoothing_window_days} days "
+                    f"and only updates IV multipliers when: (1) The change is larger than {policy.min_delta_global} "
+                    f"(e.g., 0.03), and (2) There are at least {policy.min_sample_size} samples with sufficient vega "
+                    f"({policy.min_vega_sum}+). This prevents overreacting to noisy days and keeps the synthetic universe stable."
+                ),
+            }
+        )
     except Exception as e:
         return JSONResponse(
             status_code=500,
@@ -801,18 +895,20 @@ def get_calibration_policy() -> JSONResponse:
 def get_current_multipliers(underlying: str = "BTC") -> JSONResponse:
     """
     Get the currently applied IV multipliers.
-    
+
     This reads from the calibration store, which is updated when:
     - A live calibration is applied via policy
     - User clicks "Force-Apply Latest"
     """
     try:
         from src.calibration_update_policy import get_current_applied_multipliers
-        
+
         current = get_current_applied_multipliers(underlying)
-        
-        last_applied = current.last_updated.isoformat() if current.last_updated else None
-        
+
+        last_applied = (
+            current.last_updated.isoformat() if current.last_updated else None
+        )
+
         bands_list = None
         if current.band_multipliers:
             bands_list = [
@@ -824,13 +920,15 @@ def get_current_multipliers(underlying: str = "BTC") -> JSONResponse:
                 }
                 for b in current.band_multipliers
             ]
-        
-        return JSONResponse(content={
-            "underlying": underlying,
-            "global_multiplier": current.global_multiplier,
-            "band_multipliers": bands_list,
-            "last_updated": last_applied,
-        })
+
+        return JSONResponse(
+            content={
+                "underlying": underlying,
+                "global_multiplier": current.global_multiplier,
+                "band_multipliers": bands_list,
+                "last_updated": last_applied,
+            }
+        )
     except Exception as e:
         return JSONResponse(
             status_code=500,
@@ -849,33 +947,39 @@ def get_calibration_runs(
     """
     try:
         from src.calibration_update_policy import load_recent_calibration_history
-        
+
         runs = load_recent_calibration_history(underlying, limit=limit)
-        
-        return JSONResponse(content={
-            "underlying": underlying,
-            "runs": [
-                {
-                    "timestamp": r.timestamp.isoformat() if r.timestamp else None,
-                    "source": r.source,
-                    "recommended_iv_multiplier": r.recommended_iv_multiplier,
-                    "smoothed_global_multiplier": r.smoothed_global_multiplier,
-                    "sample_size": r.sample_size,
-                    "vega_sum": r.vega_sum,
-                    "applied": r.applied,
-                    "applied_reason": r.applied_reason,
-                    "bands": [
-                        {"name": b.name, "iv_multiplier": b.iv_multiplier}
-                        for b in (r.recommended_band_multipliers or [])
-                    ] if r.recommended_band_multipliers else None,
-                    "smoothed_bands": [
-                        {"name": b.name, "iv_multiplier": b.iv_multiplier}
-                        for b in (r.smoothed_band_multipliers or [])
-                    ] if r.smoothed_band_multipliers else None,
-                }
-                for r in runs
-            ],
-        })
+
+        return JSONResponse(
+            content={
+                "underlying": underlying,
+                "runs": [
+                    {
+                        "timestamp": r.timestamp.isoformat() if r.timestamp else None,
+                        "source": r.source,
+                        "recommended_iv_multiplier": r.recommended_iv_multiplier,
+                        "smoothed_global_multiplier": r.smoothed_global_multiplier,
+                        "sample_size": r.sample_size,
+                        "vega_sum": r.vega_sum,
+                        "applied": r.applied,
+                        "applied_reason": r.applied_reason,
+                        "bands": [
+                            {"name": b.name, "iv_multiplier": b.iv_multiplier}
+                            for b in (r.recommended_band_multipliers or [])
+                        ]
+                        if r.recommended_band_multipliers
+                        else None,
+                        "smoothed_bands": [
+                            {"name": b.name, "iv_multiplier": b.iv_multiplier}
+                            for b in (r.smoothed_band_multipliers or [])
+                        ]
+                        if r.smoothed_band_multipliers
+                        else None,
+                    }
+                    for r in runs
+                ],
+            }
+        )
     except Exception as e:
         return JSONResponse(
             status_code=500,
@@ -898,10 +1002,11 @@ def force_apply_calibration(request: ForceApplyCalibrationRequest) -> JSONRespon
     """
     try:
         from src.calibration_update_policy import run_calibration_with_policy
-        from typing import Literal
-        
-        source: Literal["live", "harvested"] = "live" if request.source == "live" else "harvested"
-        
+
+        source: Literal["live", "harvested"] = (
+            "live" if request.source == "live" else "harvested"
+        )
+
         record, decision = run_calibration_with_policy(
             underlying=request.underlying,
             source=source,
@@ -909,20 +1014,23 @@ def force_apply_calibration(request: ForceApplyCalibrationRequest) -> JSONRespon
             min_dte=request.min_dte,
             max_dte=request.max_dte,
         )
-        
-        return JSONResponse(content={
-            "status": "ok",
-            "underlying": request.underlying,
-            "source": request.source,
-            "recommended_iv_multiplier": record.recommended_iv_multiplier,
-            "smoothed_iv_multiplier": record.smoothed_global_multiplier,
-            "applied": record.applied,
-            "applied_reason": record.applied_reason,
-            "sample_size": record.sample_size,
-            "timestamp": record.timestamp.isoformat() if record.timestamp else None,
-        })
+
+        return JSONResponse(
+            content={
+                "status": "ok",
+                "underlying": request.underlying,
+                "source": request.source,
+                "recommended_iv_multiplier": record.recommended_iv_multiplier,
+                "smoothed_iv_multiplier": record.smoothed_global_multiplier,
+                "applied": record.applied,
+                "applied_reason": record.applied_reason,
+                "sample_size": record.sample_size,
+                "timestamp": record.timestamp.isoformat() if record.timestamp else None,
+            }
+        )
     except Exception as e:
         import traceback
+
         traceback.print_exc()
         return JSONResponse(
             status_code=500,
@@ -931,16 +1039,19 @@ def force_apply_calibration(request: ForceApplyCalibrationRequest) -> JSONRespon
 
 
 @app.post("/api/calibration/run_with_policy")
-def run_calibration_with_policy_endpoint(request: ForceApplyCalibrationRequest) -> JSONResponse:
+def run_calibration_with_policy_endpoint(
+    request: ForceApplyCalibrationRequest,
+) -> JSONResponse:
     """
     Run calibration with the update policy (normal mode, respects thresholds).
     """
     try:
         from src.calibration_update_policy import run_calibration_with_policy
-        from typing import Literal
-        
-        source: Literal["live", "harvested"] = "live" if request.source == "live" else "harvested"
-        
+
+        source: Literal["live", "harvested"] = (
+            "live" if request.source == "live" else "harvested"
+        )
+
         record, decision = run_calibration_with_policy(
             underlying=request.underlying,
             source=source,
@@ -948,20 +1059,23 @@ def run_calibration_with_policy_endpoint(request: ForceApplyCalibrationRequest) 
             min_dte=request.min_dte,
             max_dte=request.max_dte,
         )
-        
-        return JSONResponse(content={
-            "status": "ok",
-            "underlying": request.underlying,
-            "source": request.source,
-            "recommended_iv_multiplier": record.recommended_iv_multiplier,
-            "smoothed_iv_multiplier": record.smoothed_global_multiplier,
-            "applied": record.applied,
-            "applied_reason": record.applied_reason,
-            "sample_size": record.sample_size,
-            "timestamp": record.timestamp.isoformat() if record.timestamp else None,
-        })
+
+        return JSONResponse(
+            content={
+                "status": "ok",
+                "underlying": request.underlying,
+                "source": request.source,
+                "recommended_iv_multiplier": record.recommended_iv_multiplier,
+                "smoothed_iv_multiplier": record.smoothed_global_multiplier,
+                "applied": record.applied,
+                "applied_reason": record.applied_reason,
+                "sample_size": record.sample_size,
+                "timestamp": record.timestamp.isoformat() if record.timestamp else None,
+            }
+        )
     except Exception as e:
         import traceback
+
         traceback.print_exc()
         return JSONResponse(
             status_code=500,
@@ -973,44 +1087,52 @@ def run_calibration_with_policy_endpoint(request: ForceApplyCalibrationRequest) 
 def apply_skew_ratios(request: dict) -> JSONResponse:
     """
     Apply recommended skew anchor ratios directly.
-    
+
     Body: {"underlying": "BTC", "anchor_ratios": {"0.15": 0.96, "0.25": 0.94, "0.35": 0.92}}
     """
-    from src.calibration_store import set_skew_anchor_ratios, get_applied_multiplier, set_applied_multiplier
-    
+    from src.calibration_store import (
+        set_skew_anchor_ratios,
+        get_applied_multiplier,
+        set_applied_multiplier,
+    )
+
     underlying = request.get("underlying", "BTC")
     anchor_ratios = request.get("anchor_ratios", {})
-    
+
     if underlying not in ("BTC", "ETH"):
         return JSONResponse(
             status_code=400,
             content={"error": "underlying must be BTC or ETH"},
         )
-    
+
     if not anchor_ratios or not isinstance(anchor_ratios, dict):
         return JSONResponse(
             status_code=400,
             content={"error": "anchor_ratios is required and must be a dict"},
         )
-    
+
     try:
         set_skew_anchor_ratios(underlying, anchor_ratios)
-        
+
         current_state = get_applied_multiplier(underlying)
         set_applied_multiplier(
             underlying=underlying,
             global_multiplier=current_state.global_multiplier,
-            band_multipliers=current_state.band_multipliers if current_state.band_multipliers else None,
+            band_multipliers=current_state.band_multipliers
+            if current_state.band_multipliers
+            else None,
             skew_anchor_ratios=anchor_ratios,
             source=current_state.source,
             applied_reason="Skew ratios applied directly",
         )
-        
-        return JSONResponse(content={
-            "status": "ok",
-            "underlying": underlying,
-            "anchor_ratios": anchor_ratios,
-        })
+
+        return JSONResponse(
+            content={
+                "status": "ok",
+                "underlying": underlying,
+                "anchor_ratios": anchor_ratios,
+            }
+        )
     except Exception as e:
         return JSONResponse(
             status_code=500,
@@ -1026,10 +1148,10 @@ def get_auto_calibration_status() -> JSONResponse:
     """
     try:
         from src.db.models_calibration import list_recent_calibrations
-        
+
         underlyings = ["BTC", "ETH"]
         results = {}
-        
+
         for underlying in underlyings:
             entries = list_recent_calibrations(underlying=underlying, limit=1)
             if entries:
@@ -1049,7 +1171,7 @@ def get_auto_calibration_status() -> JSONResponse:
                 }
             else:
                 results[underlying] = None
-        
+
         any_recent = any(r is not None for r in results.values())
         overall_status = "ok"
         if any_recent:
@@ -1062,11 +1184,13 @@ def get_auto_calibration_status() -> JSONResponse:
                 overall_status = "degraded"
         else:
             overall_status = "no_data"
-        
-        return JSONResponse(content={
-            "overall_status": overall_status,
-            "underlyings": results,
-        })
+
+        return JSONResponse(
+            content={
+                "overall_status": overall_status,
+                "underlyings": results,
+            }
+        )
     except Exception as e:
         return JSONResponse(
             status_code=500,
@@ -1081,7 +1205,7 @@ def intraday_data_status() -> JSONResponse:
     Read-only; does not trigger scraping.
     """
     from src.data_status import get_intraday_data_status
-    
+
     try:
         status = get_intraday_data_status(settings)
         return JSONResponse(
@@ -1091,8 +1215,12 @@ def intraday_data_status() -> JSONResponse:
                 "backend": status.backend,
                 "rows_total": status.rows_total,
                 "days_covered": status.days_covered,
-                "first_timestamp": status.first_timestamp.isoformat() if status.first_timestamp else None,
-                "last_timestamp": status.last_timestamp.isoformat() if status.last_timestamp else None,
+                "first_timestamp": status.first_timestamp.isoformat()
+                if status.first_timestamp
+                else None,
+                "last_timestamp": status.last_timestamp.isoformat()
+                if status.last_timestamp
+                else None,
                 "approx_size_mb": status.approx_size_mb,
                 "target_interval_sec": status.target_interval_sec,
                 "is_running": status.is_running,
@@ -1117,10 +1245,6 @@ class BacktestRequest(BaseModel):
     # Hybrid synthetic mode settings
     sigma_mode: str = "rv_x_multiplier"
     chain_mode: str = "synthetic_grid"
-
-
-from typing import Literal as TypingLiteral
-
 class BacktestStartRequest(BaseModel):
     underlying: str = "BTC"
     start: str
@@ -1134,8 +1258,8 @@ class BacktestStartRequest(BaseModel):
     max_dte: int = 21
     delta_min: float = 0.15
     delta_max: float = 0.35
-    margin_type: TypingLiteral["inverse", "linear"] = "inverse"
-    settlement_ccy: TypingLiteral["ANY", "USDC", "BTC", "ETH"] = "ANY"
+    margin_type: Literal["inverse", "linear"] = "inverse"
+    settlement_ccy: Literal["ANY", "USDC", "BTC", "ETH"] = "ANY"
     # Hybrid synthetic mode settings
     sigma_mode: str = "rv_x_multiplier"
     chain_mode: str = "synthetic_grid"
@@ -1149,21 +1273,23 @@ def start_backtest(req: BacktestStartRequest) -> JSONResponse:
     """Start a new backtest in the background."""
     from src.backtest.manager import backtest_manager
     from src.backtest.strategy_caps import apply_strategy_overrides
-    
+
     try:
         start_dt = datetime.fromisoformat(req.start.replace("Z", "+00:00"))
         end_dt = datetime.fromisoformat(req.end.replace("Z", "+00:00"))
     except ValueError as e:
         raise HTTPException(status_code=400, detail=f"Invalid date format: {e}")
-    
+
     if start_dt.tzinfo is None:
         start_dt = start_dt.replace(tzinfo=timezone.utc)
     if end_dt.tzinfo is None:
         end_dt = end_dt.replace(tzinfo=timezone.utc)
-    
+
     if start_dt >= end_dt:
-        raise HTTPException(status_code=400, detail="Start date must be before end date")
-    
+        raise HTTPException(
+            status_code=400, detail="Start date must be before end date"
+        )
+
     user_config = {
         "exit_style": req.exit_style,
         "target_dte": req.target_dte,
@@ -1173,22 +1299,25 @@ def start_backtest(req: BacktestStartRequest) -> JSONResponse:
         "delta_min": req.delta_min,
         "delta_max": req.delta_max,
     }
-    
+
     validation = apply_strategy_overrides(req.selector_name, user_config)
     effective = validation.effective_config
-    
+
     effective_exit_style = effective.get("exit_style", req.exit_style)
-    
+
     if effective_exit_style == "gregbot_managed" and req.selector_name != "gregbot":
         raise HTTPException(
             status_code=400,
-            detail="exit_style 'gregbot_managed' is only valid for the gregbot selector"
+            detail="exit_style 'gregbot_managed' is only valid for the gregbot selector",
         )
-    
+
     valid_exit_styles = ["hold_to_expiry", "tp_and_roll", "both", "gregbot_managed"]
     if effective_exit_style not in valid_exit_styles:
-        raise HTTPException(status_code=400, detail=f"Invalid exit_style. Must be one of: {valid_exit_styles}")
-    
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid exit_style. Must be one of: {valid_exit_styles}",
+        )
+
     started = backtest_manager.start(
         underlying=req.underlying,
         start_date=start_dt,
@@ -1209,24 +1338,27 @@ def start_backtest(req: BacktestStartRequest) -> JSONResponse:
         synthetic_iv_multiplier=req.synthetic_iv_multiplier,
         selector_name=req.selector_name,
     )
-    
+
     if not started:
         return JSONResponse(
             status_code=409,
             content={"started": False, "error": "Backtest already running"},
         )
-    
-    return JSONResponse(content={
-        "started": True,
-        "warnings": validation.warnings,
-        "effective_config": validation.effective_config,
-    })
+
+    return JSONResponse(
+        content={
+            "started": True,
+            "warnings": validation.warnings,
+            "effective_config": validation.effective_config,
+        }
+    )
 
 
 @app.get("/api/backtest/status")
 def get_backtest_status() -> JSONResponse:
     """Get the current backtest status."""
     from src.backtest.manager import backtest_manager
+
     return JSONResponse(content=backtest_manager.get_status())
 
 
@@ -1234,6 +1366,7 @@ def get_backtest_status() -> JSONResponse:
 def stop_backtest() -> JSONResponse:
     """Stop the currently running backtest."""
     from src.backtest.manager import backtest_manager
+
     backtest_manager.stop()
     return JSONResponse(content={"stopping": True})
 
@@ -1242,6 +1375,7 @@ def stop_backtest() -> JSONResponse:
 def pause_backtest() -> JSONResponse:
     """Pause the currently running backtest."""
     from src.backtest.manager import backtest_manager
+
     backtest_manager.pause()
     return JSONResponse(content={"paused": True})
 
@@ -1250,6 +1384,7 @@ def pause_backtest() -> JSONResponse:
 def resume_backtest() -> JSONResponse:
     """Resume the paused backtest."""
     from src.backtest.manager import backtest_manager
+
     backtest_manager.resume()
     return JSONResponse(content={"resumed": True})
 
@@ -1259,31 +1394,39 @@ def run_backtest(req: BacktestRequest) -> JSONResponse:
     """Run a backtest using the CoveredCallSimulator and save to database."""
     from src.backtest.types import CallSimulationConfig
     from src.backtest.data_source import Timeframe
-    from src.backtest.covered_call_simulator import CoveredCallSimulator, always_trade_policy
+    from src.backtest.covered_call_simulator import (
+        CoveredCallSimulator,
+        always_trade_policy,
+    )
     from src.backtest.deribit_data_source import DeribitDataSource
     from src.db import get_db_session
     from src.db.backtest_service import create_backtest_run, complete_run, fail_run
-    
+
     valid_timeframes = ["1m", "5m", "15m", "1h", "4h", "1d"]
     if req.timeframe not in valid_timeframes:
-        raise HTTPException(status_code=400, detail=f"Invalid timeframe. Must be one of: {valid_timeframes}")
-    
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid timeframe. Must be one of: {valid_timeframes}",
+        )
+
     try:
         start_dt = datetime.fromisoformat(req.start.replace("Z", "+00:00"))
         end_dt = datetime.fromisoformat(req.end.replace("Z", "+00:00"))
     except ValueError as e:
         raise HTTPException(status_code=400, detail=f"Invalid date format: {e}")
-    
+
     if start_dt.tzinfo is None:
         start_dt = start_dt.replace(tzinfo=timezone.utc)
     if end_dt.tzinfo is None:
         end_dt = end_dt.replace(tzinfo=timezone.utc)
-    
+
     if start_dt >= end_dt:
-        raise HTTPException(status_code=400, detail="Start date must be before end date")
-    
+        raise HTTPException(
+            status_code=400, detail="Start date must be before end date"
+        )
+
     timeframe: Timeframe = cast(Timeframe, req.timeframe)
-    
+
     config_dict = {
         "underlying": req.underlying,
         "start": req.start,
@@ -1293,7 +1436,7 @@ def run_backtest(req: BacktestRequest) -> JSONResponse:
         "target_delta": req.target_delta,
         "decision_interval_bars": req.decision_interval_bars,
     }
-    
+
     with get_db_session() as db:
         run = create_backtest_run(
             db=db,
@@ -1307,11 +1450,12 @@ def run_backtest(req: BacktestRequest) -> JSONResponse:
         run_id = run.run_id
         run.status = "running"
         db.commit()
-    
+
     from src.backtest.types import SigmaMode, ChainMode
+
     sigma_mode_typed: SigmaMode = req.sigma_mode  # type: ignore
     chain_mode_typed: ChainMode = req.chain_mode  # type: ignore
-    
+
     config = CallSimulationConfig(
         underlying=req.underlying,
         start=start_dt,
@@ -1328,28 +1472,37 @@ def run_backtest(req: BacktestRequest) -> JSONResponse:
         sigma_mode=sigma_mode_typed,
         chain_mode=chain_mode_typed,
     )
-    
+
     ds = DeribitDataSource()
     simulator = CoveredCallSimulator(data_source=ds, config=config)
-    
+
     try:
-        result = simulator.simulate_policy(policy=always_trade_policy, size=req.initial_position)
+        result = simulator.simulate_policy(
+            policy=always_trade_policy, size=req.initial_position
+        )
     except Exception as e:
         ds.close()
         with get_db_session() as db:
             from src.db.models_backtest import BacktestRun as BacktestRunModel
-            run = db.query(BacktestRunModel).filter(BacktestRunModel.run_id == run_id).first()
+
+            run = (
+                db.query(BacktestRunModel)
+                .filter(BacktestRunModel.run_id == run_id)
+                .first()
+            )
             if run:
                 fail_run(db, run, str(e))
-        raise HTTPException(status_code=500, detail=f"Backtest simulation failed: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"Backtest simulation failed: {str(e)}"
+        )
     finally:
         ds.close()
-    
+
     equity_curve = [
         [ts.isoformat(), round(val, 4)]
         for ts, val in sorted(result.equity_curve.items())
     ]
-    
+
     trades_sample = [
         {
             "instrument_name": t.instrument_name,
@@ -1362,7 +1515,7 @@ def run_backtest(req: BacktestRequest) -> JSONResponse:
         }
         for t in result.trades[:20]
     ]
-    
+
     metrics_data = {
         "num_trades": result.metrics.get("num_trades", 0),
         "final_pnl": round(result.metrics.get("final_pnl", 0), 4),
@@ -1373,10 +1526,13 @@ def run_backtest(req: BacktestRequest) -> JSONResponse:
         "sharpe_ratio": round(result.metrics.get("sharpe_ratio", 0), 2),
         "sortino_ratio": round(result.metrics.get("sortino_ratio", 0), 2),
     }
-    
+
     with get_db_session() as db:
         from src.db.models_backtest import BacktestRun as BacktestRunModel
-        run = db.query(BacktestRunModel).filter(BacktestRunModel.run_id == run_id).first()
+
+        run = (
+            db.query(BacktestRunModel).filter(BacktestRunModel.run_id == run_id).first()
+        )
         if run:
             complete_run(
                 db=db,
@@ -1385,7 +1541,7 @@ def run_backtest(req: BacktestRequest) -> JSONResponse:
                 chains_by_style={"default": trades_sample},
                 primary_exit_style="default",
             )
-    
+
     response_data = {
         "run_id": run_id,
         "config": config_dict,
@@ -1393,7 +1549,7 @@ def run_backtest(req: BacktestRequest) -> JSONResponse:
         "equity_curve": equity_curve,
         "trades_sample": trades_sample,
     }
-    
+
     return JSONResponse(content=response_data)
 
 
@@ -1409,15 +1565,24 @@ def get_backtest_insights(req: InsightsRequest) -> JSONResponse:
     try:
         from openai import OpenAI
         import os
-        
-        api_key = os.environ.get("AI_INTEGRATIONS_OPENAI_API_KEY") or os.environ.get("OPENAI_API_KEY")
-        base_url = os.environ.get("AI_INTEGRATIONS_OPENAI_BASE_URL") or "https://api.openai.com/v1"
-        
+
+        api_key = os.environ.get("AI_INTEGRATIONS_OPENAI_API_KEY") or os.environ.get(
+            "OPENAI_API_KEY"
+        )
+        base_url = (
+            os.environ.get("AI_INTEGRATIONS_OPENAI_BASE_URL")
+            or "https://api.openai.com/v1"
+        )
+
         if not api_key:
-            return JSONResponse(content={"insights": "OpenAI API key not configured. Cannot generate insights."})
-        
+            return JSONResponse(
+                content={
+                    "insights": "OpenAI API key not configured. Cannot generate insights."
+                }
+            )
+
         client = OpenAI(api_key=api_key, base_url=base_url)
-        
+
         system_prompt = """You are an options research analyst. You receive results from a covered-call backtest.
 Summarize what worked, what didn't, and suggest simple rules based on regime (bull/bear/sideways) and IVRV.
 Be concise and concrete. Focus on actionable insights. Use 2-3 short paragraphs."""
@@ -1427,11 +1592,11 @@ Be concise and concrete. Focus on actionable insights. Use 2-3 short paragraphs.
 Config: {req.config}
 
 Metrics:
-- Number of trades: {req.metrics.get('num_trades', 0)}
-- Final PnL: {req.metrics.get('final_pnl', 0):.4f}
-- Average PnL per trade: {req.metrics.get('avg_pnl', 0):.4f}
-- Max Drawdown: {req.metrics.get('max_drawdown_pct', 0):.2f}%
-- Win Rate: {req.metrics.get('win_rate', 0)}%
+- Number of trades: {req.metrics.get("num_trades", 0)}
+- Final PnL: {req.metrics.get("final_pnl", 0):.4f}
+- Average PnL per trade: {req.metrics.get("avg_pnl", 0):.4f}
+- Max Drawdown: {req.metrics.get("max_drawdown_pct", 0):.2f}%
+- Win Rate: {req.metrics.get("win_rate", 0)}%
 
 Sample Trades (first 10):
 {req.trades_sample[:10]}
@@ -1447,13 +1612,15 @@ Please analyze these results and provide insights."""
             max_tokens=500,
             temperature=0.3,
         )
-        
+
         insights = response.choices[0].message.content or "No insights generated."
-        
+
         return JSONResponse(content={"insights": insights})
-        
+
     except Exception as e:
-        return JSONResponse(content={"insights": f"Error generating insights: {str(e)}"})
+        return JSONResponse(
+            content={"insights": f"Error generating insights: {str(e)}"}
+        )
 
 
 @app.get("/api/backtests")
@@ -1464,7 +1631,7 @@ def list_backtest_runs(
     """List all backtest runs from database, sorted by created_at descending."""
     from src.db import get_db_session
     from src.db.backtest_service import list_runs
-    
+
     with get_db_session() as db:
         runs = list_runs(db, underlying=underlying, status=status)
         return JSONResponse(content=[run.to_dict() for run in runs])
@@ -1475,12 +1642,14 @@ def get_backtest_run(run_id: str) -> JSONResponse:
     """Get the full result for a specific backtest run from database."""
     from src.db import get_db_session
     from src.db.backtest_service import get_run_with_details
-    
+
     with get_db_session() as db:
         result = get_run_with_details(db, run_id)
         if result is None:
-            raise HTTPException(status_code=404, detail=f"Backtest run '{run_id}' not found")
-        
+            raise HTTPException(
+                status_code=404, detail=f"Backtest run '{run_id}' not found"
+            )
+
         return JSONResponse(content=result)
 
 
@@ -1489,19 +1658,23 @@ def download_backtest_run(run_id: str) -> JSONResponse:
     """Download the backtest run data as JSON."""
     from src.db import get_db_session
     from src.db.backtest_service import get_run_with_details
-    
+
     with get_db_session() as db:
         result = get_run_with_details(db, run_id)
         if result is None:
-            raise HTTPException(status_code=404, detail=f"Backtest run '{run_id}' not found")
-        
+            raise HTTPException(
+                status_code=404, detail=f"Backtest run '{run_id}' not found"
+            )
+
         from fastapi.responses import Response
         import json
-        
+
         return Response(
             content=json.dumps(result, indent=2, default=str),
             media_type="application/json",
-            headers={"Content-Disposition": f'attachment; filename="{run_id}_backtest_result.json"'},
+            headers={
+                "Content-Disposition": f'attachment; filename="{run_id}_backtest_result.json"'
+            },
         )
 
 
@@ -1510,12 +1683,14 @@ def delete_backtest_run(run_id: str) -> JSONResponse:
     """Delete a backtest run from database."""
     from src.db import get_db_session
     from src.db.backtest_service import delete_run, get_run_by_id
-    
+
     with get_db_session() as db:
         run = get_run_by_id(db, run_id)
         if run is None:
-            raise HTTPException(status_code=404, detail=f"Backtest run '{run_id}' not found")
-        
+            raise HTTPException(
+                status_code=404, detail=f"Backtest run '{run_id}' not found"
+            )
+
         delete_run(db, run_id)
         return JSONResponse(content={"deleted": True, "run_id": run_id})
 
@@ -1528,64 +1703,80 @@ def get_backtest_events(
 ) -> JSONResponse:
     """
     Get the event timeline for a backtest run.
-    
+
     Optionally filter by strategy_key or event_type.
     """
     from src.db import get_db_session
     from src.db.models_backtest import BacktestRun, BacktestEvent
-    
+
     with get_db_session() as db:
         run = db.query(BacktestRun).filter(BacktestRun.run_id == run_id).first()
         if run is None:
-            raise HTTPException(status_code=404, detail=f"Backtest run '{run_id}' not found")
-        
+            raise HTTPException(
+                status_code=404, detail=f"Backtest run '{run_id}' not found"
+            )
+
         query = db.query(BacktestEvent).filter(BacktestEvent.run_id == run.id)
-        
+
         if strategy_key:
             query = query.filter(BacktestEvent.strategy_key == strategy_key)
         if event_type:
             query = query.filter(BacktestEvent.event_type == event_type)
-        
+
         events = query.order_by(BacktestEvent.event_time).all()
-        
-        return JSONResponse(content={
-            "run_id": run_id,
-            "count": len(events),
-            "events": [e.to_dict() for e in events],
-        })
+
+        return JSONResponse(
+            content={
+                "run_id": run_id,
+                "count": len(events),
+                "events": [e.to_dict() for e in events],
+            }
+        )
 
 
 @app.get("/api/backtests/{run_id}/strategy_summary")
 def get_backtest_strategy_summary(run_id: str) -> JSONResponse:
     """
     Get strategy breakdown summary for a backtest run.
-    
+
     Returns aggregated metrics grouped by strategy_key.
     """
     from src.db import get_db_session
     from src.db.models_backtest import BacktestRun, BacktestEvent
-    from sqlalchemy import func
-    
+
     with get_db_session() as db:
         run = db.query(BacktestRun).filter(BacktestRun.run_id == run_id).first()
         if run is None:
-            raise HTTPException(status_code=404, detail=f"Backtest run '{run_id}' not found")
-        
+            raise HTTPException(
+                status_code=404, detail=f"Backtest run '{run_id}' not found"
+            )
+
         events = db.query(BacktestEvent).filter(BacktestEvent.run_id == run.id).all()
-        
+
         if not events:
-            return JSONResponse(content={
-                "run_id": run_id,
-                "strategy_summary": [],
-                "total_events": 0,
-            })
-        
+            return JSONResponse(
+                content={
+                    "run_id": run_id,
+                    "strategy_summary": [],
+                    "total_events": 0,
+                }
+            )
+
         from collections import defaultdict
-        strategy_stats: Dict[str, Dict[str, Any]] = defaultdict(lambda: {
-            "opens": 0, "closes": 0, "total_pnl": 0.0, "wins": 0,
-            "decisions": 0, "skips": 0, "rolls": 0, "take_profits": 0,
-        })
-        
+
+        strategy_stats: Dict[str, Dict[str, Any]] = defaultdict(
+            lambda: {
+                "opens": 0,
+                "closes": 0,
+                "total_pnl": 0.0,
+                "wins": 0,
+                "decisions": 0,
+                "skips": 0,
+                "rolls": 0,
+                "take_profits": 0,
+            }
+        )
+
         for event in events:
             stats = strategy_stats[event.strategy_key]
             if event.event_type == "DECISION":
@@ -1609,30 +1800,36 @@ def get_backtest_strategy_summary(run_id: str) -> JSONResponse:
                     stats["total_pnl"] += event.pnl
                     if event.pnl > 0:
                         stats["wins"] += 1
-        
+
         summaries = []
         for key, stats in strategy_stats.items():
             closes = stats["closes"]
-            summaries.append({
-                "strategy_key": key,
-                "opens": stats["opens"],
-                "closes": closes,
-                "total_pnl": round(stats["total_pnl"], 2),
-                "avg_pnl": round(stats["total_pnl"] / closes, 2) if closes > 0 else 0.0,
-                "win_rate": round(stats["wins"] / closes, 4) if closes > 0 else 0.0,
-                "decisions": stats["decisions"],
-                "skips": stats["skips"],
-                "rolls": stats["rolls"],
-                "take_profits": stats["take_profits"],
-            })
-        
+            summaries.append(
+                {
+                    "strategy_key": key,
+                    "opens": stats["opens"],
+                    "closes": closes,
+                    "total_pnl": round(stats["total_pnl"], 2),
+                    "avg_pnl": round(stats["total_pnl"] / closes, 2)
+                    if closes > 0
+                    else 0.0,
+                    "win_rate": round(stats["wins"] / closes, 4) if closes > 0 else 0.0,
+                    "decisions": stats["decisions"],
+                    "skips": stats["skips"],
+                    "rolls": stats["rolls"],
+                    "take_profits": stats["take_profits"],
+                }
+            )
+
         summaries.sort(key=lambda x: x["total_pnl"], reverse=True)
-        
-        return JSONResponse(content={
-            "run_id": run_id,
-            "strategy_summary": summaries,
-            "total_events": len(events),
-        })
+
+        return JSONResponse(
+            content={
+                "run_id": run_id,
+                "strategy_summary": summaries,
+                "total_events": len(events),
+            }
+        )
 
 
 @app.get("/api/backtests/{run_id}/events/download")
@@ -1643,38 +1840,54 @@ def download_backtest_events(run_id: str):
     from fastapi.responses import Response
     import csv
     import io
-    
+
     with get_db_session() as db:
         run = db.query(BacktestRun).filter(BacktestRun.run_id == run_id).first()
         if run is None:
-            raise HTTPException(status_code=404, detail=f"Backtest run '{run_id}' not found")
-        
-        events = db.query(BacktestEvent).filter(
-            BacktestEvent.run_id == run.id
-        ).order_by(BacktestEvent.event_time).all()
-        
+            raise HTTPException(
+                status_code=404, detail=f"Backtest run '{run_id}' not found"
+            )
+
+        events = (
+            db.query(BacktestEvent)
+            .filter(BacktestEvent.run_id == run.id)
+            .order_by(BacktestEvent.event_time)
+            .all()
+        )
+
         output = io.StringIO()
         writer = csv.writer(output)
-        writer.writerow([
-            "event_time", "selector_name", "strategy_key", "event_type",
-            "trade_id", "position_id", "pnl"
-        ])
-        
+        writer.writerow(
+            [
+                "event_time",
+                "selector_name",
+                "strategy_key",
+                "event_type",
+                "trade_id",
+                "position_id",
+                "pnl",
+            ]
+        )
+
         for e in events:
-            writer.writerow([
-                e.event_time.isoformat() if e.event_time else "",
-                e.selector_name,
-                e.strategy_key,
-                e.event_type,
-                e.trade_id or "",
-                e.position_id or "",
-                e.pnl if e.pnl is not None else "",
-            ])
-        
+            writer.writerow(
+                [
+                    e.event_time.isoformat() if e.event_time else "",
+                    e.selector_name,
+                    e.strategy_key,
+                    e.event_type,
+                    e.trade_id or "",
+                    e.position_id or "",
+                    e.pnl if e.pnl is not None else "",
+                ]
+            )
+
         return Response(
             content=output.getvalue(),
             media_type="text/csv",
-            headers={"Content-Disposition": f'attachment; filename="{run_id}_events.csv"'},
+            headers={
+                "Content-Disposition": f'attachment; filename="{run_id}_events.csv"'
+            },
         )
 
 
@@ -1682,7 +1895,7 @@ def download_backtest_events(run_id: str):
 def download_strategy_summary(run_id: str, format: str = "json"):
     """
     Download strategy summary as JSON or CSV.
-    
+
     Args:
         run_id: The backtest run ID
         format: 'json' or 'csv' (default: json)
@@ -1693,20 +1906,31 @@ def download_strategy_summary(run_id: str, format: str = "json"):
     import csv
     import io
     import json
-    
+
     with get_db_session() as db:
         run = db.query(BacktestRun).filter(BacktestRun.run_id == run_id).first()
         if run is None:
-            raise HTTPException(status_code=404, detail=f"Backtest run '{run_id}' not found")
-        
+            raise HTTPException(
+                status_code=404, detail=f"Backtest run '{run_id}' not found"
+            )
+
         events = db.query(BacktestEvent).filter(BacktestEvent.run_id == run.id).all()
-        
+
         from collections import defaultdict
-        strategy_stats: Dict[str, Dict[str, Any]] = defaultdict(lambda: {
-            "opens": 0, "closes": 0, "total_pnl": 0.0, "wins": 0,
-            "decisions": 0, "skips": 0, "rolls": 0, "take_profits": 0,
-        })
-        
+
+        strategy_stats: Dict[str, Dict[str, Any]] = defaultdict(
+            lambda: {
+                "opens": 0,
+                "closes": 0,
+                "total_pnl": 0.0,
+                "wins": 0,
+                "decisions": 0,
+                "skips": 0,
+                "rolls": 0,
+                "take_profits": 0,
+            }
+        )
+
         for event in events:
             stats = strategy_stats[event.strategy_key]
             if event.event_type == "DECISION":
@@ -1730,42 +1954,67 @@ def download_strategy_summary(run_id: str, format: str = "json"):
                     stats["total_pnl"] += event.pnl
                     if event.pnl > 0:
                         stats["wins"] += 1
-        
+
         summaries = []
         for key, stats in strategy_stats.items():
             closes = stats["closes"]
-            summaries.append({
-                "strategy_key": key,
-                "opens": stats["opens"],
-                "closes": closes,
-                "total_pnl": round(stats["total_pnl"], 2),
-                "avg_pnl": round(stats["total_pnl"] / closes, 2) if closes > 0 else 0.0,
-                "win_rate": round(stats["wins"] / closes, 4) if closes > 0 else 0.0,
-                "decisions": stats["decisions"],
-                "skips": stats["skips"],
-                "rolls": stats["rolls"],
-                "take_profits": stats["take_profits"],
-            })
-        
+            summaries.append(
+                {
+                    "strategy_key": key,
+                    "opens": stats["opens"],
+                    "closes": closes,
+                    "total_pnl": round(stats["total_pnl"], 2),
+                    "avg_pnl": round(stats["total_pnl"] / closes, 2)
+                    if closes > 0
+                    else 0.0,
+                    "win_rate": round(stats["wins"] / closes, 4) if closes > 0 else 0.0,
+                    "decisions": stats["decisions"],
+                    "skips": stats["skips"],
+                    "rolls": stats["rolls"],
+                    "take_profits": stats["take_profits"],
+                }
+            )
+
         summaries.sort(key=lambda x: x["total_pnl"], reverse=True)
-        
+
         if format.lower() == "csv":
             output = io.StringIO()
             writer = csv.writer(output)
-            writer.writerow([
-                "strategy_key", "opens", "closes", "total_pnl", "avg_pnl",
-                "win_rate", "decisions", "skips", "rolls", "take_profits"
-            ])
+            writer.writerow(
+                [
+                    "strategy_key",
+                    "opens",
+                    "closes",
+                    "total_pnl",
+                    "avg_pnl",
+                    "win_rate",
+                    "decisions",
+                    "skips",
+                    "rolls",
+                    "take_profits",
+                ]
+            )
             for s in summaries:
-                writer.writerow([
-                    s["strategy_key"], s["opens"], s["closes"], s["total_pnl"],
-                    s["avg_pnl"], s["win_rate"], s["decisions"], s["skips"],
-                    s["rolls"], s["take_profits"]
-                ])
+                writer.writerow(
+                    [
+                        s["strategy_key"],
+                        s["opens"],
+                        s["closes"],
+                        s["total_pnl"],
+                        s["avg_pnl"],
+                        s["win_rate"],
+                        s["decisions"],
+                        s["skips"],
+                        s["rolls"],
+                        s["take_profits"],
+                    ]
+                )
             return Response(
                 content=output.getvalue(),
                 media_type="text/csv",
-                headers={"Content-Disposition": f'attachment; filename="{run_id}_strategy_summary.csv"'},
+                headers={
+                    "Content-Disposition": f'attachment; filename="{run_id}_strategy_summary.csv"'
+                },
             )
         else:
             export_data = {
@@ -1777,7 +2026,9 @@ def download_strategy_summary(run_id: str, format: str = "json"):
             return Response(
                 content=json.dumps(export_data, indent=2),
                 media_type="application/json",
-                headers={"Content-Disposition": f'attachment; filename="{run_id}_strategy_summary.json"'},
+                headers={
+                    "Content-Disposition": f'attachment; filename="{run_id}_strategy_summary.json"'
+                },
             )
 
 
@@ -1785,8 +2036,10 @@ def download_strategy_summary(run_id: str, format: str = "json"):
 # SELECTOR SCAN & HEATMAP ENDPOINTS (BACKTESTING)
 # =============================================================================
 
+
 class SelectorScanRequest(BaseModel):
     """Request model for selector frequency scan."""
+
     selector_id: str = "greg"
     underlyings: List[str] = Field(default=["BTC", "ETH"])
     num_paths: int = 1
@@ -1795,11 +2048,11 @@ class SelectorScanRequest(BaseModel):
     threshold_overrides: Dict[str, float] = Field(default_factory=dict)
     iv_mode: str = Field(
         default="synthetic",
-        description="IV data source: 'synthetic' (estimated), 'live' (current market), or 'hybrid' (live with synthetic fallback)"
+        description="IV data source: 'synthetic' (estimated), 'live' (current market), or 'hybrid' (live with synthetic fallback)",
     )
     iv_fallback_warning: bool = Field(
         default=True,
-        description="If true, emit warnings when falling back from live to synthetic IV"
+        description="If true, emit warnings when falling back from live to synthetic IV",
     )
 
 
@@ -1810,7 +2063,7 @@ def selector_scan(req: SelectorScanRequest) -> JSONResponse:
     Backtest-only; no orders, no Deribit calls.
     """
     from src.backtest.selector_scan import SelectorScanConfig, run_selector_scan
-    
+
     try:
         config = SelectorScanConfig(
             selector_id=req.selector_id,
@@ -1823,7 +2076,7 @@ def selector_scan(req: SelectorScanRequest) -> JSONResponse:
             iv_fallback_warning=req.iv_fallback_warning,
         )
         result = run_selector_scan(config)
-        
+
         response_data: Dict[str, Any] = {
             "ok": True,
             "summary": result.summary,
@@ -1833,11 +2086,13 @@ def selector_scan(req: SelectorScanRequest) -> JSONResponse:
                 "iv_mode_description": _get_iv_mode_description(req.iv_mode),
             },
         }
-        
-        if hasattr(result, 'iv_fallback_count') and result.iv_fallback_count:
+
+        if hasattr(result, "iv_fallback_count") and result.iv_fallback_count:
             response_data["iv_fallback_count"] = result.iv_fallback_count
-            response_data["iv_fallback_warning"] = "Live IV was unavailable for some data points; fell back to synthetic estimates."
-        
+            response_data["iv_fallback_warning"] = (
+                "Live IV was unavailable for some data points; fell back to synthetic estimates."
+            )
+
         return JSONResponse(content=response_data)
     except Exception as e:
         return JSONResponse(content={"ok": False, "error": str(e)})
@@ -1855,6 +2110,7 @@ def _get_iv_mode_description(mode: str) -> str:
 
 class SelectorHeatmapRequest(BaseModel):
     """Request model for selector heatmap scan."""
+
     selector_id: str = "greg"
     underlying: str = "BTC"
     strategy_key: str = "STRATEGY_A_STRADDLE"
@@ -1875,7 +2131,7 @@ def selector_heatmap(req: SelectorHeatmapRequest) -> JSONResponse:
     Backtest-only; no orders or Deribit API calls.
     """
     from src.backtest.selector_scan import SelectorHeatmapConfig, run_selector_heatmap
-    
+
     try:
         cfg = SelectorHeatmapConfig(
             selector_id=req.selector_id,
@@ -1909,12 +2165,15 @@ def selector_heatmap(req: SelectorHeatmapRequest) -> JSONResponse:
 def environment_heatmap(req: dict) -> JSONResponse:
     """
     Environment-only occupancy heatmap over the synthetic universe.
-    
+
     Each cell = % of decision steps where the environment fell into the
     (x_bucket, y_bucket), ignoring any selector or strategy.
     """
-    from src.backtest.selector_scan import EnvironmentHeatmapRequest, compute_environment_heatmap
-    
+    from src.backtest.selector_scan import (
+        EnvironmentHeatmapRequest,
+        compute_environment_heatmap,
+    )
+
     try:
         heatmap_req = EnvironmentHeatmapRequest(**req)
         result = compute_environment_heatmap(heatmap_req)
@@ -1927,26 +2186,32 @@ def environment_heatmap(req: dict) -> JSONResponse:
 # SYSTEM CONTROLS & HEALTH API ENDPOINTS
 # =============================================================================
 
+
 @app.get("/api/llm_status")
 def get_llm_status() -> JSONResponse:
     """Get LLM and decision mode configuration status."""
     try:
-        return JSONResponse(content={
-            "ok": True,
-            "mode": settings.mode,
-            "deribit_env": settings.deribit_env,
-            "llm_enabled": settings.llm_enabled,
-            "decision_mode": getattr(settings, "decision_mode", "rule_only"),
-            "llm_shadow_enabled": getattr(settings, "llm_shadow_enabled", False),
-            "llm_validation_strict": getattr(settings, "llm_validation_strict", True),
-            "explore_prob": settings.explore_prob,
-        })
+        return JSONResponse(
+            content={
+                "ok": True,
+                "mode": settings.mode,
+                "deribit_env": settings.deribit_env,
+                "llm_enabled": settings.llm_enabled,
+                "decision_mode": getattr(settings, "decision_mode", "rule_only"),
+                "llm_shadow_enabled": getattr(settings, "llm_shadow_enabled", False),
+                "llm_validation_strict": getattr(
+                    settings, "llm_validation_strict", True
+                ),
+                "explore_prob": settings.explore_prob,
+            }
+        )
     except Exception as e:
         return JSONResponse(content={"ok": False, "error": str(e)})
 
 
 class LLMConfigUpdate(BaseModel):
     """Request model for updating LLM configuration."""
+
     llm_enabled: Optional[bool] = None
     decision_mode: Optional[str] = None
     explore_prob: Optional[float] = None
@@ -1960,30 +2225,36 @@ def update_llm_status(req: LLMConfigUpdate) -> JSONResponse:
     try:
         if req.llm_enabled is not None:
             settings.llm_enabled = req.llm_enabled
-        
+
         if req.decision_mode is not None:
             valid_modes = ["rule_only", "llm_only", "hybrid_shadow"]
             if req.decision_mode not in valid_modes:
                 return JSONResponse(
                     status_code=400,
-                    content={"ok": False, "error": f"decision_mode must be one of: {', '.join(valid_modes)}"}
+                    content={
+                        "ok": False,
+                        "error": f"decision_mode must be one of: {', '.join(valid_modes)}",
+                    },
                 )
             settings.decision_mode = req.decision_mode  # type: ignore
-        
+
         if req.explore_prob is not None:
             if req.explore_prob < 0.0 or req.explore_prob > 1.0:
                 return JSONResponse(
                     status_code=400,
-                    content={"ok": False, "error": "explore_prob must be between 0.0 and 1.0"}
+                    content={
+                        "ok": False,
+                        "error": "explore_prob must be between 0.0 and 1.0",
+                    },
                 )
             settings.explore_prob = req.explore_prob
-        
+
         if req.llm_shadow_enabled is not None:
             settings.llm_shadow_enabled = req.llm_shadow_enabled
-        
+
         if req.llm_validation_strict is not None:
             settings.llm_validation_strict = req.llm_validation_strict
-        
+
         return get_llm_status()
     except Exception as e:
         return JSONResponse(content={"ok": False, "error": str(e)})
@@ -1994,39 +2265,41 @@ def test_llm_decision() -> JSONResponse:
     """Test LLM decision pipeline (dry run, no trades)."""
     try:
         if not settings.llm_enabled:
-            return JSONResponse(content={
-                "ok": True,
-                "action": "SKIPPED",
-                "reasoning": "LLM is disabled in settings (llm_enabled=False). Enable LLM to test the decision pipeline."
-            })
-        
+            return JSONResponse(
+                content={
+                    "ok": True,
+                    "action": "SKIPPED",
+                    "reasoning": "LLM is disabled in settings (llm_enabled=False). Enable LLM to test the decision pipeline.",
+                }
+            )
+
         from src.deribit_client import DeribitClient
         from src.state_builder import build_agent_state
         from src.agent_brain_llm import choose_action_with_llm
-        
+
         with DeribitClient() as client:
             state = build_agent_state(client, settings)
-            
+
             candidates = state.candidate_options or []
             if not candidates:
-                return JSONResponse(content={
-                    "ok": True,
-                    "action": "DO_NOTHING",
-                    "reasoning": "No candidate options available for testing"
-                })
-            
+                return JSONResponse(
+                    content={
+                        "ok": True,
+                        "action": "DO_NOTHING",
+                        "reasoning": "No candidate options available for testing",
+                    }
+                )
+
             decision = choose_action_with_llm(state, candidates)
-            
+
             action = decision.get("action", "DO_NOTHING")
             reasoning = decision.get("reasoning", "")
             if len(reasoning) > 200:
                 reasoning = reasoning[:200] + "..."
-            
-            return JSONResponse(content={
-                "ok": True,
-                "action": action,
-                "reasoning": reasoning
-            })
+
+            return JSONResponse(
+                content={"ok": True, "action": action, "reasoning": reasoning}
+            )
     except Exception as e:
         return JSONResponse(content={"ok": False, "error": str(e)})
 
@@ -2037,7 +2310,7 @@ def reconcile_positions_endpoint() -> JSONResponse:
     try:
         from src.deribit_client import DeribitClient
         from src.reconciliation import run_reconciliation_once
-        
+
         with DeribitClient() as client:
             spot_prices = {}
             for underlying in settings.underlyings:
@@ -2045,14 +2318,14 @@ def reconcile_positions_endpoint() -> JSONResponse:
                     spot_prices[underlying] = client.get_index_price(underlying)
                 except Exception:
                     pass
-            
+
             diff = run_reconciliation_once(
                 deribit_client=client,
                 position_tracker=position_tracker,
                 settings=settings,
                 spot_prices=spot_prices,
             )
-            
+
             summary = {
                 "deribit_positions": diff.exchange_count,
                 "tracked_positions": diff.local_count,
@@ -2072,24 +2345,30 @@ def reconcile_positions_endpoint() -> JSONResponse:
                     for m in diff.size_mismatches
                 ],
             }
-            
+
             details = []
             if diff.is_clean:
                 details.append("All positions match between Deribit and tracker.")
             else:
                 if diff.missing_on_exchange:
-                    details.append(f"{len(diff.missing_on_exchange)} position(s) missing on Deribit")
+                    details.append(
+                        f"{len(diff.missing_on_exchange)} position(s) missing on Deribit"
+                    )
                 if diff.untracked_on_exchange:
-                    details.append(f"{len(diff.untracked_on_exchange)} position(s) untracked locally")
+                    details.append(
+                        f"{len(diff.untracked_on_exchange)} position(s) untracked locally"
+                    )
                 if diff.size_mismatches:
                     details.append(f"{len(diff.size_mismatches)} size mismatch(es)")
-            
-            return JSONResponse(content={
-                "ok": True,
-                "is_clean": diff.is_clean,
-                "summary": summary,
-                "details": details,
-            })
+
+            return JSONResponse(
+                content={
+                    "ok": True,
+                    "is_clean": diff.is_clean,
+                    "summary": summary,
+                    "details": details,
+                }
+            )
     except Exception as e:
         return JSONResponse(content={"ok": False, "error": str(e)})
 
@@ -2098,21 +2377,26 @@ def reconcile_positions_endpoint() -> JSONResponse:
 def get_risk_limits() -> JSONResponse:
     """Get current risk limit configuration."""
     try:
-        return JSONResponse(content={
-            "ok": True,
-            "max_margin_used_pct": settings.max_margin_used_pct,
-            "max_net_delta_abs": settings.max_net_delta_abs,
-            "daily_drawdown_limit_pct": getattr(settings, "daily_drawdown_limit_pct", 0.0),
-            "kill_switch_enabled": getattr(settings, "kill_switch_enabled", False),
-            "liquidity_max_spread_pct": settings.liquidity_max_spread_pct,
-            "liquidity_min_open_interest": settings.liquidity_min_open_interest,
-        })
+        return JSONResponse(
+            content={
+                "ok": True,
+                "max_margin_used_pct": settings.max_margin_used_pct,
+                "max_net_delta_abs": settings.max_net_delta_abs,
+                "daily_drawdown_limit_pct": getattr(
+                    settings, "daily_drawdown_limit_pct", 0.0
+                ),
+                "kill_switch_enabled": getattr(settings, "kill_switch_enabled", False),
+                "liquidity_max_spread_pct": settings.liquidity_max_spread_pct,
+                "liquidity_min_open_interest": settings.liquidity_min_open_interest,
+            }
+        )
     except Exception as e:
         return JSONResponse(content={"ok": False, "error": str(e)})
 
 
 class RiskLimitsUpdate(BaseModel):
     """Request model for updating risk limits."""
+
     max_margin_used_pct: Optional[float] = None
     max_net_delta_abs: Optional[float] = None
     daily_drawdown_limit_pct: Optional[float] = None
@@ -2129,35 +2413,44 @@ def update_risk_limits(req: RiskLimitsUpdate) -> JSONResponse:
             if req.max_margin_used_pct < 0.0 or req.max_margin_used_pct > 100.0:
                 return JSONResponse(
                     status_code=400,
-                    content={"ok": False, "error": "max_margin_used_pct must be between 0 and 100"}
+                    content={
+                        "ok": False,
+                        "error": "max_margin_used_pct must be between 0 and 100",
+                    },
                 )
             settings.max_margin_used_pct = req.max_margin_used_pct
-        
+
         if req.max_net_delta_abs is not None:
             if req.max_net_delta_abs < 0.0:
                 return JSONResponse(
                     status_code=400,
-                    content={"ok": False, "error": "max_net_delta_abs must be >= 0"}
+                    content={"ok": False, "error": "max_net_delta_abs must be >= 0"},
                 )
             settings.max_net_delta_abs = req.max_net_delta_abs
-        
+
         if req.daily_drawdown_limit_pct is not None:
-            if req.daily_drawdown_limit_pct < 0.0 or req.daily_drawdown_limit_pct > 100.0:
+            if (
+                req.daily_drawdown_limit_pct < 0.0
+                or req.daily_drawdown_limit_pct > 100.0
+            ):
                 return JSONResponse(
                     status_code=400,
-                    content={"ok": False, "error": "daily_drawdown_limit_pct must be between 0 and 100"}
+                    content={
+                        "ok": False,
+                        "error": "daily_drawdown_limit_pct must be between 0 and 100",
+                    },
                 )
             settings.daily_drawdown_limit_pct = req.daily_drawdown_limit_pct
-        
+
         if req.kill_switch_enabled is not None:
             settings.kill_switch_enabled = req.kill_switch_enabled
-        
+
         if req.liquidity_max_spread_pct is not None:
             settings.liquidity_max_spread_pct = req.liquidity_max_spread_pct
-        
+
         if req.liquidity_min_open_interest is not None:
             settings.liquidity_min_open_interest = req.liquidity_min_open_interest
-        
+
         return get_risk_limits()
     except Exception as e:
         return JSONResponse(content={"ok": False, "error": str(e)})
@@ -2165,6 +2458,7 @@ def update_risk_limits(req: RiskLimitsUpdate) -> JSONResponse:
 
 class ReconciliationConfigUpdate(BaseModel):
     """Request model for updating position reconciliation configuration."""
+
     position_reconcile_action: Optional[Literal["halt", "auto_heal"]] = None
     position_reconcile_on_startup: Optional[bool] = None
     position_reconcile_on_each_loop: Optional[bool] = None
@@ -2175,13 +2469,15 @@ class ReconciliationConfigUpdate(BaseModel):
 def get_reconciliation_config() -> JSONResponse:
     """Get current position reconciliation configuration."""
     try:
-        return JSONResponse(content={
-            "ok": True,
-            "position_reconcile_action": settings.position_reconcile_action,
-            "position_reconcile_on_startup": settings.position_reconcile_on_startup,
-            "position_reconcile_on_each_loop": settings.position_reconcile_on_each_loop,
-            "position_reconcile_tolerance_usd": settings.position_reconcile_tolerance_usd,
-        })
+        return JSONResponse(
+            content={
+                "ok": True,
+                "position_reconcile_action": settings.position_reconcile_action,
+                "position_reconcile_on_startup": settings.position_reconcile_on_startup,
+                "position_reconcile_on_each_loop": settings.position_reconcile_on_each_loop,
+                "position_reconcile_tolerance_usd": settings.position_reconcile_tolerance_usd,
+            }
+        )
     except Exception as e:
         return JSONResponse(content={"ok": False, "error": str(e)})
 
@@ -2192,16 +2488,20 @@ def update_reconciliation_config(req: ReconciliationConfigUpdate) -> JSONRespons
     try:
         if req.position_reconcile_action is not None:
             settings.position_reconcile_action = req.position_reconcile_action
-        
+
         if req.position_reconcile_on_startup is not None:
             settings.position_reconcile_on_startup = req.position_reconcile_on_startup
-        
+
         if req.position_reconcile_on_each_loop is not None:
-            settings.position_reconcile_on_each_loop = req.position_reconcile_on_each_loop
-        
+            settings.position_reconcile_on_each_loop = (
+                req.position_reconcile_on_each_loop
+            )
+
         if req.position_reconcile_tolerance_usd is not None:
-            settings.position_reconcile_tolerance_usd = req.position_reconcile_tolerance_usd
-        
+            settings.position_reconcile_tolerance_usd = (
+                req.position_reconcile_tolerance_usd
+            )
+
         return get_reconciliation_config()
     except Exception as e:
         return JSONResponse(content={"ok": False, "error": str(e)})
@@ -2211,39 +2511,42 @@ def update_reconciliation_config(req: ReconciliationConfigUpdate) -> JSONRespons
 def get_strategy_thresholds() -> JSONResponse:
     """Return current strategy threshold settings for both production + research."""
     try:
-        return JSONResponse(content={
-            "ok": True,
-            "mode": settings.mode,
-            "is_research": settings.is_research,
-            "training_profile_mode": settings.training_profile_mode,
-            "prod": {
-                "ivrv_min": settings.ivrv_min,
-                "delta_min": settings.delta_min,
-                "delta_max": settings.delta_max,
-                "dte_min": settings.dte_min,
-                "dte_max": settings.dte_max,
-            },
-            "research": {
-                "ivrv_min": settings.research_ivrv_min,
-                "delta_min": settings.research_delta_min,
-                "delta_max": settings.research_delta_max,
-                "dte_min": settings.research_dte_min,
-                "dte_max": settings.research_dte_max,
-            },
-            "effective": {
-                "ivrv_min": settings.effective_ivrv_min,
-                "delta_min": settings.effective_delta_min,
-                "delta_max": settings.effective_delta_max,
-                "dte_min": settings.effective_dte_min,
-                "dte_max": settings.effective_dte_max,
-            },
-        })
+        return JSONResponse(
+            content={
+                "ok": True,
+                "mode": settings.mode,
+                "is_research": settings.is_research,
+                "training_profile_mode": settings.training_profile_mode,
+                "prod": {
+                    "ivrv_min": settings.ivrv_min,
+                    "delta_min": settings.delta_min,
+                    "delta_max": settings.delta_max,
+                    "dte_min": settings.dte_min,
+                    "dte_max": settings.dte_max,
+                },
+                "research": {
+                    "ivrv_min": settings.research_ivrv_min,
+                    "delta_min": settings.research_delta_min,
+                    "delta_max": settings.research_delta_max,
+                    "dte_min": settings.research_dte_min,
+                    "dte_max": settings.research_dte_max,
+                },
+                "effective": {
+                    "ivrv_min": settings.effective_ivrv_min,
+                    "delta_min": settings.effective_delta_min,
+                    "delta_max": settings.effective_delta_max,
+                    "dte_min": settings.effective_dte_min,
+                    "dte_max": settings.effective_dte_max,
+                },
+            }
+        )
     except Exception as e:
         return JSONResponse(content={"ok": False, "error": str(e)})
 
 
 class StrategyThresholdsUpdate(BaseModel):
     """Request model for updating strategy thresholds."""
+
     ivrv_min: Optional[float] = None
     delta_min: Optional[float] = None
     delta_max: Optional[float] = None
@@ -2257,90 +2560,126 @@ def update_strategy_thresholds(req: StrategyThresholdsUpdate) -> JSONResponse:
     """Update strategy thresholds at runtime. Writes to research or production fields based on mode."""
     try:
         use_research = settings.is_research
-        
+
         if req.ivrv_min is not None:
             if req.ivrv_min < 0:
-                return JSONResponse(status_code=400, content={"ok": False, "error": "ivrv_min must be >= 0"})
-        
+                return JSONResponse(
+                    status_code=400,
+                    content={"ok": False, "error": "ivrv_min must be >= 0"},
+                )
+
         if req.delta_min is not None:
             if req.delta_min < 0 or req.delta_min > 1:
-                return JSONResponse(status_code=400, content={"ok": False, "error": "delta_min must be between 0 and 1"})
-        
+                return JSONResponse(
+                    status_code=400,
+                    content={"ok": False, "error": "delta_min must be between 0 and 1"},
+                )
+
         if req.delta_max is not None:
             if req.delta_max < 0 or req.delta_max > 1:
-                return JSONResponse(status_code=400, content={"ok": False, "error": "delta_max must be between 0 and 1"})
-        
+                return JSONResponse(
+                    status_code=400,
+                    content={"ok": False, "error": "delta_max must be between 0 and 1"},
+                )
+
         if req.dte_min is not None:
             if req.dte_min < 0:
-                return JSONResponse(status_code=400, content={"ok": False, "error": "dte_min must be >= 0"})
-        
+                return JSONResponse(
+                    status_code=400,
+                    content={"ok": False, "error": "dte_min must be >= 0"},
+                )
+
         if req.dte_max is not None:
             if req.dte_max < 0:
-                return JSONResponse(status_code=400, content={"ok": False, "error": "dte_max must be >= 0"})
-        
+                return JSONResponse(
+                    status_code=400,
+                    content={"ok": False, "error": "dte_max must be >= 0"},
+                )
+
         if req.training_profile_mode is not None:
             valid_modes = ["single", "ladder"]
             if req.training_profile_mode not in valid_modes:
                 return JSONResponse(
                     status_code=400,
-                    content={"ok": False, "error": f"training_profile_mode must be one of: {', '.join(valid_modes)}"}
+                    content={
+                        "ok": False,
+                        "error": f"training_profile_mode must be one of: {', '.join(valid_modes)}",
+                    },
                 )
-        
-        current_delta_min = settings.research_delta_min if use_research else settings.delta_min
-        current_delta_max = settings.research_delta_max if use_research else settings.delta_max
-        current_dte_min = settings.research_dte_min if use_research else settings.dte_min
-        current_dte_max = settings.research_dte_max if use_research else settings.dte_max
-        
-        new_delta_min = req.delta_min if req.delta_min is not None else current_delta_min
-        new_delta_max = req.delta_max if req.delta_max is not None else current_delta_max
+
+        current_delta_min = (
+            settings.research_delta_min if use_research else settings.delta_min
+        )
+        current_delta_max = (
+            settings.research_delta_max if use_research else settings.delta_max
+        )
+        current_dte_min = (
+            settings.research_dte_min if use_research else settings.dte_min
+        )
+        current_dte_max = (
+            settings.research_dte_max if use_research else settings.dte_max
+        )
+
+        new_delta_min = (
+            req.delta_min if req.delta_min is not None else current_delta_min
+        )
+        new_delta_max = (
+            req.delta_max if req.delta_max is not None else current_delta_max
+        )
         new_dte_min = req.dte_min if req.dte_min is not None else current_dte_min
         new_dte_max = req.dte_max if req.dte_max is not None else current_dte_max
-        
+
         if new_delta_min > new_delta_max:
             return JSONResponse(
                 status_code=400,
-                content={"ok": False, "error": f"delta_min ({new_delta_min}) cannot be greater than delta_max ({new_delta_max})"}
+                content={
+                    "ok": False,
+                    "error": f"delta_min ({new_delta_min}) cannot be greater than delta_max ({new_delta_max})",
+                },
             )
-        
+
         if new_dte_min > new_dte_max:
             return JSONResponse(
                 status_code=400,
-                content={"ok": False, "error": f"dte_min ({new_dte_min}) cannot be greater than dte_max ({new_dte_max})"}
+                content={
+                    "ok": False,
+                    "error": f"dte_min ({new_dte_min}) cannot be greater than dte_max ({new_dte_max})",
+                },
             )
-        
+
         if req.ivrv_min is not None:
             if use_research:
                 settings.research_ivrv_min = req.ivrv_min
             else:
                 settings.ivrv_min = req.ivrv_min
-        
+
         if req.delta_min is not None:
             if use_research:
                 settings.research_delta_min = req.delta_min
             else:
                 settings.delta_min = req.delta_min
-        
+
         if req.delta_max is not None:
             if use_research:
                 settings.research_delta_max = req.delta_max
             else:
                 settings.delta_max = req.delta_max
-        
+
         if req.dte_min is not None:
             if use_research:
                 settings.research_dte_min = req.dte_min
             else:
                 settings.dte_min = req.dte_min
-        
+
         if req.dte_max is not None:
             if use_research:
                 settings.research_dte_max = req.dte_max
             else:
                 settings.dte_max = req.dte_max
-        
+
         if req.training_profile_mode is not None:
             settings.training_profile_mode = req.training_profile_mode  # type: ignore
-        
+
         return get_strategy_thresholds()
     except Exception as e:
         return JSONResponse(content={"ok": False, "error": str(e)})
@@ -2349,6 +2688,7 @@ def update_strategy_thresholds(req: StrategyThresholdsUpdate) -> JSONResponse:
 # =============================================================================
 # GREG MANDOLINI VRP HARVESTER - PHASE 1 MASTER SELECTOR
 # =============================================================================
+
 
 @app.get("/api/strategies/greg/selector")
 def get_greg_selector() -> JSONResponse:
@@ -2398,17 +2738,19 @@ def get_greg_calibration() -> JSONResponse:
     """
     try:
         from src.strategies.greg_selector import load_greg_spec, get_calibration_spec
-        
+
         spec = load_greg_spec()
         meta = spec.get("meta", {})
         calib = get_calibration_spec()
-        
-        return JSONResponse(content={
-            "ok": True,
-            "version": meta.get("version", "unknown"),
-            "module": meta.get("module", "ENTRY_ENGINE"),
-            "calibration": calib,
-        })
+
+        return JSONResponse(
+            content={
+                "ok": True,
+                "version": meta.get("version", "unknown"),
+                "module": meta.get("module", "ENTRY_ENGINE"),
+                "calibration": calib,
+            }
+        )
     except Exception as e:
         return JSONResponse(content={"ok": False, "error": str(e)}, status_code=500)
 
@@ -2417,23 +2759,27 @@ def get_greg_calibration() -> JSONResponse:
 # BOTS API ENDPOINTS
 # =============================================================================
 
+
 @app.get("/api/bots/market_sensors")
 def get_bots_market_sensors(debug: str = "0") -> JSONResponse:
     """
     Return current high-level sensors per underlying for Bots tab.
     Computes Greg Phase 1 sensor bundle for each underlying.
-    
+
     Args:
         debug: If "1" or "true", include debug_inputs with raw computation inputs.
     """
     try:
-        from src.bots.gregbot import compute_greg_sensors, compute_greg_sensors_with_debug
-        
+        from src.bots.gregbot import (
+            compute_greg_sensors,
+            compute_greg_sensors_with_debug,
+        )
+
         include_debug = debug in ("1", "true", "True")
         underlyings = list(settings.underlyings or ["BTC", "ETH"])
         sensors_data = {}
         debug_data = {}
-        
+
         for u in underlyings:
             if include_debug:
                 result = compute_greg_sensors_with_debug(u)
@@ -2441,11 +2787,11 @@ def get_bots_market_sensors(debug: str = "0") -> JSONResponse:
                 debug_data[u] = result["debug_inputs"]
             else:
                 sensors_data[u] = compute_greg_sensors(u)
-        
+
         response = {"ok": True, "sensors": sensors_data}
         if include_debug:
             response["debug_inputs"] = debug_data
-        
+
         return JSONResponse(content=response)
     except Exception as e:
         return JSONResponse(content={"ok": False, "error": str(e)})
@@ -2456,33 +2802,38 @@ def get_bots_strategies(env: str = "test") -> JSONResponse:
     """
     Aggregate StrategyEvaluation objects for all expert bots.
     For now, only GregBot is implemented.
-    
+
     Args:
         env: Environment mode ("test" or "live") to fetch strategies for.
              Allows viewing LIVE strategy thresholds even when server is in TEST mode.
     """
     from src.config import EnvironmentMode
-    
+
     try:
         env_mode = EnvironmentMode(env.lower())
     except ValueError:
         return JSONResponse(
             status_code=400,
-            content={"ok": False, "error": f"Invalid env: '{env}'. Must be 'test' or 'live'."}
+            content={
+                "ok": False,
+                "error": f"Invalid env: '{env}'. Must be 'test' or 'live'.",
+            },
         )
-    
+
     try:
         from src.bots.gregbot import get_gregbot_evaluations_for_underlying
-        
+
         underlyings = list(settings.underlyings or ["BTC", "ETH"])
         all_evals = []
-        
+
         for u in underlyings:
             payload = get_gregbot_evaluations_for_underlying(u, env_mode=env_mode)
             strat_evals = payload.get("strategies", [])
             all_evals.extend([e.model_dump() for e in strat_evals])
-        
-        return JSONResponse(content={"ok": True, "strategies": all_evals, "env_mode": env_mode.value})
+
+        return JSONResponse(
+            content={"ok": True, "strategies": all_evals, "env_mode": env_mode.value}
+        )
     except Exception as e:
         return JSONResponse(content={"ok": False, "error": str(e)})
 
@@ -2495,18 +2846,23 @@ def get_greg_management() -> JSONResponse:
     No actual orders are sent.
     """
     try:
-        from src.greg_position_manager import greg_management_store, get_greg_position_rules
-        
+        from src.greg_position_manager import (
+            greg_management_store,
+            get_greg_position_rules,
+        )
+
         store_data = greg_management_store.get()
         rules = get_greg_position_rules()
-        
-        return JSONResponse(content={
-            "ok": True,
-            "suggestions": store_data.get("suggestions", []),
-            "count": store_data.get("count", 0),
-            "updated_at": store_data.get("updated_at"),
-            "rules_version": rules.meta.get("version", "unknown"),
-        })
+
+        return JSONResponse(
+            content={
+                "ok": True,
+                "suggestions": store_data.get("suggestions", []),
+                "count": store_data.get("count", 0),
+                "updated_at": store_data.get("updated_at"),
+                "rules_version": rules.meta.get("version", "unknown"),
+            }
+        )
     except Exception as e:
         return JSONResponse(content={"ok": False, "error": str(e)})
 
@@ -2521,30 +2877,31 @@ def evaluate_greg_management() -> JSONResponse:
         from src.greg_position_manager import (
             evaluate_greg_positions,
             greg_management_store,
-            GregManagementSuggestion,
         )
         from src.models import AgentState
-        
+
         status = status_store.get() or {}
         state_dict = status.get("state")
-        
+
         if state_dict:
             state = AgentState.model_validate(state_dict)
         else:
             from src.deribit_client import DeribitClient
             from src.state_builder import build_agent_state
-            
+
             with DeribitClient() as client:
                 state = build_agent_state(client, settings)
-        
+
         suggestions = evaluate_greg_positions(state)
         greg_management_store.update(suggestions)
-        
-        return JSONResponse(content={
-            "ok": True,
-            "suggestions": [s.to_dict() for s in suggestions],
-            "count": len(suggestions),
-        })
+
+        return JSONResponse(
+            content={
+                "ok": True,
+                "suggestions": [s.to_dict() for s in suggestions],
+                "count": len(suggestions),
+            }
+        )
     except Exception as e:
         return JSONResponse(content={"ok": False, "error": str(e)})
 
@@ -2561,11 +2918,11 @@ def mock_greg_management() -> JSONResponse:
             greg_management_store,
         )
         from src.models import AgentState
-        
+
         mock_state = AgentState(
             spot={"BTC": 100000.0, "ETH": 3500.0},
         )
-        
+
         mock_positions = [
             {
                 "strategy_code": "STRATEGY_A_STRADDLE",
@@ -2601,22 +2958,25 @@ def mock_greg_management() -> JSONResponse:
                 "profit_pct": 0.62,
             },
         ]
-        
+
         suggestions = evaluate_greg_positions(mock_state, mock_positions=mock_positions)
         greg_management_store.update(suggestions)
-        
-        return JSONResponse(content={
-            "ok": True,
-            "suggestions": [s.to_dict() for s in suggestions],
-            "count": len(suggestions),
-            "mock": True,
-        })
+
+        return JSONResponse(
+            content={
+                "ok": True,
+                "suggestions": [s.to_dict() for s in suggestions],
+                "count": len(suggestions),
+                "mock": True,
+            }
+        )
     except Exception as e:
         return JSONResponse(content={"ok": False, "error": str(e)})
 
 
 class ExecuteSuggestionRequest(BaseModel):
     """Request body for executing a Greg management suggestion."""
+
     position_id: str
     suggested_action: str
     strategy_type: str
@@ -2627,31 +2987,30 @@ class ExecuteSuggestionRequest(BaseModel):
 def execute_greg_suggestion(request: ExecuteSuggestionRequest) -> JSONResponse:
     """
     Execute a Greg management suggestion (hedge, take profit, assign, roll).
-    
+
     Safety gates (verified atomically at execution time):
     - ADVICE_ONLY mode: Rejects with clear message
     - PAPER mode: Requires testnet env, forces DRY_RUN execution
     - LIVE mode: Requires mainnet env + master switch + per-strategy flag
-    
+
     Uses atomic_execute_check() to prevent TOCTOU race conditions.
     Logs all decisions to greg_decision_log table.
     """
     from src.config import settings
     from src.greg_trading_store import greg_trading_store
     from src.db.models_greg_decision import log_greg_decision
-    
+
     action = request.suggested_action.upper()
     strategy = request.strategy_type
     underlying = request.underlying
     position_id = request.position_id
-    
+
     can_exec, reason, is_dry_run = greg_trading_store.atomic_execute_check(
-        strategy=strategy,
-        deribit_env=settings.deribit_env
+        strategy=strategy, deribit_env=settings.deribit_env
     )
-    
+
     mode = greg_trading_store.get_mode()
-    
+
     if not can_exec:
         log_greg_decision(
             underlying=underlying,
@@ -2673,7 +3032,7 @@ def execute_greg_suggestion(request: ExecuteSuggestionRequest) -> JSONResponse:
                 "deribit_env": settings.deribit_env,
             },
         )
-    
+
     allowed_underlyings = settings.underlyings or ["BTC", "ETH"]
     if underlying not in allowed_underlyings:
         return JSONResponse(
@@ -2683,16 +3042,16 @@ def execute_greg_suggestion(request: ExecuteSuggestionRequest) -> JSONResponse:
                 "error": f"Underlying {underlying} not in allowed list: {allowed_underlyings}",
             },
         )
-    
+
     if mode == GregTradingMode.LIVE:
         estimated_notional = 100.0
         current_underlying_exposure = 0.0
-        
+
         notional_ok, notional_reason = greg_trading_store.check_notional_limits(
             position_notional=estimated_notional,
             current_underlying_exposure=current_underlying_exposure,
         )
-        
+
         if not notional_ok:
             log_greg_decision(
                 underlying=underlying,
@@ -2712,11 +3071,11 @@ def execute_greg_suggestion(request: ExecuteSuggestionRequest) -> JSONResponse:
                     "mode": mode.value,
                 },
             )
-    
+
     try:
         order_ids: list[str] = []
         execution_result = {}
-        
+
         if not is_dry_run and settings.dry_run:
             log_greg_decision(
                 underlying=underlying,
@@ -2737,19 +3096,19 @@ def execute_greg_suggestion(request: ExecuteSuggestionRequest) -> JSONResponse:
                     "mode": mode.value,
                 },
             )
-        
+
         if action == "HEDGE":
             from src.hedging import get_hedge_engine
-            
-            engine = get_hedge_engine(dry_run=is_dry_run)
-            
+
+            get_hedge_engine(dry_run=is_dry_run)
+
             execution_result = {
                 "action": "HEDGE",
                 "dry_run": is_dry_run,
                 "position_id": position_id,
                 "status": "simulated" if is_dry_run else "executed",
             }
-            
+
         elif action in ["TAKE_PROFIT", "CLOSE"]:
             if is_dry_run:
                 execution_result = {
@@ -2767,7 +3126,7 @@ def execute_greg_suggestion(request: ExecuteSuggestionRequest) -> JSONResponse:
                     "dry_run": False,
                     "note": "Close order submitted to exchange",
                 }
-            
+
         elif action == "ASSIGN":
             execution_result = {
                 "action": "ASSIGN",
@@ -2775,7 +3134,7 @@ def execute_greg_suggestion(request: ExecuteSuggestionRequest) -> JSONResponse:
                 "status": "simulated" if is_dry_run else "assignment_triggered",
                 "dry_run": is_dry_run,
             }
-            
+
         elif action == "ROLL":
             execution_result = {
                 "action": "ROLL",
@@ -2784,13 +3143,13 @@ def execute_greg_suggestion(request: ExecuteSuggestionRequest) -> JSONResponse:
                 "dry_run": is_dry_run,
                 "note": "Roll logic - close current + open new position",
             }
-            
+
         else:
             return JSONResponse(
                 status_code=400,
                 content={"ok": False, "error": f"Unknown action: {action}"},
             )
-        
+
         log_greg_decision(
             underlying=underlying,
             strategy_type=strategy,
@@ -2803,15 +3162,17 @@ def execute_greg_suggestion(request: ExecuteSuggestionRequest) -> JSONResponse:
             order_ids=",".join(order_ids) if order_ids else None,
             extra_info=f"deribit_env={settings.deribit_env}",
         )
-        
-        return JSONResponse(content={
-            "ok": True,
-            "mode": mode.value,
-            "executed": True,
-            "dry_run": is_dry_run,
-            "result": execution_result,
-        })
-        
+
+        return JSONResponse(
+            content={
+                "ok": True,
+                "mode": mode.value,
+                "executed": True,
+                "dry_run": is_dry_run,
+                "result": execution_result,
+            }
+        )
+
     except Exception as e:
         log_greg_decision(
             underlying=underlying,
@@ -2834,25 +3195,28 @@ def get_greg_trading_mode() -> JSONResponse:
     """Get current Greg trading mode and safety settings from mutable store."""
     from src.config import settings
     from src.greg_trading_store import greg_trading_store
-    
+
     state = greg_trading_store.get_state()
-    
-    return JSONResponse(content={
-        "ok": True,
-        "mode": state["mode"],
-        "enable_live_execution": state["enable_live_execution"],
-        "strategy_live_enabled": state["strategy_live_enabled"],
-        "max_notional_per_position": state["max_notional_per_position"],
-        "max_notional_per_underlying": state["max_notional_per_underlying"],
-        "allowed_underlyings": settings.underlyings,
-        "deribit_env": settings.deribit_env,
-        "last_mode_change": state["last_mode_change"],
-        "last_change_reason": state["last_change_reason"],
-    })
+
+    return JSONResponse(
+        content={
+            "ok": True,
+            "mode": state["mode"],
+            "enable_live_execution": state["enable_live_execution"],
+            "strategy_live_enabled": state["strategy_live_enabled"],
+            "max_notional_per_position": state["max_notional_per_position"],
+            "max_notional_per_underlying": state["max_notional_per_underlying"],
+            "allowed_underlyings": settings.underlyings,
+            "deribit_env": settings.deribit_env,
+            "last_mode_change": state["last_mode_change"],
+            "last_change_reason": state["last_change_reason"],
+        }
+    )
 
 
 class UpdateGregModeRequest(BaseModel):
     """Request to update Greg trading mode."""
+
     mode: Optional[str] = None
     enable_live_execution: Optional[bool] = None
     strategy_live_enabled: Optional[Dict[str, bool]] = None
@@ -2865,22 +3229,21 @@ class UpdateGregModeRequest(BaseModel):
 def update_greg_trading_mode(request: UpdateGregModeRequest) -> JSONResponse:
     """
     Update Greg trading mode and safety settings using mutable store.
-    
+
     When switching to LIVE mode, requires confirmation_text = "LIVE".
     Changes take effect immediately for all subsequent execute calls.
     All mode changes are logged to greg_decision_log for audit trail.
     """
-    from src.config import settings, GregTradingMode
     from src.greg_trading_store import greg_trading_store
     from src.db.models_greg_decision import log_greg_decision
-    
+
     updates = {}
     previous_state = greg_trading_store.get_state()
     previous_mode = previous_state["mode"]
-    
+
     if request.mode is not None:
         new_mode = request.mode.lower()
-        
+
         if new_mode == "live":
             if request.confirmation_text != "LIVE":
                 return JSONResponse(
@@ -2899,20 +3262,26 @@ def update_greg_trading_mode(request: UpdateGregModeRequest) -> JSONResponse:
                         "error": f"Cannot switch to LIVE mode: Deribit env is '{settings.deribit_env}', not 'mainnet'.",
                     },
                 )
-            greg_trading_store.set_mode(GregTradingMode.LIVE, "User switched to LIVE mode")
+            greg_trading_store.set_mode(
+                GregTradingMode.LIVE, "User switched to LIVE mode"
+            )
             updates["mode"] = "live"
         elif new_mode == "paper":
-            greg_trading_store.set_mode(GregTradingMode.PAPER, "User switched to PAPER mode")
+            greg_trading_store.set_mode(
+                GregTradingMode.PAPER, "User switched to PAPER mode"
+            )
             updates["mode"] = "paper"
         elif new_mode == "advice_only":
-            greg_trading_store.set_mode(GregTradingMode.ADVICE_ONLY, "User switched to ADVICE_ONLY mode")
+            greg_trading_store.set_mode(
+                GregTradingMode.ADVICE_ONLY, "User switched to ADVICE_ONLY mode"
+            )
             updates["mode"] = "advice_only"
         else:
             return JSONResponse(
                 status_code=400,
                 content={"ok": False, "error": f"Invalid mode: {request.mode}"},
             )
-        
+
         log_greg_decision(
             underlying="SYSTEM",
             strategy_type="MODE_CHANGE",
@@ -2924,12 +3293,12 @@ def update_greg_trading_mode(request: UpdateGregModeRequest) -> JSONResponse:
             reason=f"Mode changed from {previous_mode} to {updates.get('mode')}",
             extra_info=f"previous_mode={previous_mode}, deribit_env={settings.deribit_env}",
         )
-    
+
     if request.enable_live_execution is not None:
         prev_enable = previous_state["enable_live_execution"]
         greg_trading_store.set_enable_live(request.enable_live_execution)
         updates["enable_live_execution"] = request.enable_live_execution
-        
+
         log_greg_decision(
             underlying="SYSTEM",
             strategy_type="CONFIG_CHANGE",
@@ -2940,11 +3309,11 @@ def update_greg_trading_mode(request: UpdateGregModeRequest) -> JSONResponse:
             executed=True,
             reason=f"Live execution switch changed from {prev_enable} to {request.enable_live_execution}",
         )
-    
+
     if request.strategy_live_enabled is not None:
         greg_trading_store.set_all_strategy_flags(request.strategy_live_enabled)
         updates["strategy_live_enabled"] = greg_trading_store.get_all_strategy_flags()
-        
+
         log_greg_decision(
             underlying="SYSTEM",
             strategy_type="CONFIG_CHANGE",
@@ -2955,16 +3324,27 @@ def update_greg_trading_mode(request: UpdateGregModeRequest) -> JSONResponse:
             executed=True,
             reason=f"Strategy flags updated: {request.strategy_live_enabled}",
         )
-    
-    if request.max_notional_per_position is not None or request.max_notional_per_underlying is not None:
+
+    if (
+        request.max_notional_per_position is not None
+        or request.max_notional_per_underlying is not None
+    ):
         current_pos, current_und = greg_trading_store.get_notional_limits()
-        new_pos = request.max_notional_per_position if request.max_notional_per_position is not None else current_pos
-        new_und = request.max_notional_per_underlying if request.max_notional_per_underlying is not None else current_und
-        
+        new_pos = (
+            request.max_notional_per_position
+            if request.max_notional_per_position is not None
+            else current_pos
+        )
+        new_und = (
+            request.max_notional_per_underlying
+            if request.max_notional_per_underlying is not None
+            else current_und
+        )
+
         greg_trading_store.set_notional_limits(new_pos, new_und)
         updates["max_notional_per_position"] = new_pos
         updates["max_notional_per_underlying"] = new_und
-        
+
         log_greg_decision(
             underlying="SYSTEM",
             strategy_type="CONFIG_CHANGE",
@@ -2975,20 +3355,22 @@ def update_greg_trading_mode(request: UpdateGregModeRequest) -> JSONResponse:
             executed=True,
             reason=f"Notional limits updated: per_position=${new_pos}, per_underlying=${new_und}",
         )
-    
+
     state = greg_trading_store.get_state()
-    
-    return JSONResponse(content={
-        "ok": True,
-        "updates": updates,
-        "previous_mode": previous_mode,
-        "current_mode": state["mode"],
-        "current_enable_live": state["enable_live_execution"],
-        "current_strategy_flags": state["strategy_live_enabled"],
-        "max_notional_per_position": state["max_notional_per_position"],
-        "max_notional_per_underlying": state["max_notional_per_underlying"],
-        "deribit_env": settings.deribit_env,
-    })
+
+    return JSONResponse(
+        content={
+            "ok": True,
+            "updates": updates,
+            "previous_mode": previous_mode,
+            "current_mode": state["mode"],
+            "current_enable_live": state["enable_live_execution"],
+            "current_strategy_flags": state["strategy_live_enabled"],
+            "max_notional_per_position": state["max_notional_per_position"],
+            "max_notional_per_underlying": state["max_notional_per_underlying"],
+            "deribit_env": settings.deribit_env,
+        }
+    )
 
 
 @app.get("/api/bots/global_risk")
@@ -2996,18 +3378,19 @@ def get_bots_global_risk(env: str = "test") -> JSONResponse:
     """Get global risk settings for UI display."""
     from src.config import EnvironmentMode
     from src.bots.overrides import get_global_risk_for_ui
-    
+
     try:
         env_mode = EnvironmentMode(env.lower())
     except ValueError:
         env_mode = EnvironmentMode.TEST
-    
+
     result = get_global_risk_for_ui(env_mode)
     return JSONResponse(content={"ok": True, **result})
 
 
 class UpdateGlobalRiskRequest(BaseModel):
     """Request to update global risk overrides."""
+
     use_overrides: bool
     fields: Dict[str, Optional[float]] = {}
 
@@ -3017,10 +3400,10 @@ def update_bots_global_risk(request: UpdateGlobalRiskRequest) -> JSONResponse:
     """Update global risk overrides (TEST mode only)."""
     from src.config import EnvironmentMode
     from src.bots.overrides import load_overrides, save_overrides, GlobalRiskOverrides
-    
+
     validation_errors: List[str] = []
     validated_fields: Dict[str, Any] = {}
-    
+
     for key, val in request.fields.items():
         if val is None:
             validated_fields[key] = None
@@ -3029,33 +3412,48 @@ def update_bots_global_risk(request: UpdateGlobalRiskRequest) -> JSONResponse:
             try:
                 validated_fields[key] = int(float(val))
             except (ValueError, TypeError):
-                validation_errors.append(f"Invalid value for {key}: expected integer, got '{val}'")
+                validation_errors.append(
+                    f"Invalid value for {key}: expected integer, got '{val}'"
+                )
         else:
             try:
                 validated_fields[key] = float(val)
             except (ValueError, TypeError):
-                validation_errors.append(f"Invalid value for {key}: expected number, got '{val}'")
-    
+                validation_errors.append(
+                    f"Invalid value for {key}: expected number, got '{val}'"
+                )
+
     if validation_errors:
         return JSONResponse(
-            status_code=400,
-            content={"ok": False, "errors": validation_errors}
+            status_code=400, content={"ok": False, "errors": validation_errors}
         )
-    
+
     env_mode = EnvironmentMode.TEST
     overrides = load_overrides(env_mode)
     overrides.use_global_risk_overrides = request.use_overrides
-    
+
     if validated_fields:
         existing = overrides.global_risk or GlobalRiskOverrides()
         overrides.global_risk = GlobalRiskOverrides(
-            max_margin_pct=validated_fields.get("max_margin_pct") if "max_margin_pct" in validated_fields else existing.max_margin_pct,
-            max_net_delta=validated_fields.get("max_net_delta") if "max_net_delta" in validated_fields else existing.max_net_delta,
-            daily_drawdown_limit_pct=validated_fields.get("daily_drawdown_limit_pct") if "daily_drawdown_limit_pct" in validated_fields else existing.daily_drawdown_limit_pct,
-            liquidity_max_spread_pct=validated_fields.get("liquidity_max_spread_pct") if "liquidity_max_spread_pct" in validated_fields else existing.liquidity_max_spread_pct,
-            liquidity_min_open_interest=validated_fields.get("liquidity_min_open_interest") if "liquidity_min_open_interest" in validated_fields else existing.liquidity_min_open_interest,
+            max_margin_pct=validated_fields.get("max_margin_pct")
+            if "max_margin_pct" in validated_fields
+            else existing.max_margin_pct,
+            max_net_delta=validated_fields.get("max_net_delta")
+            if "max_net_delta" in validated_fields
+            else existing.max_net_delta,
+            daily_drawdown_limit_pct=validated_fields.get("daily_drawdown_limit_pct")
+            if "daily_drawdown_limit_pct" in validated_fields
+            else existing.daily_drawdown_limit_pct,
+            liquidity_max_spread_pct=validated_fields.get("liquidity_max_spread_pct")
+            if "liquidity_max_spread_pct" in validated_fields
+            else existing.liquidity_max_spread_pct,
+            liquidity_min_open_interest=validated_fields.get(
+                "liquidity_min_open_interest"
+            )
+            if "liquidity_min_open_interest" in validated_fields
+            else existing.liquidity_min_open_interest,
         )
-    
+
     success = save_overrides(env_mode, overrides)
     return JSONResponse(content={"ok": success})
 
@@ -3068,24 +3466,28 @@ def get_bot_risk(bot_id: str, env: str = "test") -> JSONResponse:
     """Get per-bot risk settings for UI display."""
     from src.config import EnvironmentMode
     from src.bots.overrides import get_bot_risk_for_ui
-    
+
     if bot_id.lower() not in VALID_BOT_IDS:
         return JSONResponse(
             status_code=400,
-            content={"ok": False, "error": f"Unknown bot_id: {bot_id}. Valid bots: {list(VALID_BOT_IDS)}"}
+            content={
+                "ok": False,
+                "error": f"Unknown bot_id: {bot_id}. Valid bots: {list(VALID_BOT_IDS)}",
+            },
         )
-    
+
     try:
         env_mode = EnvironmentMode(env.lower())
     except ValueError:
         env_mode = EnvironmentMode.TEST
-    
+
     result = get_bot_risk_for_ui(bot_id.lower(), env_mode)
     return JSONResponse(content={"ok": True, **result})
 
 
 class UpdateBotRiskRequest(BaseModel):
     """Request to update per-bot risk overrides."""
+
     use_overrides: bool
     fields: Dict[str, Optional[float]] = {}
 
@@ -3095,16 +3497,19 @@ def update_bot_risk(bot_id: str, request: UpdateBotRiskRequest) -> JSONResponse:
     """Update per-bot risk overrides (TEST mode only)."""
     from src.config import EnvironmentMode
     from src.bots.overrides import load_overrides, save_overrides, BotRiskOverrides
-    
+
     if bot_id.lower() not in VALID_BOT_IDS:
         return JSONResponse(
             status_code=400,
-            content={"ok": False, "error": f"Unknown bot_id: {bot_id}. Valid bots: {list(VALID_BOT_IDS)}"}
+            content={
+                "ok": False,
+                "error": f"Unknown bot_id: {bot_id}. Valid bots: {list(VALID_BOT_IDS)}",
+            },
         )
-    
+
     validation_errors: List[str] = []
     validated_fields: Dict[str, Any] = {}
-    
+
     for key, val in request.fields.items():
         if val is None:
             validated_fields[key] = None
@@ -3113,34 +3518,51 @@ def update_bot_risk(bot_id: str, request: UpdateBotRiskRequest) -> JSONResponse:
             try:
                 validated_fields[key] = int(float(val))
             except (ValueError, TypeError):
-                validation_errors.append(f"Invalid value for {key}: expected integer, got '{val}'")
+                validation_errors.append(
+                    f"Invalid value for {key}: expected integer, got '{val}'"
+                )
         else:
             try:
                 validated_fields[key] = float(val)
             except (ValueError, TypeError):
-                validation_errors.append(f"Invalid value for {key}: expected number, got '{val}'")
-    
+                validation_errors.append(
+                    f"Invalid value for {key}: expected number, got '{val}'"
+                )
+
     if validation_errors:
         return JSONResponse(
-            status_code=400,
-            content={"ok": False, "errors": validation_errors}
+            status_code=400, content={"ok": False, "errors": validation_errors}
         )
-    
+
     bot_id = bot_id.lower()
     env_mode = EnvironmentMode.TEST
     overrides = load_overrides(env_mode)
     overrides.use_bot_risk_overrides = request.use_overrides
-    
+
     existing = overrides.bots.get(bot_id, BotRiskOverrides())
-    
+
     merged = BotRiskOverrides(
-        max_equity_share=validated_fields.get("max_equity_share") if "max_equity_share" in validated_fields else existing.max_equity_share,
-        max_notional_usd_per_position=validated_fields.get("max_notional_usd_per_position") if "max_notional_usd_per_position" in validated_fields else existing.max_notional_usd_per_position,
-        max_notional_usd_per_underlying=validated_fields.get("max_notional_usd_per_underlying") if "max_notional_usd_per_underlying" in validated_fields else existing.max_notional_usd_per_underlying,
-        max_positions_per_underlying=validated_fields.get("max_positions_per_underlying") if "max_positions_per_underlying" in validated_fields else existing.max_positions_per_underlying,
+        max_equity_share=validated_fields.get("max_equity_share")
+        if "max_equity_share" in validated_fields
+        else existing.max_equity_share,
+        max_notional_usd_per_position=validated_fields.get(
+            "max_notional_usd_per_position"
+        )
+        if "max_notional_usd_per_position" in validated_fields
+        else existing.max_notional_usd_per_position,
+        max_notional_usd_per_underlying=validated_fields.get(
+            "max_notional_usd_per_underlying"
+        )
+        if "max_notional_usd_per_underlying" in validated_fields
+        else existing.max_notional_usd_per_underlying,
+        max_positions_per_underlying=validated_fields.get(
+            "max_positions_per_underlying"
+        )
+        if "max_positions_per_underlying" in validated_fields
+        else existing.max_positions_per_underlying,
     )
     overrides.bots[bot_id] = merged
-    
+
     success = save_overrides(env_mode, overrides)
     return JSONResponse(content={"ok": success})
 
@@ -3150,78 +3572,88 @@ def get_bot_entry_rules(bot_id: str, env: str = "test") -> JSONResponse:
     """Get entry rule thresholds for UI display."""
     from src.config import EnvironmentMode
     from src.bots.overrides import get_entry_rules_for_ui
-    
+
     if bot_id.lower() not in VALID_BOT_IDS:
         return JSONResponse(
             status_code=400,
-            content={"ok": False, "error": f"Unknown bot_id: {bot_id}. Valid bots: {list(VALID_BOT_IDS)}"}
+            content={
+                "ok": False,
+                "error": f"Unknown bot_id: {bot_id}. Valid bots: {list(VALID_BOT_IDS)}",
+            },
         )
-    
+
     try:
         env_mode = EnvironmentMode(env.lower())
     except ValueError:
         env_mode = EnvironmentMode.TEST
-    
+
     result = get_entry_rules_for_ui(bot_id.lower(), env_mode)
     return JSONResponse(content={"ok": True, **result})
 
 
 class UpdateEntryRulesRequest(BaseModel):
     """Request to update entry rule threshold overrides."""
+
     use_overrides: bool
     thresholds: Dict[str, float] = {}
 
 
 @app.post("/api/bots/{bot_id}/entry_rules")
-def update_bot_entry_rules(bot_id: str, request: UpdateEntryRulesRequest) -> JSONResponse:
+def update_bot_entry_rules(
+    bot_id: str, request: UpdateEntryRulesRequest
+) -> JSONResponse:
     """Update entry rule threshold overrides (TEST mode only)."""
     from src.config import EnvironmentMode
     from src.bots.overrides import load_overrides, save_overrides, EntryRuleOverrides
     from src.strategies.greg_selector import clear_greg_spec_cache
     from src.bots.gregbot import clear_strategies_cache
-    
+
     if bot_id.lower() not in VALID_BOT_IDS:
         return JSONResponse(
             status_code=400,
-            content={"ok": False, "error": f"Unknown bot_id: {bot_id}. Valid bots: {list(VALID_BOT_IDS)}"}
+            content={
+                "ok": False,
+                "error": f"Unknown bot_id: {bot_id}. Valid bots: {list(VALID_BOT_IDS)}",
+            },
         )
-    
+
     bot_id = bot_id.lower()
     env_mode = EnvironmentMode.TEST
     overrides = load_overrides(env_mode)
     overrides.use_entry_rule_overrides = request.use_overrides
-    
+
     validation_errors: List[str] = []
-    
+
     def coerce_threshold(key: str, val: Any) -> Optional[float]:
         try:
             return float(val)
         except (ValueError, TypeError):
-            validation_errors.append(f"Invalid value for {key}: expected number, got '{val}'")
+            validation_errors.append(
+                f"Invalid value for {key}: expected number, got '{val}'"
+            )
             return None
-    
+
     coerced_thresholds: Dict[str, float] = {}
     for k, v in request.thresholds.items():
         result = coerce_threshold(k, v)
         if result is not None:
             coerced_thresholds[k] = result
-    
+
     if validation_errors:
         return JSONResponse(
-            status_code=400,
-            content={"ok": False, "errors": validation_errors}
+            status_code=400, content={"ok": False, "errors": validation_errors}
         )
-    
+
     existing = overrides.entry_rules.get(bot_id, EntryRuleOverrides())
     merged_thresholds = {**existing.thresholds, **coerced_thresholds}
     entry_overrides = EntryRuleOverrides(thresholds=merged_thresholds)
     overrides.entry_rules[bot_id] = entry_overrides
-    
+
     success = save_overrides(env_mode, overrides)
-    
+
     clear_greg_spec_cache()
     clear_strategies_cache()
-    
+
     return JSONResponse(content={"ok": success})
 
 
@@ -3233,20 +3665,22 @@ def get_greg_decision_log(
 ) -> JSONResponse:
     """Get recent Greg decision log entries."""
     from src.db.models_greg_decision import get_decision_history, get_decision_stats
-    
+
     history = get_decision_history(
         underlying=underlying,
         strategy_type=strategy_type,
         limit=limit,
     )
-    
+
     stats = get_decision_stats(underlying=underlying)
-    
-    return JSONResponse(content={
-        "ok": True,
-        "decisions": history,
-        "stats": stats,
-    })
+
+    return JSONResponse(
+        content={
+            "ok": True,
+            "decisions": history,
+            "stats": stats,
+        }
+    )
 
 
 GREG_STRATEGY_NAMES = {
@@ -3267,52 +3701,55 @@ def get_greg_positions(
 ) -> JSONResponse:
     """
     Get all Greg positions for the Greg Lab view.
-    
+
     Args:
         underlying: Filter by underlying (BTC, ETH)
         sandbox_filter: 'sandbox_only', 'non_sandbox', or 'all' (default)
     """
     from src.position_tracker import PositionTracker
     from src.greg_trading_store import greg_trading_store
-    
+
     tracker = PositionTracker()
     mode_state = greg_trading_store.get_state()
     deribit_env = settings.deribit_env
-    
+
     positions_data = []
     sandbox_runs = {}
-    
+
     with tracker._lock:
         for chain in tracker._chains.values():
             if not chain.is_open():
                 continue
-            
+
             is_sandbox = chain.is_sandbox()
             if sandbox_filter == "sandbox_only" and not is_sandbox:
                 continue
             if sandbox_filter == "non_sandbox" and is_sandbox:
                 continue
-            
+
             if underlying and chain.underlying != underlying.upper():
                 continue
-            
+
             is_greg_strategy = chain.strategy_type.startswith("STRATEGY_")
             if not is_greg_strategy:
                 continue
-            
-            human_name = GREG_STRATEGY_NAMES.get(chain.strategy_type, chain.strategy_type)
-            
+
+            human_name = GREG_STRATEGY_NAMES.get(
+                chain.strategy_type, chain.strategy_type
+            )
+
             if chain.expiry:
                 from datetime import timezone as tz
+
                 now = datetime.now(tz.utc)
                 dte = max(0, int((chain.expiry - now).total_seconds() / 86400))
             else:
                 dte = 0
-            
+
             size = chain.legs[-1].quantity if chain.legs else 0
             entry_price = chain.legs[0].entry_price if chain.legs else 0
             notional = size * entry_price
-            
+
             if is_sandbox and chain.origin == "GREG_SANDBOX" and chain.run_id:
                 if chain.run_id not in sandbox_runs:
                     sandbox_runs[chain.run_id] = {"btc": 0, "eth": 0, "total_pnl": 0.0}
@@ -3321,7 +3758,7 @@ def get_greg_positions(
                 elif chain.underlying == "ETH":
                     sandbox_runs[chain.run_id]["eth"] += 1
                 sandbox_runs[chain.run_id]["total_pnl"] += chain.unrealized_pnl_pct
-            
+
             if is_sandbox:
                 badge = "SANDBOX"
             elif deribit_env == "testnet":
@@ -3330,28 +3767,32 @@ def get_greg_positions(
                 badge = "LIVE"
             else:
                 badge = "PAPER"
-            
-            positions_data.append({
-                "position_id": chain.position_id,
-                "underlying": chain.underlying,
-                "strategy_type": chain.strategy_type,
-                "human_readable_name": human_name,
-                "size": size,
-                "notional": notional,
-                "sandbox": is_sandbox,
-                "origin": chain.origin,
-                "run_id": chain.run_id,
-                "mode": chain.mode,
-                "badge": badge,
-                "pnl_pct": chain.unrealized_pnl_pct,
-                "pnl_usd": chain.unrealized_pnl,
-                "dte": dte,
-                "net_delta": 0.0,
-                "suggested_action": "HOLD",
-                "urgency": "LOW",
-                "entry_time": chain.open_time.isoformat() if chain.open_time else None,
-            })
-    
+
+            positions_data.append(
+                {
+                    "position_id": chain.position_id,
+                    "underlying": chain.underlying,
+                    "strategy_type": chain.strategy_type,
+                    "human_readable_name": human_name,
+                    "size": size,
+                    "notional": notional,
+                    "sandbox": is_sandbox,
+                    "origin": chain.origin,
+                    "run_id": chain.run_id,
+                    "mode": chain.mode,
+                    "badge": badge,
+                    "pnl_pct": chain.unrealized_pnl_pct,
+                    "pnl_usd": chain.unrealized_pnl,
+                    "dte": dte,
+                    "net_delta": 0.0,
+                    "suggested_action": "HOLD",
+                    "urgency": "LOW",
+                    "entry_time": chain.open_time.isoformat()
+                    if chain.open_time
+                    else None,
+                }
+            )
+
     latest_sandbox_run = None
     if sandbox_runs:
         latest_run_id = max(sandbox_runs.keys())
@@ -3362,16 +3803,18 @@ def get_greg_positions(
             "eth_count": run_data["eth"],
             "total_pnl_pct": run_data["total_pnl"],
         }
-    
-    return JSONResponse(content={
-        "ok": True,
-        "positions": positions_data,
-        "count": len(positions_data),
-        "mode": mode_state["mode"],
-        "enable_live_execution": mode_state["enable_live_execution"],
-        "deribit_env": deribit_env,
-        "sandbox_summary": latest_sandbox_run,
-    })
+
+    return JSONResponse(
+        content={
+            "ok": True,
+            "positions": positions_data,
+            "count": len(positions_data),
+            "mode": mode_state["mode"],
+            "enable_live_execution": mode_state["enable_live_execution"],
+            "deribit_env": deribit_env,
+            "sandbox_summary": latest_sandbox_run,
+        }
+    )
 
 
 @app.get("/api/greg/positions/{position_id}/logs")
@@ -3381,7 +3824,7 @@ def get_greg_position_logs(position_id: str, limit: int = 50) -> JSONResponse:
     """
     from src.db.models_greg_decision import GregDecisionLog
     from src.db import get_db_session
-    
+
     try:
         with get_db_session() as session:
             entries = (
@@ -3391,31 +3834,35 @@ def get_greg_position_logs(position_id: str, limit: int = 50) -> JSONResponse:
                 .limit(limit)
                 .all()
             )
-            
+
             logs = []
             for e in entries:
-                logs.append({
-                    "id": e.id,
-                    "timestamp": e.timestamp.isoformat() if e.timestamp else None,
-                    "action_type": e.action_type,
-                    "mode": e.mode,
-                    "suggested": e.suggested,
-                    "executed": e.executed,
-                    "reason": e.reason,
-                    "pnl_pct": e.pnl_pct,
-                    "pnl_usd": e.pnl_usd,
-                    "net_delta": e.net_delta,
-                    "vrp_30d": e.vrp_30d,
-                    "adx_14d": e.adx_14d,
-                    "order_ids": e.order_ids,
-                })
-            
-            return JSONResponse(content={
-                "ok": True,
-                "position_id": position_id,
-                "logs": logs,
-                "count": len(logs),
-            })
+                logs.append(
+                    {
+                        "id": e.id,
+                        "timestamp": e.timestamp.isoformat() if e.timestamp else None,
+                        "action_type": e.action_type,
+                        "mode": e.mode,
+                        "suggested": e.suggested,
+                        "executed": e.executed,
+                        "reason": e.reason,
+                        "pnl_pct": e.pnl_pct,
+                        "pnl_usd": e.pnl_usd,
+                        "net_delta": e.net_delta,
+                        "vrp_30d": e.vrp_30d,
+                        "adx_14d": e.adx_14d,
+                        "order_ids": e.order_ids,
+                    }
+                )
+
+            return JSONResponse(
+                content={
+                    "ok": True,
+                    "position_id": position_id,
+                    "logs": logs,
+                    "count": len(logs),
+                }
+            )
     except Exception as e:
         return JSONResponse(
             status_code=500,
@@ -3433,32 +3880,36 @@ def get_greg_hedging_status() -> JSONResponse:
     """
     try:
         from src.hedging import get_hedge_engine, load_greg_hedge_rules
-        
+
         engine = get_hedge_engine(dry_run=True)
         history = engine.get_hedge_history(limit=20)
         rules = load_greg_hedge_rules()
-        
+
         global_defs = rules.get("global_definitions", {})
         hedge_instruments = global_defs.get("hedge_instrument", {})
-        
+
         strategies_summary = []
         for strat_key, strat_config in rules.get("strategies", {}).items():
             hedge_cfg = strat_config.get("hedge", {})
-            strategies_summary.append({
-                "strategy": strat_key,
-                "display_name": strat_config.get("display_name", strat_key),
-                "hedge_mode": hedge_cfg.get("mode", "NONE"),
-                "delta_threshold": hedge_cfg.get("delta_abs_threshold"),
-            })
-        
-        return JSONResponse(content={
-            "ok": True,
-            "dry_run": engine.dry_run,
-            "hedge_instruments": hedge_instruments,
-            "strategies": strategies_summary,
-            "history": history,
-            "history_count": len(history),
-        })
+            strategies_summary.append(
+                {
+                    "strategy": strat_key,
+                    "display_name": strat_config.get("display_name", strat_key),
+                    "hedge_mode": hedge_cfg.get("mode", "NONE"),
+                    "delta_threshold": hedge_cfg.get("delta_abs_threshold"),
+                }
+            )
+
+        return JSONResponse(
+            content={
+                "ok": True,
+                "dry_run": engine.dry_run,
+                "hedge_instruments": hedge_instruments,
+                "strategies": strategies_summary,
+                "history": history,
+                "history_count": len(history),
+            }
+        )
     except Exception as e:
         return JSONResponse(content={"ok": False, "error": str(e)})
 
@@ -3467,17 +3918,16 @@ def get_greg_hedging_status() -> JSONResponse:
 def evaluate_greg_hedging() -> JSONResponse:
     """
     Evaluate hedging needs for Greg positions (demo/mock for Phase 1).
-    
+
     Returns proposed hedge orders without executing them.
     Currently uses mock positions for demonstration - real position
     integration planned for Phase 2 when live trading is enabled.
     """
     try:
         from src.hedging import get_hedge_engine, GregPosition
-        from src.greg_position_manager import get_greg_position_rules
-        
+
         engine = get_hedge_engine(dry_run=True)
-        
+
         mock_positions = [
             GregPosition(
                 position_id="demo:BTC-STRADDLE-1",
@@ -3513,38 +3963,46 @@ def evaluate_greg_hedging() -> JSONResponse:
                 net_delta=-0.15,
             ),
         ]
-        
+
         proposed_hedges = []
         for pos in mock_positions:
             hedge_rules = engine.get_hedge_rules(pos.strategy_type)
             order = engine.build_hedge_order(pos, hedge_rules)
             if order:
-                proposed_hedges.append({
-                    "position_id": pos.position_id,
-                    "strategy_type": pos.strategy_type,
-                    "underlying": pos.underlying,
-                    "net_delta": engine.compute_net_delta_for_position(pos),
-                    "threshold": hedge_rules.delta_abs_threshold,
-                    "proposed_order": order.to_dict(),
-                })
+                proposed_hedges.append(
+                    {
+                        "position_id": pos.position_id,
+                        "strategy_type": pos.strategy_type,
+                        "underlying": pos.underlying,
+                        "net_delta": engine.compute_net_delta_for_position(pos),
+                        "threshold": hedge_rules.delta_abs_threshold,
+                        "proposed_order": order.to_dict(),
+                    }
+                )
             else:
-                proposed_hedges.append({
-                    "position_id": pos.position_id,
-                    "strategy_type": pos.strategy_type,
-                    "underlying": pos.underlying,
-                    "net_delta": engine.compute_net_delta_for_position(pos),
-                    "threshold": hedge_rules.delta_abs_threshold,
-                    "proposed_order": None,
-                    "status": "no_hedge_needed",
-                })
-        
-        return JSONResponse(content={
-            "ok": True,
-            "positions_evaluated": len(mock_positions),
-            "hedges_proposed": len([h for h in proposed_hedges if h.get("proposed_order")]),
-            "results": proposed_hedges,
-            "dry_run": engine.dry_run,
-        })
+                proposed_hedges.append(
+                    {
+                        "position_id": pos.position_id,
+                        "strategy_type": pos.strategy_type,
+                        "underlying": pos.underlying,
+                        "net_delta": engine.compute_net_delta_for_position(pos),
+                        "threshold": hedge_rules.delta_abs_threshold,
+                        "proposed_order": None,
+                        "status": "no_hedge_needed",
+                    }
+                )
+
+        return JSONResponse(
+            content={
+                "ok": True,
+                "positions_evaluated": len(mock_positions),
+                "hedges_proposed": len(
+                    [h for h in proposed_hedges if h.get("proposed_order")]
+                ),
+                "results": proposed_hedges,
+                "dry_run": engine.dry_run,
+            }
+        )
     except Exception as e:
         return JSONResponse(content={"ok": False, "error": str(e)})
 
@@ -3554,15 +4012,17 @@ def get_greg_hedge_history(limit: int = 50) -> JSONResponse:
     """Return recent hedge execution history."""
     try:
         from src.hedging import get_hedge_engine
-        
+
         engine = get_hedge_engine(dry_run=True)
         history = engine.get_hedge_history(limit=limit)
-        
-        return JSONResponse(content={
-            "ok": True,
-            "history": history,
-            "count": len(history),
-        })
+
+        return JSONResponse(
+            content={
+                "ok": True,
+                "history": history,
+                "count": len(history),
+            }
+        )
     except Exception as e:
         return JSONResponse(content={"ok": False, "error": str(e)})
 
@@ -3575,16 +4035,18 @@ def set_hedge_dry_run(request: dict) -> JSONResponse:
     """
     try:
         from src.hedging import get_hedge_engine
-        
+
         dry_run = request.get("dry_run", True)
         engine = get_hedge_engine()
         engine.set_dry_run(dry_run)
-        
-        return JSONResponse(content={
-            "ok": True,
-            "dry_run": engine.dry_run,
-            "message": f"Hedge engine dry_run set to {dry_run}",
-        })
+
+        return JSONResponse(
+            content={
+                "ok": True,
+                "dry_run": engine.dry_run,
+                "message": f"Hedge engine dry_run set to {dry_run}",
+            }
+        )
     except Exception as e:
         return JSONResponse(content={"ok": False, "error": str(e)})
 
@@ -3595,7 +4057,7 @@ def test_kill_switch() -> JSONResponse:
     try:
         from src.risk_engine import check_action_allowed
         from src.models import AgentState, PortfolioState, ActionType
-        
+
         mock_portfolio = PortfolioState(
             equity_usd=100000.0,
             margin_used_usd=20000.0,
@@ -3603,7 +4065,7 @@ def test_kill_switch() -> JSONResponse:
             net_delta=0.5,
             option_positions=[],
         )
-        
+
         mock_state = AgentState(
             portfolio=mock_portfolio,
             spot={"BTC": 100000.0, "ETH": 3500.0},
@@ -3611,7 +4073,7 @@ def test_kill_switch() -> JSONResponse:
             market_context=None,
             timestamp="2025-01-01T00:00:00Z",
         )
-        
+
         proposed_action = {
             "action": ActionType.OPEN_COVERED_CALL,
             "params": {
@@ -3620,18 +4082,24 @@ def test_kill_switch() -> JSONResponse:
             },
             "reasoning": "Test action for kill switch validation",
         }
-        
+
         allowed, reasons = check_action_allowed(mock_state, proposed_action, settings)
-        
-        return JSONResponse(content={
-            "ok": True,
-            "allowed": allowed,
-            "reasons": reasons,
-            "config": {
-                "daily_drawdown_limit_pct": getattr(settings, "daily_drawdown_limit_pct", 0.0),
-                "kill_switch_enabled": getattr(settings, "kill_switch_enabled", False),
+
+        return JSONResponse(
+            content={
+                "ok": True,
+                "allowed": allowed,
+                "reasons": reasons,
+                "config": {
+                    "daily_drawdown_limit_pct": getattr(
+                        settings, "daily_drawdown_limit_pct", 0.0
+                    ),
+                    "kill_switch_enabled": getattr(
+                        settings, "kill_switch_enabled", False
+                    ),
+                },
             }
-        })
+        )
     except Exception as e:
         return JSONResponse(content={"ok": False, "error": str(e)})
 
@@ -3641,19 +4109,23 @@ def run_healthcheck_endpoint() -> JSONResponse:
     """Run full agent healthcheck and return results (with caching)."""
     try:
         from src.healthcheck import run_and_cache_healthcheck, get_health_status_for_api
-        
+
         cached_status = run_and_cache_healthcheck(settings)
         result = cached_status.details
         health_api_status = get_health_status_for_api()
-        
-        return JSONResponse(content={
-            "ok": result.get("overall_status") != "FAIL",
-            "overall_status": result.get("overall_status", "UNKNOWN"),
-            "summary": result.get("summary", ""),
-            "results": result.get("results", []),
-            "last_run_at": health_api_status.get("last_run_at"),
-            "agent_paused_due_to_health": health_api_status.get("agent_paused_due_to_health", False),
-        })
+
+        return JSONResponse(
+            content={
+                "ok": result.get("overall_status") != "FAIL",
+                "overall_status": result.get("overall_status", "UNKNOWN"),
+                "summary": result.get("summary", ""),
+                "results": result.get("results", []),
+                "last_run_at": health_api_status.get("last_run_at"),
+                "agent_paused_due_to_health": health_api_status.get(
+                    "agent_paused_due_to_health", False
+                ),
+            }
+        )
     except Exception as e:
         return JSONResponse(content={"ok": False, "error": str(e)})
 
@@ -3663,13 +4135,15 @@ def get_system_health_status() -> JSONResponse:
     """Get cached system health status for dashboard display."""
     try:
         from src.healthcheck import get_health_status_for_api
-        
+
         status = get_health_status_for_api()
-        
-        return JSONResponse(content={
-            "ok": True,
-            **status,
-        })
+
+        return JSONResponse(
+            content={
+                "ok": True,
+                **status,
+            }
+        )
     except Exception as e:
         return JSONResponse(content={"ok": False, "error": str(e)})
 
@@ -3679,7 +4153,7 @@ def get_llm_readiness_endpoint() -> JSONResponse:
     """Check if LLM is ready for diagnostic tests."""
     try:
         from src.healthcheck import get_llm_readiness
-        
+
         result = get_llm_readiness(settings)
         return JSONResponse(content={"ok": True, **result})
     except Exception as e:
@@ -3690,23 +4164,25 @@ def get_llm_readiness_endpoint() -> JSONResponse:
 def get_iv_sanity_check() -> JSONResponse:
     """
     Run IV sanity check to validate synthetic IV pricing layer.
-    
+
     This runs backtests with different IV multipliers and verifies that
     results differ meaningfully (not stuck/broken). May take several seconds.
     """
     try:
         from scripts.iv_sanity_check import run_iv_sanity_check
-        
+
         result = run_iv_sanity_check()
         return JSONResponse(content={"ok": result.get("status") == "ok", **result})
     except Exception as e:
-        return JSONResponse(content={
-            "ok": False, 
-            "status": "error",
-            "error": str(e),
-            "selectors": [],
-            "summary": f"Error running IV sanity check: {e}",
-        })
+        return JSONResponse(
+            content={
+                "ok": False,
+                "status": "error",
+                "error": str(e),
+                "selectors": [],
+                "summary": f"Error running IV sanity check: {e}",
+            }
+        )
 
 
 @app.post("/api/steward/run")
@@ -3717,6 +4193,7 @@ def run_steward() -> JSONResponse:
     """
     try:
         from src.system_steward import generate_steward_report
+
         report = generate_steward_report()
         return JSONResponse(content=report.model_dump())
     except Exception as e:
@@ -3733,6 +4210,7 @@ def get_steward_report() -> JSONResponse:
     """
     try:
         from src.system_steward import get_last_report
+
         report = get_last_report()
         if report is None:
             return JSONResponse(
@@ -3761,20 +4239,21 @@ def get_greg_sweetspots() -> JSONResponse:
     """
     try:
         import json as json_lib
+
         base_dir = Path(__file__).resolve().parent.parent
         json_path = base_dir / "backtest" / "output" / "greg_heatmap_sweetspots.json"
-        
+
         if not json_path.exists():
             return JSONResponse(
                 content={
                     "ok": False,
-                    "error": "No sweet spots file found. Click 'Run Greg Sweet Spot Scan' to generate."
+                    "error": "No sweet spots file found. Click 'Run Greg Sweet Spot Scan' to generate.",
                 },
             )
-        
+
         raw = json_path.read_text(encoding="utf-8")
         data = json_lib.loads(raw)
-        
+
         return JSONResponse(content={"ok": True, "data": data})
     except Exception as e:
         return JSONResponse(content={"ok": False, "error": str(e)}, status_code=500)
@@ -3791,11 +4270,11 @@ def run_greg_sweetspots() -> JSONResponse:
     """
     try:
         from src.backtest.greg_sweetspots import run_greg_sweetspot_sweep
-        
+
         base_dir = Path(__file__).resolve().parent.parent
-        
+
         json_path = run_greg_sweetspot_sweep(base_dir=base_dir)
-        
+
         return JSONResponse(
             content={
                 "ok": True,
@@ -3812,6 +4291,7 @@ def run_greg_sweetspots() -> JSONResponse:
 
 class RuntimeConfigUpdate(BaseModel):
     """Request model for updating runtime configuration."""
+
     kill_switch_enabled: Optional[bool] = None
     daily_drawdown_limit_pct: Optional[float] = None
     decision_mode: Optional[str] = None
@@ -3822,14 +4302,16 @@ class RuntimeConfigUpdate(BaseModel):
 @app.get("/api/system/runtime-config")
 def get_runtime_config() -> JSONResponse:
     """Fetch current runtime configuration settings."""
-    return JSONResponse(content={
-        "ok": True,
-        "kill_switch_enabled": settings.kill_switch_enabled,
-        "daily_drawdown_limit_pct": settings.daily_drawdown_limit_pct,
-        "decision_mode": settings.decision_mode,
-        "dry_run": settings.dry_run,
-        "position_reconcile_action": settings.position_reconcile_action,
-    })
+    return JSONResponse(
+        content={
+            "ok": True,
+            "kill_switch_enabled": settings.kill_switch_enabled,
+            "daily_drawdown_limit_pct": settings.daily_drawdown_limit_pct,
+            "decision_mode": settings.decision_mode,
+            "dry_run": settings.dry_run,
+            "position_reconcile_action": settings.position_reconcile_action,
+        }
+    )
 
 
 @app.post("/api/system/runtime-config")
@@ -3837,18 +4319,18 @@ def update_runtime_config(update: RuntimeConfigUpdate) -> JSONResponse:
     """Update runtime configuration settings (in-memory only, does not persist across restarts)."""
     updated = {}
     errors = []
-    
+
     if update.kill_switch_enabled is not None:
         settings.kill_switch_enabled = update.kill_switch_enabled
         updated["kill_switch_enabled"] = update.kill_switch_enabled
-    
+
     if update.daily_drawdown_limit_pct is not None:
         if update.daily_drawdown_limit_pct < 0:
             errors.append("daily_drawdown_limit_pct must be >= 0")
         else:
             settings.daily_drawdown_limit_pct = update.daily_drawdown_limit_pct
             updated["daily_drawdown_limit_pct"] = update.daily_drawdown_limit_pct
-    
+
     if update.decision_mode is not None:
         valid_modes = ["rule_only", "llm_only", "hybrid_shadow"]
         if update.decision_mode not in valid_modes:
@@ -3856,39 +4338,43 @@ def update_runtime_config(update: RuntimeConfigUpdate) -> JSONResponse:
         else:
             settings.decision_mode = update.decision_mode  # type: ignore
             updated["decision_mode"] = update.decision_mode
-    
+
     if update.dry_run is not None:
         settings.dry_run = update.dry_run
         updated["dry_run"] = update.dry_run
-    
+
     if update.position_reconcile_action is not None:
         valid_actions = ["halt", "auto_heal"]
         if update.position_reconcile_action not in valid_actions:
-            errors.append(f"position_reconcile_action must be one of: {', '.join(valid_actions)}")
+            errors.append(
+                f"position_reconcile_action must be one of: {', '.join(valid_actions)}"
+            )
         else:
             settings.position_reconcile_action = update.position_reconcile_action  # type: ignore
             updated["position_reconcile_action"] = update.position_reconcile_action
-    
+
     if errors:
         return JSONResponse(
             status_code=400,
             content={
                 "ok": False,
                 "errors": errors,
-            }
+            },
         )
-    
-    return JSONResponse(content={
-        "ok": True,
-        "updated": updated,
-        "current": {
-            "kill_switch_enabled": settings.kill_switch_enabled,
-            "daily_drawdown_limit_pct": settings.daily_drawdown_limit_pct,
-            "decision_mode": settings.decision_mode,
-            "dry_run": settings.dry_run,
-            "position_reconcile_action": settings.position_reconcile_action,
+
+    return JSONResponse(
+        content={
+            "ok": True,
+            "updated": updated,
+            "current": {
+                "kill_switch_enabled": settings.kill_switch_enabled,
+                "daily_drawdown_limit_pct": settings.daily_drawdown_limit_pct,
+                "decision_mode": settings.decision_mode,
+                "dry_run": settings.dry_run,
+                "position_reconcile_action": settings.position_reconcile_action,
+            },
         }
-    })
+    )
 
 
 SUPERVISOR_API_URL = os.environ.get("SUPERVISOR_API_URL", "")
@@ -3899,17 +4385,14 @@ async def get_supervisor_jobs():
     """Proxy supervisor jobs list from supervisor service."""
     if not SUPERVISOR_API_URL:
         return JSONResponse(content={"error": "not_configured", "jobs": []})
-    
+
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             resp = await client.get(f"{SUPERVISOR_API_URL.rstrip('/')}/jobs")
             resp.raise_for_status()
             return JSONResponse(content=resp.json())
     except Exception as e:
-        return JSONResponse(
-            status_code=500,
-            content={"error": str(e), "jobs": []}
-        )
+        return JSONResponse(status_code=500, content={"error": str(e), "jobs": []})
 
 
 @app.get("/api/supervisor/jobs/{job_id}")
@@ -3917,10 +4400,9 @@ async def get_supervisor_job(job_id: str):
     """Proxy single supervisor job from supervisor service."""
     if not SUPERVISOR_API_URL:
         return JSONResponse(
-            status_code=503,
-            content={"error": "Supervisor not configured"}
+            status_code=503, content={"error": "Supervisor not configured"}
         )
-    
+
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             resp = await client.get(f"{SUPERVISOR_API_URL.rstrip('/')}/jobs/{job_id}")
@@ -3928,14 +4410,10 @@ async def get_supervisor_job(job_id: str):
             return JSONResponse(content=resp.json())
     except httpx.HTTPStatusError as e:
         return JSONResponse(
-            status_code=e.response.status_code,
-            content={"error": str(e)}
+            status_code=e.response.status_code, content={"error": str(e)}
         )
     except Exception as e:
-        return JSONResponse(
-            status_code=500,
-            content={"error": str(e)}
-        )
+        return JSONResponse(status_code=500, content={"error": str(e)})
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -3945,8 +4423,12 @@ def index() -> str:
     op_mode = settings.mode.upper()
     explore_pct = int(settings.explore_prob * 100)
     training_enabled = settings.is_training_enabled
-    training_badge = f"TRAINING ({', '.join(settings.training_strategies)})" if training_enabled else ""
-    
+    (
+        f"TRAINING ({', '.join(settings.training_strategies)})"
+        if training_enabled
+        else ""
+    )
+
     return f"""
 <!DOCTYPE html>
 <html lang="en">
@@ -4488,13 +4970,13 @@ def index() -> str:
   <div style="display:flex;align-items:center;gap:1rem;flex-wrap:wrap;">
     <div>
       <span class="badge badge-mode">{decision_mode}</span>
-      <span class="badge {'badge-research' if settings.is_research else 'badge-production'}">
+      <span class="badge {"badge-research" if settings.is_research else "badge-production"}">
         {op_mode} ({explore_pct}% explore)
       </span>
-      <span class="badge {'badge-dry' if settings.dry_run else 'badge-live'}">
-        {'DRY RUN' if settings.dry_run else 'LIVE TRADING'}
+      <span class="badge {"badge-dry" if settings.dry_run else "badge-live"}">
+        {"DRY RUN" if settings.dry_run else "LIVE TRADING"}
       </span>
-      <span class="badge badge-training" id="training-badge" style="display:{'inline-block' if training_enabled else 'none'};">
+      <span class="badge badge-training" id="training-badge" style="display:{"inline-block" if training_enabled else "none"};">
         TRAINING
       </span>
       <span class="badge" id="agent-status-badge" style="background:#e8f5e9;color:#2e7d32;">Active</span>
@@ -4502,7 +4984,7 @@ def index() -> str:
     <div class="toggle-container" style="display:flex;align-items:center;gap:0.5rem;">
       <span style="font-size:0.85rem;color:#666;">Training Mode:</span>
       <label class="switch">
-        <input type="checkbox" id="training-toggle" {'checked' if training_enabled else ''} onchange="toggleTraining(this.checked)">
+        <input type="checkbox" id="training-toggle" {"checked" if training_enabled else ""} onchange="toggleTraining(this.checked)">
         <span class="slider"></span>
       </label>
     </div>

@@ -8,6 +8,7 @@ Key abstractions:
 - StrategyDecision: Final decision ready for execution
 - StrategyRegistry: Manages active strategies
 """
+
 from src.strategies.types import (
     Strategy,
     StrategyConfig,

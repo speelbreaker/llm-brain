@@ -3,6 +3,7 @@ Deribit public API client for backtesting.
 Extends DeribitBaseClient for public endpoints only (no authentication).
 Uses mainnet by default for historical data access.
 """
+
 from __future__ import annotations
 
 from datetime import datetime
@@ -19,7 +20,7 @@ DEFAULT_DERIBIT_TESTNET = "https://test.deribit.com"
 class DeribitPublicClient(DeribitBaseClient):
     """
     Deribit public API client for backtesting and data fetching.
-    
+
     Uses mainnet by default for historical data access.
     No authentication required - only public endpoints.
     """
@@ -40,13 +41,13 @@ class DeribitPublicClient(DeribitBaseClient):
     ) -> Dict[str, Any]:
         """
         Get TradingView-style OHLCV chart data.
-        
+
         Args:
             instrument_name: Instrument or index name (e.g. "btc_usd")
             start: Start datetime
             end: End datetime
             resolution: Candle resolution ('1','5','15','60','240','1D')
-            
+
         Returns:
             Dict with keys: ticks, open, high, low, close, volume
         """
@@ -70,12 +71,12 @@ class DeribitPublicClient(DeribitBaseClient):
     ) -> List[Dict[str, Any]]:
         """
         Get list of instruments for a currency.
-        
+
         Args:
             currency: Currency code (e.g., "BTC", "ETH")
             kind: Instrument type ('option', 'future', etc.)
             expired: Include expired instruments
-            
+
         Returns:
             List of instrument dictionaries
         """
@@ -91,10 +92,10 @@ class DeribitPublicClient(DeribitBaseClient):
     def get_ticker(self, instrument_name: str) -> Dict[str, Any]:
         """
         Get ticker data including mark_price, greeks, etc.
-        
+
         Args:
             instrument_name: Deribit instrument name
-            
+
         Returns:
             Ticker data dictionary
         """
@@ -106,10 +107,10 @@ class DeribitPublicClient(DeribitBaseClient):
     def get_index_price(self, index_name: str) -> Dict[str, Any]:
         """
         Get current index price.
-        
+
         Args:
             index_name: Index name (e.g., 'btc_usd', 'eth_usd')
-            
+
         Returns:
             Index price data dictionary
         """
@@ -125,14 +126,14 @@ class DeribitPublicClient(DeribitBaseClient):
     ) -> List[Dict[str, Any]]:
         """
         Get book summary for all instruments of a currency in one bulk call.
-        
+
         Returns mark_price, mark_iv, underlying_price, etc. for each instrument.
         Much more efficient than calling get_ticker for each instrument.
-        
+
         Args:
             currency: Currency code (e.g., "BTC", "ETH")
             kind: Instrument type ('option', 'future', etc.)
-            
+
         Returns:
             List of book summary dictionaries
         """

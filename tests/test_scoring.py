@@ -1,5 +1,5 @@
 """Tests for src/scoring/candidates.py - candidate option scoring."""
-import pytest
+
 from src.scoring.candidates import score_option_candidate
 
 
@@ -81,13 +81,13 @@ class TestScoreOptionCandidate:
             "realized_vol_7d": 0.5,
             "pct_from_200d_ma": 0.0,
         }
-        
+
         low_ivrv = {**base_features, "ivrv": 1.0}
         high_ivrv = {**base_features, "ivrv": 1.4}
-        
+
         score_low = score_option_candidate(low_ivrv, profile="backtest")
         score_high = score_option_candidate(high_ivrv, profile="backtest")
-        
+
         assert score_high > score_low
 
     def test_missing_features_use_defaults(self):

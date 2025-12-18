@@ -11,6 +11,7 @@ This script shows how to:
 3. Generate training data for ML/RL
 4. Run scoring-based backtest with exit styles (NEW)
 """
+
 from __future__ import annotations
 
 import json
@@ -23,7 +24,6 @@ from .covered_call_simulator import CoveredCallSimulator, always_trade_policy
 from .types import CallSimulationConfig
 from .training_dataset import (
     generate_training_data,
-    export_to_jsonl,
     compute_dataset_stats,
 )
 from .state_builder import create_state_builder
@@ -111,7 +111,7 @@ def example_policy_backtest():
 
     result = sim.simulate_policy(always_trade_policy, size=0.1)
 
-    print(f"\nBacktest Results:")
+    print("\nBacktest Results:")
     print(f"  Total Trades: {result.metrics['num_trades']}")
     print(f"  Final PnL: ${result.metrics['final_pnl']:,.2f}")
     print(f"  Avg PnL per Trade: ${result.metrics.get('avg_pnl', 0):,.2f}")
@@ -120,9 +120,11 @@ def example_policy_backtest():
     print(f"  Win Rate: {result.metrics.get('win_rate', 0) * 100:.1f}%")
 
     if result.trades:
-        print(f"\nFirst 3 trades:")
+        print("\nFirst 3 trades:")
         for t in result.trades[:3]:
-            print(f"  - {t.instrument_name}: PnL=${t.pnl:,.2f}, vs HODL=${t.pnl_vs_hodl:,.2f}")
+            print(
+                f"  - {t.instrument_name}: PnL=${t.pnl:,.2f}, vs HODL=${t.pnl_vs_hodl:,.2f}"
+            )
 
     ds.close()
 
@@ -160,14 +162,16 @@ def example_training_data():
     examples = generate_training_data(sim, policy=always_trade_policy)
 
     stats = compute_dataset_stats(examples)
-    print(f"\nDataset Statistics:")
+    print("\nDataset Statistics:")
     print(json.dumps(stats, indent=2))
 
     if examples:
-        print(f"\nFirst 3 examples:")
+        print("\nFirst 3 examples:")
         for ex in examples[:3]:
-            print(f"  - {ex.decision_time.isoformat()}: "
-                  f"action={ex.action}, reward=${ex.reward:,.2f}")
+            print(
+                f"  - {ex.decision_time.isoformat()}: "
+                f"action={ex.action}, reward=${ex.reward:,.2f}"
+            )
 
     ds.close()
 
@@ -176,22 +180,22 @@ def example_scoring_backtest():
     """
     Example 4: Scoring-based backtest with exit styles.
     Uses the new scoring function and state builder for more realistic backtests.
-    
+
     Demonstrates:
     - Feature extraction from market context
-    - Candidate scoring (0-10) 
+    - Candidate scoring (0-10)
     - Two exit styles: hold_to_expiry vs tp_and_roll
     - USDC linear options filtering
     """
     print("\n" + "=" * 60)
     print("Example 4: Scoring-Based Backtest")
     print("=" * 60)
-    
+
     client = DeribitPublicClient()
     ds = DeribitDataSource(client)
-    
+
     now = datetime.now(timezone.utc)
-    
+
     config = CallSimulationConfig(
         underlying="BTC",
         start=now - timedelta(days=30),
@@ -214,53 +218,55 @@ def example_scoring_backtest():
         tp_threshold_pct=80.0,
         min_score_to_trade=3.0,
     )
-    
+
     sim = CoveredCallSimulator(ds, config)
-    
+
     state_builder = create_state_builder(ds, config)
-    
+
     decision_times: List[datetime] = []
     t = config.start
     step = timedelta(hours=24)
     while t < config.end - timedelta(days=config.target_dte):
         decision_times.append(t)
         t += step
-    
-    print(f"\nRunning hold_to_expiry strategy...")
+
+    print("\nRunning hold_to_expiry strategy...")
     result_hold = sim.simulate_policy_with_scoring(
         decision_times=decision_times,
         state_builder=state_builder,
         exit_style="hold_to_expiry",
         min_score_to_trade=3.0,
     )
-    
-    print(f"\nHold-to-Expiry Results:")
+
+    print("\nHold-to-Expiry Results:")
     print(f"  Total Trades: {result_hold.metrics['num_trades']}")
     print(f"  Final PnL: ${result_hold.metrics['final_pnl']:,.2f}")
     print(f"  Avg PnL: ${result_hold.metrics.get('avg_pnl', 0):,.2f}")
     print(f"  Max Drawdown: {result_hold.metrics['max_drawdown_pct']:.2f}%")
     print(f"  Win Rate: {result_hold.metrics.get('win_rate', 0) * 100:.1f}%")
-    
-    print(f"\nRunning tp_and_roll strategy...")
+
+    print("\nRunning tp_and_roll strategy...")
     result_tp = sim.simulate_policy_with_scoring(
         decision_times=decision_times,
         state_builder=state_builder,
         exit_style="tp_and_roll",
         min_score_to_trade=3.0,
     )
-    
-    print(f"\nTP-and-Roll Results:")
+
+    print("\nTP-and-Roll Results:")
     print(f"  Total Trades: {result_tp.metrics['num_trades']}")
     print(f"  Final PnL: ${result_tp.metrics['final_pnl']:,.2f}")
     print(f"  Avg PnL: ${result_tp.metrics.get('avg_pnl', 0):,.2f}")
     print(f"  Max Drawdown: {result_tp.metrics['max_drawdown_pct']:.2f}%")
     print(f"  Win Rate: {result_tp.metrics.get('win_rate', 0) * 100:.1f}%")
-    
+
     if result_hold.trades:
-        print(f"\nSample trades (hold_to_expiry):")
+        print("\nSample trades (hold_to_expiry):")
         for t in result_hold.trades[:3]:
-            print(f"  - {t.instrument_name}: PnL=${t.pnl:,.2f}, notes={t.notes[:50]}...")
-    
+            print(
+                f"  - {t.instrument_name}: PnL=${t.pnl:,.2f}, notes={t.notes[:50]}..."
+            )
+
     ds.close()
 
 
@@ -284,7 +290,7 @@ def main():
         example_training_data()
     except Exception as e:
         print(f"Example 3 failed: {e}")
-    
+
     try:
         example_scoring_backtest()
     except Exception as e:

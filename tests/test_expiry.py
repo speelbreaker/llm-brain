@@ -1,5 +1,5 @@
 """Tests for src/utils/expiry.py - Deribit expiry parsing."""
-import pytest
+
 from datetime import datetime, timezone
 from src.utils.expiry import parse_deribit_expiry
 
@@ -82,9 +82,18 @@ class TestParseDeribitExpiry:
     def test_all_months(self):
         """Test all month abbreviations are parsed correctly."""
         months = [
-            ("JAN", 1), ("FEB", 2), ("MAR", 3), ("APR", 4),
-            ("MAY", 5), ("JUN", 6), ("JUL", 7), ("AUG", 8),
-            ("SEP", 9), ("OCT", 10), ("NOV", 11), ("DEC", 12),
+            ("JAN", 1),
+            ("FEB", 2),
+            ("MAR", 3),
+            ("APR", 4),
+            ("MAY", 5),
+            ("JUN", 6),
+            ("JUL", 7),
+            ("AUG", 8),
+            ("SEP", 9),
+            ("OCT", 10),
+            ("NOV", 11),
+            ("DEC", 12),
         ]
         for abbr, expected_month in months:
             result = parse_deribit_expiry(f"BTC-15{abbr}24-90000-C")

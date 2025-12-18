@@ -1,9 +1,9 @@
 """
 Tests for risk_engine module, specifically the kill switch and daily drawdown guard.
 """
+
 from __future__ import annotations
 
-from datetime import datetime, timezone
 from dataclasses import dataclass, field
 from typing import Any, List
 import pytest
@@ -13,7 +13,6 @@ from src.risk_engine import (
     _check_daily_drawdown_limit,
     _daily_drawdown_state,
 )
-from src.models import ActionType
 from src.config import Settings
 
 
@@ -68,10 +67,13 @@ class TestKillSwitch:
         _reset_drawdown_state()
         cfg = Settings(kill_switch_enabled=True)
         state = MockAgentState()
-        action = {"action": "OPEN_COVERED_CALL", "params": {"symbol": "BTC-20DEC24-100000-C", "size": 0.1}}
-        
+        action = {
+            "action": "OPEN_COVERED_CALL",
+            "params": {"symbol": "BTC-20DEC24-100000-C", "size": 0.1},
+        }
+
         allowed, reasons = check_action_allowed(state, action, config=cfg)
-        
+
         assert allowed is False
         assert any("kill-switch" in r.lower() for r in reasons)
 
@@ -81,9 +83,9 @@ class TestKillSwitch:
         cfg = Settings(kill_switch_enabled=True)
         state = MockAgentState()
         action = {"action": "DO_NOTHING", "params": {}}
-        
+
         allowed, reasons = check_action_allowed(state, action, config=cfg)
-        
+
         assert allowed is True
 
     def test_kill_switch_blocks_close_covered_call(self):
@@ -91,10 +93,13 @@ class TestKillSwitch:
         _reset_drawdown_state()
         cfg = Settings(kill_switch_enabled=True)
         state = MockAgentState()
-        action = {"action": "CLOSE_COVERED_CALL", "params": {"symbol": "BTC-20DEC24-100000-C"}}
-        
+        action = {
+            "action": "CLOSE_COVERED_CALL",
+            "params": {"symbol": "BTC-20DEC24-100000-C"},
+        }
+
         allowed, reasons = check_action_allowed(state, action, config=cfg)
-        
+
         assert allowed is False
         assert any("kill-switch" in r.lower() for r in reasons)
 
@@ -103,10 +108,13 @@ class TestKillSwitch:
         _reset_drawdown_state()
         cfg = Settings(kill_switch_enabled=True)
         state = MockAgentState()
-        action = {"action": "ROLL_COVERED_CALL", "params": {"from_symbol": "A", "to_symbol": "B"}}
-        
+        action = {
+            "action": "ROLL_COVERED_CALL",
+            "params": {"from_symbol": "A", "to_symbol": "B"},
+        }
+
         allowed, reasons = check_action_allowed(state, action, config=cfg)
-        
+
         assert allowed is False
         assert any("kill-switch" in r.lower() for r in reasons)
 
@@ -118,10 +126,13 @@ class TestKillSwitch:
         state.portfolio.equity_usd = 10000.0
         state.portfolio.margin_used_pct = 20.0
         state.portfolio.spot_positions = {"BTC": 1.0}
-        action = {"action": "OPEN_COVERED_CALL", "params": {"symbol": "BTC-20DEC24-100000-C", "size": 0.1}}
-        
+        action = {
+            "action": "OPEN_COVERED_CALL",
+            "params": {"symbol": "BTC-20DEC24-100000-C", "size": 0.1},
+        }
+
         allowed, reasons = check_action_allowed(state, action, config=cfg)
-        
+
         assert allowed is True
 
     def test_kill_switch_overrides_training_mode(self):
@@ -134,10 +145,13 @@ class TestKillSwitch:
             deribit_env="testnet",
         )
         state = MockAgentState()
-        action = {"action": "OPEN_COVERED_CALL", "params": {"symbol": "BTC-20DEC24-100000-C", "size": 0.1}}
-        
+        action = {
+            "action": "OPEN_COVERED_CALL",
+            "params": {"symbol": "BTC-20DEC24-100000-C", "size": 0.1},
+        }
+
         allowed, reasons = check_action_allowed(state, action, config=cfg)
-        
+
         assert allowed is False
         assert any("kill-switch" in r.lower() for r in reasons)
 
@@ -152,10 +166,13 @@ class TestDailyDrawdownGuard:
         state = MockAgentState()
         state.portfolio.equity_usd = 10000.0
         state.portfolio.spot_positions = {"BTC": 1.0}
-        action = {"action": "OPEN_COVERED_CALL", "params": {"symbol": "BTC-20DEC24-100000-C", "size": 0.1}}
-        
+        action = {
+            "action": "OPEN_COVERED_CALL",
+            "params": {"symbol": "BTC-20DEC24-100000-C", "size": 0.1},
+        }
+
         allowed, reasons = check_action_allowed(state, action, config=cfg)
-        
+
         assert allowed is True
         assert not any("drawdown" in r.lower() for r in reasons)
 
@@ -165,9 +182,9 @@ class TestDailyDrawdownGuard:
         cfg = Settings(daily_drawdown_limit_pct=10.0)
         portfolio = MockPortfolio(equity_usd=10000.0)
         reasons = []
-        
+
         result = _check_daily_drawdown_limit(portfolio, cfg, reasons)
-        
+
         assert result is True
         assert _daily_drawdown_state["max_equity_usd"] == 10000.0
 
@@ -178,12 +195,15 @@ class TestDailyDrawdownGuard:
         state = MockAgentState()
         state.portfolio.equity_usd = 10000.0
         state.portfolio.spot_positions = {"BTC": 1.0}
-        action = {"action": "OPEN_COVERED_CALL", "params": {"symbol": "BTC-20DEC24-100000-C", "size": 0.1}}
-        
+        action = {
+            "action": "OPEN_COVERED_CALL",
+            "params": {"symbol": "BTC-20DEC24-100000-C", "size": 0.1},
+        }
+
         check_action_allowed(state, action, config=cfg)
-        
+
         allowed, reasons = check_action_allowed(state, action, config=cfg)
-        
+
         assert allowed is True
 
     def test_drawdown_guard_blocks_after_limit_exceeded(self):
@@ -192,13 +212,13 @@ class TestDailyDrawdownGuard:
         cfg = Settings(daily_drawdown_limit_pct=10.0)
         portfolio = MockPortfolio(equity_usd=10000.0)
         reasons = []
-        
+
         _check_daily_drawdown_limit(portfolio, cfg, reasons)
-        
+
         portfolio.equity_usd = 8500.0
         reasons = []
         result = _check_daily_drawdown_limit(portfolio, cfg, reasons)
-        
+
         assert result is False
         assert any("drawdown" in r.lower() for r in reasons)
 
@@ -209,18 +229,27 @@ class TestDailyDrawdownGuard:
         state = MockAgentState()
         state.portfolio.equity_usd = 10000.0
         state.portfolio.spot_positions = {"BTC": 1.0}
-        
+
         from src.models import Side
-        state.portfolio.option_positions = [MockPosition(symbol="BTC-20DEC24-100000-C", side=Side.SELL, size=0.1)]
-        
-        open_action = {"action": "OPEN_COVERED_CALL", "params": {"symbol": "BTC-20DEC24-100000-C", "size": 0.1}}
+
+        state.portfolio.option_positions = [
+            MockPosition(symbol="BTC-20DEC24-100000-C", side=Side.SELL, size=0.1)
+        ]
+
+        open_action = {
+            "action": "OPEN_COVERED_CALL",
+            "params": {"symbol": "BTC-20DEC24-100000-C", "size": 0.1},
+        }
         check_action_allowed(state, open_action, config=cfg)
-        
+
         state.portfolio.equity_usd = 8500.0
-        
-        close_action = {"action": "CLOSE_COVERED_CALL", "params": {"symbol": "BTC-20DEC24-100000-C"}}
+
+        close_action = {
+            "action": "CLOSE_COVERED_CALL",
+            "params": {"symbol": "BTC-20DEC24-100000-C"},
+        }
         allowed, reasons = check_action_allowed(state, close_action, config=cfg)
-        
+
         assert allowed is True
         assert not any("drawdown" in r.lower() for r in reasons)
 
@@ -231,15 +260,18 @@ class TestDailyDrawdownGuard:
         state = MockAgentState()
         state.portfolio.equity_usd = 10000.0
         state.portfolio.spot_positions = {"BTC": 1.0}
-        
-        open_action = {"action": "OPEN_COVERED_CALL", "params": {"symbol": "BTC-20DEC24-100000-C", "size": 0.1}}
+
+        open_action = {
+            "action": "OPEN_COVERED_CALL",
+            "params": {"symbol": "BTC-20DEC24-100000-C", "size": 0.1},
+        }
         check_action_allowed(state, open_action, config=cfg)
-        
+
         state.portfolio.equity_usd = 8000.0
-        
+
         action = {"action": "DO_NOTHING", "params": {}}
         allowed, reasons = check_action_allowed(state, action, config=cfg)
-        
+
         assert allowed is True
 
     def test_drawdown_guard_blocks_roll_after_limit_exceeded(self):
@@ -248,13 +280,13 @@ class TestDailyDrawdownGuard:
         cfg = Settings(daily_drawdown_limit_pct=10.0)
         portfolio = MockPortfolio(equity_usd=10000.0)
         reasons = []
-        
+
         _check_daily_drawdown_limit(portfolio, cfg, reasons)
-        
+
         portfolio.equity_usd = 8500.0
         reasons = []
         result = _check_daily_drawdown_limit(portfolio, cfg, reasons)
-        
+
         assert result is False
         assert any("drawdown" in r.lower() for r in reasons)
 
@@ -264,14 +296,14 @@ class TestDailyDrawdownGuard:
         cfg = Settings(daily_drawdown_limit_pct=10.0)
         portfolio = MockPortfolio(equity_usd=10000.0)
         reasons = []
-        
+
         _check_daily_drawdown_limit(portfolio, cfg, reasons)
         assert _daily_drawdown_state["max_equity_usd"] == 10000.0
-        
+
         portfolio.equity_usd = 11000.0
         _check_daily_drawdown_limit(portfolio, cfg, reasons)
         assert _daily_drawdown_state["max_equity_usd"] == 11000.0
-        
+
         portfolio.equity_usd = 10000.0
         result = _check_daily_drawdown_limit(portfolio, cfg, reasons)
         assert result is True
@@ -289,14 +321,17 @@ class TestDailyDrawdownGuard:
         state = MockAgentState()
         state.portfolio.equity_usd = 10000.0
         state.portfolio.spot_positions = {"BTC": 1.0}
-        
-        open_action = {"action": "OPEN_COVERED_CALL", "params": {"symbol": "BTC-20DEC24-100000-C", "size": 0.1}}
+
+        open_action = {
+            "action": "OPEN_COVERED_CALL",
+            "params": {"symbol": "BTC-20DEC24-100000-C", "size": 0.1},
+        }
         check_action_allowed(state, open_action, config=cfg)
-        
+
         state.portfolio.equity_usd = 5000.0
-        
+
         allowed, reasons = check_action_allowed(state, open_action, config=cfg)
-        
+
         assert allowed is True
         assert any("training" in r.lower() for r in reasons)
 
@@ -310,9 +345,9 @@ class TestDrawdownHelperFunction:
         portfolio = MockPortfolio(equity_usd=10000.0)
         cfg = Settings(daily_drawdown_limit_pct=0.0)
         reasons = []
-        
+
         result = _check_daily_drawdown_limit(portfolio, cfg, reasons)
-        
+
         assert result is True
         assert len(reasons) == 0
 
@@ -322,9 +357,9 @@ class TestDrawdownHelperFunction:
         portfolio = MockPortfolio(equity_usd=10000.0)
         cfg = Settings(daily_drawdown_limit_pct=10.0)
         reasons = []
-        
+
         result = _check_daily_drawdown_limit(portfolio, cfg, reasons)
-        
+
         assert result is True
         assert _daily_drawdown_state["max_equity_usd"] == 10000.0
 
@@ -334,13 +369,13 @@ class TestDrawdownHelperFunction:
         portfolio = MockPortfolio(equity_usd=10000.0)
         cfg = Settings(daily_drawdown_limit_pct=10.0)
         reasons = []
-        
+
         _check_daily_drawdown_limit(portfolio, cfg, reasons)
-        
+
         portfolio.equity_usd = 8500.0
         reasons = []
         result = _check_daily_drawdown_limit(portfolio, cfg, reasons)
-        
+
         assert result is False
         assert len(reasons) == 1
         assert "15.00%" in reasons[0]

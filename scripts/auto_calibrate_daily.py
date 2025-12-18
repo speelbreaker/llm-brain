@@ -13,7 +13,9 @@ Usage:
     python -m scripts.auto_calibrate_daily --dry-run
     python -m scripts.auto_calibrate_daily --underlyings BTC,ETH
 """
+
 from __future__ import annotations
+# ruff: noqa: E402
 
 import argparse
 import sys
@@ -52,6 +54,7 @@ from src.db import init_db
 @dataclass
 class CalibrationRunResult:
     """Result of a single underlying calibration run."""
+
     underlying: str
     status: Literal["ok", "degraded", "failed"]
     reason: str
@@ -76,20 +79,20 @@ def run_calibration_for_underlying(
 ) -> CalibrationRunResult:
     """
     Run calibration for a single underlying with policy enforcement.
-    
+
     Returns CalibrationRunResult with status and metrics.
     """
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print(f"Auto IV Calibration: {underlying}")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
     print(f"  DTE range: {dte_min}–{dte_max} days")
     print(f"  Lookback: {lookback_days} days")
     print(f"  Max samples: {max_samples}")
     print(f"  Data dir: {data_dir}")
-    
+
     end_time = datetime.now(timezone.utc)
     start_time = end_time - timedelta(days=lookback_days)
-    
+
     config = CalibrationConfig(
         underlying=underlying,
         min_dte=float(dte_min),
@@ -112,7 +115,7 @@ def run_calibration_for_underlying(
         max_samples=max_samples,
         return_rows=False,
     )
-    
+
     try:
         result = run_historical_calibration_from_harvest(config, validate_quality=True)
     except Exception as e:
@@ -122,24 +125,26 @@ def run_calibration_for_underlying(
             status="failed",
             reason=f"Calibration exception: {str(e)}",
         )
-    
+
     rec_mult = result.recommended_iv_multiplier or result.iv_multiplier
     global_metrics = result.global_metrics
     data_quality = result.data_quality
-    
+
     mae_pct = global_metrics.mae_pct if global_metrics else result.mae_pct
-    vega_weighted_mae_pct = global_metrics.vega_weighted_mae_pct if global_metrics else None
+    vega_weighted_mae_pct = (
+        global_metrics.vega_weighted_mae_pct if global_metrics else None
+    )
     bias_pct = global_metrics.bias_pct if global_metrics else result.bias_pct
     dq_status = data_quality.status if data_quality else "ok"
-    
+
     status, reason = assess_calibration_realism(
         multiplier=rec_mult,
         mae_pct=mae_pct,
         vega_weighted_mae_pct=vega_weighted_mae_pct,
         data_quality_status=dq_status,
     )
-    
-    print(f"\n  Metrics:")
+
+    print("\n  Metrics:")
     print(f"    Recommended multiplier: {rec_mult:.4f}")
     print(f"    Samples: {result.count:,}")
     if vega_weighted_mae_pct is not None:
@@ -148,9 +153,9 @@ def run_calibration_for_underlying(
     print(f"    Bias: {bias_pct:.2f}%")
     print(f"    Realism status: {status.upper()}")
     print(f"    Reason: {reason}")
-    
+
     history = load_recent_calibration_history(underlying, limit=50)
-    
+
     recommended_bands: Optional[List[BandMultiplier]] = None
     if result.bands:
         recommended_bands = [
@@ -163,43 +168,44 @@ def run_calibration_for_underlying(
             for b in result.bands
             if b.recommended_iv_multiplier is not None
         ]
-    
+
     smoothed_global, smoothed_bands = get_smoothed_multipliers(
         history, rec_mult, recommended_bands, policy
     )
-    
-    print(f"\n  Smoothing:")
+
+    print("\n  Smoothing:")
     print(f"    Raw recommended: {rec_mult:.4f}")
     print(f"    Smoothed (EWMA): {smoothed_global:.4f}")
     print(f"    History window: {policy.smoothing_window_days} days")
     print(f"    EWMA alpha: {policy.ewma_alpha}")
-    
+
     current_applied = get_current_applied_multipliers(underlying)
     sample_size = result.count
     vega_sum = sample_size * 10.0
-    
+
     update_decision = should_apply_update(
-        current_applied, smoothed_global, smoothed_bands,
-        policy, sample_size, vega_sum
+        current_applied, smoothed_global, smoothed_bands, policy, sample_size, vega_sum
     )
-    
+
     applied = False
     applied_reason = ""
-    
+
     if status == "failed":
         applied = False
         applied_reason = f"Realism check failed: {reason}"
-        print(f"\n  Update: NOT APPLIED (realism check failed)")
+        print("\n  Update: NOT APPLIED (realism check failed)")
     elif update_decision.should_apply:
         applied = True
         applied_reason = update_decision.reason
         print(f"\n  Update: WILL APPLY - {applied_reason}")
-        
+
         if not dry_run:
             band_multipliers_dict = None
             if smoothed_bands:
-                band_multipliers_dict = {b.name: b.iv_multiplier for b in smoothed_bands}
-            
+                band_multipliers_dict = {
+                    b.name: b.iv_multiplier for b in smoothed_bands
+                }
+
             set_applied_multiplier(
                 underlying=underlying,
                 global_multiplier=smoothed_global,
@@ -212,7 +218,7 @@ def run_calibration_for_underlying(
         applied = False
         applied_reason = update_decision.reason
         print(f"\n  Update: NOT APPLIED - {applied_reason}")
-    
+
     if not dry_run:
         entry = CalibrationHistoryEntry(
             underlying=underlying,
@@ -221,19 +227,21 @@ def run_calibration_for_underlying(
             lookback_days=lookback_days,
             multiplier=float(rec_mult),
             mae_pct=float(mae_pct) if mae_pct is not None else 0.0,
-            vega_weighted_mae_pct=float(vega_weighted_mae_pct) if vega_weighted_mae_pct is not None else None,
+            vega_weighted_mae_pct=float(vega_weighted_mae_pct)
+            if vega_weighted_mae_pct is not None
+            else None,
             bias_pct=float(bias_pct) if bias_pct is not None else None,
             num_samples=int(result.count),
             source="harvested",
             status=status,
             reason=reason,
         )
-        
+
         row_id = insert_calibration_history(entry)
         print(f"    Saved to calibration_history (id={row_id})")
     else:
-        print(f"    [DRY RUN] Would save to calibration_history")
-    
+        print("    [DRY RUN] Would save to calibration_history")
+
     typed_status = cast(Literal["ok", "degraded", "failed"], status)
     return CalibrationRunResult(
         underlying=underlying,
@@ -294,18 +302,18 @@ def main() -> None:
         action="store_true",
         help="Don't save to database or apply updates, just print results",
     )
-    
+
     args = parser.parse_args()
-    
+
     underlyings = [u.strip().upper() for u in args.underlyings.split(",")]
     for u in underlyings:
         if u not in ("BTC", "ETH"):
             print(f"ERROR: Invalid underlying '{u}'. Must be BTC or ETH.")
             sys.exit(1)
-    
-    print(f"\n{'#'*60}")
+
+    print(f"\n{'#' * 60}")
     print("Daily Auto-Calibration")
-    print(f"{'#'*60}")
+    print(f"{'#' * 60}")
     print(f"  Underlyings: {', '.join(underlyings)}")
     print(f"  DTE range: {args.dte_min}–{args.dte_max} days")
     print(f"  Lookback: {args.lookback_days} days")
@@ -313,21 +321,21 @@ def main() -> None:
     print(f"  Data dir: {args.data_dir}")
     print(f"  Dry run: {args.dry_run}")
     print(f"  Started: {datetime.now(timezone.utc).isoformat()}")
-    print(f"{'#'*60}")
-    
+    print(f"{'#' * 60}")
+
     if not args.dry_run:
         init_db()
-    
+
     policy = get_policy()
-    print(f"\nUpdate Policy:")
+    print("\nUpdate Policy:")
     print(f"  min_delta_global: {policy.min_delta_global}")
     print(f"  min_sample_size: {policy.min_sample_size}")
     print(f"  min_vega_sum: {policy.min_vega_sum}")
     print(f"  smoothing_window_days: {policy.smoothing_window_days}")
     print(f"  ewma_alpha: {policy.ewma_alpha}")
-    
+
     results: List[CalibrationRunResult] = []
-    
+
     for underlying in underlyings:
         result = run_calibration_for_underlying(
             underlying=underlying,
@@ -340,30 +348,30 @@ def main() -> None:
             dry_run=args.dry_run,
         )
         results.append(result)
-    
-    print(f"\n{'#'*60}")
+
+    print(f"\n{'#' * 60}")
     print("Summary")
-    print(f"{'#'*60}")
-    
+    print(f"{'#' * 60}")
+
     ok_count = sum(1 for r in results if r.status == "ok")
     degraded_count = sum(1 for r in results if r.status == "degraded")
     failed_count = sum(1 for r in results if r.status == "failed")
     applied_count = sum(1 for r in results if r.applied)
-    
+
     for r in results:
         status_icon = {"ok": "OK", "degraded": "DEGRADED", "failed": "FAILED"}[r.status]
         applied_str = "APPLIED" if r.applied else "not applied"
         mult_str = f"{r.smoothed_multiplier:.4f}" if r.smoothed_multiplier else "N/A"
         print(f"  {r.underlying}: {status_icon}, mult={mult_str}, {applied_str}")
-    
-    print(f"\nTotals:")
+
+    print("\nTotals:")
     print(f"  OK: {ok_count}")
     print(f"  Degraded: {degraded_count}")
     print(f"  Failed: {failed_count}")
     print(f"  Applied: {applied_count}")
     print(f"\nFinished: {datetime.now(timezone.utc).isoformat()}")
-    print(f"{'#'*60}\n")
-    
+    print(f"{'#' * 60}\n")
+
     if failed_count == len(results):
         print("EXIT 2: All calibrations failed")
         sys.exit(2)

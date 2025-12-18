@@ -2,6 +2,7 @@
 Configuration module using Pydantic BaseSettings.
 Reads from environment variables and .env file.
 """
+
 from __future__ import annotations
 
 from enum import Enum
@@ -12,6 +13,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class GregTradingMode(str, Enum):
     """Trading mode for Greg strategies."""
+
     ADVICE_ONLY = "advice_only"
     PAPER = "paper"
     LIVE = "live"
@@ -19,6 +21,7 @@ class GregTradingMode(str, Enum):
 
 class EnvironmentMode(str, Enum):
     """UI environment mode for testing vs production views."""
+
     TEST = "test"
     LIVE = "live"
 
@@ -28,6 +31,7 @@ class Settings(BaseSettings):
     Main configuration for the options trading agent.
     All values can be overridden via environment variables or .env file.
     """
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
@@ -170,7 +174,7 @@ class Settings(BaseSettings):
         default=["conservative", "moderate", "aggressive"],
         description="Strategy profiles to test in training mode",
     )
-    
+
     save_training_data: bool = Field(
         default=False,
         description="If True, export training data CSV/JSONL after each backtest",
@@ -206,7 +210,7 @@ class Settings(BaseSettings):
         default=["BTC", "ETH"],
         description="List of underlyings to trade",
     )
-    
+
     option_margin_type: Literal["linear", "inverse"] = Field(
         default="linear",
         description="Option margin type: 'linear' for USDC-settled, 'inverse' for coin-margined",
@@ -458,7 +462,11 @@ class Settings(BaseSettings):
     @property
     def effective_max_expiry_exposure(self) -> float:
         """Get mode-appropriate per-expiry exposure limit."""
-        return self.research_max_expiry_exposure if self.is_research else self.max_expiry_exposure
+        return (
+            self.research_max_expiry_exposure
+            if self.is_research
+            else self.max_expiry_exposure
+        )
 
 
 settings = Settings()

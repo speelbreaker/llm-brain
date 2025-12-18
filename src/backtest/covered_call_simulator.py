@@ -8,18 +8,28 @@ Includes:
 - Two exit styles: hold_to_expiry, tp_and_roll
 - State-builder integration for historical backtesting
 """
+
 from __future__ import annotations
 
 from datetime import datetime, timedelta
-from typing import Optional, List, Dict, Callable, Any, Literal
+from typing import Optional, List, Dict, Callable, Any
 from dataclasses import asdict
 
-import numpy as np
 import pandas as pd
 
 from .data_source import MarketDataSource
-from .types import CallSimulationConfig, SimulatedTrade, SimulationResult, TrainingExample, OptionSnapshot, ExitStyle, ChainData, ChainLeg, RollTrigger
-from .pricing import bs_call_price, bs_call_delta, get_synthetic_iv, compute_realized_volatility
+from .types import (
+    CallSimulationConfig,
+    SimulatedTrade,
+    SimulationResult,
+    TrainingExample,
+    OptionSnapshot,
+    ExitStyle,
+    ChainData,
+    ChainLeg,
+    RollTrigger,
+)
+from .pricing import bs_call_price, bs_call_delta, get_synthetic_iv
 from src.models import MarketContext
 from src.metrics.volatility import compute_ivrv_ratio
 from src.scoring.candidates import score_option_candidate
@@ -45,11 +55,11 @@ class CoveredCallSimulator:
         self.ds = data_source
         self.cfg = config
         self._spot_history_cache: List[tuple] = []
-    
+
     def _get_synthetic_iv(self, as_of: datetime) -> float:
         """Get synthetic implied volatility for pricing."""
         return get_synthetic_iv(self.cfg, self._spot_history_cache, as_of)
-    
+
     def _compute_synthetic_option_price(
         self,
         spot: float,
@@ -59,40 +69,44 @@ class CoveredCallSimulator:
     ) -> tuple:
         """
         Compute synthetic call option price and delta using Black-Scholes.
-        
+
         Returns:
             Tuple of (price, delta)
         """
         sigma = self._get_synthetic_iv(as_of)
         t_years = max((expiry - as_of).total_seconds() / (365.0 * 24 * 3600), 1e-6)
         r = self.cfg.risk_free_rate
-        
+
         price = bs_call_price(spot, strike, t_years, sigma, r)
         delta = bs_call_delta(spot, strike, t_years, sigma, r)
-        
+
         return price, delta
-    
+
     def _build_spot_history_cache(self, start: datetime, end: datetime) -> None:
         """Pre-fetch spot history for synthetic IV calculation."""
         lookback = timedelta(days=max(60, self.cfg.synthetic_rv_window_days + 10))
         fetch_start = start - lookback
-        
+
         spot_df = self.ds.get_spot_ohlc(
             underlying=self.cfg.underlying,
             start=fetch_start,
             end=end,
             timeframe="1d",
         )
-        
+
         if not spot_df.empty:
             cache_list = []
             for ts, row in spot_df.iterrows():
-                ts_dt = ts.to_pydatetime() if hasattr(ts, 'to_pydatetime') else datetime.utcnow()
+                ts_dt = (
+                    ts.to_pydatetime()
+                    if hasattr(ts, "to_pydatetime")
+                    else datetime.utcnow()
+                )
                 cache_list.append((ts_dt, float(row["close"])))
             self._spot_history_cache = cache_list
         else:
             self._spot_history_cache = []
-    
+
     def _generate_synthetic_option_prices(
         self,
         spot_series: pd.Series,
@@ -101,45 +115,46 @@ class CoveredCallSimulator:
     ) -> pd.Series:
         """
         Generate synthetic option prices for an entire spot time series.
-        
+
         Uses IV computed at each timestamp to avoid look-ahead bias.
-        
+
         Args:
             spot_series: Pandas Series with datetime index and spot prices
             strike: Option strike price
             expiry: Option expiry datetime
-        
+
         Returns:
             Pandas Series with synthetic option prices
         """
         r = self.cfg.risk_free_rate
-        
+
         prices = []
         for ts, spot_val in spot_series.items():
             ts_dt: datetime
-            if hasattr(ts, 'to_pydatetime'):
+            if hasattr(ts, "to_pydatetime"):
                 ts_dt = ts.to_pydatetime()
             elif isinstance(ts, datetime):
                 ts_dt = ts
             else:
                 ts_dt = datetime.utcnow()
-            
+
             sigma = self._get_synthetic_iv(ts_dt)
-            
+
             t_years = max((expiry - ts_dt).total_seconds() / (365.0 * 24 * 3600), 1e-6)
             price = bs_call_price(float(spot_val), strike, t_years, sigma, r)
             prices.append(price)
-        
+
         return pd.Series(prices, index=spot_series.index)
-    
-    def _extract_candidate_features(self, state: State, option: OptionSnapshot) -> Dict[str, Any]:
+
+    def _extract_candidate_features(
+        self, state: State, option: OptionSnapshot
+    ) -> Dict[str, Any]:
         """
         Build a numeric feature dict for scoring from:
         - option snapshot (delta, dte, iv, ivrv, strike, mark, etc.)
         - market context (regime, returns, vol, distance from MAs)
         - spot price from state
         """
-        cfg = self.cfg
         mc_raw = state.get("market_context") or {}
         if isinstance(mc_raw, MarketContext):
             mc = mc_raw.model_dump()
@@ -150,28 +165,28 @@ class CoveredCallSimulator:
                 mc = asdict(mc_raw)
             except (TypeError, AttributeError):
                 mc = {}
-        
+
         spot = state.get("spot")
         as_of = state.get("time", datetime.utcnow())
-        
+
         expiry = option.expiry
         dte = (expiry - as_of).total_seconds() / 86400.0
-        
+
         strike = option.strike
         mark = option.mark_price or 0.0
         delta = abs(float(option.delta)) if option.delta is not None else 0.0
         iv = float(option.iv) if option.iv is not None else 0.0
-        
+
         if spot is None or spot <= 0:
             otm_pct = 0.0
             premium_pct = 0.0
         else:
             otm_pct = (strike / spot - 1.0) * 100.0
             premium_pct = (mark / spot) * 100.0 if mark > 0 else 0.0
-        
+
         rv30 = mc.get("realized_vol_30d") or mc.get("realized_vol_30") or 0.0
         ivrv = compute_ivrv_ratio(iv, rv30)
-        
+
         regime_label = mc.get("regime", "sideways")
         if regime_label == "bull":
             regime_num = 1
@@ -179,7 +194,7 @@ class CoveredCallSimulator:
             regime_num = -1
         else:
             regime_num = 0
-        
+
         return {
             "delta": delta,
             "dte": dte,
@@ -195,12 +210,12 @@ class CoveredCallSimulator:
             "pct_from_50d_ma": mc.get("pct_from_50d_ma", 0.0),
             "pct_from_200d_ma": mc.get("pct_from_200d_ma", 0.0),
         }
-    
+
     def _score_candidate(self, features: Dict[str, Any]) -> float:
         """
         Score an option candidate using the centralized scoring function.
         Outputs a score in [0, 10]. Higher = more attractive to short.
-        
+
         Uses the shared scoring module (src/scoring/candidates.py) to ensure
         consistent scoring across live agent, backtests, and training.
         """
@@ -236,7 +251,10 @@ class CoveredCallSimulator:
         using timeframe * decision_interval_bars.
         Stop early if target_dte would push expiry beyond cfg.end.
         """
-        tf_step = self._timeframe_to_timedelta(self.cfg.timeframe) * self.cfg.decision_interval_bars
+        tf_step = (
+            self._timeframe_to_timedelta(self.cfg.timeframe)
+            * self.cfg.decision_interval_bars
+        )
         t = self.cfg.start
         decision_times: List[datetime] = []
 
@@ -466,7 +484,9 @@ class CoveredCallSimulator:
             final_equity = 0.0
 
         avg_pnl = sum(t.pnl for t in trades) / len(trades) if trades else 0.0
-        avg_pnl_vs_hodl = sum(t.pnl_vs_hodl for t in trades) / len(trades) if trades else 0.0
+        avg_pnl_vs_hodl = (
+            sum(t.pnl_vs_hodl for t in trades) / len(trades) if trades else 0.0
+        )
 
         metrics = {
             "num_trades": len(trades),
@@ -474,7 +494,9 @@ class CoveredCallSimulator:
             "avg_pnl": avg_pnl,
             "avg_pnl_vs_hodl": avg_pnl_vs_hodl,
             "max_drawdown_pct": max_dd,
-            "win_rate": sum(1 for t in trades if t.pnl > 0) / len(trades) if trades else 0.0,
+            "win_rate": sum(1 for t in trades if t.pnl > 0) / len(trades)
+            if trades
+            else 0.0,
         }
 
         return SimulationResult(
@@ -499,7 +521,8 @@ class CoveredCallSimulator:
         Returns list of TrainingExample objects suitable for CSV/JSON export.
         """
         if policy is None:
-            policy = lambda state: state.get("spot") is not None
+            def policy(state):
+                return state.get("spot") is not None
 
         decision_times = self._generate_decision_times()
         examples: List[TrainingExample] = []
@@ -544,7 +567,7 @@ class CoveredCallSimulator:
             )
 
         return examples
-    
+
     def _simulate_call_hold_to_expiry(
         self,
         decision_time: datetime,
@@ -554,7 +577,7 @@ class CoveredCallSimulator:
         """
         Simulate a call option held to expiry using a specific option snapshot.
         Used by scoring-based policy for hold_to_expiry exit style.
-        
+
         Supports both pricing modes:
         - deribit_live: Uses actual option OHLC from data source
         - synthetic_bs: Uses Black-Scholes synthetic pricing from spot
@@ -562,12 +585,12 @@ class CoveredCallSimulator:
         cfg = self.cfg
         ds = self.ds
         use_synthetic = cfg.pricing_mode == "synthetic_bs"
-        
+
         size = size if size is not None else cfg.initial_spot_position
         instrument_name = option_snapshot.instrument_name
         strike = option_snapshot.strike
         expiry = option_snapshot.expiry
-        
+
         spot_df = ds.get_spot_ohlc(
             underlying=cfg.underlying,
             start=decision_time,
@@ -576,17 +599,19 @@ class CoveredCallSimulator:
         )
         if spot_df.empty:
             return None
-        
+
         if use_synthetic:
             if not self._spot_history_cache:
                 self._build_spot_history_cache(cfg.start, cfg.end)
-            
+
             spot_at_open = float(spot_df["close"].iloc[0])
-            open_price, _ = self._compute_synthetic_option_price(spot_at_open, strike, expiry, decision_time)
-            
+            open_price, _ = self._compute_synthetic_option_price(
+                spot_at_open, strike, expiry, decision_time
+            )
+
             if open_price <= 0:
                 return None
-            
+
             idx = spot_df.index.sort_values()
             spot = spot_df.reindex(idx).ffill()["close"]
             opt_price = self._generate_synthetic_option_prices(spot, strike, expiry)
@@ -594,7 +619,7 @@ class CoveredCallSimulator:
             open_price = float(option_snapshot.mark_price or 0.0)
             if open_price <= 0:
                 return None
-            
+
             opt_df = ds.get_option_ohlc(
                 instrument_name=instrument_name,
                 start=decision_time,
@@ -603,34 +628,34 @@ class CoveredCallSimulator:
             )
             if opt_df.empty:
                 return None
-            
+
             idx = spot_df.index.union(opt_df.index).sort_values()
             spot = spot_df.reindex(idx).ffill()["close"]
             opt_price = opt_df.reindex(idx).ffill()["close"]
-        
+
         portfolio_values: List[float] = []
         hodl_values: List[float] = []
-        
+
         for ts in idx:
             s = float(spot.loc[ts])
             c = float(opt_price.loc[ts])
-            
+
             hodl_val = size * s
             cc_val = size * s + size * (open_price - c)
             portfolio_values.append(cc_val)
             hodl_values.append(hodl_val)
-        
+
         if not portfolio_values:
             return None
-        
+
         start_portfolio = portfolio_values[0]
         final_cc = portfolio_values[-1]
         final_hodl = hodl_values[-1]
         final_opt_price = float(opt_price.iloc[-1])
-        
+
         pnl = final_cc - start_portfolio
         pnl_vs_hodl = final_cc - final_hodl
-        
+
         peak = portfolio_values[0]
         max_dd_pct = 0.0
         for v in portfolio_values:
@@ -639,9 +664,9 @@ class CoveredCallSimulator:
             dd = (peak - v) / peak if peak > 0 else 0.0
             if dd > max_dd_pct:
                 max_dd_pct = dd
-        
+
         pricing_note = "synthetic_bs" if use_synthetic else "deribit_live"
-        
+
         return SimulatedTrade(
             instrument_name=instrument_name,
             underlying=cfg.underlying,
@@ -656,7 +681,7 @@ class CoveredCallSimulator:
             max_drawdown_pct=max_dd_pct * 100.0,
             notes=f"exit_style=hold_to_expiry; pricing={pricing_note}; delta={option_snapshot.delta}",
         )
-    
+
     def _simulate_call_tp_and_roll(
         self,
         decision_time: datetime,
@@ -665,57 +690,57 @@ class CoveredCallSimulator:
     ) -> Optional[SimulatedTrade]:
         """
         Simulate a multi-roll call chain with TP and defensive roll triggers.
-        
+
         Roll triggers:
         1. Take-profit: When capture_frac >= tp_threshold_pct (e.g., 80%)
         2. Defensive: When spot/strike >= defend_near_strike_pct (e.g., 98%)
-        
+
         Only rolls if DTE > min_dte_to_roll and rolls_used < max_rolls_per_chain.
-        
+
         Supports both pricing modes:
         - deribit_live: Uses actual option OHLC from data source
         - synthetic_bs: Uses Black-Scholes synthetic pricing from spot
         """
         from .state_builder import build_historical_state
-        
+
         cfg = self.cfg
         ds = self.ds
         use_synthetic = cfg.pricing_mode == "synthetic_bs"
-        
+
         if use_synthetic and not self._spot_history_cache:
             self._build_spot_history_cache(cfg.start, cfg.end)
-        
+
         size = size if size is not None else cfg.initial_spot_position
-        
+
         max_rolls = cfg.max_rolls_per_chain
         tp_frac = cfg.tp_threshold_pct / 100.0
         defend_thresh = cfg.defend_near_strike_pct
         min_dte_roll = cfg.min_dte_to_roll
         min_score = cfg.min_score_to_trade
-        
+
         realized_pnl = 0.0
         realized_pnl_vs_hodl = 0.0
         equity_curve: List[float] = []
         hodl_curve: List[float] = []
         legs_count = 0
         rolls_used = 0
-        
+
         chain_legs: List[ChainLeg] = []
-        
+
         first_open_time = decision_time
         last_close_time = decision_time
         first_instrument = option_snapshot.instrument_name
-        
+
         current_opt = option_snapshot
         current_leg_open_time = decision_time
-        
+
         while current_opt is not None:
             instrument_name = current_opt.instrument_name
             strike = current_opt.strike
             expiry = current_opt.expiry
             backtest_end = cfg.end
             sim_end = min(expiry, backtest_end)
-            
+
             spot_df = ds.get_spot_ohlc(
                 underlying=cfg.underlying,
                 start=current_leg_open_time,
@@ -724,21 +749,25 @@ class CoveredCallSimulator:
             )
             if spot_df.empty:
                 break
-            
+
             if use_synthetic:
                 spot_at_open = float(spot_df["close"].iloc[0])
-                open_price, _ = self._compute_synthetic_option_price(spot_at_open, strike, expiry, current_leg_open_time)
+                open_price, _ = self._compute_synthetic_option_price(
+                    spot_at_open, strike, expiry, current_leg_open_time
+                )
                 if open_price <= 0:
                     break
-                
+
                 idx = spot_df.index.sort_values()
                 spot_series = spot_df.reindex(idx).ffill()["close"]
-                opt_price_series = self._generate_synthetic_option_prices(spot_series, strike, expiry)
+                opt_price_series = self._generate_synthetic_option_prices(
+                    spot_series, strike, expiry
+                )
             else:
                 open_price = float(current_opt.mark_price or 0.0)
                 if open_price <= 0:
                     break
-                
+
                 opt_df = ds.get_option_ohlc(
                     instrument_name=instrument_name,
                     start=current_leg_open_time,
@@ -747,51 +776,51 @@ class CoveredCallSimulator:
                 )
                 if opt_df.empty:
                     break
-                
+
                 idx = spot_df.index.union(opt_df.index).sort_values()
                 spot_series = spot_df.reindex(idx).ffill()["close"]
                 opt_price_series = opt_df.reindex(idx).ffill()["close"]
-            
+
             leg_close_time = sim_end
             leg_close_price = open_price
             last_observed_time = current_leg_open_time
             last_observed_price = open_price
             roll_triggered = False
             roll_time: Optional[datetime] = None
-            
+
             for ts in idx:
                 if ts <= current_leg_open_time:
                     continue
-                    
+
                 spot_now = float(spot_series.loc[ts])
                 opt_now = float(opt_price_series.loc[ts])
-                
+
                 last_observed_time = ts
                 last_observed_price = opt_now
-                
+
                 dte_now = (expiry - ts).total_seconds() / 86400.0
-                
+
                 premium_captured = open_price - opt_now
                 capture_frac = premium_captured / open_price if open_price > 0 else 0.0
-                
+
                 portfolio_val = (
-                    size * spot_now
-                    + realized_pnl
-                    + size * (open_price - opt_now)
+                    size * spot_now + realized_pnl + size * (open_price - opt_now)
                 )
                 hodl_val = size * spot_now
                 equity_curve.append(portfolio_val)
                 hodl_curve.append(hodl_val)
-                
+
                 if dte_now <= 0:
                     leg_close_time = ts
                     leg_close_price = opt_now
                     break
-                
+
                 if rolls_used < max_rolls and dte_now > min_dte_roll:
                     tp_trigger = capture_frac >= tp_frac
-                    defensive_trigger = (spot_now / strike) >= defend_thresh if strike > 0 else False
-                    
+                    defensive_trigger = (
+                        (spot_now / strike) >= defend_thresh if strike > 0 else False
+                    )
+
                     if tp_trigger or defensive_trigger:
                         leg_close_time = ts
                         leg_close_price = opt_now
@@ -801,14 +830,16 @@ class CoveredCallSimulator:
             else:
                 leg_close_time = last_observed_time
                 leg_close_price = last_observed_price
-            
+
             leg_pnl = size * (open_price - leg_close_price)
-            leg_hodl_at_close = hodl_curve[-1] if hodl_curve else size * float(spot_series.iloc[-1])
+            leg_hodl_at_close = (
+                hodl_curve[-1] if hodl_curve else size * float(spot_series.iloc[-1])
+            )
             leg_portfolio_at_close = equity_curve[-1] if equity_curve else leg_pnl
-            leg_pnl_vs_hodl = leg_portfolio_at_close - leg_hodl_at_close
-            
+            leg_portfolio_at_close - leg_hodl_at_close
+
             dte_at_open = (expiry - current_leg_open_time).total_seconds() / 86400.0
-            
+
             leg_trigger: RollTrigger = "none"
             if roll_triggered:
                 premium_captured = open_price - leg_close_price
@@ -817,53 +848,65 @@ class CoveredCallSimulator:
                     leg_trigger = "tp_roll"
                 else:
                     leg_trigger = "defensive_roll"
-            elif leg_close_time >= expiry or (expiry - leg_close_time).total_seconds() / 86400.0 <= 0:
+            elif (
+                leg_close_time >= expiry
+                or (expiry - leg_close_time).total_seconds() / 86400.0 <= 0
+            ):
                 leg_trigger = "expiry"
-            
-            chain_legs.append(ChainLeg(
-                index=legs_count,
-                instrument_name=instrument_name,
-                open_time=current_leg_open_time,
-                close_time=leg_close_time,
-                strike=strike,
-                dte_open=dte_at_open,
-                open_price=open_price,
-                close_price=leg_close_price,
-                pnl=leg_pnl,
-                trigger=leg_trigger,
-            ))
-            
+
+            chain_legs.append(
+                ChainLeg(
+                    index=legs_count,
+                    instrument_name=instrument_name,
+                    open_time=current_leg_open_time,
+                    close_time=leg_close_time,
+                    strike=strike,
+                    dte_open=dte_at_open,
+                    open_price=open_price,
+                    close_price=leg_close_price,
+                    pnl=leg_pnl,
+                    trigger=leg_trigger,
+                )
+            )
+
             realized_pnl += leg_pnl
-            realized_pnl_vs_hodl = leg_portfolio_at_close - leg_hodl_at_close if hodl_curve else 0.0
+            realized_pnl_vs_hodl = (
+                leg_portfolio_at_close - leg_hodl_at_close if hodl_curve else 0.0
+            )
             legs_count += 1
             last_close_time = leg_close_time
-            
+
             if roll_triggered and roll_time is not None:
                 rolls_used += 1
-                
+
                 state_roll: Optional[Dict[str, Any]] = None
                 candidates: List[OptionSnapshot] = []
                 try:
                     from .deribit_data_source import DeribitDataSource as DDS
+
                     if isinstance(ds, DDS):
                         state_roll = build_historical_state(ds, cfg, roll_time)
                         candidates = state_roll.get("candidate_options") or []
                 except Exception:
                     candidates = []
-                
+
                 scored = []
                 for opt in candidates:
                     if opt.instrument_name == instrument_name:
                         continue
                     try:
-                        roll_state = state_roll if state_roll else {"time": roll_time, "spot": None}
+                        roll_state = (
+                            state_roll
+                            if state_roll
+                            else {"time": roll_time, "spot": None}
+                        )
                         feats = self._extract_candidate_features(roll_state, opt)
                         s = self._score_candidate(feats)
                         if s >= min_score:
                             scored.append((s, opt))
                     except Exception:
                         continue
-                
+
                 if scored:
                     scored.sort(key=lambda x: x[0], reverse=True)
                     _, next_opt = scored[0]
@@ -873,10 +916,10 @@ class CoveredCallSimulator:
                     current_opt = None
             else:
                 current_opt = None
-        
+
         if not equity_curve:
             return None
-        
+
         peak = equity_curve[0]
         max_dd_pct = 0.0
         for v in equity_curve:
@@ -885,14 +928,14 @@ class CoveredCallSimulator:
             dd = (peak - v) / peak if peak > 0 else 0.0
             if dd > max_dd_pct:
                 max_dd_pct = dd
-        
+
         pricing_note = "synthetic_bs" if use_synthetic else "deribit_live"
         notes = (
             f"multi_roll: {legs_count} legs, rolls_used={rolls_used}, "
-            f"tp={tp_frac*100:.0f}%, defend={defend_thresh*100:.0f}%, max_rolls={max_rolls}, "
+            f"tp={tp_frac * 100:.0f}%, defend={defend_thresh * 100:.0f}%, max_rolls={max_rolls}, "
             f"pricing={pricing_note}"
         )
-        
+
         chain_data = ChainData(
             decision_time=decision_time,
             underlying=cfg.underlying,
@@ -900,7 +943,7 @@ class CoveredCallSimulator:
             max_drawdown_pct=max_dd_pct * 100.0,
             legs=chain_legs,
         )
-        
+
         return SimulatedTrade(
             instrument_name=first_instrument,
             underlying=cfg.underlying,
@@ -916,7 +959,7 @@ class CoveredCallSimulator:
             notes=notes,
             chain=chain_data,
         )
-    
+
     def simulate_policy_with_scoring(
         self,
         decision_times: List[datetime],
@@ -927,68 +970,72 @@ class CoveredCallSimulator:
     ) -> SimulationResult:
         """
         Run a scoring-based policy over many decision times.
-        
+
         Args:
             decision_times: List of datetimes at which to consider trades
             state_builder: Function that builds historical state dict at time t
             exit_style: "hold_to_expiry" or "tp_and_roll"
             min_score_to_trade: Minimum score (0-10) to execute trade
             size: Position size (defaults to cfg.initial_spot_position)
-            
+
         Returns:
             SimulationResult with trades, equity curve, and metrics
         """
         trade_size = size if size is not None else self.cfg.initial_spot_position
-        min_score = min_score_to_trade if min_score_to_trade is not None else self.cfg.min_score_to_trade
-        
+        min_score = (
+            min_score_to_trade
+            if min_score_to_trade is not None
+            else self.cfg.min_score_to_trade
+        )
+
         trades: List[SimulatedTrade] = []
         equity_curve: Dict[datetime, float] = {}
         equity_vs_hodl: Dict[datetime, float] = {}
-        
+
         cumulative_pnl = 0.0
         cumulative_pnl_vs_hodl = 0.0
-        
+
         for t in decision_times:
             state = state_builder(t)
             spot = state.get("spot")
             if spot is None or spot <= 0:
                 continue
-            
+
             options = state.get("candidate_options") or []
             if not options:
                 continue
-            
+
             scored: List[tuple] = []
             for opt in options:
                 feats = self._extract_candidate_features(state, opt)
                 s = self._score_candidate(feats)
                 scored.append((s, opt, feats))
-            
+
             if not scored:
                 continue
-            
+
             scored.sort(key=lambda x: x[0], reverse=True)
             best_score, best_opt, best_feats = scored[0]
-            
+
             if best_score < min_score:
                 continue
-            
+
             if exit_style == "hold_to_expiry":
                 trade = self._simulate_call_hold_to_expiry(t, best_opt, trade_size)
             else:
                 trade = self._simulate_call_tp_and_roll(t, best_opt, trade_size)
-            
+
             if trade is None:
                 continue
-            
+
             trades.append(trade)
             cumulative_pnl += trade.pnl
             cumulative_pnl_vs_hodl += trade.pnl_vs_hodl
-            
+
             close_ts = trade.close_time
             equity_curve[close_ts] = cumulative_pnl
             equity_vs_hodl[close_ts] = cumulative_pnl_vs_hodl
-        
+
         if equity_curve:
             idx = pd.DatetimeIndex(sorted(equity_curve.keys()))
             eq = pd.Series([equity_curve[t] for t in idx], index=idx)
@@ -999,21 +1046,25 @@ class CoveredCallSimulator:
         else:
             max_dd = 0.0
             final_equity = 0.0
-        
+
         avg_pnl = sum(t.pnl for t in trades) / len(trades) if trades else 0.0
-        avg_pnl_vs_hodl = sum(t.pnl_vs_hodl for t in trades) / len(trades) if trades else 0.0
-        
+        avg_pnl_vs_hodl = (
+            sum(t.pnl_vs_hodl for t in trades) / len(trades) if trades else 0.0
+        )
+
         metrics = {
             "num_trades": len(trades),
             "final_pnl": final_equity,
             "avg_pnl": avg_pnl,
             "avg_pnl_vs_hodl": avg_pnl_vs_hodl,
             "max_drawdown_pct": max_dd,
-            "win_rate": sum(1 for t in trades if t.pnl > 0) / len(trades) if trades else 0.0,
+            "win_rate": sum(1 for t in trades if t.pnl > 0) / len(trades)
+            if trades
+            else 0.0,
             "exit_style": exit_style,
             "min_score_to_trade": min_score,
         }
-        
+
         return SimulationResult(
             trades=trades,
             equity_curve=equity_curve,

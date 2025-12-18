@@ -1,4 +1,5 @@
 """Scoring module for candidate option evaluation."""
+
 from .candidates import (
     score_option_candidate,
     ScoringProfile,

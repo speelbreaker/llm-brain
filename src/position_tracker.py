@@ -8,12 +8,12 @@ trade history from Deribit.
 
 Persistence: Positions are saved to a JSON file and restored on restart.
 """
+
 from __future__ import annotations
 
 import json
 import os
-import re
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from threading import Lock
@@ -46,6 +46,7 @@ def _utc_now() -> datetime:
 @dataclass
 class PositionLeg:
     """Single executed leg within a position chain."""
+
     symbol: str
     underlying: str
     option_type: OptionType
@@ -71,6 +72,7 @@ class PositionChain:
       - leg 2: buy back 90k call, sell 95k call (roll)
       - leg 3: buy back 95k call (close)
     """
+
     position_id: str
     underlying: str
     option_type: OptionType
@@ -118,7 +120,7 @@ class PositionTracker:
 
     Assumes linear USDC-settled options with contract_size=1.0.
     For inverse / other contract sizes, adjust `_pnl_for_leg`.
-    
+
     Positions are automatically saved to disk after each update and
     restored on initialization.
     """
@@ -132,17 +134,23 @@ class PositionTracker:
         self._chains: Dict[str, PositionChain] = {}
         self._notional_multiplier = float(notional_multiplier)
         self._persistence_path = persistence_path or DEFAULT_PERSISTENCE_PATH
-        
+
         # Ensure data directory exists
         self._persistence_path.parent.mkdir(parents=True, exist_ok=True)
-        
+
         # Load persisted positions on startup
         self._load_from_disk()
 
-    def _find_open_chain_for(self, underlying: str, strategy_type: StrategyType) -> Optional[PositionChain]:
+    def _find_open_chain_for(
+        self, underlying: str, strategy_type: StrategyType
+    ) -> Optional[PositionChain]:
         """Find an open chain for the given underlying and strategy (must be called with lock held)."""
         for chain in self._chains.values():
-            if chain.is_open() and chain.underlying == underlying and chain.strategy_type == strategy_type:
+            if (
+                chain.is_open()
+                and chain.underlying == underlying
+                and chain.strategy_type == strategy_type
+            ):
                 return chain
         return None
 
@@ -189,10 +197,15 @@ class PositionTracker:
 
         with self._lock:
             if action == "OPEN_COVERED_CALL":
-                symbol = params.get("symbol") or (orders[0].get("symbol") if orders else "")
-                size = float(params.get("size") or (orders[0].get("size", 0.0) if orders else 0.0))
+                symbol = params.get("symbol") or (
+                    orders[0].get("symbol") if orders else ""
+                )
+                size = float(
+                    params.get("size")
+                    or (orders[0].get("size", 0.0) if orders else 0.0)
+                )
                 price = _extract_price("symbol")
-                
+
                 # Use symbol + microseconds for unique ID in batch executions
                 position_id = f"{underlying}-{strategy_type}-{symbol}-{now.strftime('%Y%m%d%H%M%S%f')}"
 
@@ -227,7 +240,10 @@ class PositionTracker:
 
                 from_symbol = params.get("from_symbol") or ""
                 to_symbol = params.get("to_symbol") or ""
-                size = float(params.get("size") or (orders[0].get("size", 0.0) if orders else 0.0))
+                size = float(
+                    params.get("size")
+                    or (orders[0].get("size", 0.0) if orders else 0.0)
+                )
 
                 close_price = _extract_price("from_symbol")
                 for leg in chain.legs:
@@ -249,7 +265,7 @@ class PositionTracker:
                     mark_price=open_price,
                 )
                 chain.legs.append(new_leg)
-                
+
                 new_expiry = parse_deribit_expiry(new_symbol)
                 if new_expiry is not None:
                     chain.expiry = new_expiry
@@ -270,7 +286,7 @@ class PositionTracker:
 
             if chain is not None:
                 self._update_chain_unrealized(chain)
-            
+
             # Auto-save after any position update
             self._save_to_disk()
 
@@ -294,10 +310,12 @@ class PositionTracker:
                             pass
                 self._update_chain_unrealized(chain)
 
-    def get_open_positions_payload(self, include_sandbox: bool = False) -> Dict[str, Any]:
+    def get_open_positions_payload(
+        self, include_sandbox: bool = False
+    ) -> Dict[str, Any]:
         """
         Get payload for open positions.
-        
+
         Args:
             include_sandbox: If False (default), excludes sandbox positions for main bots.
         """
@@ -312,15 +330,23 @@ class PositionTracker:
 
             totals = {
                 "positions_count": len(positions),
-                "unrealized_pnl": float(sum(p["unrealized_pnl"] for p in positions)) if positions else 0.0,
-                "unrealized_pnl_pct": float(sum(p["unrealized_pnl_pct"] for p in positions)) if positions else 0.0,
+                "unrealized_pnl": float(sum(p["unrealized_pnl"] for p in positions))
+                if positions
+                else 0.0,
+                "unrealized_pnl_pct": float(
+                    sum(p["unrealized_pnl_pct"] for p in positions)
+                )
+                if positions
+                else 0.0,
             }
             return {"positions": positions, "totals": totals}
 
-    def get_closed_positions_payload(self, include_sandbox: bool = False) -> Dict[str, Any]:
+    def get_closed_positions_payload(
+        self, include_sandbox: bool = False
+    ) -> Dict[str, Any]:
         """
         Get payload for closed positions.
-        
+
         Args:
             include_sandbox: If False (default), excludes sandbox positions for main bots.
         """
@@ -335,28 +361,28 @@ class PositionTracker:
 
             totals = {
                 "chains_count": len(chains),
-                "realized_pnl": float(sum(c["realized_pnl"] for c in chains)) if chains else 0.0,
-                "realized_pnl_pct": float(sum(c["realized_pnl_pct"] for c in chains)) if chains else 0.0,
+                "realized_pnl": float(sum(c["realized_pnl"] for c in chains))
+                if chains
+                else 0.0,
+                "realized_pnl_pct": float(sum(c["realized_pnl_pct"] for c in chains))
+                if chains
+                else 0.0,
             }
             return {"chains": chains, "totals": totals}
 
     def get_sandbox_positions(self) -> List[PositionChain]:
         """Get only sandbox positions."""
         with self._lock:
-            return [
-                chain for chain in self._chains.values()
-                if chain.is_sandbox()
-            ]
+            return [chain for chain in self._chains.values() if chain.is_sandbox()]
 
     def get_live_positions(self) -> List[PositionChain]:
         """Get only non-sandbox (live) positions."""
         with self._lock:
-            return [
-                chain for chain in self._chains.values()
-                if not chain.is_sandbox()
-            ]
+            return [chain for chain in self._chains.values() if not chain.is_sandbox()]
 
-    def _pnl_for_leg(self, leg: PositionLeg, mark_price: Optional[float] = None) -> float:
+    def _pnl_for_leg(
+        self, leg: PositionLeg, mark_price: Optional[float] = None
+    ) -> float:
         """
         Compute PnL in USD for a single leg.
 
@@ -390,7 +416,14 @@ class PositionTracker:
 
         chain.unrealized_pnl = unrealized
         if chain.legs:
-            base = abs(chain.legs[0].entry_price * chain.legs[0].quantity * self._notional_multiplier) or 1.0
+            base = (
+                abs(
+                    chain.legs[0].entry_price
+                    * chain.legs[0].quantity
+                    * self._notional_multiplier
+                )
+                or 1.0
+            )
             chain.unrealized_pnl_pct = (realized + unrealized) / base * 100.0
 
     def _chain_to_open_summary(self, chain: PositionChain) -> Dict[str, Any]:
@@ -405,7 +438,11 @@ class PositionTracker:
             expiry_str = None
 
         current_leg = chain.legs[-1] if chain.legs else None
-        mark = current_leg.mark_price if current_leg and current_leg.mark_price else (current_leg.entry_price if current_leg else 0.0)
+        mark = (
+            current_leg.mark_price
+            if current_leg and current_leg.mark_price
+            else (current_leg.entry_price if current_leg else 0.0)
+        )
 
         return {
             "position_id": chain.position_id,
@@ -466,7 +503,7 @@ class PositionTracker:
                 "saved_at": _utc_now().isoformat(),
                 "chains": {},
             }
-            
+
             for position_id, chain in self._chains.items():
                 chain_data = {
                     "position_id": chain.position_id,
@@ -476,7 +513,9 @@ class PositionTracker:
                     "mode": chain.mode,
                     "exit_style": chain.exit_style,
                     "open_time": chain.open_time.isoformat(),
-                    "close_time": chain.close_time.isoformat() if chain.close_time else None,
+                    "close_time": chain.close_time.isoformat()
+                    if chain.close_time
+                    else None,
                     "realized_pnl": chain.realized_pnl,
                     "realized_pnl_pct": chain.realized_pnl_pct,
                     "max_drawdown_pct": chain.max_drawdown_pct,
@@ -488,7 +527,7 @@ class PositionTracker:
                     "run_id": chain.run_id,
                     "legs": [],
                 }
-                
+
                 for leg in chain.legs:
                     leg_data = {
                         "symbol": leg.symbol,
@@ -499,19 +538,21 @@ class PositionTracker:
                         "entry_price": leg.entry_price,
                         "entry_time": leg.entry_time.isoformat(),
                         "exit_price": leg.exit_price,
-                        "exit_time": leg.exit_time.isoformat() if leg.exit_time else None,
+                        "exit_time": leg.exit_time.isoformat()
+                        if leg.exit_time
+                        else None,
                         "mark_price": leg.mark_price,
                     }
                     chain_data["legs"].append(leg_data)
-                
+
                 data["chains"][position_id] = chain_data
-            
+
             # Write atomically using temp file + os.replace (cross-platform)
             temp_path = self._persistence_path.with_suffix(".tmp")
             with open(temp_path, "w") as f:
                 json.dump(data, f, indent=2)
             os.replace(temp_path, self._persistence_path)
-            
+
         except Exception as e:
             print(f"[PositionTracker] Failed to save positions: {e}")
 
@@ -520,18 +561,20 @@ class PositionTracker:
         if not self._persistence_path.exists():
             print("[PositionTracker] No persisted positions found, starting fresh")
             return
-        
+
         try:
             with open(self._persistence_path, "r") as f:
                 data = json.load(f)
-            
+
             if data.get("version") != 1:
-                print(f"[PositionTracker] Unknown version {data.get('version')}, skipping load")
+                print(
+                    f"[PositionTracker] Unknown version {data.get('version')}, skipping load"
+                )
                 return
-            
+
             chains_data = data.get("chains", {})
             loaded_count = 0
-            
+
             for position_id, chain_data in chains_data.items():
                 legs = []
                 for leg_data in chain_data.get("legs", []):
@@ -544,11 +587,13 @@ class PositionTracker:
                         entry_price=leg_data["entry_price"],
                         entry_time=datetime.fromisoformat(leg_data["entry_time"]),
                         exit_price=leg_data.get("exit_price"),
-                        exit_time=datetime.fromisoformat(leg_data["exit_time"]) if leg_data.get("exit_time") else None,
+                        exit_time=datetime.fromisoformat(leg_data["exit_time"])
+                        if leg_data.get("exit_time")
+                        else None,
                         mark_price=leg_data.get("mark_price"),
                     )
                     legs.append(leg)
-                
+
                 chain = PositionChain(
                     position_id=chain_data["position_id"],
                     underlying=chain_data["underlying"],
@@ -558,24 +603,30 @@ class PositionTracker:
                     exit_style=chain_data.get("exit_style"),
                     legs=legs,
                     open_time=datetime.fromisoformat(chain_data["open_time"]),
-                    close_time=datetime.fromisoformat(chain_data["close_time"]) if chain_data.get("close_time") else None,
+                    close_time=datetime.fromisoformat(chain_data["close_time"])
+                    if chain_data.get("close_time")
+                    else None,
                     realized_pnl=chain_data.get("realized_pnl", 0.0),
                     realized_pnl_pct=chain_data.get("realized_pnl_pct", 0.0),
                     max_drawdown_pct=chain_data.get("max_drawdown_pct", 0.0),
                     unrealized_pnl=chain_data.get("unrealized_pnl", 0.0),
                     unrealized_pnl_pct=chain_data.get("unrealized_pnl_pct", 0.0),
-                    expiry=datetime.fromisoformat(chain_data["expiry"]) if chain_data.get("expiry") else None,
+                    expiry=datetime.fromisoformat(chain_data["expiry"])
+                    if chain_data.get("expiry")
+                    else None,
                     sandbox=chain_data.get("sandbox", False),
                     origin=chain_data.get("origin"),
                     run_id=chain_data.get("run_id"),
                 )
                 self._chains[position_id] = chain
                 loaded_count += 1
-            
+
             open_count = sum(1 for c in self._chains.values() if c.is_open())
             closed_count = loaded_count - open_count
-            print(f"[PositionTracker] Loaded {loaded_count} positions ({open_count} open, {closed_count} closed)")
-            
+            print(
+                f"[PositionTracker] Loaded {loaded_count} positions ({open_count} open, {closed_count} closed)"
+            )
+
         except Exception as e:
             print(f"[PositionTracker] Failed to load positions: {e}")
 
@@ -589,16 +640,16 @@ class PositionTracker:
     def rebuild_from_exchange(self, exchange_positions: List[Dict[str, Any]]) -> int:
         """
         Rebuild local position tracker from exchange positions.
-        
+
         Used for auto-healing when local state is out of sync with exchange.
         Creates a fresh position chain for each exchange position.
         PnL tracking restarts from current state (no historical data).
-        
+
         Args:
             exchange_positions: List of position dicts from Deribit.
-                Expected keys: symbol, size/quantity, direction/side, 
+                Expected keys: symbol, size/quantity, direction/side,
                 average_price, mark_price, underlying, delta
-        
+
         Returns:
             Number of positions rebuilt.
         """
@@ -606,25 +657,29 @@ class PositionTracker:
             self._chains.clear()
             now = _utc_now()
             rebuilt = 0
-            
+
             for pos in exchange_positions:
                 symbol = pos.get("symbol", "") or pos.get("instrument_name", "")
                 if not symbol:
                     continue
-                    
+
                 size = abs(float(pos.get("size", 0) or pos.get("quantity", 0) or 0))
                 if size <= 0:
                     continue
-                
+
                 direction = pos.get("direction", "") or pos.get("side", "sell")
                 side: Side = "SHORT" if direction in ("sell", "SHORT") else "LONG"
-                
+
                 underlying = pos.get("underlying", "BTC")
-                entry_price = float(pos.get("average_price", 0) or pos.get("avg_price", 0) or 0)
+                entry_price = float(
+                    pos.get("average_price", 0) or pos.get("avg_price", 0) or 0
+                )
                 mark_price = float(pos.get("mark_price", 0) or entry_price)
-                
-                position_id = f"healed-{underlying}-{symbol}-{now.strftime('%Y%m%d%H%M%S%f')}"
-                
+
+                position_id = (
+                    f"healed-{underlying}-{symbol}-{now.strftime('%Y%m%d%H%M%S%f')}"
+                )
+
                 leg = PositionLeg(
                     symbol=symbol,
                     underlying=underlying,
@@ -635,7 +690,7 @@ class PositionTracker:
                     entry_time=now,
                     mark_price=mark_price,
                 )
-                
+
                 expiry = parse_deribit_expiry(symbol)
                 chain = PositionChain(
                     position_id=position_id,
@@ -650,7 +705,7 @@ class PositionTracker:
                 )
                 self._chains[position_id] = chain
                 rebuilt += 1
-            
+
             self._save_to_disk()
             print(f"[PositionTracker] Rebuilt {rebuilt} positions from exchange")
             return rebuilt

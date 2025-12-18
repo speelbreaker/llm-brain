@@ -4,6 +4,7 @@ Configuration and result models for covered call simulation.
 NOTE: When option_margin_type="linear" and option_settlement_ccy="USDC" (defaults),
 all prices (spot, option mark_price) and PnL are in USD/USDC.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -27,6 +28,7 @@ class OptionSnapshot:
     Generic point-in-time snapshot of an option contract.
     Source-agnostic: can be populated from Deribit, CSV, Tardis, etc.
     """
+
     instrument_name: str
     underlying: str
     kind: Literal["call", "put"]
@@ -45,6 +47,7 @@ class LiveChainDebugSample:
     Debug sample comparing Deribit mark price vs engine-calculated price.
     Used to verify that Live Chain + Live IV mode correctly preserves exchange marks.
     """
+
     instrument_name: str
     dte_days: float
     strike: float
@@ -67,10 +70,11 @@ class LiveChainDebugSample:
 class CallSimulationConfig:
     """
     Configuration for a simple covered-call simulation on a single underlying.
-    
+
     When option_margin_type="linear" and option_settlement_ccy="USDC",
     all amounts (PnL, equity) are in USD/USDC.
     """
+
     underlying: str
     start: datetime
     end: datetime
@@ -86,32 +90,32 @@ class CallSimulationConfig:
     dte_tolerance: int = 2
     target_delta: float = 0.25
     delta_tolerance: float = 0.05
-    
+
     min_dte: int = 1
     max_dte: int = 21
     delta_min: float = 0.10
     delta_max: float = 0.40
 
     hold_to_expiry: bool = True
-    
+
     option_margin_type: Literal["linear", "inverse"] = "linear"
     option_settlement_ccy: str = "USDC"
-    
+
     tp_threshold_pct: float = 80.0
     min_dte_to_roll: int = 2
     defend_near_strike_pct: float = 0.98
     max_rolls_per_chain: int = 3
     min_score_to_trade: float = 3.0
-    
+
     initial_capital_usd: float = 10000.0
     position_size_underlying: float = 1.0
-    
+
     pricing_mode: PricingMode = "synthetic_bs"
     synthetic_iv_mode: SyntheticIVMode = "fixed"
     synthetic_fixed_iv: float = 0.70
     synthetic_rv_window_days: int = 30
     synthetic_iv_multiplier: float = 1.0
-    
+
     # Hybrid synthetic mode settings
     sigma_mode: SigmaMode = "rv_x_multiplier"
     chain_mode: ChainMode = "synthetic_grid"
@@ -123,10 +127,11 @@ RollTrigger = Literal["tp_roll", "defensive_roll", "expiry", "none"]
 @dataclass
 class EquityPoint:
     """A single point in the equity curve."""
+
     time: datetime
     equity: float
     hodl_equity: float
-    
+
     def to_dict(self) -> Dict[str, Any]:
         return {
             "time": self.time.isoformat(),
@@ -138,6 +143,7 @@ class EquityPoint:
 @dataclass
 class ChainLeg:
     """A single leg within a multi-roll call chain."""
+
     index: int
     instrument_name: str
     open_time: datetime
@@ -153,12 +159,13 @@ class ChainLeg:
 @dataclass
 class ChainData:
     """Multi-leg chain data attached to a SimulatedTrade."""
+
     decision_time: datetime
     underlying: str
     total_pnl: float
     max_drawdown_pct: float
     legs: List[ChainLeg] = field(default_factory=list)
-    
+
     def to_dict(self) -> Dict[str, Any]:
         return {
             "decision_time": self.decision_time.isoformat(),
@@ -188,6 +195,7 @@ class SimulatedTrade:
     """
     Result of simulating a single covered call trade.
     """
+
     instrument_name: str
     underlying: str
     side: Literal["SHORT_CALL"]
@@ -228,6 +236,7 @@ class SimulationResult:
     """
     Aggregate result of running a simulation across multiple decision times.
     """
+
     trades: List[SimulatedTrade]
     equity_curve: Dict[datetime, float]
     equity_vs_hodl: Dict[datetime, float]
@@ -238,7 +247,9 @@ class SimulationResult:
         return {
             "trades": [t.to_dict() for t in self.trades],
             "equity_curve": {k.isoformat(): v for k, v in self.equity_curve.items()},
-            "equity_vs_hodl": {k.isoformat(): v for k, v in self.equity_vs_hodl.items()},
+            "equity_vs_hodl": {
+                k.isoformat(): v for k, v in self.equity_vs_hodl.items()
+            },
             "metrics": self.metrics,
         }
 
@@ -247,12 +258,13 @@ class SimulationResult:
 class TrainingExample:
     """
     A single (state, action, reward) tuple for ML training.
-    
+
     The strategy field indicates which training profile was used:
     - "conservative", "moderate", "aggressive" for profile-based selection
     - "fallback" when no profile matched
     - "ladder_N" for ladder mode positions
     """
+
     decision_time: datetime
     underlying: str
     spot: float
@@ -278,17 +290,18 @@ class TrainingExample:
 class CandidateLevelExample:
     """
     A single candidate-level training example for ML policy learning.
-    
+
     One row per candidate per decision time step.
     For trade steps: exactly one candidate has chosen=1, action="SELL_CALL"
     For no-trade steps: all candidates have chosen=0, action="SKIP"
-    
+
     The strategy field indicates which training profile was used for chosen candidates.
     """
+
     decision_time: datetime
     underlying: str
     spot: float
-    
+
     instrument: str
     strike: float
     dte: float
@@ -296,13 +309,13 @@ class CandidateLevelExample:
     score: float
     iv: Optional[float] = None
     ivrv_ratio: Optional[float] = None
-    
+
     exit_style: str = "hold_to_expiry"
     trade_executed: bool = False
     chosen: bool = False
     action: str = "SKIP"
     strategy: str = ""
-    
+
     reward: float = 0.0
     pnl_vs_hodl: float = 0.0
     max_drawdown_pct: float = 0.0
@@ -335,10 +348,11 @@ class CandidateLevelExample:
 class DecisionStepData:
     """
     Per-step data collected during backtest for candidate-level export.
-    
+
     Stores all candidates evaluated at a decision time along with
     which one (if any) was chosen for each exit style.
     """
+
     decision_time: datetime
     underlying: str
     spot: float

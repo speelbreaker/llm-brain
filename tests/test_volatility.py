@@ -1,4 +1,5 @@
 """Tests for src/metrics/volatility.py - IVRV ratio calculation."""
+
 import pytest
 from src.metrics.volatility import compute_ivrv_ratio
 

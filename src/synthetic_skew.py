@@ -4,6 +4,7 @@ Synthetic skew engine for IV smile modeling.
 Derives skew factors from live Deribit IV vs delta data and applies them
 to the synthetic RV-based pricing universe.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -21,6 +22,7 @@ _SKEW_CACHE: Dict[Tuple[str, str], List["SkewAnchor"]] = {}
 @dataclass
 class SkewAnchor:
     """A single anchor point in the skew curve."""
+
     delta: float
     ratio: float
 
@@ -68,7 +70,7 @@ def compute_live_skew_anchors(
         return _flat_anchors()
 
     now = datetime.now(timezone.utc)
-    
+
     filtered_instruments: List[dict] = []
     for inst in instruments:
         if inst.get("option_type") != option_type:
@@ -80,21 +82,25 @@ def compute_live_skew_anchors(
 
         if dte_days < min_dte or dte_days > max_dte:
             continue
-        
-        filtered_instruments.append({
-            "instrument_name": inst["instrument_name"],
-            "dte": dte_days,
-        })
-    
+
+        filtered_instruments.append(
+            {
+                "instrument_name": inst["instrument_name"],
+                "dte": dte_days,
+            }
+        )
+
     filtered_instruments.sort(key=lambda x: x["dte"])
     filtered_instruments = filtered_instruments[:max_quotes]
-    
+
     quotes: List[dict] = []
     for fi in filtered_instruments:
         try:
-            ticker = _deribit_get("public/ticker", {"instrument_name": fi["instrument_name"]})
+            ticker = _deribit_get(
+                "public/ticker", {"instrument_name": fi["instrument_name"]}
+            )
             mark_iv = ticker.get("mark_iv")
-            
+
             greeks = ticker.get("greeks") or {}
             delta = greeks.get("delta")
 
@@ -103,12 +109,14 @@ def compute_live_skew_anchors(
             if delta is None:
                 continue
 
-            quotes.append({
-                "instrument": fi["instrument_name"],
-                "mark_iv": float(mark_iv),
-                "delta": float(delta),
-                "dte": fi["dte"],
-            })
+            quotes.append(
+                {
+                    "instrument": fi["instrument_name"],
+                    "mark_iv": float(mark_iv),
+                    "delta": float(delta),
+                    "dte": fi["dte"],
+                }
+            )
         except Exception:
             continue
 
@@ -128,10 +136,7 @@ def compute_live_skew_anchors(
     anchors: List[SkewAnchor] = []
 
     for anchor_d in anchor_deltas:
-        nearby = [
-            q for q in quotes
-            if abs(abs(q["delta"]) - anchor_d) <= 0.05
-        ]
+        nearby = [q for q in quotes if abs(abs(q["delta"]) - anchor_d) <= 0.05]
 
         if nearby:
             avg_iv = sum(q["mark_iv"] for q in nearby) / len(nearby)

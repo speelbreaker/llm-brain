@@ -9,6 +9,7 @@ This module provides:
 Uses RV-based IV model matching the synthetic backtester, NOT Deribit's mark_iv.
 Uses only public Deribit endpoints - no authentication required.
 """
+
 from __future__ import annotations
 
 import math
@@ -43,14 +44,14 @@ def black_scholes_call_price(
 ) -> float:
     """
     Standard Black-Scholes European call price.
-    
+
     Args:
         spot: Current underlying price
         strike: Option strike price
         t_years: Time to expiration in years
         sigma: Implied volatility (annualized)
         r: Risk-free rate (continuous compounding)
-    
+
     Returns:
         Call option price
     """
@@ -58,7 +59,7 @@ def black_scholes_call_price(
         return max(0.0, spot - strike)
 
     sqrt_t = math.sqrt(t_years)
-    d1 = (math.log(spot / strike) + (r + 0.5 * sigma ** 2) * t_years) / (sigma * sqrt_t)
+    d1 = (math.log(spot / strike) + (r + 0.5 * sigma**2) * t_years) / (sigma * sqrt_t)
     d2 = d1 - sigma * sqrt_t
 
     nd1 = _norm_cdf(d1)
@@ -76,14 +77,14 @@ def black_scholes_put_price(
 ) -> float:
     """
     Standard Black-Scholes European put price.
-    
+
     Args:
         spot: Current underlying price
         strike: Option strike price
         t_years: Time to expiration in years
         sigma: Implied volatility (annualized)
         r: Risk-free rate (continuous compounding)
-    
+
     Returns:
         Put option price
     """
@@ -91,7 +92,7 @@ def black_scholes_put_price(
         return max(0.0, strike - spot)
 
     sqrt_t = math.sqrt(t_years)
-    d1 = (math.log(spot / strike) + (r + 0.5 * sigma ** 2) * t_years) / (sigma * sqrt_t)
+    d1 = (math.log(spot / strike) + (r + 0.5 * sigma**2) * t_years) / (sigma * sqrt_t)
     d2 = d1 - sigma * sqrt_t
 
     nd1 = _norm_cdf(-d1)
@@ -161,6 +162,7 @@ def get_spot_history_for_rv(
 @dataclass
 class OptionQuote:
     """Point-in-time quote for a Deribit option."""
+
     instrument_name: str
     kind: str
     strike: float
@@ -180,7 +182,7 @@ def get_call_chain(
 ) -> List[OptionQuote]:
     """
     Fetch all CALL options for the given underlying and filter by DTE.
-    
+
     Uses public Deribit endpoints:
     - public/get_instruments (currency=underlying, kind=option, expired=false)
     - public/ticker (instrument_name=<option>)
@@ -212,7 +214,7 @@ def get_call_chain(
             continue
 
         settlement_currency = inst.get("settlement_currency", underlying)
-        
+
         try:
             ticker = deribit_get(
                 "public/ticker",
@@ -223,7 +225,7 @@ def get_call_chain(
             greeks = ticker.get("greeks") or {}
             delta = greeks.get("delta", None)
             vega = greeks.get("vega", None)
-            
+
             if mark_price <= 0.0:
                 continue
 
@@ -255,14 +257,14 @@ def get_option_chain(
 ) -> List[OptionQuote]:
     """
     Fetch options for the given underlying, filtering by DTE and option type.
-    
+
     Args:
         underlying: BTC or ETH
         min_dte: Minimum days to expiry
         max_dte: Maximum days to expiry
         option_types: List of option types to include: 'C' for calls, 'P' for puts
                      Default ['C'] for backward compatibility
-    
+
     Returns:
         List of OptionQuote objects
     """
@@ -274,10 +276,10 @@ def get_option_chain(
             allowed_types.add(type_map[ot_upper])
         elif ot_upper in ("CALL", "PUT"):
             allowed_types.add(ot_upper.lower())
-    
+
     if not allowed_types:
         allowed_types = {"call"}
-    
+
     result = deribit_get(
         "public/get_instruments",
         {
@@ -306,7 +308,7 @@ def get_option_chain(
             continue
 
         settlement_currency = inst.get("settlement_currency", underlying)
-        
+
         try:
             ticker = deribit_get(
                 "public/ticker",
@@ -317,7 +319,7 @@ def get_option_chain(
             greeks = ticker.get("greeks") or {}
             delta = greeks.get("delta", None)
             vega = greeks.get("vega", None)
-            
+
             if mark_price <= 0.0:
                 continue
 
@@ -364,6 +366,7 @@ def synthetic_iv_from_rv(
 @dataclass
 class CalibrationRow:
     """Single option comparison row."""
+
     instrument: str
     dte: float
     strike: float
@@ -378,6 +381,7 @@ class CalibrationRow:
 @dataclass
 class CalibrationResult:
     """Complete calibration result with summary metrics and detail rows."""
+
     underlying: str
     spot: float
     min_dte: float
@@ -406,10 +410,10 @@ def run_calibration(
 ) -> CalibrationResult:
     """
     Compare synthetic BS prices vs Deribit mark prices for CALLs.
-    
+
     Uses RV-based IV model with skew matching the synthetic backtester:
         sigma_synth = realized_vol(window_days) * iv_multiplier * skew_factor(delta)
-    
+
     1. Fetch current spot and recent spot history from Deribit
     2. Compute realized volatility from spot history
     3. Fetch call chain via get_call_chain()
@@ -428,9 +432,11 @@ def run_calibration(
     """
     now = datetime.now(timezone.utc)
     spot = get_index_price(underlying)
-    
-    spot_history = get_spot_history_for_rv(underlying, as_of=now, window_days=rv_window_days)
-    
+
+    spot_history = get_spot_history_for_rv(
+        underlying, as_of=now, window_days=rv_window_days
+    )
+
     if spot_history:
         rv_annualized = compute_realized_volatility(
             prices=spot_history,
@@ -439,12 +445,11 @@ def run_calibration(
         )
     else:
         rv_annualized = default_iv
-    
-    base_iv = rv_annualized
-    
+
+
     quotes = get_call_chain(underlying, min_dte=min_dte, max_dte=max_dte)
     quotes = sorted(quotes, key=lambda q: (q.dte_days, q.strike))
-    
+
     if not quotes:
         return CalibrationResult(
             underlying=underlying,
@@ -487,16 +492,18 @@ def run_calibration(
 
     for q in quotes:
         t_years = max(0.0001, q.dte_days / 365.0)
-        
+
         base_iv_for_delta = max(1e-6, rv_annualized * iv_multiplier)
-        abs_delta = abs(bs_call_delta(
-            spot=spot,
-            strike=q.strike,
-            t_years=t_years,
-            sigma=base_iv_for_delta,
-            r=r,
-        ))
-        
+        abs_delta = abs(
+            bs_call_delta(
+                spot=spot,
+                strike=q.strike,
+                t_years=t_years,
+                sigma=base_iv_for_delta,
+                r=r,
+            )
+        )
+
         sigma = compute_synthetic_iv_with_skew(
             underlying=underlying,
             option_type="call",
@@ -515,7 +522,7 @@ def run_calibration(
             sigma=sigma,
             r=r,
         )
-        
+
         is_inverse = q.settlement_currency.upper() in ("BTC", "ETH")
         if is_inverse:
             synthetic_price = synthetic_price_usd / spot

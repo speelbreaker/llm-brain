@@ -3,7 +3,7 @@ Tests for the healthcheck module.
 
 These tests use mocking to avoid real network calls.
 """
-import pytest
+
 from unittest.mock import MagicMock, patch
 
 from src.healthcheck import (
@@ -125,7 +125,10 @@ class TestCheckDeribitPrivate:
         cfg = Settings(deribit_client_id="test_id", deribit_client_secret="test_secret")
         result = check_deribit_private(client, cfg)
         assert result.status == CheckStatus.FAIL
-        assert "authentication" in result.detail.lower() or "error" in result.detail.lower()
+        assert (
+            "authentication" in result.detail.lower()
+            or "error" in result.detail.lower()
+        )
 
 
 class TestCheckStateBuilder:
@@ -151,7 +154,10 @@ class TestCheckStateBuilder:
         client = FakeDeribitClient()
         cfg = Settings()
 
-        with patch("src.state_builder.build_agent_state", side_effect=DeribitAPIError(-1, "connection failed")):
+        with patch(
+            "src.state_builder.build_agent_state",
+            side_effect=DeribitAPIError(-1, "connection failed"),
+        ):
             result = check_state_builder(client, cfg)
             assert result.status == CheckStatus.FAIL
             assert "failed" in result.detail.lower()
@@ -199,9 +205,7 @@ class TestHealthCheckResult:
 
     def test_result_creation(self):
         result = HealthCheckResult(
-            name="test",
-            status=CheckStatus.OK,
-            detail="all good"
+            name="test", status=CheckStatus.OK, detail="all good"
         )
         assert result.name == "test"
         assert result.status == CheckStatus.OK

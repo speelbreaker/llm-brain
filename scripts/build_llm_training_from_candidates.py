@@ -12,6 +12,7 @@ Usage:
         --exit-style tp_and_roll \
         --underlying BTC
 """
+
 from __future__ import annotations
 
 import argparse
@@ -64,12 +65,20 @@ def load_candidate_rows(
                 row["delta"] = safe_float(row.get("delta"), "delta", row_num)
                 row["score"] = safe_float(row.get("score"), "score", row_num)
                 row["iv"] = safe_float(row.get("iv"), "iv", row_num)
-                row["ivrv_ratio"] = safe_float(row.get("ivrv_ratio"), "ivrv_ratio", row_num)
-                row["trade_executed"] = safe_int(row.get("trade_executed"), "trade_executed", row_num)
+                row["ivrv_ratio"] = safe_float(
+                    row.get("ivrv_ratio"), "ivrv_ratio", row_num
+                )
+                row["trade_executed"] = safe_int(
+                    row.get("trade_executed"), "trade_executed", row_num
+                )
                 row["chosen"] = safe_int(row.get("chosen"), "chosen", row_num)
                 row["reward"] = safe_float(row.get("reward"), "reward", row_num)
-                row["pnl_vs_hodl"] = safe_float(row.get("pnl_vs_hodl"), "pnl_vs_hodl", row_num)
-                row["max_drawdown_pct"] = safe_float(row.get("max_drawdown_pct"), "max_drawdown_pct", row_num)
+                row["pnl_vs_hodl"] = safe_float(
+                    row.get("pnl_vs_hodl"), "pnl_vs_hodl", row_num
+                )
+                row["max_drawdown_pct"] = safe_float(
+                    row.get("max_drawdown_pct"), "max_drawdown_pct", row_num
+                )
                 rows.append(row)
             except ValueError as e:
                 print(f"Warning: Skipping malformed row: {e}")
@@ -91,24 +100,24 @@ def build_per_candidate_jsonl(rows: list[dict[str, Any]], out_path: Path) -> int
 
     records = []
     for row in rows:
-        user_content = f"""Decision time: {row['decision_time']}
-Underlying: {row['underlying']}
-Spot price: {row['spot']:.2f}
-Teacher policy (exit_style): {row['exit_style']}
-Candidate option: {row['instrument']}
-  - Strike: {row['strike']:.0f}
-  - DTE (days): {row['dte']:.0f}
-  - Delta: {row['delta']:.4f}
-  - Score: {row['score']:.4f}
-  - IV: {row['iv']:.4f}
-  - IV/RV ratio: {row['ivrv_ratio']:.4f}
+        user_content = f"""Decision time: {row["decision_time"]}
+Underlying: {row["underlying"]}
+Spot price: {row["spot"]:.2f}
+Teacher policy (exit_style): {row["exit_style"]}
+Candidate option: {row["instrument"]}
+  - Strike: {row["strike"]:.0f}
+  - DTE (days): {row["dte"]:.0f}
+  - Delta: {row["delta"]:.4f}
+  - Score: {row["score"]:.4f}
+  - IV: {row["iv"]:.4f}
+  - IV/RV ratio: {row["ivrv_ratio"]:.4f}
 
 Risk snapshot (teacher hindsight):
-  - Max drawdown on this chain: {row['max_drawdown_pct']:.2f}%
+  - Max drawdown on this chain: {row["max_drawdown_pct"]:.2f}%
 
 PnL outcome for this candidate if chosen (teacher hindsight):
-  - Reward (USD): {row['reward']:.2f}
-  - PnL vs HODL (USD): {row['pnl_vs_hodl']:.2f}
+  - Reward (USD): {row["reward"]:.2f}
+  - PnL vs HODL (USD): {row["pnl_vs_hodl"]:.2f}
 
 Question: Based only on the information available at decision time (ignore the realized outcome), what ACTION should the policy take on this candidate? Reply with exactly one token: SELL_CALL or SKIP."""
 
@@ -138,7 +147,7 @@ def build_per_decision_ranking_jsonl(rows: list[dict[str, Any]], out_path: Path)
     One record per (decision_time, underlying, exit_style) group.
     Task: pick the best candidate index (1..N) or NO_TRADE.
     Returns count of records written.
-    
+
     Preserves original CSV row ordering within each group to ensure chosen_idx
     matches the teacher's original candidate presentation order.
     """
@@ -289,11 +298,11 @@ def main() -> None:
     per_candidate_path = output_dir / f"{stem}_per_candidate.jsonl"
     per_decision_path = output_dir / f"{stem}_per_decision_ranking.jsonl"
 
-    print(f"\nBuilding per-candidate JSONL...")
+    print("\nBuilding per-candidate JSONL...")
     count1 = build_per_candidate_jsonl(rows, per_candidate_path)
     print(f"  Wrote {count1} records to: {per_candidate_path}")
 
-    print(f"\nBuilding per-decision ranking JSONL...")
+    print("\nBuilding per-decision ranking JSONL...")
     count2 = build_per_decision_ranking_jsonl(rows, per_decision_path)
     print(f"  Wrote {count2} records to: {per_decision_path}")
 

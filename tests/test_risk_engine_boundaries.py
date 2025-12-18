@@ -4,14 +4,19 @@ Freeze the behavior of risk limit checks to prevent accidental weakening.
 
 Convention: Allow when metric <= limit, block when metric > limit.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Any, List
 import pytest
 
-from src.risk_engine import check_action_allowed, _check_liquidity_limits, _daily_drawdown_state
-from src.models import ActionType, Side
+from src.risk_engine import (
+    check_action_allowed,
+    _check_liquidity_limits,
+    _daily_drawdown_state,
+)
+from src.models import Side
 from src.config import Settings
 
 
@@ -53,7 +58,7 @@ def _reset_drawdown_state():
 
 class TestMaxMarginUsedBoundary:
     """Tests for max_margin_used_pct boundary behavior.
-    
+
     Note: For OPEN_COVERED_CALL actions, there's an additional 90% threshold check.
     The tests here verify the core margin limit behavior.
     """
@@ -61,12 +66,17 @@ class TestMaxMarginUsedBoundary:
     def test_margin_below_limit_allows_action(self):
         """Trading allowed when margin < limit."""
         _reset_drawdown_state()
-        cfg = Settings(max_margin_used_pct=80.0, kill_switch_enabled=False, mode="production")
+        cfg = Settings(
+            max_margin_used_pct=80.0, kill_switch_enabled=False, mode="production"
+        )
         state = MockAgentState()
         state.portfolio.margin_used_pct = 50.0
         state.portfolio.equity_usd = 10000.0
         state.portfolio.spot_positions = {"BTC": 1.0}
-        action = {"action": "OPEN_COVERED_CALL", "params": {"symbol": "BTC-20DEC24-100000-C", "size": 0.1}}
+        action = {
+            "action": "OPEN_COVERED_CALL",
+            "params": {"symbol": "BTC-20DEC24-100000-C", "size": 0.1},
+        }
 
         allowed, reasons = check_action_allowed(state, action, config=cfg)
 
@@ -76,12 +86,17 @@ class TestMaxMarginUsedBoundary:
     def test_margin_at_exact_limit_blocks_action(self):
         """Trading blocked when margin == limit (>= check)."""
         _reset_drawdown_state()
-        cfg = Settings(max_margin_used_pct=80.0, kill_switch_enabled=False, mode="production")
+        cfg = Settings(
+            max_margin_used_pct=80.0, kill_switch_enabled=False, mode="production"
+        )
         state = MockAgentState()
         state.portfolio.margin_used_pct = 80.0
         state.portfolio.equity_usd = 10000.0
         state.portfolio.spot_positions = {"BTC": 1.0}
-        action = {"action": "OPEN_COVERED_CALL", "params": {"symbol": "BTC-20DEC24-100000-C", "size": 0.1}}
+        action = {
+            "action": "OPEN_COVERED_CALL",
+            "params": {"symbol": "BTC-20DEC24-100000-C", "size": 0.1},
+        }
 
         allowed, reasons = check_action_allowed(state, action, config=cfg)
 
@@ -91,12 +106,17 @@ class TestMaxMarginUsedBoundary:
     def test_margin_above_limit_blocks_action(self):
         """Trading blocked when margin > limit."""
         _reset_drawdown_state()
-        cfg = Settings(max_margin_used_pct=80.0, kill_switch_enabled=False, mode="production")
+        cfg = Settings(
+            max_margin_used_pct=80.0, kill_switch_enabled=False, mode="production"
+        )
         state = MockAgentState()
         state.portfolio.margin_used_pct = 85.0
         state.portfolio.equity_usd = 10000.0
         state.portfolio.spot_positions = {"BTC": 1.0}
-        action = {"action": "OPEN_COVERED_CALL", "params": {"symbol": "BTC-20DEC24-100000-C", "size": 0.1}}
+        action = {
+            "action": "OPEN_COVERED_CALL",
+            "params": {"symbol": "BTC-20DEC24-100000-C", "size": 0.1},
+        }
 
         allowed, reasons = check_action_allowed(state, action, config=cfg)
 
@@ -106,12 +126,17 @@ class TestMaxMarginUsedBoundary:
     def test_margin_reason_includes_values(self):
         """Blocking reason includes actual vs limit values."""
         _reset_drawdown_state()
-        cfg = Settings(max_margin_used_pct=80.0, kill_switch_enabled=False, mode="production")
+        cfg = Settings(
+            max_margin_used_pct=80.0, kill_switch_enabled=False, mode="production"
+        )
         state = MockAgentState()
         state.portfolio.margin_used_pct = 85.0
         state.portfolio.equity_usd = 10000.0
         state.portfolio.spot_positions = {"BTC": 1.0}
-        action = {"action": "OPEN_COVERED_CALL", "params": {"symbol": "BTC-20DEC24-100000-C", "size": 0.1}}
+        action = {
+            "action": "OPEN_COVERED_CALL",
+            "params": {"symbol": "BTC-20DEC24-100000-C", "size": 0.1},
+        }
 
         _, reasons = check_action_allowed(state, action, config=cfg)
 
@@ -127,12 +152,17 @@ class TestMaxNetDeltaBoundary:
     def test_delta_below_limit_allows_action(self):
         """Trading allowed when |delta| < limit."""
         _reset_drawdown_state()
-        cfg = Settings(max_net_delta_abs=5.0, kill_switch_enabled=False, mode="production")
+        cfg = Settings(
+            max_net_delta_abs=5.0, kill_switch_enabled=False, mode="production"
+        )
         state = MockAgentState()
         state.portfolio.net_delta = 4.0
         state.portfolio.equity_usd = 10000.0
         state.portfolio.spot_positions = {"BTC": 1.0}
-        action = {"action": "OPEN_COVERED_CALL", "params": {"symbol": "BTC-20DEC24-100000-C", "size": 0.1}}
+        action = {
+            "action": "OPEN_COVERED_CALL",
+            "params": {"symbol": "BTC-20DEC24-100000-C", "size": 0.1},
+        }
 
         allowed, reasons = check_action_allowed(state, action, config=cfg)
 
@@ -142,12 +172,17 @@ class TestMaxNetDeltaBoundary:
     def test_delta_at_exact_limit_allows_action(self):
         """Trading allowed when |delta| == limit (> check, not >=)."""
         _reset_drawdown_state()
-        cfg = Settings(max_net_delta_abs=5.0, kill_switch_enabled=False, mode="production")
+        cfg = Settings(
+            max_net_delta_abs=5.0, kill_switch_enabled=False, mode="production"
+        )
         state = MockAgentState()
         state.portfolio.net_delta = 5.0
         state.portfolio.equity_usd = 10000.0
         state.portfolio.spot_positions = {"BTC": 1.0}
-        action = {"action": "OPEN_COVERED_CALL", "params": {"symbol": "BTC-20DEC24-100000-C", "size": 0.1}}
+        action = {
+            "action": "OPEN_COVERED_CALL",
+            "params": {"symbol": "BTC-20DEC24-100000-C", "size": 0.1},
+        }
 
         allowed, reasons = check_action_allowed(state, action, config=cfg)
 
@@ -157,12 +192,17 @@ class TestMaxNetDeltaBoundary:
     def test_delta_above_limit_blocks_action(self):
         """Trading blocked when |delta| > limit."""
         _reset_drawdown_state()
-        cfg = Settings(max_net_delta_abs=5.0, kill_switch_enabled=False, mode="production")
+        cfg = Settings(
+            max_net_delta_abs=5.0, kill_switch_enabled=False, mode="production"
+        )
         state = MockAgentState()
         state.portfolio.net_delta = 6.0
         state.portfolio.equity_usd = 10000.0
         state.portfolio.spot_positions = {"BTC": 1.0}
-        action = {"action": "OPEN_COVERED_CALL", "params": {"symbol": "BTC-20DEC24-100000-C", "size": 0.1}}
+        action = {
+            "action": "OPEN_COVERED_CALL",
+            "params": {"symbol": "BTC-20DEC24-100000-C", "size": 0.1},
+        }
 
         allowed, reasons = check_action_allowed(state, action, config=cfg)
 
@@ -172,12 +212,17 @@ class TestMaxNetDeltaBoundary:
     def test_negative_delta_uses_absolute_value(self):
         """Negative delta should use absolute value for comparison."""
         _reset_drawdown_state()
-        cfg = Settings(max_net_delta_abs=5.0, kill_switch_enabled=False, mode="production")
+        cfg = Settings(
+            max_net_delta_abs=5.0, kill_switch_enabled=False, mode="production"
+        )
         state = MockAgentState()
         state.portfolio.net_delta = -6.0
         state.portfolio.equity_usd = 10000.0
         state.portfolio.spot_positions = {"BTC": 1.0}
-        action = {"action": "OPEN_COVERED_CALL", "params": {"symbol": "BTC-20DEC24-100000-C", "size": 0.1}}
+        action = {
+            "action": "OPEN_COVERED_CALL",
+            "params": {"symbol": "BTC-20DEC24-100000-C", "size": 0.1},
+        }
 
         allowed, reasons = check_action_allowed(state, action, config=cfg)
 
@@ -187,7 +232,7 @@ class TestMaxNetDeltaBoundary:
 
 class TestMaxExpiryExposureBoundary:
     """Tests for max_expiry_exposure boundary behavior.
-    
+
     Note: effective_max_expiry_exposure differs between research (1.0) and production (0.3).
     These tests use production mode to test the production limit.
     """
@@ -195,12 +240,17 @@ class TestMaxExpiryExposureBoundary:
     def test_expiry_exposure_below_limit_allows_action(self):
         """Trading allowed when expiry exposure < limit."""
         _reset_drawdown_state()
-        cfg = Settings(max_expiry_exposure=0.3, kill_switch_enabled=False, mode="production")
+        cfg = Settings(
+            max_expiry_exposure=0.3, kill_switch_enabled=False, mode="production"
+        )
         state = MockAgentState()
         state.portfolio.equity_usd = 10000.0
         state.portfolio.spot_positions = {"BTC": 1.0}
         state.portfolio.option_positions = []
-        action = {"action": "OPEN_COVERED_CALL", "params": {"symbol": "BTC-20DEC24-100000-C", "size": 0.1}}
+        action = {
+            "action": "OPEN_COVERED_CALL",
+            "params": {"symbol": "BTC-20DEC24-100000-C", "size": 0.1},
+        }
 
         allowed, reasons = check_action_allowed(state, action, config=cfg)
 
@@ -209,14 +259,19 @@ class TestMaxExpiryExposureBoundary:
     def test_expiry_exposure_at_exact_limit_blocks_action(self):
         """Trading blocked when expiry exposure == limit (>= check)."""
         _reset_drawdown_state()
-        cfg = Settings(max_expiry_exposure=0.3, kill_switch_enabled=False, mode="production")
+        cfg = Settings(
+            max_expiry_exposure=0.3, kill_switch_enabled=False, mode="production"
+        )
         state = MockAgentState()
         state.portfolio.equity_usd = 10000.0
         state.portfolio.spot_positions = {"BTC": 1.0}
         state.portfolio.option_positions = [
             MockPosition(symbol="BTC-20DEC24-95000-C", side=Side.SELL, size=0.2)
         ]
-        action = {"action": "OPEN_COVERED_CALL", "params": {"symbol": "BTC-20DEC24-100000-C", "size": 0.1}}
+        action = {
+            "action": "OPEN_COVERED_CALL",
+            "params": {"symbol": "BTC-20DEC24-100000-C", "size": 0.1},
+        }
 
         allowed, reasons = check_action_allowed(state, action, config=cfg)
 
@@ -226,14 +281,19 @@ class TestMaxExpiryExposureBoundary:
     def test_expiry_exposure_above_limit_blocks_action(self):
         """Trading blocked when expiry exposure would exceed limit."""
         _reset_drawdown_state()
-        cfg = Settings(max_expiry_exposure=0.3, kill_switch_enabled=False, mode="production")
+        cfg = Settings(
+            max_expiry_exposure=0.3, kill_switch_enabled=False, mode="production"
+        )
         state = MockAgentState()
         state.portfolio.equity_usd = 10000.0
         state.portfolio.spot_positions = {"BTC": 1.0}
         state.portfolio.option_positions = [
             MockPosition(symbol="BTC-20DEC24-95000-C", side=Side.SELL, size=0.25)
         ]
-        action = {"action": "OPEN_COVERED_CALL", "params": {"symbol": "BTC-20DEC24-100000-C", "size": 0.1}}
+        action = {
+            "action": "OPEN_COVERED_CALL",
+            "params": {"symbol": "BTC-20DEC24-100000-C", "size": 0.1},
+        }
 
         allowed, reasons = check_action_allowed(state, action, config=cfg)
 
@@ -243,14 +303,19 @@ class TestMaxExpiryExposureBoundary:
     def test_expiry_exposure_reason_includes_values(self):
         """Blocking reason includes projected vs limit values."""
         _reset_drawdown_state()
-        cfg = Settings(max_expiry_exposure=0.3, kill_switch_enabled=False, mode="production")
+        cfg = Settings(
+            max_expiry_exposure=0.3, kill_switch_enabled=False, mode="production"
+        )
         state = MockAgentState()
         state.portfolio.equity_usd = 10000.0
         state.portfolio.spot_positions = {"BTC": 1.0}
         state.portfolio.option_positions = [
             MockPosition(symbol="BTC-20DEC24-95000-C", side=Side.SELL, size=0.25)
         ]
-        action = {"action": "OPEN_COVERED_CALL", "params": {"symbol": "BTC-20DEC24-100000-C", "size": 0.1}}
+        action = {
+            "action": "OPEN_COVERED_CALL",
+            "params": {"symbol": "BTC-20DEC24-100000-C", "size": 0.1},
+        }
 
         _, reasons = check_action_allowed(state, action, config=cfg)
 
@@ -356,7 +421,10 @@ class TestLiquidityIntegration:
         state.portfolio.equity_usd = 10000.0
         state.portfolio.spot_positions = {"BTC": 1.0}
         state.candidate_options = [candidate]
-        action = {"action": "OPEN_COVERED_CALL", "params": {"symbol": "BTC-20DEC24-100000-C", "size": 0.1}}
+        action = {
+            "action": "OPEN_COVERED_CALL",
+            "params": {"symbol": "BTC-20DEC24-100000-C", "size": 0.1},
+        }
 
         allowed, reasons = check_action_allowed(state, action, config=cfg)
 
@@ -381,7 +449,10 @@ class TestLiquidityIntegration:
         state.portfolio.equity_usd = 10000.0
         state.portfolio.spot_positions = {"BTC": 1.0}
         state.candidate_options = [candidate]
-        action = {"action": "OPEN_COVERED_CALL", "params": {"symbol": "BTC-20DEC24-100000-C", "size": 0.1}}
+        action = {
+            "action": "OPEN_COVERED_CALL",
+            "params": {"symbol": "BTC-20DEC24-100000-C", "size": 0.1},
+        }
 
         allowed, reasons = check_action_allowed(state, action, config=cfg)
 
@@ -402,7 +473,10 @@ class TestLiquidityIntegration:
         state.portfolio.option_positions = [
             MockPosition(symbol="BTC-20DEC24-100000-C", side=Side.SELL, size=0.1)
         ]
-        action = {"action": "CLOSE_COVERED_CALL", "params": {"symbol": "BTC-20DEC24-100000-C"}}
+        action = {
+            "action": "CLOSE_COVERED_CALL",
+            "params": {"symbol": "BTC-20DEC24-100000-C"},
+        }
 
         allowed, reasons = check_action_allowed(state, action, config=cfg)
 
