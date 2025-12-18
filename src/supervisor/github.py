@@ -231,9 +231,12 @@ def format_pr_comment(
         lines.append("")
         allowed = arbiter_decision.get("auto_fix_allowed", False)
         risk = arbiter_decision.get("risk_level", "unknown")
+        objectives = arbiter_decision.get("fix_objectives") or []
         
         if allowed:
             lines.append(f"- ✅ Yes — auto-fix approved (risk: {risk})")
+            for obj in objectives:
+                lines.append(f"  - {obj}")
         else:
             reason = arbiter_decision.get("stop_reason", "")[:100]
             lines.append(f"- ❌ No — auto-fix denied (reason: {reason})")
