@@ -334,7 +334,7 @@ class TestSettings:
     """Tests for configuration settings."""
 
     def test_default_settings(self):
-        with patch.dict("os.environ", {}, clear=False):
+        with patch.dict("os.environ", {}, clear=True):
             settings = SupervisorSettings()
 
             assert settings.enabled is False
