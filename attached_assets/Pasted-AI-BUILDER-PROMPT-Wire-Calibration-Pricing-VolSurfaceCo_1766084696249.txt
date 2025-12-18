@@ -1,0 +1,78 @@
+AI BUILDER PROMPT — Wire Calibration → Pricing (VolSurfaceConfig is source of truth)
+
+Goal: Make the synthetic universe pricing use the calibrated vol surface (global + DTE-band multipliers and skew settings) instead of only config.synthetic_iv_multiplier + the live synthetic_skew engine. After this change, when calibration updates the runtime VolSurfaceConfig, backtests and hybrid synthetic pricing should immediately reflect it.
+
+Scope (do exactly this, nothing more)
+Modify get_sigma_for_option() so that it uses vol_surface.py runtime config (get_vol_surface_config()) for:
+IV multiplier selection (global or DTE-band, based on option DTE)
+skew adjustment (using VolSurfaceConfig.get_skew_anchor_ratio(abs_delta) and SkewTemplate settings)
+Keep current behavior as fallback when vol surface config has no skew configured.
+Do NOT:
+
+Add new UI pages/controls.
+Change database schema.
+Add new modes beyond existing sigma_mode and chain_mode.
+Rewrite backtest architecture.
+Files you will touch
+pricing.py (primary change)
+vol_surface.py (only if you need a tiny helper, but prefer not)
+Add tests in tests if there are already pricing tests; otherwise add a small new unit test file.
+Current behavior (what to replace)
+In get_sigma_for_option() in pricing.py, base_iv is computed using:
+
+rv * config.synthetic_iv_multiplier (rv mode), or
+atm_iv * config.synthetic_iv_multiplier (atm_iv mode), or
+option_mark_iv * config.synthetic_iv_multiplier (mark_iv mode)
+Then it applies skew via from src.synthetic_skew import get_skew_factor(...).
+This is inconsistent with calibration, which updates VolSurfaceConfig in vol_surface.py and policy code in calibration_update_policy.py.
+
+Required new behavior (the wiring)
+In src/backtest/pricing.py:get_sigma_for_option():
+
+A) Compute DTE (days to expiry) when possible
+
+Add an optional parameter dte_days: Optional[float] = None to get_sigma_for_option().
+Call sites:
+In state_builder.py, when calling get_sigma_for_option() for each option, pass dte_days computed as (opt.expiry - as_of).total_seconds() / 86400.
+For the synthetic-grid base sigma call (where there isn’t a specific option), pass dte_days=float(config.target_dte).
+If dte_days is None, fall back to float(config.target_dte).
+B) Replace IV multiplier logic with VolSurfaceConfig
+
+Import: from src.synthetic.vol_surface import get_vol_surface_config
+Read vs = get_vol_surface_config()
+Determine the multiplier:
+mult = vs.get_iv_multiplier_for_dte(dte_days) if dte_days is known
+else mult = vs.iv_multiplier
+Apply multiplier to the chosen base sigma (rv/atm/mark) instead of config.synthetic_iv_multiplier.
+Keep config.synthetic_iv_multiplier as a fallback only if you decide a safety fallback is needed, but default should be vol-surface driven.
+C) Replace skew adjustment with VolSurfaceConfig skew
+
+If abs_delta is provided and vs.skew exists and vs.skew.enabled:
+Only apply skew if vs.skew.min_dte <= dte_days <= vs.skew.max_dte
+Compute skew_ratio = vs.get_skew_anchor_ratio(abs_delta)
+Apply base_iv *= skew_ratio
+Otherwise do not apply vol-surface skew.
+D) Backward-compatible fallback
+
+If vs.skew is None (or disabled), keep existing skew behavior ONLY if we’re in a “live” mode where it makes sense:
+For historical/pure synthetic backtests: do NOT call the live Deribit skew engine by default (avoid hidden coupling). Prefer no skew rather than live skew.
+For explicit live-chain modes, it’s okay to keep old skew as fallback if you must, but document the behavior in a docstring.
+E) Keep bounds and return type stable
+
+Preserve the existing clamp: return sigma in [0.01, 5.0] as decimal.
+Tests (minimal but meaningful)
+Add unit tests proving calibration wiring works without network:
+
+When runtime VolSurfaceConfig.iv_multiplier is set to 1.2, and sigma_mode=rv_x_multiplier, returned sigma increases by 20% vs the same RV.
+When VolSurfaceConfig.dte_bands contains a band matching dte_days, that band multiplier is used instead of global.
+When VolSurfaceConfig.skew is enabled and abs_delta=0.25, sigma is multiplied by get_skew_anchor_ratio(0.25) within the skew DTE window.
+Test constraints:
+
+Do not call Deribit or synthetic_skew from tests.
+Use set_vol_surface_config() / get_vol_surface_config() to set runtime state for test; restore/reset after.
+Acceptance criteria
+Changing calibration-applied multipliers (global or DTE bands) changes sigma returned by get_sigma_for_option() immediately.
+Skew comes from VolSurfaceConfig when configured.
+No network calls are introduced in backtests by this wiring.
+Existing public APIs continue to work; only add optional params where needed.
+Deliverable: Implement code changes + tests and ensure pytest passes.

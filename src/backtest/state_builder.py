@@ -240,11 +240,13 @@ def _generate_live_chain_candidates(
             abs_delta=0.25,  # Use target delta for base sigma
             regime_state=None,
             skew_source="none",  # No live skew in backtests
+            dte_days=float(cfg.target_dte),  # Use target DTE for base sigma
         )
         
         result = []
         for opt in filtered:
             abs_delta = abs(opt.delta) if opt.delta else 0.25
+            dte = (opt.expiry - t).total_seconds() / (24 * 3600)
             opt_sigma = get_sigma_for_option(
                 config=cfg,
                 spot_history=spot_history,
@@ -254,9 +256,10 @@ def _generate_live_chain_candidates(
                 abs_delta=abs_delta,
                 regime_state=None,
                 skew_source="none",  # No live skew in backtests
+                dte_days=dte,  # Use actual option DTE for DTE-band selection
             )
             
-            dte = (opt.expiry - t).total_seconds() / (24 * 3600)
+            # dte already computed above
             t_years = max(dte / 365.0, 1e-6)
             mark_price = bs_call_price(spot, opt.strike, t_years, opt_sigma, cfg.risk_free_rate)
             delta = bs_call_delta(spot, opt.strike, t_years, opt_sigma, cfg.risk_free_rate)
@@ -442,6 +445,7 @@ def build_historical_state(
                 abs_delta=cfg.target_delta,
                 regime_state=None,
                 skew_source="none",  # No live skew in backtests
+                dte_days=float(cfg.target_dte),  # Use target DTE for synthetic grid base sigma
             )
             candidates = _generate_synthetic_candidates(spot, t, cfg, sigma)
 
@@ -586,6 +590,7 @@ def build_historical_agent_state(
         abs_delta=cfg.target_delta,
         regime_state=None,
         skew_source="none",  # No live skew in backtests
+        dte_days=float(cfg.target_dte),  # Use target DTE for base sigma
     )
     rv = sigma * 0.8
     

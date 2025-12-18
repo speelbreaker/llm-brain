@@ -379,11 +379,13 @@ def get_sigma_for_option(
     abs_delta: Optional[float] = None,
     regime_state: Optional[RegimeState] = None,
     skew_source: str = "none",
+    dte_days: Optional[float] = None,
 ) -> float:
     """
     Get the sigma (IV) to use for option pricing based on sigma_mode.
     
     This is the main entry point for hybrid synthetic mode sigma selection.
+    Uses VolSurfaceConfig as source of truth for IV multipliers and skew when configured.
     
     Args:
         config: Simulation configuration with sigma_mode
@@ -397,21 +399,37 @@ def get_sigma_for_option(
             - "none": No skew adjustment (flat, default for backtests)
             - "harvested": Use historical harvested data (preferred for backtests)
             - "live": Use live Deribit data (only for live trading, NOT backtests)
+        dte_days: Days to expiry for DTE-band multiplier selection (optional)
         
     Returns:
         Sigma (IV) as decimal for Black-Scholes pricing
         
     IMPORTANT: Historical backtests must use skew_source="harvested" or "none"
     to avoid look-ahead bias. Never use skew_source="live" in backtests.
+    
+    CALIBRATION WIRING:
+    - IV multiplier comes from VolSurfaceConfig (global or DTE-band specific)
+    - Skew comes from VolSurfaceConfig.get_skew_anchor_ratio() when configured
+    - Falls back to config.synthetic_iv_multiplier only if vol surface not configured
     """
     from src.synthetic_skew import get_skew_factor
+    from src.synthetic.vol_surface import get_vol_surface_config
     
     sigma_mode = getattr(config, 'sigma_mode', 'rv_x_multiplier')
+    
+    vs = get_vol_surface_config()
+    
+    effective_dte = dte_days if dte_days is not None else float(config.target_dte)
+    
+    iv_multiplier = vs.get_iv_multiplier_for_dte(effective_dte)
     
     if sigma_mode == "mark_iv_x_multiplier":
         if option_mark_iv is not None and option_mark_iv > 0:
             base_iv = option_mark_iv
-            scaled_iv = base_iv * config.synthetic_iv_multiplier
+            scaled_iv = base_iv * iv_multiplier
+            scaled_iv = _apply_vol_surface_skew(
+                scaled_iv, vs, abs_delta, effective_dte, config, as_of, skew_source
+            )
             return max(0.01, min(scaled_iv, 5.0))
         else:
             sigma_mode = "rv_x_multiplier"
@@ -428,21 +446,10 @@ def get_sigma_for_option(
             )
         
         if atm_iv is not None:
-            base_iv = atm_iv * config.synthetic_iv_multiplier
-            
-            if abs_delta is not None:
-                skew_factor = get_skew_factor(
-                    underlying=config.underlying,
-                    option_type="call",
-                    abs_delta=abs_delta,
-                    skew_enabled=True,
-                    min_dte=float(config.min_dte),
-                    max_dte=float(config.max_dte),
-                    as_of=as_of,
-                    source=skew_source,
-                )
-                base_iv = base_iv * skew_factor
-            
+            base_iv = atm_iv * iv_multiplier
+            base_iv = _apply_vol_surface_skew(
+                base_iv, vs, abs_delta, effective_dte, config, as_of, skew_source
+            )
             return max(0.01, min(base_iv, 5.0))
         else:
             sigma_mode = "rv_x_multiplier"
@@ -456,22 +463,69 @@ def get_sigma_for_option(
     if regime_state is not None and regime_state.regime is not None:
         base_iv = regime_state.iv_atm / 100.0
     else:
-        base_iv = rv * config.synthetic_iv_multiplier
+        base_iv = rv * iv_multiplier
     
-    if abs_delta is not None:
-        skew_factor = get_skew_factor(
-            underlying=config.underlying,
-            option_type="call",
-            abs_delta=abs_delta,
-            skew_enabled=True,
-            min_dte=float(config.min_dte),
-            max_dte=float(config.max_dte),
-            as_of=as_of,
-            source=skew_source,
-        )
-        base_iv = base_iv * skew_factor
+    base_iv = _apply_vol_surface_skew(
+        base_iv, vs, abs_delta, effective_dte, config, as_of, skew_source
+    )
     
     return max(0.01, min(base_iv, 5.0))
+
+
+def _apply_vol_surface_skew(
+    base_iv: float,
+    vs: "VolSurfaceConfig",
+    abs_delta: Optional[float],
+    dte_days: float,
+    config: CallSimulationConfig,
+    as_of: datetime,
+    skew_source: str,
+) -> float:
+    """
+    Apply skew adjustment using VolSurfaceConfig or fallback to synthetic_skew.
+    
+    Priority:
+    1. If VolSurfaceConfig.skew is enabled and DTE in range, use get_skew_anchor_ratio()
+    2. Otherwise, for non-backtest modes, use synthetic_skew.get_skew_factor()
+    3. For backtests with no vol surface skew, return base_iv unchanged (flat skew)
+    
+    Args:
+        base_iv: Base IV to apply skew to
+        vs: VolSurfaceConfig instance
+        abs_delta: Absolute delta for skew lookup
+        dte_days: Days to expiry
+        config: Simulation config for fallback
+        as_of: Reference time
+        skew_source: Skew source mode ("none", "harvested", "live")
+    
+    Returns:
+        Skew-adjusted IV
+    """
+    from src.synthetic.vol_surface import VolSurfaceConfig
+    
+    if abs_delta is None:
+        return base_iv
+    
+    if vs.skew is not None and vs.skew.enabled:
+        if vs.skew.min_dte <= dte_days <= vs.skew.max_dte:
+            skew_ratio = vs.get_skew_anchor_ratio(abs_delta)
+            return base_iv * skew_ratio
+    
+    if skew_source == "none":
+        return base_iv
+    
+    from src.synthetic_skew import get_skew_factor
+    skew_factor = get_skew_factor(
+        underlying=config.underlying,
+        option_type="call",
+        abs_delta=abs_delta,
+        skew_enabled=True,
+        min_dte=float(config.min_dte),
+        max_dte=float(config.max_dte),
+        as_of=as_of,
+        source=skew_source,
+    )
+    return base_iv * skew_factor
 
 
 def price_option_synthetic(
