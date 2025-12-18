@@ -69,6 +69,15 @@ data/**/positions.json
 # OS
 .DS_Store
 Thumbs.db
+Library/Caches/
+Library/Caches/Google/Chrome/Default/Cache/Cache_Data/
+Library/Caches/Google/Chrome/Default/Cache/
+Library/Caches/Google/Chrome/Default/Code Cache/
+Library/Caches/Google/Chrome/Default/Code Cache/js/
+Library/Caches/BraveSoftware/Brave-Browser/Default/Cache/Cache_Data/
+Library/Caches/BraveSoftware/Brave-Browser/Default/Cache/
+Library/Caches/BraveSoftware/Brave-Browser/Default/Code Cache/
+Library/Caches/BraveSoftware/Brave-Browser/Default/Code Cache/js/
 
 # Secrets (NEVER commit these)
 *.pem
