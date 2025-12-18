@@ -2,6 +2,8 @@
 
 import asyncio
 import logging
+import os
+import re
 import uuid
 from contextlib import asynccontextmanager
 from typing import Optional
@@ -103,6 +105,38 @@ def truncate_job_for_api(job_dict: dict) -> dict:
                 attempt["codex_prompt_truncated"] = truncated["truncated"]
 
     return job_dict
+
+
+FORBIDDEN_ENV_PATTERN = re.compile(r"(key|token|secret|password)", re.IGNORECASE)
+ALLOWED_ENV_KEYS = {
+    "SUPERVISOR_ENABLED",
+    "MODEL_OPTIMIST",
+    "MODEL_SKEPTIC",
+    "MODEL_ARBITER",
+    "CODEX_MODEL",
+    "OPENAI_BASE_URL",
+    "GEMINI_MODEL",
+}
+
+
+def build_safe_env_snapshot(settings: SupervisorSettings) -> dict[str, str | None]:
+    """Return a minimal, allowlisted env snapshot with denylist enforcement."""
+    env_snapshot: dict[str, str | None] = {}
+
+    for key in ALLOWED_ENV_KEYS:
+        if key in os.environ and not FORBIDDEN_ENV_PATTERN.search(key):
+            env_snapshot[key] = os.environ.get(key)
+
+    # Ensure enabled flag is always present
+    if "SUPERVISOR_ENABLED" not in env_snapshot:
+        env_snapshot["SUPERVISOR_ENABLED"] = "1" if settings.enabled else "0"
+
+    # Final guardrail: drop anything that accidentally matches the forbidden pattern
+    return {
+        k: v
+        for k, v in env_snapshot.items()
+        if not FORBIDDEN_ENV_PATTERN.search(k or "")
+    }
 
 
 async def job_worker(app: FastAPI) -> None:
@@ -272,11 +306,7 @@ async def diag(request: Request):
         "CODEX_MODEL": present(getattr(settings, "codex_model", None)),
     }
 
-    env_flags = {
-        "SUPERVISOR_ENABLED": present_bool(getattr(settings, "enabled", None) and "1" or ""),
-        "OPENAI_API_KEY_SET": present_bool(getattr(settings, "openai_api_key", None)),
-        "GEMINI_API_KEY_SET": present_bool(getattr(settings, "gemini_api_key", None)),
-    }
+    env_flags = build_safe_env_snapshot(settings)
 
     notes = []
     notes.append(f"ready={getattr(request.app.state, 'ready', None)}")
