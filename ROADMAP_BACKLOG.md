@@ -16,8 +16,8 @@ Priorities:
 
 Phases:
 - **Phase 1** – One good covered-call bot on testnet (mostly done).
-- **Phase 2** – One smart bot with LLM co-pilot + stronger safety.
-- **Phase 3** – Multi-bot, supervisor AI, real historical data, production-grade ops.
+- **Phase 2** – One smart bot with LLM co-pilot + stronger safety. Pragmatic synthetic universe using Greg-cluster regimes + AR(1) IV dynamics calibrated to Deribit harvester data.
+- **Phase 3** – Multi-bot, supervisor AI, real historical data, production-grade ops. Heavy-duty quant research: PCA factor models, GARCH/Heston, full volatility surface modeling.
 
 ---
 
