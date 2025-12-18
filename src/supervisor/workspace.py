@@ -143,12 +143,18 @@ class WorkspaceManager:
             return 0
 
         cutoff = time.time() - (ttl_hours * 3600)
+        sentinel_cutoff = time.time() - (sentinel_ttl_hours * 3600)
         cleaned = 0
 
         for path in self.base_dir.iterdir():
             if path.name.startswith("_") or not path.is_dir():
                 continue
             try:
+                sentinel = path / ACTIVE_SENTINEL
+                # Preserve active workspaces with fresh sentinel
+                if sentinel.exists() and sentinel.stat().st_mtime > sentinel_cutoff:
+                    continue
+
                 if path.stat().st_mtime < cutoff:
                     shutil.rmtree(path, ignore_errors=True)
                     cleaned += 1
@@ -156,6 +162,15 @@ class WorkspaceManager:
                 logger.warning("Failed to clean workspace %s: %s", path.name, e)
 
         return cleaned
+
+    def mark_workspace_inactive(self, workspace_path: str) -> None:
+        """Remove the active sentinel so cleanup can proceed."""
+        try:
+            sentinel = Path(workspace_path) / ACTIVE_SENTINEL
+            if sentinel.exists():
+                sentinel.unlink()
+        except Exception:
+            pass
 
     async def get_diff_stats(self, workspace_path: str) -> DiffStats:
         try:
