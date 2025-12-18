@@ -114,8 +114,11 @@ class DebateSystem:
                     max_tokens=600,
                     temperature=0.7 if attempt == 0 else 0.3,
                 )
-                
-                response = DebateResponse(role=role, **result)
+
+                # Providers may include "role" in the payload; avoid double-passing
+                payload = dict(result or {})
+                agent_role = payload.pop("role", role)
+                response = DebateResponse(role=agent_role, **payload)
                 return response.model_dump()
                 
             except (json.JSONDecodeError, ValidationError) as e:
@@ -149,9 +152,11 @@ class DebateSystem:
                     max_tokens=500,
                     temperature=0.3,
                 )
-                
-                response = DebateResponse(role="arbiter", **result)
-                
+
+                payload = dict(result or {})
+                payload_role = payload.pop("role", "arbiter")
+                response = DebateResponse(role=payload_role, **payload)
+
                 return ArbiterDecision(
                     auto_fix_allowed=response.auto_fix_allowed or False,
                     fix_objectives=response.objectives or [],
