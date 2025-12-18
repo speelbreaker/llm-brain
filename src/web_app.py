@@ -22,6 +22,7 @@ from src.web.routes_backtest import router as backtest_router
 from src.web.routes_positions import router as positions_router
 from src.web.routes_bots import router as bots_router
 from src.web.routes_health import router as health_router
+from src.web.routes_deploy import router as deploy_router
 
 
 app = FastAPI(
@@ -35,6 +36,7 @@ app.include_router(backtest_router)
 app.include_router(positions_router)
 app.include_router(bots_router)
 app.include_router(health_router)
+app.include_router(deploy_router)
 
 
 def _agent_thread_target() -> None:
