@@ -948,6 +948,13 @@ def render_dashboard_html() -> str:
         </div>
       </div>
       <div class="form-row">
+        <div class="form-group">
+          <label>Synthetic IV Multiplier</label>
+          <input type="number" id="bt-iv-multiplier" value="1.0" min="0.1" max="5.0" step="0.05" style="width:80px;">
+          <small style="display:block;margin-top:4px;color:#888;font-size:0.8rem;">Per-run override (default: 1.0). Higher = more expensive options.</small>
+        </div>
+      </div>
+      <div class="form-row">
         <div class="form-group" style="flex:2;">
           <label>Selector / Strategy</label>
           <select id="bt-selector-name">
@@ -1007,6 +1014,18 @@ def render_dashboard_html() -> str:
       <div id="bt-error" class="error-text" style="display:none;"></div>
       <div class="progress-bar">
         <div class="progress-bar-inner" id="bt-progress-inner" style="width:0%">0%</div>
+      </div>
+      
+      <!-- Effective Vol Settings Panel -->
+      <div id="bt-vol-settings" class="card" style="margin-top:1rem;display:none;background:#f8f9fa;padding:0.8rem;border-radius:6px;">
+        <h4 style="margin:0 0 0.5rem 0;font-size:0.95rem;color:#333;">Effective Vol Settings (This Run)</h4>
+        <div style="display:flex;flex-wrap:wrap;gap:0.8rem 1.5rem;font-size:0.85rem;">
+          <div><strong>Sigma Mode:</strong> <span id="bt-eff-sigma-mode">-</span></div>
+          <div><strong>Chain Mode:</strong> <span id="bt-eff-chain-mode">-</span></div>
+          <div><strong>IV Multiplier:</strong> <span id="bt-eff-iv-multiplier">-</span></div>
+          <div><strong>Skew Source:</strong> <span id="bt-eff-skew-source">-</span></div>
+        </div>
+        <div id="bt-eff-calibration-note" style="margin-top:0.5rem;font-size:0.8rem;color:#666;"></div>
       </div>
       
       <div id="bt-metrics-live" style="margin-top:1rem;display:none;">
@@ -6682,7 +6701,7 @@ def render_dashboard_html() -> str:
     }}
     
     function setBacktestInputsDisabled(disabled) {{
-      const inputs = ['bt-underlying', 'bt-start', 'bt-end', 'bt-timeframe', 'bt-interval', 'bt-exit-style', 'bt-dte', 'bt-delta', 'bt-min-dte', 'bt-max-dte', 'bt-delta-min', 'bt-delta-max', 'bt-margin-type', 'bt-settlement-ccy', 'bt-skew-source'];
+      const inputs = ['bt-underlying', 'bt-start', 'bt-end', 'bt-timeframe', 'bt-interval', 'bt-exit-style', 'bt-dte', 'bt-delta', 'bt-min-dte', 'bt-max-dte', 'bt-delta-min', 'bt-delta-max', 'bt-margin-type', 'bt-settlement-ccy', 'bt-skew-source', 'bt-iv-multiplier'];
       inputs.forEach(id => {{
         const el = document.getElementById(id);
         if (el) el.disabled = disabled;
@@ -6765,6 +6784,7 @@ def render_dashboard_html() -> str:
       const backtestType = document.getElementById('bt-backtest-type').value;
       const dataSource = document.getElementById('bt-data-source').value;
       const skewSource = document.getElementById('bt-skew-source').value;
+      const syntheticIvMultiplier = parseFloat(document.getElementById('bt-iv-multiplier').value) || 1.0;
       
       const gregUnderlyings = [];
       if (document.getElementById('bt-greg-btc').checked) gregUnderlyings.push('BTC');
@@ -6791,6 +6811,7 @@ def render_dashboard_html() -> str:
         backtest_type: backtestType,
         greg_underlyings: gregUnderlyings,
         skew_source: skewSource,
+        synthetic_iv_multiplier: syntheticIvMultiplier,
       }};
       
       document.getElementById('bt-error').style.display = 'none';
@@ -6991,6 +7012,31 @@ def render_dashboard_html() -> str:
         }} else {{
           phaseLabel.style.display = 'none';
           phaseEl.style.display = 'none';
+        }}
+        
+        // Update Effective Vol Settings panel
+        const volSettingsPanel = document.getElementById('bt-vol-settings');
+        if (st.config && (st.running || st.finished_at)) {{
+          volSettingsPanel.style.display = 'block';
+          document.getElementById('bt-eff-sigma-mode').textContent = st.config.sigma_mode || '-';
+          document.getElementById('bt-eff-chain-mode').textContent = st.config.chain_mode || '-';
+          document.getElementById('bt-eff-iv-multiplier').textContent = st.config.synthetic_iv_multiplier?.toFixed(2) || '1.00';
+          const skewSource = st.config.skew_source || 'none';
+          const skewEl = document.getElementById('bt-eff-skew-source');
+          skewEl.textContent = skewSource;
+          skewEl.style.color = skewSource === 'live' ? '#c62828' : (skewSource === 'harvested' ? '#2e7d32' : '#333');
+          
+          // Calibration note
+          const calibNote = document.getElementById('bt-eff-calibration-note');
+          if (skewSource === 'none') {{
+            calibNote.textContent = 'Using flat skew (no look-ahead bias). Per-run IV multiplier applied to RV/ATM base.';
+          }} else if (skewSource === 'harvested') {{
+            calibNote.textContent = 'Using historical harvested skew (time-appropriate for backtest dates).';
+          }} else {{
+            calibNote.textContent = 'Using live market skew (caution: may introduce look-ahead bias for historical backtests).';
+          }}
+        }} else {{
+          volSettingsPanel.style.display = 'none';
         }}
         
         const pct = Math.round((st.progress_pct || 0) * 100);

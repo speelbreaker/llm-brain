@@ -684,6 +684,7 @@ class BacktestManager:
         chain_mode: str = "live_chain",
         synthetic_iv_multiplier: float = 1.0,
         selector_name: str = "generic_covered_call",
+        skew_source: str = "none",
     ) -> bool:
         from src.backtest.run_store import create_run, update_run_status
         
@@ -712,6 +713,7 @@ class BacktestManager:
                 "chain_mode": chain_mode,
                 "synthetic_iv_multiplier": synthetic_iv_multiplier,
                 "selector_name": selector_name,
+                "skew_source": skew_source,
             }
             
             run_result = create_run(config_dict)

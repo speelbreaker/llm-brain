@@ -328,6 +328,7 @@ def start_backtest(req: BacktestStartRequest) -> JSONResponse:
         chain_mode=req.chain_mode,
         synthetic_iv_multiplier=req.synthetic_iv_multiplier,
         selector_name=req.selector_name,
+        skew_source=req.skew_source.value,
     )
     
     if not started:
