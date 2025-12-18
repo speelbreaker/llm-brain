@@ -1,0 +1,72 @@
+Prompt for Third Win (Feature completion): Unify the two synthetic engines
+Copy/paste this as a one-shot “AI builder” prompt.
+
+Goal
+Unify our two synthetic-vol engines into a single canonical “Synthetic Vol Model” used everywhere (backtests, scoring, selector scans, and any synthetic/hybrid pricing). This reduces duplicated logic, inconsistent multipliers, and drift between “synthetic skew engine” vs “vol surface/regime engine”.
+
+Non‑Negotiables
+Single source of truth: After this change, there should be one canonical engine that answers “what IV do we use for this option at time 
+t
+t?” (including ATM term structure + skew/smile).
+No behavior regressions without explicit intent: Default historical backtests must remain protected from look-ahead (i.e., no live skew leakage).
+UI alignment requirement (IMPORTANT): Any changes to code functionality or new configuration knobs must be reflected in the UI wherever applicable (and the API contracts backing that UI).
+Current Problem (what to unify)
+We currently have overlapping synthetic-vol logic split across:
+
+A “vol surface / calibration-config” pathway (multipliers, DTE bands, skew anchors)
+A “synthetic skew engine” pathway (skew factors with source controls, time-awareness)
+Optional regime dynamics for IV/skew evolution
+These overlap in responsibility and can disagree (especially around: multiplier application order, DTE handling, and skew anchoring).
+
+Target Design (what “unified” means)
+Create a single module (suggestion: src/synthetic/engine.py) implementing a stable API like:
+
+SyntheticVolEngine.get_iv(underlying, as_of, dte_days, abs_delta, option_type, *, mode) → iv
+SyntheticVolEngine.get_atm_iv(underlying, as_of, dte_days, *, mode) → atm_iv
+SyntheticVolEngine.get_skew_anchor_ratio(underlying, as_of, dte_days, abs_delta, option_type, *, mode) → ratio
+mode (or config) must support:
+Surface source: runtime surface config (calibration-driven) vs none
+Skew source: none/harvested/live (but historical backtests must never use live)
+Internally, the engine should:
+
+Compute/select base ATM vol (RV/ATM IV/mark IV selection depending on existing sigma_mode semantics).
+Apply calibration multipliers consistently (global + DTE band).
+Apply skew/smile consistently:
+Prefer calibrated skew anchors when configured and DTE in range
+Otherwise apply skew source fallback (harvested/live/none) with as_of enforced
+(Optional) apply regime evolution as a wrapper, but still through the same interface.
+Refactor Steps (implementation)
+Introduce SyntheticVolEngine and move all “compose IV” logic into it.
+Update call sites to use the engine:
+Pricing entrypoints (sigma selection / IV with skew)
+State building (synthetic candidates, hybrid candidates)
+Selector scan IV selection (synthetic/hybrid)
+Reduce old modules to thin wrappers or delete them:
+Keep backwards-compatible function names if widely referenced, but route them into SyntheticVolEngine.
+Ensure a single consistent order-of-operations:
+base_iv → multiplier → skew
+Enforce “no look-ahead” at the boundary:
+If as_of is historical and caller requests live, error or hard-fallback to safe source (choose one and document it).
+UI Requirements (must do)
+Update the Backtesting Lab UI to reflect the unified engine controls without adding new pages:
+
+Add a simple “Skew Source” selector in the backtest controls (values: none, harvested, live).
+If the backtest is historical (start/end in the past), disable live or show a clear warning and force fallback.
+Display the effective synthetic vol configuration used for the run (at least: sigma_mode, chain_mode, multiplier mode source, skew source).
+Ensure API request/response models include these fields and the UI sends them.
+Where to wire:
+
+Frontend payload creation is in dashboard.py:6640-6820
+Backtest request model is in routes_backtest.py:1-140
+Acceptance Criteria
+All existing synthetic/backtest tests pass.
+Add/adjust tests proving:
+The unified engine reproduces current behavior for default settings.
+Calibration multipliers and skew anchors change pricing through the unified engine.
+Historical backtests cannot use live skew (no look-ahead).
+UI:
+Backtest start request includes the skew source selection and it is honored.
+UI shows what was actually used (effective config summary).
+Tests to Update/Add
+Extend existing synthetic tests to call the unified engine directly (new unit tests).
+Add a small integration test that starts a backtest via API and confirms the config echoes back including skew source (or is visible in the returned status)

@@ -76,6 +76,13 @@ class BacktestRequest(BaseModel):
     chain_mode: str = "synthetic_grid"
 
 
+class SkewSourceType(str, Enum):
+    """Skew source for synthetic IV calculations."""
+    NONE = "none"
+    HARVESTED = "harvested"
+    LIVE = "live"
+
+
 class BacktestStartRequest(BaseModel):
     underlying: str = "BTC"
     start: str
@@ -102,6 +109,10 @@ class BacktestStartRequest(BaseModel):
     greg_underlyings: List[str] = Field(
         default=["BTC", "ETH"],
         description="Underlyings for Greg selector mode (ignored in generic mode)"
+    )
+    skew_source: SkewSourceType = Field(
+        default=SkewSourceType.NONE,
+        description="Skew source for IV calculations: 'none' (flat, safe), 'harvested' (historical), 'live' (blocked for historical backtests)"
     )
 
 

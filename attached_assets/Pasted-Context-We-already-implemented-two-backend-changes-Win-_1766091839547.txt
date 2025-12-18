@@ -1,0 +1,64 @@
+Context
+We already implemented two backend changes:
+
+Win #2 (Consistency): Calibration → Pricing wiring
+Pricing now uses runtime calibration state (global + DTE band multipliers) and calibrated skew anchors (when configured) as the preferred source of truth.
+
+Win #1 (Correctness): Remove look‑ahead bias in skew
+Historical backtests must not use live skew. Backend supports skew_source = none|harvested|live with safe defaults (backtests default to none / non-live).
+
+What’s missing (UI)
+The backend behavior has changed / expanded, but the UI does not fully reflect it:
+
+Backtesting UI does not expose “skew source” (even though backend supports it).
+Backtesting UI also does not expose the per-run synthetic_iv_multiplier override even though:
+API model includes it: routes_backtest.py:1-140
+Backtest start uses it: routes_backtest.py:240-340
+The UI should also show the effective config used (especially skew source + multipliers), so users can see what the engine actually did.
+Task
+Update the Dashboard/Backtesting Lab UI + API contract wiring so the UI reflects both wins.
+
+A) Add “Skew Source” control to Backtesting Lab (generic backtest mode)
+Add a dropdown in the backtest controls with values:
+none (default for historical backtests)
+harvested
+live
+Send it in the /api/backtest/start payload.
+Update BacktestStartRequest and downstream backtest_manager.start(...) call if needed (if the backend already supports it, just wire through).
+Safety / correctness requirement
+
+If the user selects live while the backtest is historical (start/end not “now”), the UI must:
+either disable live, OR
+show a clear warning and automatically downgrade to harvested or none
+The goal is: UI should never encourage look-ahead behavior.
+B) Add “Synthetic IV Multiplier” control to Backtesting Lab
+Add a numeric input for synthetic_iv_multiplier (default 1.0) and include it in the start payload.
+This must map to the existing request field:
+synthetic_iv_multiplier in routes_backtest.py:1-140
+C) Display “Effective Vol Settings” in the UI
+Wherever you show backtest config/status, show:
+
+sigma_mode
+chain_mode
+synthetic_iv_multiplier (per-run)
+skew_source (new)
+“Applied calibration multipliers / skew anchors” if they influence the run:
+At minimum, show the currently applied multipliers panel already exists; make sure the backtest section points users to it or echoes the values used.
+D) Keep UI consistent with backend calibration wiring
+Confirm the “Current Applied Multipliers” and skew anchor ratio panels reflect the same runtime state the pricing engine now uses.
+If any API response fields have changed semantics, update labels/tooltips so users understand:
+Per-run synthetic_iv_multiplier vs runtime calibration multipliers (global + bands)
+When skew comes from calibrated anchors vs fallback skew source
+Files likely to edit
+UI: dashboard.py:6640-6820 (backtest payload builder + inputs)
+API models/route: routes_backtest.py:1-140 and the /api/backtest/start handler
+Backtest config plumbing (if needed): manager.py, types.py, and pricing/state builder wiring.
+Acceptance Criteria
+Starting a backtest from the UI sends both:
+synthetic_iv_multiplier
+skew_source
+Backend honors these values (confirmed via response fields and/or status endpoint).
+Historical backtests cannot silently run with live skew from the UI.
+Existing tests remain green; add/adjust a small TestClient test if needed to assert the request model accepts these fields and they appear in the stored/effective config.
+UI Alignment Requirement (must include in all future prompts)
+If this change alters behavior, defaults, config fields, or output semantics that users can interact with, update the UI (and API contracts) so the UI reflects the new behavior. This includes request models, dashboard controls, labels/tooltips, and any “current applied settings” panels.

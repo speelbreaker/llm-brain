@@ -937,6 +937,15 @@ def render_dashboard_html() -> str:
           </select>
           <small id="bt-synthetic-mode-desc" style="display:block;margin-top:4px;color:#888;font-size:0.8rem;">Uses realized volatility with multiplier to price synthetic options on a generated strike grid.</small>
         </div>
+        <div class="form-group">
+          <label>Skew Source</label>
+          <select id="bt-skew-source" onchange="updateSkewSourceWarning()">
+            <option value="none" selected>None (Flat Skew)</option>
+            <option value="harvested">Harvested (Historical)</option>
+            <option value="live">Live (Current Market)</option>
+          </select>
+          <small id="bt-skew-source-desc" style="display:block;margin-top:4px;color:#888;font-size:0.8rem;">Flat skew is safe for all backtests.</small>
+        </div>
       </div>
       <div class="form-row">
         <div class="form-group" style="flex:2;">
@@ -6673,7 +6682,7 @@ def render_dashboard_html() -> str:
     }}
     
     function setBacktestInputsDisabled(disabled) {{
-      const inputs = ['bt-underlying', 'bt-start', 'bt-end', 'bt-timeframe', 'bt-interval', 'bt-exit-style', 'bt-dte', 'bt-delta', 'bt-min-dte', 'bt-max-dte', 'bt-delta-min', 'bt-delta-max', 'bt-margin-type', 'bt-settlement-ccy'];
+      const inputs = ['bt-underlying', 'bt-start', 'bt-end', 'bt-timeframe', 'bt-interval', 'bt-exit-style', 'bt-dte', 'bt-delta', 'bt-min-dte', 'bt-max-dte', 'bt-delta-min', 'bt-delta-max', 'bt-margin-type', 'bt-settlement-ccy', 'bt-skew-source'];
       inputs.forEach(id => {{
         const el = document.getElementById(id);
         if (el) el.disabled = disabled;
@@ -6699,6 +6708,23 @@ def render_dashboard_html() -> str:
         'live_chain': 'Uses actual Deribit option chains with live mark IV for each strike. Most realistic backtesting.',
       }};
       desc.textContent = descriptions[mode] || descriptions['pure_synthetic'];
+    }}
+    
+    function updateSkewSourceWarning() {{
+      const source = document.getElementById('bt-skew-source').value;
+      const desc = document.getElementById('bt-skew-source-desc');
+      const startDate = document.getElementById('bt-start').value;
+      const today = new Date().toISOString().split('T')[0];
+      const isHistorical = startDate && startDate < today;
+      
+      const descriptions = {{
+        'none': 'Flat skew is safe for all backtests.',
+        'harvested': 'Uses historical skew from harvested data (time-appropriate, no look-ahead).',
+        'live': isHistorical ? 'WARNING: Live skew will cause look-ahead bias in historical backtests!' : 'Uses current market skew (only valid for forward simulations).',
+      }};
+      
+      desc.textContent = descriptions[source] || descriptions['none'];
+      desc.style.color = (source === 'live' && isHistorical) ? '#c62828' : '#888';
     }}
     
     function updateBacktestModeUI() {{
@@ -6738,6 +6764,7 @@ def render_dashboard_html() -> str:
       const selectorName = document.getElementById('bt-selector-name').value;
       const backtestType = document.getElementById('bt-backtest-type').value;
       const dataSource = document.getElementById('bt-data-source').value;
+      const skewSource = document.getElementById('bt-skew-source').value;
       
       const gregUnderlyings = [];
       if (document.getElementById('bt-greg-btc').checked) gregUnderlyings.push('BTC');
@@ -6763,6 +6790,7 @@ def render_dashboard_html() -> str:
         selector_name: selectorName,
         backtest_type: backtestType,
         greg_underlyings: gregUnderlyings,
+        skew_source: skewSource,
       }};
       
       document.getElementById('bt-error').style.display = 'none';
