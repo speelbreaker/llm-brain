@@ -235,6 +235,57 @@ async def health(request: Request):
     )
 
 
+
+class DiagResponse(BaseModel):
+    ok: bool = True
+    version: str = "0.2.1"
+    code_paths: dict[str, str]
+    models: dict[str, str | None]
+    env_flags: dict[str, str | None]
+    notes: list[str] = []
+
+
+@app.get("/api/diag", response_model=DiagResponse)
+async def diag(request: Request):
+    settings: SupervisorSettings = request.app.state.settings
+
+    # Import inside handler so module paths reflect the running container mount
+    from src.supervisor import workspace as ws
+    from src.supervisor.llm import openai_provider as oai
+
+    def present(v: str | None) -> str | None:
+        return v if v else None
+
+    def present_bool(v: str | None) -> str:
+        return "1" if (v and v.strip()) else "0"
+
+    code_paths = {
+        "app_py": __file__,
+        "workspace_py": getattr(ws, "__file__", "unknown"),
+        "openai_provider_py": getattr(oai, "__file__", "unknown"),
+    }
+
+    models = {
+        "MODEL_OPTIMIST": present(getattr(settings, "model_optimist", None)),
+        "MODEL_SKEPTIC": present(getattr(settings, "model_skeptic", None)),
+        "MODEL_ARBITER": present(getattr(settings, "model_arbiter", None)),
+        "CODEX_MODEL": present(getattr(settings, "codex_model", None)),
+    }
+
+    env_flags = {
+        "SUPERVISOR_ENABLED": present_bool(getattr(settings, "enabled", None) and "1" or ""),
+        "OPENAI_API_KEY_SET": present_bool(getattr(settings, "openai_api_key", None)),
+        "GEMINI_API_KEY_SET": present_bool(getattr(settings, "gemini_api_key", None)),
+    }
+
+    notes = []
+    notes.append(f"ready={getattr(request.app.state, 'ready', None)}")
+    notes.append(f"queue_size={request.app.state.job_queue.qsize() if hasattr(request.app.state,'job_queue') else 'na'}")
+
+    return DiagResponse(code_paths=code_paths, models=models, env_flags=env_flags, notes=notes)
+
+
+
 @app.post("/github/webhook")
 async def github_webhook(
     request: Request,
