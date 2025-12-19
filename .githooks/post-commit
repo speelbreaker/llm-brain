@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Auto-push after each successful commit.
+# Notes:
+# - This runs locally only.
+# - If you're offline or push is rejected, the commit still succeeds.
+
+branch="$(git rev-parse --abbrev-ref HEAD)"
+
+# Only auto-push named branches; skip detached HEAD.
+if [[ "$branch" == "HEAD" ]]; then
+  exit 0
+fi
+
+# Avoid recursive hooks for git-in-git operations.
+if [[ -n "${GIT_AUTO_PUSH_RUNNING:-}" ]]; then
+  exit 0
+fi
+
+# Push, but never fail the commit if push fails.
+GIT_AUTO_PUSH_RUNNING=1 git push origin "$branch" || {
+  echo "[post-commit] Auto-push failed (non-fatal)." >&2
+  exit 0
+}

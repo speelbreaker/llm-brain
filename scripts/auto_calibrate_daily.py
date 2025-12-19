@@ -4,9 +4,17 @@ Daily auto-calibration script for BTC and ETH.
 
 This script:
 1. Runs calibration for both BTC and ETH underlyings
-2. Applies the update policy (min_delta, min_samples, min_vega, smoothing)
+2. Evaluates the update policy (min_delta, min_samples, min_vega, smoothing)
 3. Records results to calibration_history table
-4. Exits with non-zero if all runs failed or all are degraded
+4. Prints whether each run is eligible to apply under the policy
+5. Exits with non-zero if all runs failed or all are degraded
+
+IMPORTANT:
+- This script is intended for cron/scheduler usage.
+- It does NOT apply any runtime vol surface changes, because cron runs in a separate
+    process and in-memory "applied" settings would be lost on exit.
+- Applying multipliers/skew to the running web app is done via the Calibration UI
+    (Run Calibration With Policy / Force Apply) or the equivalent API endpoints.
 
 Usage:
     python -m scripts.auto_calibrate_daily
@@ -45,7 +53,6 @@ from src.calibration_update_policy import (
     load_recent_calibration_history,
     BandMultiplier,
 )
-from src.calibration_store import set_applied_multiplier
 from src.db import init_db
 
 
@@ -60,8 +67,8 @@ class CalibrationRunResult:
     mae_pct: Optional[float] = None
     vega_weighted_mae_pct: Optional[float] = None
     num_samples: int = 0
-    applied: bool = False
-    applied_reason: str = ""
+    policy_should_apply: bool = False
+    policy_reason: str = ""
 
 
 def run_calibration_for_underlying(
@@ -186,32 +193,22 @@ def run_calibration_for_underlying(
     applied = False
     applied_reason = ""
     
+    policy_should_apply = False
+    policy_reason = ""
+
     if status == "failed":
-        applied = False
-        applied_reason = f"Realism check failed: {reason}"
-        print(f"\n  Update: NOT APPLIED (realism check failed)")
+        policy_should_apply = False
+        policy_reason = f"Realism check failed: {reason}"
+        print(f"\n  Policy: NOT ELIGIBLE - {policy_reason}")
     elif update_decision.should_apply:
-        applied = True
-        applied_reason = update_decision.reason
-        print(f"\n  Update: WILL APPLY - {applied_reason}")
-        
-        if not dry_run:
-            band_multipliers_dict = None
-            if smoothed_bands:
-                band_multipliers_dict = {b.name: b.iv_multiplier for b in smoothed_bands}
-            
-            set_applied_multiplier(
-                underlying=underlying,
-                global_multiplier=smoothed_global,
-                band_multipliers=band_multipliers_dict,
-                source="harvested",
-                applied_reason=f"Daily auto-calibration: {applied_reason}",
-            )
-            print(f"    Applied multiplier {smoothed_global:.4f} to {underlying}")
+        policy_should_apply = True
+        policy_reason = update_decision.reason
+        print(f"\n  Policy: ELIGIBLE TO APPLY - {policy_reason}")
+        print("  Note: Not applied here (cron is record-only). Apply via UI/API in the running service.")
     else:
-        applied = False
-        applied_reason = update_decision.reason
-        print(f"\n  Update: NOT APPLIED - {applied_reason}")
+        policy_should_apply = False
+        policy_reason = update_decision.reason
+        print(f"\n  Policy: NOT ELIGIBLE - {policy_reason}")
     
     if not dry_run:
         entry = CalibrationHistoryEntry(
@@ -244,8 +241,8 @@ def run_calibration_for_underlying(
         mae_pct=mae_pct,
         vega_weighted_mae_pct=vega_weighted_mae_pct,
         num_samples=result.count,
-        applied=applied,
-        applied_reason=applied_reason,
+        policy_should_apply=policy_should_apply,
+        policy_reason=policy_reason,
     )
 
 
@@ -348,19 +345,19 @@ def main() -> None:
     ok_count = sum(1 for r in results if r.status == "ok")
     degraded_count = sum(1 for r in results if r.status == "degraded")
     failed_count = sum(1 for r in results if r.status == "failed")
-    applied_count = sum(1 for r in results if r.applied)
+    eligible_count = sum(1 for r in results if r.policy_should_apply)
     
     for r in results:
         status_icon = {"ok": "OK", "degraded": "DEGRADED", "failed": "FAILED"}[r.status]
-        applied_str = "APPLIED" if r.applied else "not applied"
+        eligible_str = "ELIGIBLE" if r.policy_should_apply else "not eligible"
         mult_str = f"{r.smoothed_multiplier:.4f}" if r.smoothed_multiplier else "N/A"
-        print(f"  {r.underlying}: {status_icon}, mult={mult_str}, {applied_str}")
+        print(f"  {r.underlying}: {status_icon}, mult={mult_str}, {eligible_str}")
     
     print(f"\nTotals:")
     print(f"  OK: {ok_count}")
     print(f"  Degraded: {degraded_count}")
     print(f"  Failed: {failed_count}")
-    print(f"  Applied: {applied_count}")
+    print(f"  Eligible (policy): {eligible_count}")
     print(f"\nFinished: {datetime.now(timezone.utc).isoformat()}")
     print(f"{'#'*60}\n")
     

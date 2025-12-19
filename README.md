@@ -224,10 +224,36 @@ IV Multiplier → Synthetic Option Prices → Premium Estimates → Greg VRP Sig
 
 2. **Use Auto-Calibration** (daily cron or manual)
    ```bash
-   python -m scripts.auto_calibrate_iv --underlying BTC
+  # Record a single harvested calibration run
+  python scripts/auto_calibrate_iv.py --underlying BTC
+
+  # Or run the daily batch (BTC,ETH) with policy eligibility reporting
+  python -m scripts.auto_calibrate_daily
    ```
    - Writes to `calibration_history` table
-   - Does NOT auto-apply—you must review and enable via Update Policy
+  - Does NOT auto-apply (cron runs in a separate process)
+  - To actually apply to the running service, use **Apply via Update Policy** in the UI
+    (or the equivalent calibration API endpoints)
+
+### Minimal “Call API Endpoint Daily” (Recommended)
+
+If you want daily calibration to actually update the runtime vol surface used by pricing/backtests,
+run it by calling the running web service (same process) rather than a local CLI that exits.
+
+```bash
+# Calls /api/calibration/run_with_policy on the running FastAPI service
+CALIBRATION_BASE_URL="http://127.0.0.1:8000" \
+  CALIBRATION_SOURCE="harvested" \
+  CALIBRATION_UNDERLYINGS="BTC,ETH" \
+  CALIBRATION_MIN_DTE=3 CALIBRATION_MAX_DTE=10 \
+  python scripts/cron_calibrate_via_api.py
+```
+
+Cron example (03:10 UTC):
+
+```bash
+10 3 * * * CALIBRATION_BASE_URL="http://127.0.0.1:8000" /path/to/repo/scripts/cron_calibrate_via_api.py >> /path/to/repo/logs/cron_calibrate_api.log 2>&1
+```
 
 3. **Apply via Update Policy** (UI: Calibration → Update Policy)
    - EWMA smoothing prevents sudden jumps
