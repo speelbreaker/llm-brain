@@ -872,7 +872,13 @@ async def run_supervisor_job(job: SupervisorJob, app: FastAPI) -> None:
                     check_lines = []
                     for check in new_verification.checks:
                         status = "✅" if check.passed else "❌"
-                        cmd = check.command.split()[0].split("/")[-1]
+                        cmd_lower = check.command.lower()
+                        if "pytest" in cmd_lower:
+                            cmd = "pytest"
+                        elif "ruff" in cmd_lower:
+                            cmd = "ruff"
+                        else:
+                            cmd = check.command.split()[0].split("/")[-1]
                         result_text = "Pass" if check.passed else "Fail"
                         check_lines.append(f"- {status} {result_text} `{cmd}`")
                     if not check_lines:
