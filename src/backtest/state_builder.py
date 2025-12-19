@@ -424,6 +424,7 @@ def build_historical_state(
         )
     elif chain_mode == "live_chain":
         # Hybrid mode: live chain with configurable sigma mode
+        # Falls back to synthetic_grid when harvested chain is empty
         if spot is not None and spot > 0:
             if collect_debug_samples:
                 candidates, debug_samples = _generate_live_chain_candidates(
@@ -435,6 +436,25 @@ def build_historical_state(
                     ds, spot, t, cfg, spot_history, 
                     collect_debug_samples=False
                 )
+            
+            if not candidates:
+                logger.warning(
+                    f"[build_historical_state] live_chain returned empty at {t}, "
+                    f"falling back to synthetic_grid for {underlying}"
+                )
+                skew_source = getattr(cfg, "skew_source", "none")
+                sigma = get_sigma_for_option(
+                    config=cfg,
+                    spot_history=spot_history,
+                    as_of=t,
+                    option_chain=None,
+                    option_mark_iv=None,
+                    abs_delta=cfg.target_delta,
+                    regime_state=regime_state,
+                    skew_source=skew_source,
+                    dte_days=float(cfg.target_dte),
+                )
+                candidates = _generate_synthetic_candidates(spot, t, cfg, sigma)
     else:
         # Default: synthetic_grid mode
         if spot is not None and spot > 0:

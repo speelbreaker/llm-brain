@@ -337,10 +337,10 @@ def start_backtest(req: BacktestStartRequest) -> JSONResponse:
         margin_type=req.margin_type,
         settlement_ccy=req.settlement_ccy,
         sigma_mode=req.sigma_mode,
-        chain_mode=req.chain_mode,
+        chain_mode=effective_chain_mode,
         synthetic_iv_multiplier=req.synthetic_iv_multiplier,
         selector_name=req.selector_name,
-        skew_source=req.skew_source.value,
+        skew_source=effective_skew_source.value,
     )
     
     if not started:
@@ -353,7 +353,12 @@ def start_backtest(req: BacktestStartRequest) -> JSONResponse:
         "started": True,
         "backtest_type": "generic",
         "warnings": validation.warnings,
-        "effective_config": validation.effective_config,
+        "effective_config": {
+            **validation.effective_config,
+            "chain_mode": effective_chain_mode,
+            "skew_source": effective_skew_source.value,
+            "is_historical": is_historical,
+        },
     })
 
 
@@ -365,7 +370,6 @@ def _run_greg_selector_backtest(req: BacktestStartRequest) -> JSONResponse:
     response that does NOT use the backtest_manager and does NOT block other backtests.
     """
     from src.backtest.selector_scan import SelectorScanConfig, run_selector_scan
-    from datetime import timedelta
     
     try:
         start_dt = datetime.fromisoformat(req.start.replace("Z", "+00:00"))
@@ -381,9 +385,15 @@ def _run_greg_selector_backtest(req: BacktestStartRequest) -> JSONResponse:
     if start_dt >= end_dt:
         raise HTTPException(status_code=400, detail="Start date must be before end date")
 
-    now_utc = datetime.now(timezone.utc)
-    is_historical = end_dt < (now_utc - timedelta(minutes=5))
-    if is_historical and req.skew_source == SkewSourceType.LIVE:
+    is_historical = is_historical_backtest(end_dt)
+    
+    _, effective_skew_source = apply_historical_defaults(
+        is_historical=is_historical,
+        chain_mode=req.chain_mode,
+        skew_source=req.skew_source,
+    )
+    
+    if is_historical and effective_skew_source == SkewSourceType.LIVE:
         raise HTTPException(
             status_code=400,
             detail=(
