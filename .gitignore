@@ -83,6 +83,7 @@ secrets.json
 
 # local env / secrets
 .env*
+**/.env*
 docker/*.env
 docker/pr-supervisor.env
 key.md
@@ -92,6 +93,4 @@ key.md*
 *.key
 *.p12
 *.crt
-*.pub
-.gitleaks.toml
-.secrets.baseline
+# Do NOT ignore all *.pub; only specific key artifacts above.

@@ -11,10 +11,14 @@ import re
 import subprocess
 import sys
 from pathlib import Path
+from typing import Iterable
 
 
 SUSPICIOUS_PATTERNS = [
-    re.compile(r"(api_key|token|secret|password|private_key)[\\s:=]{1,6}['\"]?[A-Za-z0-9]{20,}", re.IGNORECASE),
+    re.compile(
+        r"(api_key|token|secret|password|private_key)[\\s:=]{1,6}['\"]?[A-Za-z0-9_-]{16,}",
+        re.IGNORECASE,
+    ),
 ]
 
 SKIP_DIRS = {
@@ -60,9 +64,15 @@ def should_skip(path: Path) -> bool:
     return False
 
 
-def main() -> int:
-    failures: list[str] = []
-    for path in iter_tracked_files():
+def _redact(text: str) -> str:
+    if len(text) <= 4:
+        return "***REDACTED***"
+    return "***REDACTED***" + text[-4:]
+
+
+def scan_paths(paths: Iterable[Path]) -> list[dict[str, str]]:
+    findings: list[dict[str, str]] = []
+    for path in paths:
         if should_skip(path):
             continue
         try:
@@ -71,14 +81,27 @@ def main() -> int:
             continue
         for pat in SUSPICIOUS_PATTERNS:
             for match in pat.finditer(content):
-                snippet = content[max(0, match.start() - 10) : match.end() + 10]
-                failures.append(f"{path}: {snippet.strip()}")
-                break  # one hit is enough per file
+                line_no = content.count("\n", 0, match.start()) + 1
+                findings.append(
+                    {
+                        "path": str(path),
+                        "line": str(line_no),
+                        "pattern": pat.pattern,
+                        "value": _redact(match.group(0)),
+                    }
+                )
+                break
+    return findings
 
-    if failures:
-        print("🚨 Potential secrets detected:")
-        for item in failures:
-            print(f"- {item}")
+
+def main() -> int:
+    files = iter_tracked_files()
+    findings = scan_paths(files)
+
+    if findings:
+        print("🚨 Potential secrets detected (values redacted):")
+        for f in findings:
+            print(f"- {f['path']}: line {f['line']} pattern={f['pattern']}")
         return 1
 
     print("✅ No obvious secrets detected.")

@@ -11,10 +11,11 @@ Manual scans
 ------------
 - Working tree: `scripts/security/scan_worktree_secrets.sh`
 - Staged changes: `scripts/security/scan_staged_secrets.sh`
-- Git history: `scripts/security/scan_git_history_secrets.sh [deep|shallow]`
+- Git history: `scripts/security/scan_git_history_secrets.sh [deep|shallow]` (deep scans full history; can be slow)
+- Scripts use local gitleaks if present, or fall back to docker image automatically.
 
 Rotation helper
 ---------------
-- Interactive env rotation: `scripts/security/rotate_supervisor_secrets.sh`
-  - Backs up the env file, prompts for new keys, writes values without echoing secrets.
-  - After rotation, restart the supervisor container.
+- Interactive env rotation: `scripts/security/rotate_supervisor_secrets.sh [--restart]`
+  - Backs up the env file, prompts for new keys without echoing, sets chmod 600.
+  - Optionally restarts via `docker/run_pr_supervisor.sh` when `--restart` is passed.
