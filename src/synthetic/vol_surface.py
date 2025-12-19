@@ -135,11 +135,38 @@ class VolSurfaceConfig(BaseModel):
 _runtime_vol_surface: Optional[VolSurfaceConfig] = None
 
 
+def _get_default_dte_bands() -> List[DteBand]:
+    """
+    Get default DTE bands for term-structure realism.
+    
+    Rationale:
+    - Weekly options (3-10 DTE): Higher gamma, faster decay, use 1.0x multiplier
+    - Monthly options (20-40 DTE): Lower gamma, smoother IV, use 1.10x multiplier
+      (monthly IV tends to be 5-15% higher than weekly in crypto due to event risk)
+    - Outside bands: Fall back to global iv_multiplier
+    
+    These defaults provide realistic term structure out-of-the-box without
+    requiring calibration. Calibration results override these defaults.
+    """
+    return [
+        DteBand(name="weekly", min_dte=3.0, max_dte=10.0, iv_multiplier=1.00),
+        DteBand(name="monthly", min_dte=20.0, max_dte=40.0, iv_multiplier=1.10),
+    ]
+
+
 def get_vol_surface_config() -> VolSurfaceConfig:
-    """Get the current runtime vol surface configuration."""
+    """
+    Get the current runtime vol surface configuration.
+    
+    If no runtime config is set, returns a default config with sensible
+    DTE bands for term-structure realism. Calibration/runtime overrides
+    replace these defaults entirely.
+    """
     global _runtime_vol_surface
     if _runtime_vol_surface is None:
-        _runtime_vol_surface = VolSurfaceConfig()
+        _runtime_vol_surface = VolSurfaceConfig(
+            dte_bands=_get_default_dte_bands()
+        )
     return _runtime_vol_surface
 
 
@@ -147,6 +174,17 @@ def set_vol_surface_config(config: VolSurfaceConfig) -> None:
     """Set the runtime vol surface configuration."""
     global _runtime_vol_surface
     _runtime_vol_surface = config
+
+
+def reset_vol_surface_config() -> None:
+    """
+    Reset the runtime vol surface config to None.
+    
+    Next call to get_vol_surface_config() will return defaults.
+    Useful for testing.
+    """
+    global _runtime_vol_surface
+    _runtime_vol_surface = None
 
 
 def update_vol_surface_from_calibration(recommended: Dict[str, Any]) -> VolSurfaceConfig:
