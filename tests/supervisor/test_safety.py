@@ -1,6 +1,5 @@
 """Safety tests for PR Supervisor hotfixes."""
 
-import asyncio
 import hashlib
 import hmac
 import json
