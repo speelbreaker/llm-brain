@@ -6,6 +6,11 @@ Stores backtest results in:
 
 Maintains an index file at:
   data/backtests/index.jsonl
+
+Environment Variables:
+  BACKTEST_RUNS_DIR: Override the base directory for backtest storage.
+                     Default is "data/backtests". Set this in tests to
+                     use a temp directory and keep the repo clean.
 """
 from __future__ import annotations
 
@@ -20,10 +25,26 @@ from typing import Any, Dict, List, Literal, Optional
 
 StatusType = Literal["queued", "running", "finished", "failed"]
 
-BACKTESTS_DIR = Path("data/backtests")
-INDEX_FILE = BACKTESTS_DIR / "index.jsonl"
+_DEFAULT_BACKTESTS_DIR = Path("data/backtests")
 
 _lock = threading.Lock()
+
+
+def _get_backtests_dir() -> Path:
+    """Get the backtests directory, respecting BACKTEST_RUNS_DIR env override."""
+    override = os.environ.get("BACKTEST_RUNS_DIR")
+    if override:
+        return Path(override)
+    return _DEFAULT_BACKTESTS_DIR
+
+
+def _get_index_file() -> Path:
+    """Get the index file path, respecting BACKTEST_RUNS_DIR env override."""
+    return _get_backtests_dir() / "index.jsonl"
+
+
+BACKTESTS_DIR = _DEFAULT_BACKTESTS_DIR
+INDEX_FILE = BACKTESTS_DIR / "index.jsonl"
 
 
 @dataclass
@@ -129,7 +150,7 @@ def generate_run_id(underlying: str = "BTC") -> str:
 
 def get_run_dir(run_id: str) -> Path:
     """Get the directory path for a run."""
-    return BACKTESTS_DIR / run_id
+    return _get_backtests_dir() / run_id
 
 
 def get_result_path(run_id: str) -> Path:
@@ -139,7 +160,7 @@ def get_result_path(run_id: str) -> Path:
 
 def ensure_backtests_dir() -> None:
     """Ensure the backtests directory exists."""
-    BACKTESTS_DIR.mkdir(parents=True, exist_ok=True)
+    _get_backtests_dir().mkdir(parents=True, exist_ok=True)
 
 
 def create_run(config: Dict[str, Any]) -> BacktestRunResult:
@@ -289,13 +310,14 @@ def load_index() -> List[BacktestIndexEntry]:
     """
     ensure_backtests_dir()
     
-    if not INDEX_FILE.exists():
+    index_file = _get_index_file()
+    if not index_file.exists():
         return []
     
     entries_by_id: Dict[str, BacktestIndexEntry] = {}
     
     try:
-        with open(INDEX_FILE, "r") as f:
+        with open(index_file, "r") as f:
             for line in f:
                 line = line.strip()
                 if not line:
@@ -366,7 +388,7 @@ def _append_index_entry(entry: BacktestIndexEntry) -> None:
     ensure_backtests_dir()
     
     with _lock:
-        with open(INDEX_FILE, "a") as f:
+        with open(_get_index_file(), "a") as f:
             f.write(json.dumps(entry.to_dict()) + "\n")
 
 
@@ -411,8 +433,9 @@ def _rewrite_index(entries: List[BacktestIndexEntry]) -> None:
     """Rewrite the entire index file."""
     ensure_backtests_dir()
     
-    tmp_path = INDEX_FILE.with_suffix(".tmp")
+    index_file = _get_index_file()
+    tmp_path = index_file.with_suffix(".tmp")
     with open(tmp_path, "w") as f:
         for entry in entries:
             f.write(json.dumps(entry.to_dict()) + "\n")
-    tmp_path.replace(INDEX_FILE)
+    tmp_path.replace(index_file)
