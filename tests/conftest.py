@@ -36,15 +36,21 @@ def isolate_backtest_storage(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) ->
 @pytest.fixture(autouse=True)
 def isolate_test_database(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Generator[Path, None, None]:
     """
-    Automatically isolate test database to a temp directory.
+    Automatically isolate test databases to a temp directory.
     
-    This prevents .test_db.sqlite from being created in the repo root.
+    This prevents .test_db.sqlite and data/agent_data.db from being 
+    created/modified in the repo.
     
     Yields:
         Path to the isolated database file
     """
-    db_path = tmp_path / "test_db.sqlite"
+    db_dir = tmp_path / "db"
+    db_dir.mkdir(parents=True, exist_ok=True)
     
-    monkeypatch.setenv("TEST_DB_PATH", str(db_path))
+    agent_db_path = db_dir / "agent_data.db"
+    monkeypatch.setenv("AGENT_DB_PATH", str(agent_db_path))
     
-    yield db_path
+    test_db_path = db_dir / "test_db.sqlite"
+    monkeypatch.setenv("TEST_DB_PATH", str(test_db_path))
+    
+    yield test_db_path

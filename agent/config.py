@@ -36,7 +36,7 @@ class Settings:
     openai_reasoning_effort: str = "high"
     openai_transcribe_model: str = "gpt-4o-mini-transcribe"
     
-    db_path: Path = field(default_factory=lambda: Path("data/agent_data.db"))
+    db_path: Path = field(default_factory=lambda: Path(os.environ.get("AGENT_DB_PATH", "data/agent_data.db")))
     log_paths: list[str] = field(default_factory=lambda: ["logs/app.log", "logs/tests.log"])
     config_watch_files: list[str] = field(default_factory=lambda: [
         ".env.example",

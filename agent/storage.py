@@ -85,8 +85,15 @@ class CheckRun:
 
 
 def _get_db_path() -> Path:
-    """Get database path, creating parent directories if needed."""
-    if settings:
+    """Get database path, creating parent directories if needed.
+    
+    Respects AGENT_DB_PATH environment variable for test isolation.
+    """
+    import os
+    env_path = os.environ.get("AGENT_DB_PATH")
+    if env_path:
+        db_path = Path(env_path)
+    elif settings:
         db_path = settings.db_path
     else:
         db_path = Path("data/agent_data.db")
