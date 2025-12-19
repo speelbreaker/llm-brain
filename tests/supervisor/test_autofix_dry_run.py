@@ -114,10 +114,16 @@ async def test_autofix_dry_run_posts_comment_and_skips_codex(monkeypatch, tmp_pa
     monkeypatch.setattr(app_module, "DebateSystem", FakeDebateSystem)
 
     apply_fix_mock = AsyncMock(return_value=(True, "ok"))
+    commit_and_push_mock = AsyncMock(return_value="deadbeef")
     def build_prompt_mock(self, *args, **kwargs):  # noqa: ANN001
         return "PROMPT CONTENT WITH FIX"
     monkeypatch.setattr(app_module.CodexFixer, "apply_fix", apply_fix_mock)
     monkeypatch.setattr(app_module.CodexFixer, "build_fix_prompt", build_prompt_mock)
+    monkeypatch.setattr(
+        FakeWorkspaceManager,
+        "commit_and_push",
+        commit_and_push_mock,
+    )
 
     # Stub notifier to no-op
     class NoopNotifier:
@@ -158,6 +164,7 @@ async def test_autofix_dry_run_posts_comment_and_skips_codex(monkeypatch, tmp_pa
     assert job.final_message == "Autofix approved (dry-run): no changes pushed."
 
     apply_fix_mock.assert_not_awaited()
+    commit_and_push_mock.assert_not_awaited()
     assert post_comments, "Expected a GitHub comment to be posted"
     assert any("Autofix Dry-Run" in c for c in post_comments)
     assert any("fix the boom" in c for c in post_comments)

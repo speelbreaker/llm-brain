@@ -80,3 +80,12 @@ secrets.json
 
 # mypy
 .mypy_cache/
+
+# local env / secrets
+.env*
+docker/*.env
+docker/pr-supervisor.env
+key.md
+key.md.pub
+*.pem
+*.key
