@@ -39,6 +39,17 @@ from src.state_core import (
 logger = logging.getLogger(__name__)
 
 
+def _is_effectively_now(ts: datetime, *, tolerance_minutes: int = 5) -> bool:
+    """Return True if ts is within a small window of now (UTC).
+
+    We treat timestamps older than this window as historical for the purpose of
+    preventing look-ahead when using DeribitDataSource live chain snapshots.
+    """
+    now_utc = datetime.now(timezone.utc)
+    ts_utc = ts if ts.tzinfo is not None else ts.replace(tzinfo=timezone.utc)
+    return ts_utc >= (now_utc - timedelta(minutes=tolerance_minutes))
+
+
 def _generate_synthetic_candidates(
     spot: float,
     t: datetime,
@@ -431,16 +442,40 @@ def build_historical_state(
         # Hybrid mode: live chain with configurable sigma mode
         # Falls back to synthetic_grid when harvested chain is empty
         if spot is not None and spot > 0:
-            if collect_debug_samples:
-                candidates, debug_samples = _generate_live_chain_candidates(
-                    ds, spot, t, cfg, spot_history, 
-                    collect_debug_samples=True
+            # DeribitDataSource does NOT provide historical option chains (it returns current instruments/summaries).
+            # Using it for t in the past is pure look-ahead. Block and fall back to synthetic grid.
+            if ds_class == "DeribitDataSource" and not _is_effectively_now(t):
+                used_synthetic_fallback = True
+                chain_source = "live_chain_blocked_deribit_api"
+                logger.warning(
+                    f"[build_historical_state] Blocking DeribitDataSource live_chain for historical timestamp {t}; "
+                    "falling back to synthetic_grid to avoid look-ahead."
                 )
+
+                skew_source = getattr(cfg, "skew_source", "none")
+                sigma = get_sigma_for_option(
+                    config=cfg,
+                    spot_history=spot_history,
+                    as_of=t,
+                    option_chain=None,
+                    option_mark_iv=None,
+                    abs_delta=cfg.target_delta,
+                    regime_state=regime_state,
+                    skew_source=skew_source,
+                    dte_days=float(cfg.target_dte),
+                )
+                candidates = _generate_synthetic_candidates(spot, t, cfg, sigma)
             else:
-                candidates = _generate_live_chain_candidates(
-                    ds, spot, t, cfg, spot_history, 
-                    collect_debug_samples=False
-                )
+                if collect_debug_samples:
+                    candidates, debug_samples = _generate_live_chain_candidates(
+                        ds, spot, t, cfg, spot_history,
+                        collect_debug_samples=True
+                    )
+                else:
+                    candidates = _generate_live_chain_candidates(
+                        ds, spot, t, cfg, spot_history,
+                        collect_debug_samples=False
+                    )
             
             if not candidates:
                 used_synthetic_fallback = True
@@ -472,7 +507,7 @@ def build_historical_state(
                     logger.error(error_msg)
                     raise ValueError(error_msg)
 
-            if candidates and chain_source != "synthetic_fallback":
+            if candidates and chain_source not in ("synthetic_fallback", "live_chain_blocked_deribit_api"):
                 if ds_class == "LiveDeribitDataSource":
                     chain_source = "harvested_chain"
                 elif ds_class == "DeribitDataSource":
@@ -680,7 +715,10 @@ def build_historical_agent_state(
     elif chain_mode == "live_chain":
         # Hybrid mode: live chain with configurable sigma mode
         if spot > 0:
-            options = _generate_live_chain_candidates(ds, spot, t, cfg, spot_history)
+            if ds.__class__.__name__ == "DeribitDataSource" and not _is_effectively_now(t):
+                options = _generate_synthetic_candidates(spot, t, cfg, sigma)
+            else:
+                options = _generate_live_chain_candidates(ds, spot, t, cfg, spot_history)
     else:
         # Default: synthetic_grid mode
         if spot > 0:
