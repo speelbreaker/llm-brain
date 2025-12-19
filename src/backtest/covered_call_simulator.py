@@ -19,7 +19,7 @@ import pandas as pd
 
 from .data_source import MarketDataSource
 from .types import CallSimulationConfig, SimulatedTrade, SimulationResult, TrainingExample, OptionSnapshot, ExitStyle, ChainData, ChainLeg, RollTrigger
-from .pricing import bs_call_price, bs_call_delta, get_synthetic_iv, compute_realized_volatility
+from .pricing import bs_call_price, bs_call_delta, get_synthetic_iv, compute_realized_volatility, get_sigma_for_option
 from src.models import MarketContext
 from src.metrics.volatility import compute_ivrv_ratio
 from src.scoring.candidates import score_option_candidate
@@ -46,9 +46,42 @@ class CoveredCallSimulator:
         self.cfg = config
         self._spot_history_cache: List[tuple] = []
     
-    def _get_synthetic_iv(self, as_of: datetime) -> float:
-        """Get synthetic implied volatility for pricing."""
-        return get_synthetic_iv(self.cfg, self._spot_history_cache, as_of)
+    def _get_synthetic_iv(
+        self,
+        as_of: datetime,
+        dte_days: Optional[float] = None,
+        abs_delta: Optional[float] = None,
+        option_mark_iv: Optional[float] = None,
+        option_chain: Optional[List[OptionSnapshot]] = None,
+    ) -> float:
+        """
+        Get synthetic implied volatility for pricing via unified get_sigma_for_option.
+        
+        Args:
+            as_of: Reference time for calculation
+            dte_days: Days to expiry (uses target_dte if not provided)
+            abs_delta: Absolute delta for skew adjustment (uses target_delta if not provided)
+            option_mark_iv: Mark IV for mark_iv_x_multiplier mode
+            option_chain: Option chain for atm_iv_x_multiplier mode
+            
+        Returns:
+            IV as decimal for Black-Scholes pricing
+        """
+        effective_delta = abs_delta if abs_delta is not None else self.cfg.target_delta
+        effective_dte = dte_days if dte_days is not None else float(self.cfg.target_dte)
+        skew_source = getattr(self.cfg, 'skew_source', 'none')
+        
+        return get_sigma_for_option(
+            config=self.cfg,
+            spot_history=self._spot_history_cache,
+            as_of=as_of,
+            option_chain=option_chain,
+            option_mark_iv=option_mark_iv,
+            abs_delta=effective_delta,
+            regime_state=None,
+            skew_source=skew_source,
+            dte_days=effective_dte,
+        )
     
     def _compute_synthetic_option_price(
         self,
@@ -56,16 +89,49 @@ class CoveredCallSimulator:
         strike: float,
         expiry: datetime,
         as_of: datetime,
+        abs_delta: Optional[float] = None,
+        option_mark_iv: Optional[float] = None,
+        option_chain: Optional[List[OptionSnapshot]] = None,
     ) -> tuple:
         """
         Compute synthetic call option price and delta using Black-Scholes.
         
+        Uses get_sigma_for_option for unified sigma selection respecting
+        sigma_mode, chain_mode, skew_source, and vol-surface config.
+        
+        Args:
+            spot: Current spot price
+            strike: Option strike price
+            expiry: Option expiry datetime
+            as_of: Reference time
+            abs_delta: Absolute delta for skew (computed via BS if not provided)
+            option_mark_iv: Mark IV for mark_iv_x_multiplier mode
+            option_chain: Option chain for atm_iv_x_multiplier mode
+            
         Returns:
             Tuple of (price, delta)
         """
-        sigma = self._get_synthetic_iv(as_of)
         t_years = max((expiry - as_of).total_seconds() / (365.0 * 24 * 3600), 1e-6)
+        dte_days = (expiry - as_of).total_seconds() / 86400.0
         r = self.cfg.risk_free_rate
+        
+        if abs_delta is None:
+            initial_sigma = self._get_synthetic_iv(
+                as_of=as_of,
+                dte_days=dte_days,
+                abs_delta=self.cfg.target_delta,
+                option_mark_iv=option_mark_iv,
+                option_chain=option_chain,
+            )
+            abs_delta = abs(bs_call_delta(spot, strike, t_years, initial_sigma, r))
+        
+        sigma = self._get_synthetic_iv(
+            as_of=as_of,
+            dte_days=dte_days,
+            abs_delta=abs_delta,
+            option_mark_iv=option_mark_iv,
+            option_chain=option_chain,
+        )
         
         price = bs_call_price(spot, strike, t_years, sigma, r)
         delta = bs_call_delta(spot, strike, t_years, sigma, r)
@@ -98,16 +164,22 @@ class CoveredCallSimulator:
         spot_series: pd.Series,
         strike: float,
         expiry: datetime,
+        option_mark_iv: Optional[float] = None,
+        option_chain: Optional[List[OptionSnapshot]] = None,
     ) -> pd.Series:
         """
         Generate synthetic option prices for an entire spot time series.
         
-        Uses IV computed at each timestamp to avoid look-ahead bias.
+        Uses get_sigma_for_option at each timestamp with proper dte_days and
+        delta calculation to avoid look-ahead bias and respect sigma_mode,
+        chain_mode, skew_source, and vol-surface config.
         
         Args:
             spot_series: Pandas Series with datetime index and spot prices
             strike: Option strike price
             expiry: Option expiry datetime
+            option_mark_iv: Optional mark IV for mark_iv_x_multiplier mode
+            option_chain: Optional option chain for atm_iv_x_multiplier mode
         
         Returns:
             Pandas Series with synthetic option prices
@@ -124,9 +196,26 @@ class CoveredCallSimulator:
             else:
                 ts_dt = datetime.utcnow()
             
-            sigma = self._get_synthetic_iv(ts_dt)
-            
             t_years = max((expiry - ts_dt).total_seconds() / (365.0 * 24 * 3600), 1e-6)
+            dte_days = (expiry - ts_dt).total_seconds() / 86400.0
+            
+            initial_sigma = self._get_synthetic_iv(
+                as_of=ts_dt,
+                dte_days=dte_days,
+                abs_delta=self.cfg.target_delta,
+                option_mark_iv=option_mark_iv,
+                option_chain=option_chain,
+            )
+            abs_delta = abs(bs_call_delta(float(spot_val), strike, t_years, initial_sigma, r))
+            
+            sigma = self._get_synthetic_iv(
+                as_of=ts_dt,
+                dte_days=dte_days,
+                abs_delta=abs_delta,
+                option_mark_iv=option_mark_iv,
+                option_chain=option_chain,
+            )
+            
             price = bs_call_price(float(spot_val), strike, t_years, sigma, r)
             prices.append(price)
         
@@ -582,14 +671,24 @@ class CoveredCallSimulator:
                 self._build_spot_history_cache(cfg.start, cfg.end)
             
             spot_at_open = float(spot_df["close"].iloc[0])
-            open_price, _ = self._compute_synthetic_option_price(spot_at_open, strike, expiry, decision_time)
+            snapshot_delta = abs(float(option_snapshot.delta)) if option_snapshot.delta is not None else None
+            snapshot_mark_iv = float(option_snapshot.iv) if option_snapshot.iv is not None else None
+            
+            open_price, _ = self._compute_synthetic_option_price(
+                spot_at_open, strike, expiry, decision_time,
+                abs_delta=snapshot_delta,
+                option_mark_iv=snapshot_mark_iv,
+            )
             
             if open_price <= 0:
                 return None
             
             idx = spot_df.index.sort_values()
             spot = spot_df.reindex(idx).ffill()["close"]
-            opt_price = self._generate_synthetic_option_prices(spot, strike, expiry)
+            opt_price = self._generate_synthetic_option_prices(
+                spot, strike, expiry,
+                option_mark_iv=snapshot_mark_iv,
+            )
         else:
             open_price = float(option_snapshot.mark_price or 0.0)
             if open_price <= 0:
@@ -727,13 +826,23 @@ class CoveredCallSimulator:
             
             if use_synthetic:
                 spot_at_open = float(spot_df["close"].iloc[0])
-                open_price, _ = self._compute_synthetic_option_price(spot_at_open, strike, expiry, current_leg_open_time)
+                current_delta = abs(float(current_opt.delta)) if current_opt.delta is not None else None
+                current_mark_iv = float(current_opt.iv) if current_opt.iv is not None else None
+                
+                open_price, _ = self._compute_synthetic_option_price(
+                    spot_at_open, strike, expiry, current_leg_open_time,
+                    abs_delta=current_delta,
+                    option_mark_iv=current_mark_iv,
+                )
                 if open_price <= 0:
                     break
                 
                 idx = spot_df.index.sort_values()
                 spot_series = spot_df.reindex(idx).ffill()["close"]
-                opt_price_series = self._generate_synthetic_option_prices(spot_series, strike, expiry)
+                opt_price_series = self._generate_synthetic_option_prices(
+                    spot_series, strike, expiry,
+                    option_mark_iv=current_mark_iv,
+                )
             else:
                 open_price = float(current_opt.mark_price or 0.0)
                 if open_price <= 0:
