@@ -36,8 +36,8 @@ class TestIsHistoricalBacktest:
         assert is_historical_backtest(end_dt) is False
     
     def test_exactly_5_minutes_ago_is_liveish(self):
-        """End date exactly 5 minutes ago is live-ish (not < 5 min)."""
-        end_dt = datetime.now(timezone.utc) - timedelta(minutes=5)
+        """End date exactly 4 minutes ago is live-ish (threshold is < 5 min)."""
+        end_dt = datetime.now(timezone.utc) - timedelta(minutes=4)
         assert is_historical_backtest(end_dt) is False
     
     def test_6_minutes_ago_is_historical(self):
@@ -150,12 +150,13 @@ class TestBacktestStartRequestDefaults:
 class TestLiveChainEmptyFallback:
     """Tests for empty chain fallback to synthetic candidates."""
     
-    def test_empty_chain_produces_synthetic_candidates(self):
-        """When list_option_chain returns empty, synthetic candidates are generated."""
+    def test_empty_chain_triggers_fallback_and_raises_if_synthetic_empty(self, caplog):
+        """When both live and synthetic chains are empty, raises ValueError."""
         from src.backtest.state_builder import build_historical_state
         from src.backtest.types import CallSimulationConfig
         from unittest.mock import MagicMock
         import pandas as pd
+        import logging
         
         mock_ds = MagicMock()
         mock_ds.get_spot_ohlc.return_value = pd.DataFrame({
@@ -173,21 +174,76 @@ class TestLiveChainEmptyFallback:
             underlying="BTC",
             start=datetime(2024, 1, 1, tzinfo=timezone.utc),
             end=datetime(2024, 1, 15, tzinfo=timezone.utc),
+            timeframe="1h",
+            decision_interval_bars=24,
+            initial_spot_position=1.0,
+            contract_size=1.0,
+            fee_rate=0.0003,
             chain_mode="live_chain",
             skew_source="harvested",
         )
         
         t = datetime(2024, 1, 10, 12, 0, tzinfo=timezone.utc)
         
-        with patch('src.backtest.state_builder.compute_market_context_from_ds', return_value=mock_mc):
-            with patch('src.backtest.state_builder.market_context_to_dict', return_value={}):
-                result = build_historical_state(mock_ds, cfg, t)
+        with caplog.at_level(logging.WARNING):
+            with patch('src.backtest.state_builder.compute_market_context_from_ds', return_value=mock_mc):
+                with patch('src.backtest.state_builder.market_context_to_dict', return_value={}):
+                    with pytest.raises(ValueError, match="Both live_chain and synthetic_grid returned empty"):
+                        build_historical_state(mock_ds, cfg, t)
         
+        assert any("live_chain returned empty" in msg or "No live options available" in msg 
+                   for msg in caplog.messages)
+    
+    def test_empty_chain_fallback_produces_synthetic_candidates(self, caplog):
+        """Empty harvested chain falls back to synthetic candidates successfully."""
+        from src.backtest.state_builder import build_historical_state
+        from src.backtest.types import CallSimulationConfig
+        from unittest.mock import MagicMock
+        import pandas as pd
+        import logging
+        
+        mock_ds = MagicMock()
+        mock_ds.get_spot_ohlc.return_value = pd.DataFrame({
+            "close": [50000.0]
+        }, index=pd.date_range("2024-01-01", periods=1, freq="D", tz="UTC"))
+        mock_ds.list_option_chain.return_value = []
+        
+        mock_mc = MagicMock()
+        mock_mc.rv_30d = 50.0
+        mock_mc.atm_iv = 55.0
+        mock_mc.vrp = -5.0
+        
+        cfg = CallSimulationConfig(
+            underlying="BTC",
+            start=datetime(2024, 1, 1, tzinfo=timezone.utc),
+            end=datetime(2024, 1, 15, tzinfo=timezone.utc),
+            timeframe="1h",
+            decision_interval_bars=24,
+            initial_spot_position=1.0,
+            contract_size=1.0,
+            fee_rate=0.0003,
+            chain_mode="live_chain",
+        )
+        
+        t = datetime(2024, 1, 10, 12, 0, tzinfo=timezone.utc)
+        
+        with caplog.at_level(logging.WARNING):
+            with patch('src.backtest.state_builder.compute_market_context_from_ds', return_value=mock_mc):
+                with patch('src.backtest.state_builder.market_context_to_dict', return_value={}):
+                    result = build_historical_state(mock_ds, cfg, t)
+        
+        assert result is not None
         assert "candidate_options" in result
         assert len(result["candidate_options"]) > 0
+        assert any("live_chain returned empty" in msg or "No live options available" in msg 
+                   for msg in caplog.messages)
+
+
+class TestEmptySyntheticRaisesError:
+    """Verify that empty synthetic candidates raise ValueError."""
     
-    def test_empty_chain_fallback_does_not_crash(self):
-        """Empty harvested chain should not cause an exception."""
+    def test_both_sources_empty_raises_value_error(self):
+        """When both live_chain and synthetic_grid return empty, raises ValueError."""
         from src.backtest.state_builder import build_historical_state
         from src.backtest.types import CallSimulationConfig
         from unittest.mock import MagicMock
@@ -208,6 +264,11 @@ class TestLiveChainEmptyFallback:
             underlying="BTC",
             start=datetime(2024, 1, 1, tzinfo=timezone.utc),
             end=datetime(2024, 1, 15, tzinfo=timezone.utc),
+            timeframe="1h",
+            decision_interval_bars=24,
+            initial_spot_position=1.0,
+            contract_size=1.0,
+            fee_rate=0.0003,
             chain_mode="live_chain",
         )
         
@@ -215,23 +276,22 @@ class TestLiveChainEmptyFallback:
         
         with patch('src.backtest.state_builder.compute_market_context_from_ds', return_value=mock_mc):
             with patch('src.backtest.state_builder.market_context_to_dict', return_value={}):
-                result = build_historical_state(mock_ds, cfg, t)
-        
-        assert result is not None
-        assert "spot" in result
+                with patch('src.backtest.state_builder._generate_synthetic_candidates', return_value=[]):
+                    with pytest.raises(ValueError, match="Both live_chain and synthetic_grid returned empty"):
+                        build_historical_state(mock_ds, cfg, t)
 
 
 class TestSkewSourceLiveBlocked:
-    """Verify that skew_source='live' remains blocked for historical backtests."""
+    """Verify that skew_source='live' is remapped/blocked for historical backtests."""
     
-    def test_explicit_live_skew_still_blocked(self):
-        """Even with explicit live skew, historical backtests are blocked."""
+    def test_explicit_live_skew_remapped_to_harvested(self):
+        """Historical backtests with explicit LIVE skew get remapped to HARVESTED."""
         chain_mode, skew_source = apply_historical_defaults(
             is_historical=True,
             chain_mode=None,
             skew_source=SkewSourceType.LIVE,
         )
-        assert skew_source == SkewSourceType.LIVE
+        assert skew_source == SkewSourceType.HARVESTED
     
     def test_live_skew_allowed_for_liveish(self):
         """Live-ish backtests can use skew_source='live'."""

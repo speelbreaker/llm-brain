@@ -651,6 +651,20 @@
     "name": "get_chat_history_endpoint"
   },
   {
+    "path": "/deploy-hook",
+    "methods": [
+      "POST"
+    ],
+    "name": "deploy_hook"
+  },
+  {
+    "path": "/deploy-status",
+    "methods": [
+      "GET"
+    ],
+    "name": "deploy_status"
+  },
+  {
     "path": "/health",
     "methods": [
       "GET"

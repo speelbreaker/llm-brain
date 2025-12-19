@@ -455,6 +455,15 @@ def build_historical_state(
                     dte_days=float(cfg.target_dte),
                 )
                 candidates = _generate_synthetic_candidates(spot, t, cfg, sigma)
+                
+                if not candidates:
+                    error_msg = (
+                        f"[build_historical_state] Both live_chain and synthetic_grid "
+                        f"returned empty candidates at {t} for {underlying}. "
+                        f"sigma={sigma:.4f}, spot={spot}, DTE range=[{cfg.min_dte}, {cfg.max_dte}]"
+                    )
+                    logger.error(error_msg)
+                    raise ValueError(error_msg)
     else:
         # Default: synthetic_grid mode
         if spot is not None and spot > 0:

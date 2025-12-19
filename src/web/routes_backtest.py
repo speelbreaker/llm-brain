@@ -99,7 +99,10 @@ class BacktestStartRequest(BaseModel):
     margin_type: TypingLiteral["inverse", "linear"] = "inverse"
     settlement_ccy: TypingLiteral["ANY", "USDC", "BTC", "ETH"] = "ANY"
     sigma_mode: str = "rv_x_multiplier"
-    chain_mode: str = "synthetic_grid"
+    chain_mode: Optional[str] = Field(
+        default=None,
+        description="Chain mode for candidates: None (auto based on backtest type), 'synthetic_grid', or 'live_chain'"
+    )
     synthetic_iv_multiplier: float = 1.0
     selector_name: str = "generic_covered_call"
     backtest_type: BacktestType = Field(
@@ -110,9 +113,9 @@ class BacktestStartRequest(BaseModel):
         default=["BTC", "ETH"],
         description="Underlyings for Greg selector mode (ignored in generic mode)"
     )
-    skew_source: SkewSourceType = Field(
-        default=SkewSourceType.NONE,
-        description="Skew source for IV calculations: 'none' (flat, safe), 'harvested' (historical), 'live' (blocked for historical backtests)"
+    skew_source: Optional[SkewSourceType] = Field(
+        default=None,
+        description="Skew source for IV: None (auto based on backtest type), 'none', 'harvested', 'live' (blocked for historical)"
     )
 
 
@@ -167,6 +170,52 @@ def _get_iv_mode_description(mode: str) -> str:
         "hybrid": "Uses live market IV when available; falls back to synthetic estimates otherwise",
     }
     return descriptions.get(mode, "Unknown IV mode")
+
+
+from datetime import timedelta
+
+
+def is_historical_backtest(end_dt: datetime) -> bool:
+    """
+    Determine if a backtest is historical based on its end date.
+    
+    Historical = end_dt < (now_utc - 5 minutes).
+    This matches the threshold used in existing API validation.
+    """
+    now_utc = datetime.now(timezone.utc)
+    return end_dt < (now_utc - timedelta(minutes=5))
+
+
+def apply_historical_defaults(
+    is_historical: bool,
+    chain_mode: Optional[str],
+    skew_source: Optional[SkewSourceType],
+) -> tuple[str, SkewSourceType]:
+    """
+    Apply smart defaults for chain_mode and skew_source based on backtest type.
+    
+    Historical backtests (end_dt > 5 min ago):
+      - chain_mode defaults to 'live_chain' (use harvested option chains)
+      - skew_source defaults to 'harvested' (historical skew data)
+      - LIVE skew is BLOCKED and remapped to HARVESTED to prevent look-ahead bias
+    
+    Live-ish backtests (end_dt within 5 min of now):
+      - chain_mode defaults to 'synthetic_grid' (safe generated candidates)
+      - skew_source defaults to 'none' (flat, safe estimates)
+    
+    Explicit overrides take precedence, except LIVE skew for historical (blocked).
+    """
+    if is_historical:
+        effective_chain_mode = chain_mode if chain_mode is not None else "live_chain"
+        if skew_source == SkewSourceType.LIVE:
+            effective_skew_source = SkewSourceType.HARVESTED
+        else:
+            effective_skew_source = skew_source if skew_source is not None else SkewSourceType.HARVESTED
+    else:
+        effective_chain_mode = chain_mode if chain_mode is not None else "synthetic_grid"
+        effective_skew_source = skew_source if skew_source is not None else SkewSourceType.NONE
+    
+    return effective_chain_mode, effective_skew_source
 
 
 @router.get("/api/backtest/presets")
@@ -264,7 +313,6 @@ def start_backtest(req: BacktestStartRequest) -> JSONResponse:
     """Start a new backtest in the background."""
     from src.backtest.manager import backtest_manager
     from src.backtest.strategy_caps import apply_strategy_overrides
-    from datetime import timedelta
     
     backtest_type_value = req.backtest_type.value if hasattr(req.backtest_type, 'value') else str(req.backtest_type)
     
@@ -285,9 +333,15 @@ def start_backtest(req: BacktestStartRequest) -> JSONResponse:
     if start_dt >= end_dt:
         raise HTTPException(status_code=400, detail="Start date must be before end date")
 
-    now_utc = datetime.now(timezone.utc)
-    is_historical = end_dt < (now_utc - timedelta(minutes=5))
-    if is_historical and req.skew_source == SkewSourceType.LIVE:
+    is_historical = is_historical_backtest(end_dt)
+    
+    effective_chain_mode, effective_skew_source = apply_historical_defaults(
+        is_historical=is_historical,
+        chain_mode=req.chain_mode,
+        skew_source=req.skew_source,
+    )
+    
+    if is_historical and effective_skew_source == SkewSourceType.LIVE:
         raise HTTPException(
             status_code=400,
             detail=(
