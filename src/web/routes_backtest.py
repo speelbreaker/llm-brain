@@ -264,6 +264,7 @@ def start_backtest(req: BacktestStartRequest) -> JSONResponse:
     """Start a new backtest in the background."""
     from src.backtest.manager import backtest_manager
     from src.backtest.strategy_caps import apply_strategy_overrides
+    from datetime import timedelta
     
     backtest_type_value = req.backtest_type.value if hasattr(req.backtest_type, 'value') else str(req.backtest_type)
     
@@ -283,6 +284,17 @@ def start_backtest(req: BacktestStartRequest) -> JSONResponse:
     
     if start_dt >= end_dt:
         raise HTTPException(status_code=400, detail="Start date must be before end date")
+
+    now_utc = datetime.now(timezone.utc)
+    is_historical = end_dt < (now_utc - timedelta(minutes=5))
+    if is_historical and req.skew_source == SkewSourceType.LIVE:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "skew_source='live' is not allowed for historical backtests "
+                "(look-ahead bias). Use 'harvested' or 'none'."
+            ),
+        )
     
     user_config = {
         "exit_style": req.exit_style,
@@ -353,15 +365,32 @@ def _run_greg_selector_backtest(req: BacktestStartRequest) -> JSONResponse:
     response that does NOT use the backtest_manager and does NOT block other backtests.
     """
     from src.backtest.selector_scan import SelectorScanConfig, run_selector_scan
+    from datetime import timedelta
     
     try:
         start_dt = datetime.fromisoformat(req.start.replace("Z", "+00:00"))
         end_dt = datetime.fromisoformat(req.end.replace("Z", "+00:00"))
     except ValueError as e:
         raise HTTPException(status_code=400, detail=f"Invalid date format: {e}")
+
+    if start_dt.tzinfo is None:
+        start_dt = start_dt.replace(tzinfo=timezone.utc)
+    if end_dt.tzinfo is None:
+        end_dt = end_dt.replace(tzinfo=timezone.utc)
     
     if start_dt >= end_dt:
         raise HTTPException(status_code=400, detail="Start date must be before end date")
+
+    now_utc = datetime.now(timezone.utc)
+    is_historical = end_dt < (now_utc - timedelta(minutes=5))
+    if is_historical and req.skew_source == SkewSourceType.LIVE:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "skew_source='live' is not allowed for historical backtests "
+                "(look-ahead bias). Use 'harvested' or 'none'."
+            ),
+        )
     
     horizon_days = (end_dt - start_dt).days
     if horizon_days < 1:

@@ -6,6 +6,7 @@ This is the thin entrypoint that wires together the routers from src/web/ packag
 """
 from __future__ import annotations
 
+import os
 import threading
 from typing import Any, Dict
 
@@ -19,6 +20,7 @@ from src.config import settings
 from src.web.dashboard import render_dashboard_html
 from src.web.routes_main import router as main_router
 from src.web.routes_backtest import router as backtest_router
+from src.web.routes_backtest import BacktestStartRequest
 from src.web.routes_positions import router as positions_router
 from src.web.routes_bots import router as bots_router
 from src.web.routes_health import router as health_router
@@ -36,7 +38,8 @@ app.include_router(backtest_router)
 app.include_router(positions_router)
 app.include_router(bots_router)
 app.include_router(health_router)
-app.include_router(deploy_router)
+if os.environ.get("DEPLOY_WEBHOOK_SECRET"):
+    app.include_router(deploy_router)
 
 
 def _agent_thread_target() -> None:

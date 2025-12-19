@@ -230,7 +230,8 @@ def _generate_live_chain_candidates(
         return result
     else:
         # For atm_iv or rv modes, get sigma and recalculate
-        # IMPORTANT: Use skew_source="none" to avoid look-ahead bias in backtests
+        # IMPORTANT: Never use skew_source="live" for historical backtests (look-ahead).
+        skew_source = getattr(cfg, "skew_source", "none")
         sigma = get_sigma_for_option(
             config=cfg,
             spot_history=spot_history,
@@ -239,7 +240,7 @@ def _generate_live_chain_candidates(
             option_mark_iv=None,
             abs_delta=0.25,  # Use target delta for base sigma
             regime_state=None,
-            skew_source="none",  # No live skew in backtests
+            skew_source=skew_source,
             dte_days=float(cfg.target_dte),  # Use target DTE for base sigma
         )
         
@@ -255,7 +256,7 @@ def _generate_live_chain_candidates(
                 option_mark_iv=opt.iv,
                 abs_delta=abs_delta,
                 regime_state=None,
-                skew_source="none",  # No live skew in backtests
+                skew_source=skew_source,
                 dte_days=dte,  # Use actual option DTE for DTE-band selection
             )
             
@@ -435,7 +436,8 @@ def build_historical_state(
         # Default: synthetic_grid mode
         if spot is not None and spot > 0:
             # Use new sigma selection logic
-            # IMPORTANT: Use skew_source="none" to avoid look-ahead bias in backtests
+            # IMPORTANT: Never use skew_source="live" for historical backtests (look-ahead).
+            skew_source = getattr(cfg, "skew_source", "none")
             sigma = get_sigma_for_option(
                 config=cfg,
                 spot_history=spot_history,
@@ -444,7 +446,7 @@ def build_historical_state(
                 option_mark_iv=None,
                 abs_delta=cfg.target_delta,
                 regime_state=None,
-                skew_source="none",  # No live skew in backtests
+                skew_source=skew_source,
                 dte_days=float(cfg.target_dte),  # Use target DTE for synthetic grid base sigma
             )
             candidates = _generate_synthetic_candidates(spot, t, cfg, sigma)
@@ -580,7 +582,8 @@ def build_historical_agent_state(
             spot_history.append((idx, float(row["close"])))
     
     # Use new sigma selection logic
-    # IMPORTANT: Use skew_source="none" to avoid look-ahead bias in backtests
+    # IMPORTANT: Never use skew_source="live" for historical backtests (look-ahead).
+    skew_source = getattr(cfg, "skew_source", "none")
     sigma = get_sigma_for_option(
         config=cfg,
         spot_history=spot_history,
@@ -589,7 +592,7 @@ def build_historical_agent_state(
         option_mark_iv=None,
         abs_delta=cfg.target_delta,
         regime_state=None,
-        skew_source="none",  # No live skew in backtests
+        skew_source=skew_source,
         dte_days=float(cfg.target_dte),  # Use target DTE for base sigma
     )
     rv = sigma * 0.8

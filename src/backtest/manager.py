@@ -787,6 +787,7 @@ class BacktestManager:
                     sigma_mode=sigma_mode_typed,
                     chain_mode=chain_mode_typed,
                     synthetic_iv_multiplier=synthetic_iv_multiplier,
+                    skew_source=skew_source,
                 )
 
                 now_utc = datetime.utcnow()

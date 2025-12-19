@@ -16,6 +16,9 @@ ExitStyle = Literal["hold_to_expiry", "tp_and_roll"]
 PricingMode = Literal["deribit_live", "synthetic_bs"]
 SyntheticIVMode = Literal["fixed", "rv_window", "historical_replay"]
 
+# Synthetic skew source enums
+SkewSource = Literal["none", "harvested", "live"]
+
 # Hybrid synthetic mode enums
 SigmaMode = Literal["rv_x_multiplier", "atm_iv_x_multiplier", "mark_iv_x_multiplier"]
 ChainMode = Literal["synthetic_grid", "live_chain"]
@@ -111,6 +114,9 @@ class CallSimulationConfig:
     synthetic_fixed_iv: float = 0.70
     synthetic_rv_window_days: int = 30
     synthetic_iv_multiplier: float = 1.0
+
+    # Synthetic skew settings
+    skew_source: SkewSource = "none"
     
     # Hybrid synthetic mode settings
     sigma_mode: SigmaMode = "rv_x_multiplier"

@@ -848,11 +848,11 @@ def render_dashboard_html() -> str:
         </div>
         <div class="form-group">
           <label>Start Date</label>
-          <input type="date" id="bt-start" value="2024-09-01">
+          <input type="date" id="bt-start" value="2024-09-01" onchange="updateSkewSourceWarning()">
         </div>
         <div class="form-group">
           <label>End Date</label>
-          <input type="date" id="bt-end" value="2024-11-01">
+          <input type="date" id="bt-end" value="2024-11-01" onchange="updateSkewSourceWarning()">
         </div>
       </div>
       <div class="form-row">
