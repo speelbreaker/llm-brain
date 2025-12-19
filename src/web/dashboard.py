@@ -650,6 +650,48 @@ def render_dashboard_html() -> str:
       <div class="last-update" id="last-update">Last update: --</div>
     </div>
 
+    <div class="section">
+      <h2>Synthetic Fidelity</h2>
+      <p style="color:#666;margin-bottom:1rem;">Latest PnL-parity gate/score for BTC and ETH (from the fidelity suite).</p>
+      <div style="margin-bottom: 8px;">
+        <button onclick="refreshFidelityDashboard()" style="background:#1565c0;color:#fff;border:none;padding:6px 12px;border-radius:4px;cursor:pointer;">Refresh Fidelity</button>
+      </div>
+      <div style="overflow-x:auto;">
+        <table class="steps-table">
+          <thead>
+            <tr>
+              <th>Metric</th>
+              <th>BTC</th>
+              <th>ETH</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td style="font-weight:600;">Gate</td>
+              <td id="fidelity-btc-gate">Loading...</td>
+              <td id="fidelity-eth-gate">Loading...</td>
+            </tr>
+            <tr>
+              <td style="font-weight:600;">Overall Score</td>
+              <td id="fidelity-btc-score">-</td>
+              <td id="fidelity-eth-score">-</td>
+            </tr>
+            <tr>
+              <td style="font-weight:600;">Run ID</td>
+              <td id="fidelity-btc-run" style="font-family:monospace;font-size:0.85rem;">-</td>
+              <td id="fidelity-eth-run" style="font-family:monospace;font-size:0.85rem;">-</td>
+            </tr>
+            <tr>
+              <td style="font-weight:600;">Timestamp</td>
+              <td id="fidelity-btc-ts">-</td>
+              <td id="fidelity-eth-ts">-</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <div id="fidelity-dashboard-hint" style="margin-top:10px;font-size:0.85rem;color:#888;"></div>
+    </div>
+
     <div class="section" id="strategy-status-section">
       <h2>Strategy & Safeguards</h2>
       <div id="strategy-status-box" style="border:1px solid #333;border-radius:8px;padding:12px;background:#1e1e1e;">
@@ -1997,6 +2039,66 @@ def render_dashboard_html() -> str:
           </table>
         </div>
       </div>
+
+      <!-- Synthetic Fidelity Panel -->
+      <div class="card" style="margin-top:1rem;border-left:4px solid #1565c0;">
+        <h3 style="margin-top:0;color:#1565c0;">Synthetic Fidelity (PnL Parity)</h3>
+        <p style="color:#666;font-size:0.9rem;margin-bottom:12px;">
+          Shows the latest Synthetic Fidelity gate/score and recent run history.
+          Runs are produced by <code>scripts/run_fidelity_suite.py</code> and stored on disk.
+        </p>
+
+        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:12px;">
+          <label>
+            Underlying:
+            <select id="fidelity-underlying" style="padding:6px 12px;border-radius:4px;border:1px solid #ccc;">
+              <option value="BTC">BTC</option>
+              <option value="ETH">ETH</option>
+            </select>
+          </label>
+          <button onclick="refreshFidelityUI()" style="background:#1565c0;color:#fff;border:none;padding:6px 12px;border-radius:4px;cursor:pointer;">
+            Refresh Fidelity
+          </button>
+        </div>
+
+        <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(220px, 1fr));gap:12px;margin-bottom:12px;">
+          <div style="background:#e3f2fd;padding:12px;border-radius:6px;">
+            <div style="font-size:0.75rem;color:#666;margin-bottom:4px;">Latest Gate</div>
+            <div id="fidelity-latest-gate" style="font-size:1.1rem;font-weight:700;color:#1a1a2e;">Loading...</div>
+          </div>
+          <div style="background:#e3f2fd;padding:12px;border-radius:6px;">
+            <div style="font-size:0.75rem;color:#666;margin-bottom:4px;">Overall Score</div>
+            <div id="fidelity-latest-score" style="font-size:1.1rem;font-weight:700;color:#1a1a2e;">-</div>
+          </div>
+          <div style="background:#e3f2fd;padding:12px;border-radius:6px;">
+            <div style="font-size:0.75rem;color:#666;margin-bottom:4px;">Run ID</div>
+            <div id="fidelity-latest-run-id" style="font-size:0.9rem;color:#333;font-family:monospace;">-</div>
+          </div>
+          <div style="background:#e3f2fd;padding:12px;border-radius:6px;">
+            <div style="font-size:0.75rem;color:#666;margin-bottom:4px;">Timestamp</div>
+            <div id="fidelity-latest-timestamp" style="font-size:0.9rem;color:#333;">-</div>
+          </div>
+        </div>
+
+        <div id="fidelity-component-scores" style="font-size:0.85rem;color:#555;margin-bottom:12px;"></div>
+
+        <h4 style="margin:0 0 8px 0;color:#555;">Recent Fidelity Runs</h4>
+        <div style="overflow-x:auto;max-height:240px;overflow-y:auto;">
+          <table class="steps-table" style="font-size:0.85rem;">
+            <thead>
+              <tr>
+                <th>Time</th>
+                <th>Run ID</th>
+                <th>Gate</th>
+                <th>Overall</th>
+              </tr>
+            </thead>
+            <tbody id="fidelity-history-body">
+              <tr><td colspan="4" style="text-align:center;color:#666;">Loading...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
       
       <div class="card" style="margin-top:1rem;">
         <h3 style="margin-top:0;">Calibration History (Auto-Calibrate)</h3>
@@ -2941,6 +3043,9 @@ def render_dashboard_html() -> str:
       }}
       if (name === 'calibration') {{
         fetchAutoCalibStatus();
+      }}
+      if (name === 'live') {{
+        refreshFidelityDashboard();
       }}
       if (name === 'supervisor') {{
         loadSupervisorJobs();
@@ -6504,6 +6609,186 @@ def render_dashboard_html() -> str:
         fetchPolicyRuns()
       ]);
     }}
+
+    // ===== Synthetic Fidelity UI =====
+
+    function fidelityGateBadge(gate) {{
+      const g = (gate || '').toUpperCase();
+      let bg = '#9e9e9e';
+      if (g === 'TRUSTED') bg = '#4caf50';
+      else if (g === 'WARNING') bg = '#ff9800';
+      else if (g === 'UNTRUSTED') bg = '#f44336';
+      return `<span style="background:${{bg}};color:#fff;padding:2px 8px;border-radius:4px;font-size:0.85rem;">${{g || '-'}}</span>`;
+    }}
+
+    function formatFidelityScore(x) {{
+      if (x == null || Number.isNaN(Number(x))) return '-';
+      return Number(x).toFixed(1);
+    }}
+
+    async function fetchFidelityLatest() {{
+      const underlying = document.getElementById('fidelity-underlying')?.value || 'BTC';
+      const gateEl = document.getElementById('fidelity-latest-gate');
+      const scoreEl = document.getElementById('fidelity-latest-score');
+      const runIdEl = document.getElementById('fidelity-latest-run-id');
+      const tsEl = document.getElementById('fidelity-latest-timestamp');
+      const compsEl = document.getElementById('fidelity-component-scores');
+
+      gateEl.textContent = 'Loading...';
+      scoreEl.textContent = '-';
+      runIdEl.textContent = '-';
+      tsEl.textContent = '-';
+      compsEl.textContent = '';
+
+      try {{
+        const res = await fetch(`/api/calibration/fidelity/latest?underlying=${{underlying}}`);
+        if (!res.ok) throw new Error(`HTTP ${{res.status}}`);
+        const data = await res.json();
+
+        const report = data.report;
+        if (!report) {{
+          gateEl.innerHTML = '<span style="color:#666;">No fidelity run yet</span>';
+          compsEl.innerHTML = '<span style="color:#888;">Run <code>scripts/run_fidelity_suite.py</code> to generate a report.</span>';
+          return;
+        }}
+
+        gateEl.innerHTML = fidelityGateBadge(report.gate);
+        scoreEl.textContent = formatFidelityScore(report.overall_score);
+        runIdEl.textContent = report.run_id || '-';
+        tsEl.textContent = report.timestamp ? new Date(report.timestamp).toLocaleString() : '-';
+
+        const componentScores = report.component_scores || {{}};
+        const keys = Object.keys(componentScores);
+        if (keys.length > 0) {{
+          const parts = keys.sort().map(k => `${{k}}=${{formatFidelityScore(componentScores[k])}}`).join(' | ');
+          compsEl.textContent = parts;
+        }}
+      }} catch (err) {{
+        console.error('Failed to fetch fidelity latest:', err);
+        gateEl.innerHTML = '<span style="color:#c00;">Error loading latest</span>';
+      }}
+    }}
+
+    async function fetchFidelityHistory() {{
+      const underlying = document.getElementById('fidelity-underlying')?.value || 'BTC';
+      const tbody = document.getElementById('fidelity-history-body');
+      tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;color:#666;">Loading...</td></tr>';
+
+      try {{
+        const res = await fetch(`/api/calibration/fidelity/history?underlying=${{underlying}}&limit=10`);
+        if (!res.ok) throw new Error(`HTTP ${{res.status}}`);
+        const data = await res.json();
+
+        const runs = data.runs || [];
+        if (runs.length === 0) {{
+          tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;color:#666;">No fidelity history yet</td></tr>';
+          return;
+        }}
+
+        tbody.innerHTML = runs.map(r => {{
+          const ts = r.timestamp ? new Date(r.timestamp).toLocaleString() : 'N/A';
+          const runId = r.run_id || '-';
+          const gate = fidelityGateBadge(r.gate);
+          const score = formatFidelityScore(r.overall_score);
+          return `<tr>
+            <td style="font-size:0.8rem;white-space:nowrap;">${{ts}}</td>
+            <td style="font-family:monospace;font-size:0.8rem;">${{runId}}</td>
+            <td>${{gate}}</td>
+            <td style="font-weight:600;">${{score}}</td>
+          </tr>`;
+        }}).join('');
+      }} catch (err) {{
+        console.error('Failed to fetch fidelity history:', err);
+        tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;color:#c00;">Error loading history</td></tr>';
+      }}
+    }}
+
+    async function refreshFidelityUI() {{
+      await Promise.all([
+        fetchFidelityLatest(),
+        fetchFidelityHistory(),
+      ]);
+    }}
+
+    // ===== Synthetic Fidelity (Dashboard Tab) =====
+
+    function _setFidelityDashboardLoading() {{
+      const ids = [
+        'fidelity-btc-gate','fidelity-eth-gate',
+        'fidelity-btc-score','fidelity-eth-score',
+        'fidelity-btc-run','fidelity-eth-run',
+        'fidelity-btc-ts','fidelity-eth-ts'
+      ];
+      ids.forEach(id => {{
+        const el = document.getElementById(id);
+        if (el) el.textContent = (id.endsWith('-gate') ? 'Loading...' : '-');
+      }});
+    }}
+
+    function _applyFidelityDashboardReport(underlying, report) {{
+      const u = (underlying || '').toUpperCase();
+      const p = u === 'BTC' ? 'btc' : 'eth';
+
+      const gateEl = document.getElementById(`fidelity-${{p}}-gate`);
+      const scoreEl = document.getElementById(`fidelity-${{p}}-score`);
+      const runEl = document.getElementById(`fidelity-${{p}}-run`);
+      const tsEl = document.getElementById(`fidelity-${{p}}-ts`);
+
+      if (!gateEl || !scoreEl || !runEl || !tsEl) return;
+
+      if (!report) {{
+        gateEl.innerHTML = '<span style="color:#666;">No run yet</span>';
+        scoreEl.textContent = '-';
+        runEl.textContent = '-';
+        tsEl.textContent = '-';
+        return;
+      }}
+
+      gateEl.innerHTML = fidelityGateBadge(report.gate);
+      scoreEl.textContent = formatFidelityScore(report.overall_score);
+      runEl.textContent = report.run_id || '-';
+      tsEl.textContent = report.timestamp ? new Date(report.timestamp).toLocaleString() : '-';
+    }}
+
+    async function refreshFidelityDashboard() {{
+      const hintEl = document.getElementById('fidelity-dashboard-hint');
+      if (hintEl) hintEl.textContent = '';
+
+      _setFidelityDashboardLoading();
+
+      try {{
+        const [btcRes, ethRes] = await Promise.all([
+          fetch('/api/calibration/fidelity/latest?underlying=BTC'),
+          fetch('/api/calibration/fidelity/latest?underlying=ETH'),
+        ]);
+
+        const btcData = btcRes.ok ? await btcRes.json() : null;
+        const ethData = ethRes.ok ? await ethRes.json() : null;
+
+        _applyFidelityDashboardReport('BTC', btcData ? btcData.report : null);
+        _applyFidelityDashboardReport('ETH', ethData ? ethData.report : null);
+
+        const anyReport = (btcData && btcData.report) || (ethData && ethData.report);
+        if (!anyReport && hintEl) {{
+          hintEl.innerHTML = 'No fidelity runs found yet. Run <code>scripts/run_fidelity_suite.py</code> to generate reports.';
+        }}
+      }} catch (err) {{
+        console.error('Failed to refresh fidelity dashboard:', err);
+        if (hintEl) hintEl.textContent = 'Error loading fidelity. Check server logs.';
+      }}
+    }}
+
+    // ===== End Synthetic Fidelity (Dashboard Tab) =====
+
+    document.addEventListener('DOMContentLoaded', function() {{
+      refreshFidelityDashboard();
+      const fidelityUnderlying = document.getElementById('fidelity-underlying');
+      if (fidelityUnderlying) {{
+        fidelityUnderlying.addEventListener('change', refreshFidelityUI);
+      }}
+    }});
+
+    // ===== End Synthetic Fidelity UI =====
     
     async function fetchPolicy() {{
       try {{
@@ -6662,7 +6947,10 @@ def render_dashboard_html() -> str:
       const calibTab = document.querySelector('button[onclick*="calibration"]');
       if (calibTab) {{
         calibTab.addEventListener('click', function() {{
-          setTimeout(refreshPolicyUI, 100);
+          setTimeout(function() {{
+            refreshPolicyUI();
+            refreshFidelityUI();
+          }}, 100);
         }});
       }}
       

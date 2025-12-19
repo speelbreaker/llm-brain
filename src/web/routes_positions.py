@@ -611,6 +611,53 @@ def get_calibration_runs(
         )
 
 
+@router.get("/api/calibration/fidelity/latest")
+def get_fidelity_latest(
+    underlying: str = "BTC",
+) -> JSONResponse:
+    """Return the latest Synthetic Fidelity report (if any)."""
+    if underlying not in ("BTC", "ETH"):
+        return JSONResponse(status_code=400, content={"error": "underlying must be BTC or ETH"})
+
+    try:
+        from src.fidelity.fidelity_store import load_latest_report
+
+        report = load_latest_report(underlying)
+        return JSONResponse(
+            content={
+                "ok": True,
+                "underlying": underlying,
+                "report": report,
+            }
+        )
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"ok": False, "error": str(e)})
+
+
+@router.get("/api/calibration/fidelity/history")
+def get_fidelity_history(
+    underlying: str = "BTC",
+    limit: int = 30,
+) -> JSONResponse:
+    """Return recent Synthetic Fidelity reports from the file-based history store."""
+    if underlying not in ("BTC", "ETH"):
+        return JSONResponse(status_code=400, content={"error": "underlying must be BTC or ETH"})
+
+    try:
+        from src.fidelity.fidelity_store import list_recent_reports
+
+        runs = list_recent_reports(underlying, limit=limit)
+        return JSONResponse(
+            content={
+                "ok": True,
+                "underlying": underlying,
+                "runs": runs,
+            }
+        )
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"ok": False, "error": str(e)})
+
+
 @router.post("/api/calibration/force_apply")
 def force_apply_calibration(request: ForceApplyCalibrationRequest) -> JSONResponse:
     """
