@@ -10,6 +10,7 @@ from src.supervisor.config import get_settings
 from src.supervisor.models import (
     ArbiterDecision,
     CheckResult,
+    DiffStats,
     JobStatus,
     SupervisorJob,
     VerificationReport,
@@ -29,7 +30,7 @@ class FakeWorkspaceManager:
         return "/tmp/fake-ws"
 
     async def get_diff_stats(self, workspace_path):
-        return app_module.DiffStats(files_changed=0, total_loc_changed=0)
+        return DiffStats(files_changed=0, total_loc_changed=0)
 
     async def commit_and_push(self, *args, **kwargs):
         return "deadbeef"
@@ -41,23 +42,58 @@ class FakeWorkspaceManager:
 class FakeRunner:
     def __init__(self, settings):
         self.settings = settings
+        self.calls = 0
 
     async def run_checks(self, workspace_path, head_sha):
+        self.calls += 1
+        if self.calls == 1:
+            return VerificationReport(
+                commit_sha=head_sha,
+                checks=[
+                    CheckResult(
+                        command="python -m pytest -q",
+                        exit_code=0,
+                        passed=True,
+                        stdout="",
+                        stderr="",
+                        duration_seconds=0.1,
+                    ),
+                    CheckResult(
+                        command="python -m ruff check .",
+                        exit_code=1,
+                        passed=False,
+                        stdout="F401 unused import",
+                        stderr="",
+                        duration_seconds=0.1,
+                    ),
+                ],
+                all_passed=False,
+                failure_summary="ruff failed",
+                failing_tests=[],
+            )
         return VerificationReport(
             commit_sha=head_sha,
             checks=[
                 CheckResult(
-                    command="pytest",
-                    exit_code=1,
-                    passed=False,
-                    stdout="boom",
+                    command="python -m pytest -q",
+                    exit_code=0,
+                    passed=True,
+                    stdout="",
                     stderr="",
                     duration_seconds=0.1,
-                )
+                ),
+                CheckResult(
+                    command="python -m ruff check .",
+                    exit_code=0,
+                    passed=True,
+                    stdout="",
+                    stderr="",
+                    duration_seconds=0.1,
+                ),
             ],
-            all_passed=False,
-            failure_summary="boom",
-            failing_tests=["tests/foo.py"],
+            all_passed=True,
+            failure_summary="",
+            failing_tests=[],
         )
 
 
@@ -74,7 +110,7 @@ class FakeDebateSystem:
 
 
 @pytest.mark.asyncio
-async def test_autofix_dry_run_posts_comment_and_skips_codex(monkeypatch, tmp_path):
+async def test_autofix_dry_run_posts_comment_and_skips_push(monkeypatch, tmp_path):
     settings = get_settings()
     settings.enable_codex = True
     settings.autofix_policy = "label"
@@ -160,11 +196,12 @@ async def test_autofix_dry_run_posts_comment_and_skips_codex(monkeypatch, tmp_pa
 
     await run_supervisor_job(job, app)
 
-    assert job.status == JobStatus.NEEDS_HUMAN
-    assert job.final_message == "Autofix approved (dry-run): no changes pushed."
+    assert job.status == JobStatus.FIXED
+    assert "DRY RUN" in job.final_message
+    assert len(job.fix_attempts) == 1
+    assert job.fix_attempts[0].committed is False
 
-    apply_fix_mock.assert_not_awaited()
+    apply_fix_mock.assert_awaited()
     commit_and_push_mock.assert_not_awaited()
     assert post_comments, "Expected a GitHub comment to be posted"
-    assert any("Autofix Dry-Run" in c for c in post_comments)
-    assert any("fix the boom" in c for c in post_comments)
+    assert any("DRY RUN" in c for c in post_comments)

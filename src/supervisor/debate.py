@@ -24,6 +24,43 @@ DEBATE_SCHEMA = """{
 }"""
 
 
+def _is_pytest_command(command: str) -> bool:
+    return "pytest" in command.lower()
+
+
+def _is_ruff_check_command(command: str) -> bool:
+    cmd = command.lower()
+    return "ruff" in cmd and "check" in cmd
+
+
+def lint_only_decision(
+    verification: VerificationReport,
+) -> Optional[ArbiterDecision]:
+    """Return a safe auto-fix decision for ruff-only failures with pytest passing."""
+    if not verification or not verification.checks:
+        return None
+
+    pytest_checks = [c for c in verification.checks if _is_pytest_command(c.command)]
+    if not pytest_checks or not all(c.passed for c in pytest_checks):
+        return None
+
+    failed_checks = [c for c in verification.checks if not c.passed]
+    if not failed_checks:
+        return None
+
+    if any(not _is_ruff_check_command(c.command) for c in failed_checks):
+        return None
+
+    return ArbiterDecision(
+        auto_fix_allowed=True,
+        fix_objectives=[
+            "Fix ruff lint errors (e.g., unused imports) and re-run checks"
+        ],
+        risk_level="low",
+        arbiter_reasoning="Ruff-only lint failure with pytest passing",
+    )
+
+
 class DebateSystem:
     """Runs Optimist/Skeptic/Arbiter debate with multi-provider support."""
 
@@ -39,6 +76,10 @@ class DebateSystem:
         pr_body: str = "",
     ) -> ArbiterDecision:
         """Run the 3-agent debate and return Arbiter's decision."""
+        lint_decision = lint_only_decision(verification)
+        if lint_decision:
+            return lint_decision
+
         context = self._build_context(verification, changed_files, pr_title, pr_body)
 
         optimist_response = await self._call_agent("optimist", context)
