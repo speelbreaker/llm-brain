@@ -1,0 +1,35 @@
+AI Builder Prompt — “Historical realism defaults + fallback”
+Goal: For historical backtests, default to using harvested chain + harvested skew to maximize realism, and automatically fall back to synthetic grid when harvested chain is missing.
+
+Scope / requirements:
+
+Add a helper to decide whether a run is “historical” vs “live-ish”
+Use the same logic as the existing API guard: end_dt < (now_utc - 5 minutes).
+Implement defaulting logic (only when user didn’t explicitly override)
+Where the backtest start payload is resolved (in the backtest start endpoint or config resolver), apply:
+If historical:
+If request does not explicitly set chain_mode, default to "live_chain".
+If request does not explicitly set skew_source, default to "harvested".
+If live-ish:
+Keep existing defaults (don’t change).
+Important: distinguish “explicitly provided by user” vs “default field value”.
+
+Current BacktestStartRequest has defaults. You need a way to tell if the user actually chose them.
+Preferred solution: make chain_mode and skew_source Optional in the request model (Optional[str] / Optional[SkewSourceType]) with default None, and set defaults server-side after parsing.
+Keep backwards compatibility for the UI by continuing to send the fields; tests should be updated accordingly if needed.
+Add runtime fallback when harvested chain is missing
+In state_builder.py, inside the chain_mode == "live_chain" branch:
+If ds.list_option_chain(... as_of=t ...) returns empty for that time:
+Log a warning and fall back to synthetic grid candidate generation for that decision step:
+Compute sigma via get_sigma_for_option(...) (already used)
+Generate candidates via _generate_synthetic_candidates(...)
+Keep skew_source as chosen (harvested preferred); but if harvested skew lookup fails internally, it should gracefully behave like none (no exceptions).
+Tests
+Add tests that:
+Historical request with omitted chain_mode/skew_source ends up using "live_chain" + "harvested" in the effective config.
+When list_option_chain returns empty, the backtest still runs and produces synthetic candidates (no crash).
+Ensure historical skew_source="live" is still blocked (existing tests should continue passing).
+Acceptance:
+
+Full pytest suite passes.
+Backtests with historical date ranges preferentially use harvested chain + harvested skew, but never fail when harvested chain is missing (they fall back to synthetic).
