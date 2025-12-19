@@ -555,6 +555,7 @@ def render_dashboard_html() -> str:
 <body>
   <h1>Options Trading Agent</h1>
   <p class="subtitle">Deribit Testnet - Covered Call Strategy</p>
+  <p class="subtitle" style="margin-top:-0.75rem;">Build: <span id="build-info">loading...</span></p>
   
   <div style="display:flex;align-items:center;gap:1rem;flex-wrap:wrap;">
     <div>
@@ -3018,6 +3019,25 @@ def render_dashboard_html() -> str:
   </div>
 
   <script>
+    async function refreshBuildInfo() {{
+      const el = document.getElementById('build-info');
+      if (!el) return;
+
+      try {{
+        const res = await fetch('/api/meta/version');
+        const data = await res.json();
+        if (!data || data.ok !== true) {{
+          el.textContent = 'unknown';
+          return;
+        }}
+        const sha = data.git_sha_short || data.git_sha || 'unknown';
+        const dirty = (data.git_dirty === true) ? ' (dirty)' : '';
+        el.textContent = `${{sha}}${{dirty}}`;
+      }} catch (e) {{
+        el.textContent = 'unknown';
+      }}
+    }}
+
     let backtestResult = null;
     
     function showTab(name) {{
@@ -6781,6 +6801,7 @@ def render_dashboard_html() -> str:
     // ===== End Synthetic Fidelity (Dashboard Tab) =====
 
     document.addEventListener('DOMContentLoaded', function() {{
+      refreshBuildInfo();
       refreshFidelityDashboard();
       const fidelityUnderlying = document.getElementById('fidelity-underlying');
       if (fidelityUnderlying) {{

@@ -322,6 +322,20 @@
     "name": "get_current_multipliers"
   },
   {
+    "path": "/api/calibration/fidelity/history",
+    "methods": [
+      "GET"
+    ],
+    "name": "get_fidelity_history"
+  },
+  {
+    "path": "/api/calibration/fidelity/latest",
+    "methods": [
+      "GET"
+    ],
+    "name": "get_fidelity_latest"
+  },
+  {
     "path": "/api/calibration/force_apply",
     "methods": [
       "POST"
@@ -467,6 +481,13 @@
       "POST"
     ],
     "name": "update_llm_status"
+  },
+  {
+    "path": "/api/meta/version",
+    "methods": [
+      "GET"
+    ],
+    "name": "get_meta_version"
   },
   {
     "path": "/api/positions/closed",
@@ -649,20 +670,6 @@
       "GET"
     ],
     "name": "get_chat_history_endpoint"
-  },
-  {
-    "path": "/deploy-hook",
-    "methods": [
-      "POST"
-    ],
-    "name": "deploy_hook"
-  },
-  {
-    "path": "/deploy-status",
-    "methods": [
-      "GET"
-    ],
-    "name": "deploy_status"
   },
   {
     "path": "/health",

@@ -1,6 +1,9 @@
 """Main routes for Options Trading Agent - status, chat, training, and strategy endpoints."""
 from __future__ import annotations
 
+from datetime import datetime, timezone
+from pathlib import Path
+import subprocess
 from typing import Any, Dict
 
 from fastapi import APIRouter, Body
@@ -14,6 +17,50 @@ from src.strategy_status import build_strategy_status, StrategyStatus
 from src.rules_summary import build_rules_summary_from_settings
 
 router = APIRouter()
+
+_SERVER_STARTED_AT = datetime.now(timezone.utc).isoformat()
+
+
+def _safe_git_meta() -> dict:
+    """Best-effort git metadata for debugging deployments.
+
+    This intentionally never raises (deployed environments may not have git).
+    """
+    try:
+        repo_root = Path(__file__).resolve().parents[2]
+        sha = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=str(repo_root), stderr=subprocess.DEVNULL
+        ).decode("utf-8").strip()
+        dirty = bool(
+            subprocess.check_output(
+                ["git", "status", "--porcelain"], cwd=str(repo_root), stderr=subprocess.DEVNULL
+            )
+            .decode("utf-8")
+            .strip()
+        )
+        return {
+            "git_sha": sha,
+            "git_sha_short": sha[:8] if sha else None,
+            "git_dirty": dirty,
+        }
+    except Exception:
+        return {"git_sha": None, "git_sha_short": None, "git_dirty": None}
+
+
+@router.get("/api/meta/version")
+def get_meta_version() -> JSONResponse:
+    """Return server build metadata.
+
+    Used by the UI to show what commit the running service is on.
+    """
+    meta = _safe_git_meta()
+    return JSONResponse(
+        content={
+            "ok": True,
+            "started_at": _SERVER_STARTED_AT,
+            **meta,
+        }
+    )
 
 
 @router.get("/status")
