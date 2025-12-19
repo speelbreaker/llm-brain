@@ -153,6 +153,18 @@ Right now, we use synthetic (calculated) option prices for backtesting. Real his
 - [ ] Add strategy status table to Live Agent dashboard
 - [ ] Allow backtests to filter by strategy name
 
+- [ ] **Calibration must prove Synthetic Fidelity (gate)**
+   - Build a **Synthetic Fidelity Score** and refuse to trust backtests until it passes
+   - Minimum checks (acceptance criteria):
+      - **Underlying path fidelity:** log-return distribution (tails/kurtosis), vol clustering, jump frequency/magnitude
+      - **IV surface fidelity:** error by tenor × delta buckets; day-over-day surface changes (not just levels)
+      - **Spot–IV coupling:** correlation of spot returns vs IV change; conditional behavior on downside moves
+      - **Strategy PnL parity (guardrail):** canonical strategies must not look materially better in synthetic vs live
+   - Add a **trading gate**:
+      - refuse trading when calibration is stale
+      - refuse trading when fidelity score below threshold
+      - refuse trading when live regime is outside synthetic training envelope (drift)
+
 ### Medium-Term (1-2 Months)
 - [ ] Add a simple "researcher job" that proposes experiments
 - [ ] Build an experiment queue with automatic backtest evaluation
@@ -173,4 +185,4 @@ Right now, we use synthetic (calculated) option prices for backtesting. Real his
 
 ---
 
-*Last updated: December 2024*
+*Last updated: December 2025*

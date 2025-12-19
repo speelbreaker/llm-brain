@@ -376,6 +376,61 @@ Examples:
 
 ---
 
+### [E1.5] Calibration acceptance criteria: Synthetic Fidelity Score + trading gate
+**Priority:** P0–P1 (must-have before trusting backtests / real capital)
+**Status:** Partially started (wiring exists; metrics + enforcement pending)
+
+This defines what “calibration” must actually *prove*.
+
+**Goal:**
+- Build a **Synthetic Fidelity Score** and refuse to trust synthetic backtests until it passes.
+- Treat **strategy PnL parity** as the primary guardrail against self-delusion.
+
+**Minimum score components (acceptance criteria):**
+- **Underlying path fidelity**
+  - Match distribution of log-returns (tails, kurtosis)
+  - Match realized vol clustering (autocorrelation of vol)
+  - Match jump frequency/magnitude (extreme moves)
+- **IV surface fidelity**
+  - Error on IV by tenor × delta buckets (e.g., 7D/14D/30D × 10d/25d/50d)
+  - Track changes in IV surface, not just levels (day-over-day moves)
+- **Spot–IV coupling fidelity**
+  - Correlation of spot returns vs IV change (especially downside moves)
+  - Conditional behavior: “when spot drops X%, what happens to IV/skew?”
+- **Strategy PnL parity tests (the only test that truly matters)**
+  - Run canonical strategies on both live replay and synthetic:
+    - covered calls, cash-secured puts, short strangles, calendars, spreads
+  - Compare distributions:
+    - win rate, avg win/loss, max drawdown, tail loss, time-to-recovery
+  - If synthetic makes these look materially better than reality → **reject synthetic**
+
+**Nightly calibration pipeline (bulletproof loop):**
+- Separate **market emulator** vs **calibration** vs **trading**; version everything.
+- Pull newly harvested Deribit snapshots (spot + IV surface + option chain)
+- Fit/update model parameters (regimes, surface, spot–IV coupling)
+- Produce a versioned calibration report artifact:
+  - surface error heatmap stats (RMSE/MAE by bucket)
+  - spot distribution diagnostics
+  - spot–IV coupling diagnostics
+  - strategy parity suite results
+- Write a timestamped calibration bundle; promote to “active” only if thresholds pass
+- If calibration fails: keep last good bundle; raise alert; optionally auto-tighten trading
+
+**Trading gate (refuse to trade unless safe):**
+- Calibration is stale (older than N hours/days)
+- Fidelity score below threshold
+- Live regime outside synthetic training envelope (drift checks)
+
+**Safe self-improvement (champion–challenger cage):**
+- Only evolve in simulation → paper → small capital → scale
+- Any “improvement” must beat baseline on return + drawdown + tail risk + stability across regimes
+- Permanent champion–challenger:
+  - Champion runs live
+  - Challenger trains/tests
+  - Promotion only after passing strict battery
+
+---
+
 ### [E2] More granular decision intervals (1h/4h vs daily)  
 **Priority:** P2  
 **Status:** Backtester supports different intervals but not fully explored  
