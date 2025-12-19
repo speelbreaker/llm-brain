@@ -84,6 +84,10 @@ Library/Caches/BraveSoftware/Brave-Browser/Default/Code Cache/js/
 *.key
 secrets.json
 
+# Repo-specific key artifacts (filenames without .key extension)
+attached_assets/codex_vps_key
+attached_assets/codex_vps_key.pub
+
 # Jupyter
 .ipynb_checkpoints/
 
