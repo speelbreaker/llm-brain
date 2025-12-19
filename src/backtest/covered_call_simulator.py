@@ -53,6 +53,7 @@ class CoveredCallSimulator:
         abs_delta: Optional[float] = None,
         option_mark_iv: Optional[float] = None,
         option_chain: Optional[List[OptionSnapshot]] = None,
+        regime_state: Optional["RegimeState"] = None,
     ) -> float:
         """
         Get synthetic implied volatility for pricing via unified get_sigma_for_option.
@@ -78,7 +79,7 @@ class CoveredCallSimulator:
             option_chain=option_chain,
             option_mark_iv=option_mark_iv,
             abs_delta=effective_delta,
-            regime_state=None,
+            regime_state=regime_state,
             skew_source=skew_source,
             dte_days=effective_dte,
         )
@@ -92,6 +93,7 @@ class CoveredCallSimulator:
         abs_delta: Optional[float] = None,
         option_mark_iv: Optional[float] = None,
         option_chain: Optional[List[OptionSnapshot]] = None,
+        regime_state: Optional["RegimeState"] = None,
     ) -> tuple:
         """
         Compute synthetic call option price and delta using Black-Scholes.
@@ -122,6 +124,7 @@ class CoveredCallSimulator:
                 abs_delta=self.cfg.target_delta,
                 option_mark_iv=option_mark_iv,
                 option_chain=option_chain,
+                regime_state=regime_state,
             )
             abs_delta = abs(bs_call_delta(spot, strike, t_years, initial_sigma, r))
         
@@ -131,6 +134,7 @@ class CoveredCallSimulator:
             abs_delta=abs_delta,
             option_mark_iv=option_mark_iv,
             option_chain=option_chain,
+            regime_state=regime_state,
         )
         
         price = bs_call_price(spot, strike, t_years, sigma, r)
@@ -166,6 +170,7 @@ class CoveredCallSimulator:
         expiry: datetime,
         option_mark_iv: Optional[float] = None,
         option_chain: Optional[List[OptionSnapshot]] = None,
+        regime_state: Optional["RegimeState"] = None,
     ) -> pd.Series:
         """
         Generate synthetic option prices for an entire spot time series.
@@ -205,6 +210,7 @@ class CoveredCallSimulator:
                 abs_delta=self.cfg.target_delta,
                 option_mark_iv=option_mark_iv,
                 option_chain=option_chain,
+                regime_state=regime_state,
             )
             abs_delta = abs(bs_call_delta(float(spot_val), strike, t_years, initial_sigma, r))
             
@@ -214,6 +220,7 @@ class CoveredCallSimulator:
                 abs_delta=abs_delta,
                 option_mark_iv=option_mark_iv,
                 option_chain=option_chain,
+                regime_state=regime_state,
             )
             
             price = bs_call_price(float(spot_val), strike, t_years, sigma, r)
@@ -639,6 +646,7 @@ class CoveredCallSimulator:
         decision_time: datetime,
         option_snapshot: OptionSnapshot,
         size: Optional[float] = None,
+        regime_state: Optional["RegimeState"] = None,
     ) -> Optional[SimulatedTrade]:
         """
         Simulate a call option held to expiry using a specific option snapshot.
@@ -678,6 +686,7 @@ class CoveredCallSimulator:
                 spot_at_open, strike, expiry, decision_time,
                 abs_delta=snapshot_delta,
                 option_mark_iv=snapshot_mark_iv,
+                regime_state=regime_state,
             )
             
             if open_price <= 0:
@@ -688,6 +697,7 @@ class CoveredCallSimulator:
             opt_price = self._generate_synthetic_option_prices(
                 spot, strike, expiry,
                 option_mark_iv=snapshot_mark_iv,
+                regime_state=regime_state,
             )
         else:
             open_price = float(option_snapshot.mark_price or 0.0)
@@ -761,6 +771,7 @@ class CoveredCallSimulator:
         decision_time: datetime,
         option_snapshot: OptionSnapshot,
         size: Optional[float] = None,
+        regime_state: Optional["RegimeState"] = None,
     ) -> Optional[SimulatedTrade]:
         """
         Simulate a multi-roll call chain with TP and defensive roll triggers.
@@ -833,6 +844,7 @@ class CoveredCallSimulator:
                     spot_at_open, strike, expiry, current_leg_open_time,
                     abs_delta=current_delta,
                     option_mark_iv=current_mark_iv,
+                    regime_state=regime_state,
                 )
                 if open_price <= 0:
                     break
@@ -842,6 +854,7 @@ class CoveredCallSimulator:
                 opt_price_series = self._generate_synthetic_option_prices(
                     spot_series, strike, expiry,
                     option_mark_iv=current_mark_iv,
+                    regime_state=regime_state,
                 )
             else:
                 open_price = float(current_opt.mark_price or 0.0)

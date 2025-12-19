@@ -861,6 +861,14 @@ class BacktestManager:
                         initial_rv=50.0,
                         seed=42,
                     )
+
+                provenance_seen: set[datetime] = set()
+                provenance_counts: Dict[str, Any] = {
+                    "total_decision_times": 0,
+                    "candidates_present": 0,
+                    "chain_source_counts": {},
+                    "synthetic_fallback": 0,
+                }
                 
                 for phase_idx, current_exit_style in enumerate(styles_to_run):
                     steps_buffer: List[BacktestProgressStep] = []
@@ -894,6 +902,20 @@ class BacktestManager:
                                 collect_debug_samples=should_collect,
                                 regime_state=regime_state,
                             )
+
+                            if t not in provenance_seen:
+                                provenance_seen.add(t)
+                                provenance_counts["total_decision_times"] += 1
+                                options_for_cov = state.get("candidate_options") or []
+                                if options_for_cov:
+                                    provenance_counts["candidates_present"] += 1
+                                prov = state.get("provenance") or {}
+                                chain_source = str(prov.get("chain_source") or "unknown")
+                                provenance_counts["chain_source_counts"][chain_source] = (
+                                    provenance_counts["chain_source_counts"].get(chain_source, 0) + 1
+                                )
+                                if prov.get("used_synthetic_fallback"):
+                                    provenance_counts["synthetic_fallback"] += 1
                             
                             if should_collect and "live_chain_debug_samples" in state:
                                 for sample in state["live_chain_debug_samples"]:
@@ -998,9 +1020,9 @@ class BacktestManager:
                         if best_score >= min_score:
                             try:
                                 if current_exit_style == "hold_to_expiry":
-                                    trade = sim._simulate_call_hold_to_expiry(t, best_opt)
+                                    trade = sim._simulate_call_hold_to_expiry(t, best_opt, regime_state=regime_state)
                                 else:
-                                    trade = sim._simulate_call_tp_and_roll(t, best_opt)
+                                    trade = sim._simulate_call_tp_and_roll(t, best_opt, regime_state=regime_state)
                             except Exception:
                                 trade = None
 
@@ -1112,6 +1134,25 @@ class BacktestManager:
                     primary_equity_curve = all_equity_curves.get(exit_style, [])
 
                 with self._lock:
+                    total_decision_times = int(provenance_counts.get("total_decision_times", 0) or 0)
+                    candidates_present = int(provenance_counts.get("candidates_present", 0) or 0)
+                    chain_counts = provenance_counts.get("chain_source_counts", {}) or {}
+                    chain_pct = {
+                        k: (v / total_decision_times * 100.0) if total_decision_times > 0 else 0.0
+                        for k, v in chain_counts.items()
+                    }
+                    self._status.config["provenance_summary"] = {
+                        "total_decision_times": total_decision_times,
+                        "candidates_present_pct": (candidates_present / total_decision_times * 100.0) if total_decision_times > 0 else 0.0,
+                        "chain_source_counts": chain_counts,
+                        "chain_source_pct": chain_pct,
+                        "synthetic_fallback_pct": (int(provenance_counts.get("synthetic_fallback", 0) or 0) / total_decision_times * 100.0) if total_decision_times > 0 else 0.0,
+                        "ds_class": ds.__class__.__name__,
+                        "pricing_mode": getattr(config, "pricing_mode", None),
+                        "chain_mode": getattr(config, "chain_mode", None),
+                        "sigma_mode": getattr(config, "sigma_mode", None),
+                        "skew_source": getattr(config, "skew_source", None),
+                    }
                     self._status.metrics = all_metrics
                     self._status.equity_curve = primary_equity_curve
                     self._status.progress_pct = 1.0

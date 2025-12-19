@@ -404,9 +404,14 @@ def build_historical_state(
     # Get chain_mode from config (defaults to synthetic_grid for backward compatibility)
     chain_mode = getattr(cfg, 'chain_mode', 'synthetic_grid')
     debug_samples: List[LiveChainDebugSample] = []
+
+    ds_class = ds.__class__.__name__
+    used_synthetic_fallback = False
+    chain_source = "unknown"
     
     if cfg.pricing_mode == "deribit_live":
         # Full live mode - use Deribit chain directly
+        chain_source = "deribit_live_chain"
         all_options: List[OptionSnapshot] = ds.list_option_chain(
             underlying=underlying,
             as_of=t,
@@ -438,6 +443,8 @@ def build_historical_state(
                 )
             
             if not candidates:
+                used_synthetic_fallback = True
+                chain_source = "synthetic_fallback"
                 logger.warning(
                     f"[build_historical_state] live_chain returned empty at {t}, "
                     f"falling back to synthetic_grid for {underlying}"
@@ -464,9 +471,18 @@ def build_historical_state(
                     )
                     logger.error(error_msg)
                     raise ValueError(error_msg)
+
+            if candidates and chain_source != "synthetic_fallback":
+                if ds_class == "LiveDeribitDataSource":
+                    chain_source = "harvested_chain"
+                elif ds_class == "DeribitDataSource":
+                    chain_source = "live_api_chain"
+                else:
+                    chain_source = "live_chain"
     else:
         # Default: synthetic_grid mode
         if spot is not None and spot > 0:
+            chain_source = "synthetic_grid"
             # Use new sigma selection logic
             # IMPORTANT: Never use skew_source="live" for historical backtests (look-ahead).
             skew_source = getattr(cfg, "skew_source", "none")
@@ -495,6 +511,15 @@ def build_historical_state(
         "market_context": mc_dict,
         "candidate_options": candidates,
         "portfolio": portfolio,
+        "provenance": {
+            "chain_source": chain_source,
+            "used_synthetic_fallback": used_synthetic_fallback,
+            "ds_class": ds_class,
+            "pricing_mode": getattr(cfg, "pricing_mode", None),
+            "chain_mode": chain_mode,
+            "sigma_mode": getattr(cfg, "sigma_mode", None),
+            "skew_source": getattr(cfg, "skew_source", None),
+        },
     }
     
     if regime_state is not None:
