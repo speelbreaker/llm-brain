@@ -90,3 +90,8 @@ key.md.pub
 key.md*
 *.pem
 *.key
+*.p12
+*.crt
+*.pub
+.gitleaks.toml
+.secrets.baseline

@@ -1,0 +1,12 @@
+repos:
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.18.4
+    hooks:
+      - id: gitleaks
+        name: gitleaks (secrets scan)
+        entry: gitleaks protect --verbose --redact --config .gitleaks.toml
+        language: golang
+        types: [text]
+        pass_filenames: false
+        stages: [commit]
+        additional_dependencies: []

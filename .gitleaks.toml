@@ -1,0 +1,10 @@
+# Minimal gitleaks configuration for strict scanning with a small allowlist.
+# Do not relax without explicit approval.
+
+[allowlist]
+description = "Allowlist benign patterns to reduce false positives"
+regexes = [
+  "BUILD_ID",
+  "SUPERVISOR_AUTOFIX_LABEL",
+  "autofix-ok",
+]
