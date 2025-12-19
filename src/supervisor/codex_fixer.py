@@ -137,7 +137,30 @@ Focus only on fixing the specific failures. Be surgical and precise."""
         output = stdout.decode(errors="replace")
         if stderr:
             output += "\n" + stderr.decode(errors="replace")
-        return process.returncode == 0, output[:5000]
+        if process.returncode != 0:
+            return False, output[:5000]
+
+        if self._should_run_ruff_format():
+            format_cmd = "python -m ruff format ."
+            format_proc = await asyncio.create_subprocess_shell(
+                format_cmd,
+                cwd=workspace_path,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            fmt_stdout, fmt_stderr = await format_proc.communicate()
+            fmt_output = fmt_stdout.decode(errors="replace")
+            if fmt_stderr:
+                fmt_output += "\n" + fmt_stderr.decode(errors="replace")
+            output = f"{output}\n---\n{fmt_output}"
+            return format_proc.returncode == 0, output[:5000]
+
+        return True, output[:5000]
+
+    def _should_run_ruff_format(self) -> bool:
+        return any(
+            "ruff format" in cmd.lower() for cmd in self.settings.get_check_commands()
+        )
 
     async def apply_fix(
         self,

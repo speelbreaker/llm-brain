@@ -18,6 +18,7 @@ class SupervisorSettings(BaseSettings):
     require_human_for_high_risk: bool = Field(
         default=True, alias="SUPERVISOR_REQUIRE_HUMAN_FOR_HIGH_RISK"
     )
+    autofix_push: bool = Field(default=False, alias="SUPERVISOR_AUTOFIX_PUSH")
     base_jobs_dir: str = Field(
         default="/tmp/pr_supervisor_jobs", alias="SUPERVISOR_BASE_JOBS_DIR"
     )

@@ -802,6 +802,8 @@ async def run_supervisor_job(job: SupervisorJob, app: FastAPI) -> None:
             )
             return
 
+        dry_run_enabled = settings.autofix_dry_run and not settings.autofix_push
+
         job.update_status(JobStatus.FIXING)
         store.save(job)
 
@@ -861,7 +863,7 @@ async def run_supervisor_job(job: SupervisorJob, app: FastAPI) -> None:
             fix_attempt.verification = new_verification
 
             if new_verification.all_passed:
-                if settings.autofix_dry_run:
+                if dry_run_enabled:
                     fix_attempt.committed = False
                     job.fix_attempts.append(fix_attempt)
 
