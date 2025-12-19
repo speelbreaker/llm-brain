@@ -108,13 +108,15 @@ def truncate_job_for_api(job_dict: dict) -> dict:
 
 
 FORBIDDEN_ENV_PATTERN = re.compile(r"(key|token|secret|password)", re.IGNORECASE)
+FORBIDDEN_DIAG_PATTERN = re.compile(
+    r"(key|token|secret|password|api_key|private_key|openai|github)", re.IGNORECASE
+)
 ALLOWED_ENV_KEYS = {
     "SUPERVISOR_ENABLED",
     "MODEL_OPTIMIST",
     "MODEL_SKEPTIC",
     "MODEL_ARBITER",
     "CODEX_MODEL",
-    "OPENAI_BASE_URL",
     "GEMINI_MODEL",
 }
 
@@ -137,6 +139,14 @@ def build_safe_env_snapshot(settings: SupervisorSettings) -> dict[str, str | Non
         for k, v in env_snapshot.items()
         if not FORBIDDEN_ENV_PATTERN.search(k or "")
     }
+
+
+def record_worker_error(app: FastAPI, err: Exception) -> None:
+    """Track worker error counts by exception type on app state."""
+    if not hasattr(app.state, "worker_errors"):
+        app.state.worker_errors = {}
+    key = err.__class__.__name__
+    app.state.worker_errors[key] = app.state.worker_errors.get(key, 0) + 1
 
 
 async def job_worker(app: FastAPI) -> None:
@@ -167,16 +177,18 @@ async def job_worker(app: FastAPI) -> None:
             try:
                 logger.info("Worker processing job: %s", job.job_id)
                 await run_supervisor_job(job, job_app)
-            except Exception:
-                logger.error("Job %s failed in worker", job.job_id, exc_info=False)
+            except Exception as exc:
+                logger.exception("Job %s failed in worker (phase=worker_execute)", job.job_id)
+                record_worker_error(app, exc)
             finally:
                 app.state.job_queue.task_done()
 
         except asyncio.CancelledError:
             logger.info("Job worker cancelled, shutting down")
             break
-        except Exception:
-            logger.error("Job worker error", exc_info=False)
+        except Exception as exc:
+            logger.exception("Job worker error (phase=worker_loop)")
+            record_worker_error(app, exc)
             await asyncio.sleep(1)
 
 
@@ -189,9 +201,11 @@ async def lifespan(app: FastAPI):
     app.state.settings = settings
     app.state.ready = False
     app.state.startup_errors = []  # list[str]
+    app.state.build_id = os.environ.get("BUILD_ID") or os.environ.get("GIT_SHA")
 
     app.state.job_queue = asyncio.Queue()
     app.state.supervisor_worker_task = None  # Optional[asyncio.Task]
+    app.state.worker_errors = {}
 
     app.state.store = JobStore(f"{settings.base_jobs_dir}/job_history.jsonl")
     app.state.github_client = None
@@ -273,9 +287,11 @@ async def health(request: Request):
 class DiagResponse(BaseModel):
     ok: bool = True
     version: str = "0.2.1"
+    build_id: Optional[str] = None
     code_paths: dict[str, str]
     models: dict[str, str | None]
     env_flags: dict[str, str | None]
+    jobs: dict[str, object]
     notes: list[str] = []
 
 
@@ -283,6 +299,7 @@ class DiagResponse(BaseModel):
 async def diag(request: Request):
     settings: SupervisorSettings = request.app.state.settings
 
+    build_id = getattr(request.app.state, "build_id", None)
     # Import inside handler so module paths reflect the running container mount
     from src.supervisor import workspace as ws
     from src.supervisor.llm import openai_provider as oai
@@ -293,10 +310,15 @@ async def diag(request: Request):
     def present_bool(v: str | None) -> str:
         return "1" if (v and v.strip()) else "0"
 
-    code_paths = {
+    code_paths_raw = {
         "app_py": __file__,
         "workspace_py": getattr(ws, "__file__", "unknown"),
-        "openai_provider_py": getattr(oai, "__file__", "unknown"),
+        "llm_provider_py": getattr(oai, "__file__", "unknown"),
+    }
+    code_paths = {
+        k: v
+        for k, v in code_paths_raw.items()
+        if not FORBIDDEN_DIAG_PATTERN.search(f"{k}{v}")
     }
 
     models = {
@@ -306,13 +328,33 @@ async def diag(request: Request):
         "CODEX_MODEL": present(getattr(settings, "codex_model", None)),
     }
 
-    env_flags = build_safe_env_snapshot(settings)
+    env_flags = {
+        k: v
+        for k, v in build_safe_env_snapshot(settings).items()
+        if not FORBIDDEN_DIAG_PATTERN.search(f"{k}{v}")
+    }
+
+    job_queue = getattr(request.app.state, "job_queue", None)
+    worker_task = getattr(request.app.state, "supervisor_worker_task", None)
+    error_counts = getattr(request.app.state, "worker_errors", {})
+    jobs_stats = {
+        "queue_depth": job_queue.qsize() if job_queue else 0,
+        "worker_alive": bool(worker_task) and not worker_task.done(),
+        "error_counts": error_counts,
+    }
 
     notes = []
     notes.append(f"ready={getattr(request.app.state, 'ready', None)}")
     notes.append(f"queue_size={request.app.state.job_queue.qsize() if hasattr(request.app.state,'job_queue') else 'na'}")
 
-    return DiagResponse(code_paths=code_paths, models=models, env_flags=env_flags, notes=notes)
+    return DiagResponse(
+        build_id=build_id,
+        code_paths=code_paths,
+        models=models,
+        env_flags=env_flags,
+        jobs=jobs_stats,
+        notes=notes,
+    )
 
 
 

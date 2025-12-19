@@ -3,12 +3,15 @@ set -euo pipefail
 
 docker rm -f pr-supervisor >/dev/null 2>&1 || true
 
+BUILD_ID=$(cd /opt/llm-brain/llm-brain && git rev-parse HEAD)
+
 docker run -d \
   --name pr-supervisor \
   --restart unless-stopped \
   --network docker_default \
   -p 127.0.0.1:8080:8080 \
   --env-file /opt/llm-brain/llm-brain/docker/pr-supervisor.env \
+  -e BUILD_ID="${BUILD_ID}" \
   -e PYTHONPATH=/app \
   -v docker_supervisor_data:/var/lib/pr_supervisor \
   -v /opt/llm-brain/llm-brain/src:/app/src:ro \
