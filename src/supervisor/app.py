@@ -507,11 +507,7 @@ async def simulate_pr_event_handler(
     """
     settings: SupervisorSettings = request.app.state.settings
 
-    if settings.debug_token and settings.debug_token.strip():
-        if not x_debug_token or x_debug_token != settings.debug_token:
-            raise HTTPException(
-                status_code=401, detail="Invalid or missing debug token"
-            )
+    _require_debug_access(request, getattr(settings, "debug_token", None), x_debug_token)
 
     if not settings.enabled:
         raise HTTPException(status_code=400, detail="Supervisor disabled")
@@ -576,11 +572,46 @@ async def simulate_pr_event_handler(
     }
 
 
+def _is_local_request(request: Request) -> bool:
+    """Check whether the request originates from localhost."""
+    client = request.client
+    return bool(
+        client
+        and client.host
+        in {
+            "127.0.0.1",
+            "::1",
+            "localhost",
+            "testclient",
+            "testserver",
+        }
+    )
+
+
+def _require_debug_access(request: Request, token: str | None, provided: str | None):
+    """Enforce debug gating: enabled flag, token, and localhost-only."""
+    settings: SupervisorSettings = request.app.state.settings
+
+    if not getattr(settings, "debug_enabled", False):
+        raise HTTPException(status_code=404, detail="Not found")
+
+    if not token:
+        raise HTTPException(
+            status_code=403, detail="Debug token not configured (SUPERVISOR_DEBUG_TOKEN)"
+        )
+
+    if not provided or provided != token:
+        raise HTTPException(status_code=401, detail="Invalid debug token")
+
+    if not _is_local_request(request):
+        raise HTTPException(
+            status_code=403, detail="Debug endpoints are limited to localhost"
+        )
+
+
 def register_debug_routes(app_instance: FastAPI) -> None:
-    """Register debug routes only if SUPERVISOR_DEBUG=1."""
-    settings = get_settings()
-    if settings.debug:
-        app_instance.post("/debug/simulate_pr_event")(simulate_pr_event_handler)
+    """Register debug routes; access is enforced inside the handler."""
+    app_instance.post("/debug/simulate_pr_event")(simulate_pr_event_handler)
 
 
 register_debug_routes(app)

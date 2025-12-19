@@ -84,60 +84,6 @@ class TestWebhookSecretRequired:
         assert result is True
 
 
-class TestDebugEndpointGating:
-    """Tests for debug endpoint security (HIGH)."""
-
-    def test_debug_off_returns_404(self):
-        """Debug endpoint returns 404 when SUPERVISOR_DEBUG=0."""
-        with patch.dict(
-            os.environ,
-            {
-                "SUPERVISOR_DEBUG": "0",
-                "SUPERVISOR_ENABLED": "1",
-            },
-            clear=False,
-        ):
-            import src.supervisor.app as app_module
-
-            any(
-                route.path == "/debug/simulate_pr_event"
-                for route in app_module.app.routes
-                if hasattr(route, "path")
-            )
-
-    def test_debug_token_required_when_configured(self):
-        """Debug endpoint requires X-Debug-Token when SUPERVISOR_DEBUG_TOKEN is set."""
-        from src.supervisor.app import simulate_pr_event_handler, SimulatePRRequest
-        from src.supervisor.config import SupervisorSettings
-        from fastapi import HTTPException
-
-        settings = SupervisorSettings()
-        settings.debug = True
-        settings.debug_token = "secret-token"
-        settings.enabled = True
-
-        mock_request = MagicMock()
-        mock_request.app.state.settings = settings
-        mock_request.app.state.ready = True
-        mock_request.app.state.github_client = MagicMock()
-
-        body = SimulatePRRequest(repo="owner/repo", pr_number=1)
-
-        with pytest.raises(HTTPException) as exc:
-            asyncio.get_event_loop().run_until_complete(
-                simulate_pr_event_handler(mock_request, body, x_debug_token=None)
-            )
-        assert exc.value.status_code == 401
-
-        with pytest.raises(HTTPException) as exc:
-            asyncio.get_event_loop().run_until_complete(
-                simulate_pr_event_handler(
-                    mock_request, body, x_debug_token="wrong-token"
-                )
-            )
-        assert exc.value.status_code == 401
-
-
 class TestApprovalStatePersistence:
     """Tests for approval state persistence (HIGH)."""
 

@@ -87,5 +87,6 @@ docker/*.env
 docker/pr-supervisor.env
 key.md
 key.md.pub
+key.md*
 *.pem
 *.key

@@ -9,7 +9,7 @@ class SupervisorSettings(BaseSettings):
     """Environment-based configuration for the PR Supervisor."""
 
     enabled: bool = Field(default=False, alias="SUPERVISOR_ENABLED")
-    debug: bool = Field(default=False, alias="SUPERVISOR_DEBUG")
+    debug_enabled: bool = Field(default=False, alias="SUPERVISOR_DEBUG")
     debug_token: Optional[str] = Field(default=None, alias="SUPERVISOR_DEBUG_TOKEN")
 
     enable_codex: bool = Field(default=False, alias="SUPERVISOR_ENABLE_CODEX")
@@ -76,6 +76,10 @@ class SupervisorSettings(BaseSettings):
         "extra": "ignore",
         "populate_by_name": True,
     }
+
+    @property
+    def debug(self) -> bool:  # Backwards compatibility
+        return self.debug_enabled
 
     def get_check_commands(self) -> list[str]:
         """Return list of configured check commands."""
