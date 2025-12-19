@@ -104,6 +104,41 @@ Focus only on fixing the specific failures. Be surgical and precise."""
         except Exception as e:
             return False, f"Error running Codex: {str(e)}"
 
+    def _is_ruff_only_failure(self, verification: VerificationReport) -> bool:
+        if not verification or not verification.checks:
+            return False
+
+        def _is_pytest(cmd: str) -> bool:
+            return "pytest" in cmd.lower()
+
+        def _is_ruff(cmd: str) -> bool:
+            cmd_lower = cmd.lower()
+            return "ruff" in cmd_lower and "check" in cmd_lower
+
+        pytest_checks = [c for c in verification.checks if _is_pytest(c.command)]
+        if not pytest_checks or not all(c.passed for c in pytest_checks):
+            return False
+
+        failed_checks = [c for c in verification.checks if not c.passed]
+        if not failed_checks:
+            return False
+
+        return all(_is_ruff(c.command) for c in failed_checks)
+
+    async def _run_ruff_fix(self, workspace_path: str) -> tuple[bool, str]:
+        cmd = "python -m ruff check --fix ."
+        process = await asyncio.create_subprocess_shell(
+            cmd,
+            cwd=workspace_path,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await process.communicate()
+        output = stdout.decode(errors="replace")
+        if stderr:
+            output += "\n" + stderr.decode(errors="replace")
+        return process.returncode == 0, output[:5000]
+
     async def apply_fix(
         self,
         workspace_path: str,
@@ -113,4 +148,10 @@ Focus only on fixing the specific failures. Be surgical and precise."""
     ) -> tuple[bool, str]:
         """Build prompt and run Codex to apply fixes."""
         prompt = self.build_fix_prompt(arbiter_decision, verification, changed_files)
-        return await self.run_codex(workspace_path, prompt)
+        success, output = await self.run_codex(workspace_path, prompt)
+        if (not success) and "Codex binary not found" in output:
+            if self._is_ruff_only_failure(verification):
+                ruff_success, ruff_output = await self._run_ruff_fix(workspace_path)
+                combined = f"{output}\n---\nRuff fix fallback:\n{ruff_output}"
+                return ruff_success, combined[:5000]
+        return success, output
