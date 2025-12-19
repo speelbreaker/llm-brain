@@ -25,6 +25,7 @@ class SupervisorSettings(BaseSettings):
     max_files_changed: int = Field(default=10, alias="SUPERVISOR_MAX_FILES_CHANGED")
     max_loc_changed: int = Field(default=300, alias="SUPERVISOR_MAX_LOC_CHANGED")
     allow_forks: bool = Field(default=False, alias="SUPERVISOR_ALLOW_FORKS")
+    autofix_dry_run: bool = Field(default=True, alias="SUPERVISOR_AUTOFIX_DRY_RUN")
 
     github_webhook_secret: Optional[str] = Field(
         default=None, alias="GITHUB_WEBHOOK_SECRET"

@@ -113,6 +113,7 @@ FORBIDDEN_DIAG_PATTERN = re.compile(
 )
 ALLOWED_ENV_KEYS = {
     "SUPERVISOR_ENABLED",
+    "SUPERVISOR_AUTOFIX_DRY_RUN",
     "MODEL_OPTIMIST",
     "MODEL_SKEPTIC",
     "MODEL_ARBITER",
@@ -799,6 +800,52 @@ async def run_supervisor_job(job: SupervisorJob, app: FastAPI) -> None:
             await notifier.notify_final_result(
                 job, success=False, message=autofix_decision.reason
             )
+            return
+
+        if settings.autofix_dry_run:
+            prompt_preview = codex_fixer.build_fix_prompt(
+                arbiter_decision, verification, changed_files
+            )
+            prompt_preview = redact_secrets(prompt_preview, settings)[:2000]
+
+            objectives_md = (
+                "\n".join(f"- {obj}" for obj in arbiter_decision.fix_objectives)
+                or "- (none)"
+            )
+            models_used = ", ".join(
+                m
+                for m in [
+                    settings.model_optimist,
+                    settings.model_skeptic,
+                    settings.model_arbiter,
+                    settings.codex_model,
+                ]
+                if m
+            ) or "unset"
+
+            dry_comment = (
+                "### 🧪 Autofix Dry-Run (no changes pushed)\n\n"
+                f"Risk: {arbiter_decision.risk_level or 'unknown'}\n\n"
+                f"Objectives:\n{objectives_md}\n\n"
+                f"Models: {models_used}\n\n"
+                "<details><summary>Redacted prompt preview</summary>\n\n"
+                "```\n"
+                f"{prompt_preview}\n"
+                "```\n"
+                "</details>\n"
+            )
+
+            dry_comment = redact_secrets(dry_comment, settings)
+            await github_client.post_pr_comment(
+                job.repo_full_name,
+                job.pr_number,
+                dry_comment,
+            )
+
+            job.update_status(JobStatus.NEEDS_HUMAN)
+            job.final_message = "Autofix approved (dry-run): no changes pushed."
+            store.save(job)
+            await notifier.notify_final_result(job, success=False, message=job.final_message)
             return
 
         job.update_status(JobStatus.FIXING)
