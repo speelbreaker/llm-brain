@@ -678,8 +678,8 @@ class BacktestManager:
         max_dte: int = 30,
         delta_min: float = 0.10,
         delta_max: float = 0.45,
-        margin_type: MarginType = "inverse",
-        settlement_ccy: SettlementCcy = "ANY",
+        margin_type: MarginType = "linear",
+        settlement_ccy: SettlementCcy = "USDC",
         sigma_mode: str = "rv_x_multiplier",
         chain_mode: str = "live_chain",
         synthetic_iv_multiplier: float = 1.0,
@@ -876,6 +876,9 @@ class BacktestManager:
                     cumulative_pnl = 0.0
                     cumulative_pnl_vs_hodl = 0.0
 
+                    # Enforce a single coherent position path: only one active short-call at a time.
+                    active_position_until: Optional[datetime] = None
+
                     with self._lock:
                         self._status.current_phase = current_exit_style
 
@@ -892,6 +895,28 @@ class BacktestManager:
                                 return
 
                         try:
+                            if active_position_until is not None and t < active_position_until:
+                                # Skip decisions while a position is open (prevents overlapping trades).
+                                step = BacktestProgressStep(
+                                    time=t,
+                                    candidates=0,
+                                    best_score=0.0,
+                                    traded=False,
+                                    exit_style=current_exit_style,
+                                )
+                                steps_buffer.append(step)
+                                global_step_index += 1
+                                progress = global_step_index / (len(decision_times) * total_phases)
+                                self._update_status_step(
+                                    global_step_index,
+                                    len(decision_times) * total_phases,
+                                    t,
+                                    steps_buffer,
+                                    progress,
+                                    current_exit_style,
+                                )
+                                continue
+
                             should_collect = (
                                 not collected_debug_samples 
                                 and chain_mode == "live_chain" 
@@ -1032,6 +1057,8 @@ class BacktestManager:
                             cumulative_pnl += trade.pnl
                             cumulative_pnl_vs_hodl += trade.pnl_vs_hodl
                             traded = True
+                            if trade.close_time and (active_position_until is None or trade.close_time > active_position_until):
+                                active_position_until = trade.close_time
                             self._append_chain_summary(trade, current_exit_style)
                             
                             trade_result = {

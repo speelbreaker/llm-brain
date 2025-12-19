@@ -668,7 +668,7 @@ class CoveredCallSimulator:
         spot_df = ds.get_spot_ohlc(
             underlying=cfg.underlying,
             start=decision_time,
-            end=expiry,
+            end=min(expiry, cfg.end),
             timeframe=cfg.timeframe,
         )
         if spot_df.empty:

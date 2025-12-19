@@ -96,8 +96,9 @@ class BacktestStartRequest(BaseModel):
     max_dte: int = 21
     delta_min: float = 0.15
     delta_max: float = 0.35
-    margin_type: TypingLiteral["inverse", "linear"] = "inverse"
-    settlement_ccy: TypingLiteral["ANY", "USDC", "BTC", "ETH"] = "ANY"
+    # Backtests assume linear USDC-settled option marks unless explicit conversions are implemented.
+    margin_type: TypingLiteral["inverse", "linear"] = "linear"
+    settlement_ccy: TypingLiteral["ANY", "USDC", "BTC", "ETH"] = "USDC"
     sigma_mode: str = "rv_x_multiplier"
     chain_mode: Optional[str] = Field(
         default=None,
@@ -375,6 +376,19 @@ def start_backtest(req: BacktestStartRequest) -> JSONResponse:
     if effective_exit_style not in valid_exit_styles:
         raise HTTPException(status_code=400, detail=f"Invalid exit_style. Must be one of: {valid_exit_styles}")
     
+    warnings = list(validation.warnings)
+
+    effective_margin_type = req.margin_type
+    effective_settlement_ccy = req.settlement_ccy
+
+    # Normalize to linear+USDC to avoid unit-mismatched PnL (inverse marks are typically in underlying units).
+    if effective_margin_type != "linear" or effective_settlement_ccy != "USDC":
+        effective_margin_type = "linear"
+        effective_settlement_ccy = "USDC"
+        warnings.append(
+            "Normalized margin_type/settlement_ccy to linear/USDC for backtest correctness (unit consistency)."
+        )
+
     started = backtest_manager.start(
         underlying=req.underlying,
         start_date=start_dt,
@@ -388,8 +402,8 @@ def start_backtest(req: BacktestStartRequest) -> JSONResponse:
         max_dte=effective.get("max_dte", req.max_dte),
         delta_min=effective.get("delta_min", req.delta_min),
         delta_max=effective.get("delta_max", req.delta_max),
-        margin_type=req.margin_type,
-        settlement_ccy=req.settlement_ccy,
+        margin_type=effective_margin_type,
+        settlement_ccy=effective_settlement_ccy,
         sigma_mode=req.sigma_mode,
         chain_mode=effective_chain_mode,
         synthetic_iv_multiplier=req.synthetic_iv_multiplier,
@@ -406,7 +420,7 @@ def start_backtest(req: BacktestStartRequest) -> JSONResponse:
     return JSONResponse(content={
         "started": True,
         "backtest_type": "generic",
-        "warnings": validation.warnings,
+        "warnings": warnings,
         "effective_config": {
             **validation.effective_config,
             "chain_mode": effective_chain_mode,
