@@ -22,7 +22,7 @@ from typing import Dict, Any, List, Optional, Tuple
 from .deribit_data_source import DeribitDataSource
 from .market_context_backtest import compute_market_context_from_ds, market_context_to_dict
 from .types import OptionSnapshot, CallSimulationConfig, LiveChainDebugSample
-from .pricing import bs_call_delta, get_synthetic_iv, get_sigma_for_option, bs_call_price
+from .pricing import bs_call_delta, get_synthetic_iv, get_sigma_for_option, bs_call_price, RegimeState
 from src.utils.expiry import parse_deribit_expiry
 from src.models import AgentState, MarketContext
 from src.state_core import (
@@ -342,6 +342,7 @@ def build_historical_state(
     cfg: CallSimulationConfig,
     t: datetime,
     collect_debug_samples: bool = False,
+    regime_state: Optional["RegimeState"] = None,
 ) -> Dict[str, Any]:
     """
     Build a historical state dict at time t for simulate_policy.
@@ -353,6 +354,7 @@ def build_historical_state(
         "market_context": { ... },
         "candidate_options": [OptionSnapshot, ...],
         "portfolio": { ... optional ... },
+        "regime_state": RegimeState (if provided),
         "live_chain_debug_samples": [LiveChainDebugSample, ...] (if collect_debug_samples=True)
       }
       
@@ -361,6 +363,7 @@ def build_historical_state(
         cfg: CallSimulationConfig with target parameters
         t: Decision time for state construction
         collect_debug_samples: If True and using live_chain + mark_iv mode, collect debug samples
+        regime_state: Optional RegimeState for regime-aware IV dynamics
         
     Returns:
         State dict suitable for scoring and policy evaluation
@@ -445,7 +448,7 @@ def build_historical_state(
                 option_chain=None,  # No chain for pure synthetic
                 option_mark_iv=None,
                 abs_delta=cfg.target_delta,
-                regime_state=None,
+                regime_state=regime_state,
                 skew_source=skew_source,
                 dte_days=float(cfg.target_dte),  # Use target DTE for synthetic grid base sigma
             )
@@ -464,6 +467,9 @@ def build_historical_state(
         "candidate_options": candidates,
         "portfolio": portfolio,
     }
+    
+    if regime_state is not None:
+        result["regime_state"] = regime_state
     
     if debug_samples:
         result["live_chain_debug_samples"] = debug_samples

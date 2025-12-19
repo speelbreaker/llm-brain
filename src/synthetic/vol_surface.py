@@ -70,7 +70,14 @@ class VolSurfaceConfig(BaseModel):
         """
         Get skew anchor ratio for a given absolute delta.
         
-        Interpolates between defined anchors.
+        Uses a smooth parametric curve fit (quadratic in log-space) through
+        anchor points for >=3 anchors. Falls back to linear interpolation
+        for <3 anchors.
+        
+        The curve fit ensures smooth, monotone-ish behavior without kinks.
+        
+        Returns:
+            Skew ratio multiplier (clamped to [0.5, 2.0] for safety)
         """
         if not self.skew or not self.skew.enabled:
             return 1.0
@@ -80,28 +87,12 @@ class VolSurfaceConfig(BaseModel):
             return 1.0
         
         sorted_deltas = sorted([float(d) for d in anchors.keys()])
+        ratios = [anchors.get(f"{d:.2f}", 1.0) for d in sorted_deltas]
         
-        if abs_delta <= sorted_deltas[0]:
-            ratio = anchors.get(f"{sorted_deltas[0]:.2f}", 1.0)
-        elif abs_delta >= sorted_deltas[-1]:
-            ratio = anchors.get(f"{sorted_deltas[-1]:.2f}", 1.0)
+        if len(sorted_deltas) >= 3:
+            ratio = self._compute_quadratic_log_ratio(abs_delta, sorted_deltas, ratios)
         else:
-            lower_delta = sorted_deltas[0]
-            upper_delta = sorted_deltas[-1]
-            for i, d in enumerate(sorted_deltas[:-1]):
-                if d <= abs_delta <= sorted_deltas[i + 1]:
-                    lower_delta = d
-                    upper_delta = sorted_deltas[i + 1]
-                    break
-            
-            lower_ratio = anchors.get(f"{lower_delta:.2f}", 1.0)
-            upper_ratio = anchors.get(f"{upper_delta:.2f}", 1.0)
-            
-            if upper_delta == lower_delta:
-                ratio = lower_ratio
-            else:
-                t = (abs_delta - lower_delta) / (upper_delta - lower_delta)
-                ratio = lower_ratio + t * (upper_ratio - lower_ratio)
+            ratio = self._linear_interpolate_ratio(abs_delta, sorted_deltas, ratios)
         
         if self.skew.mode == "neutral":
             ratio = 1.0 + (ratio - 1.0) * 0.5
@@ -110,7 +101,65 @@ class VolSurfaceConfig(BaseModel):
         
         ratio *= self.skew.scale
         
-        return ratio
+        return max(0.5, min(ratio, 2.0))
+    
+    def _linear_interpolate_ratio(
+        self, 
+        abs_delta: float, 
+        sorted_deltas: List[float], 
+        ratios: List[float]
+    ) -> float:
+        """Linear interpolation fallback for <3 anchors."""
+        if abs_delta <= sorted_deltas[0]:
+            return ratios[0]
+        elif abs_delta >= sorted_deltas[-1]:
+            return ratios[-1]
+        
+        for i in range(len(sorted_deltas) - 1):
+            if sorted_deltas[i] <= abs_delta <= sorted_deltas[i + 1]:
+                lower_delta = sorted_deltas[i]
+                upper_delta = sorted_deltas[i + 1]
+                lower_ratio = ratios[i]
+                upper_ratio = ratios[i + 1]
+                
+                if upper_delta == lower_delta:
+                    return lower_ratio
+                
+                t = (abs_delta - lower_delta) / (upper_delta - lower_delta)
+                return lower_ratio + t * (upper_ratio - lower_ratio)
+        
+        return 1.0
+    
+    def _compute_quadratic_log_ratio(
+        self,
+        abs_delta: float,
+        sorted_deltas: List[float],
+        ratios: List[float],
+    ) -> float:
+        """
+        Fit a quadratic curve in log-space through anchor points.
+        
+        Uses least squares to fit: log(ratio) = a + b*x + c*x^2
+        where x = abs_delta - 0.25 (centered around typical OTM delta).
+        
+        Then ratio = exp(log_ratio).
+        """
+        import numpy as np
+        
+        center = 0.25
+        x = np.array([d - center for d in sorted_deltas])
+        y = np.array([np.log(max(r, 0.01)) for r in ratios])
+        
+        X = np.column_stack([np.ones_like(x), x, x**2])
+        coeffs, _, _, _ = np.linalg.lstsq(X, y, rcond=None)
+        a, b, c = coeffs
+        
+        x_query = abs_delta - center
+        log_ratio = a + b * x_query + c * x_query**2
+        
+        log_ratio = max(-1.0, min(log_ratio, 1.0))
+        
+        return np.exp(log_ratio)
     
     @classmethod
     def from_calibration(cls, recommended_vol_surface: Dict[str, Any]) -> "VolSurfaceConfig":

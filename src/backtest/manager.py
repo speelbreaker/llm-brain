@@ -852,6 +852,16 @@ class BacktestManager:
                 live_chain_debug_samples: List[Dict[str, Any]] = []
                 collected_debug_samples = False
                 
+                from src.backtest.pricing import create_regime_state, step_regime_state, compute_realized_volatility
+                regime_state = None
+                use_regime = getattr(config, 'sigma_mode', 'rv_x_multiplier') == 'rv_x_multiplier'
+                if use_regime:
+                    regime_state = create_regime_state(
+                        underlying=underlying,
+                        initial_rv=50.0,
+                        seed=42,
+                    )
+                
                 for phase_idx, current_exit_style in enumerate(styles_to_run):
                     steps_buffer: List[BacktestProgressStep] = []
                     trades: List[Any] = []
@@ -879,7 +889,11 @@ class BacktestManager:
                                 and chain_mode == "live_chain" 
                                 and sigma_mode == "mark_iv_x_multiplier"
                             )
-                            state = build_historical_state(ds, config, t, collect_debug_samples=should_collect)
+                            state = build_historical_state(
+                                ds, config, t, 
+                                collect_debug_samples=should_collect,
+                                regime_state=regime_state,
+                            )
                             
                             if should_collect and "live_chain_debug_samples" in state:
                                 for sample in state["live_chain_debug_samples"]:
@@ -889,6 +903,22 @@ class BacktestManager:
                             state = {}
 
                         spot = state.get("spot")
+                        
+                        if regime_state is not None and spot and spot > 0:
+                            rv_lookback = t - timedelta(days=30)
+                            rv_df = ds.get_spot_ohlc(
+                                underlying=underlying,
+                                start=rv_lookback,
+                                end=t,
+                                timeframe="1d",
+                            )
+                            if not rv_df.empty:
+                                spot_history_for_rv = [
+                                    (idx, float(row["close"])) 
+                                    for idx, row in rv_df.iterrows()
+                                ]
+                                rv_30d = compute_realized_volatility(spot_history_for_rv, t, 30) * 100
+                                regime_state = step_regime_state(regime_state, rv_30d, underlying)
                         options = state.get("candidate_options") or []
                         
                         if spot and spot > 0:
