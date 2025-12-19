@@ -67,8 +67,23 @@ class CalibrationRunResult:
     mae_pct: Optional[float] = None
     vega_weighted_mae_pct: Optional[float] = None
     num_samples: int = 0
+    applied: bool = False
+    applied_reason: str = ""
+    # Backward-compatible aliases (some callers/tests still use these names)
     policy_should_apply: bool = False
     policy_reason: str = ""
+
+    def __post_init__(self) -> None:
+        # Keep the two naming schemes consistent.
+        if self.applied and not self.policy_should_apply:
+            self.policy_should_apply = True
+        if self.policy_should_apply and not self.applied:
+            self.applied = True
+
+        if self.applied_reason and not self.policy_reason:
+            self.policy_reason = self.applied_reason
+        if self.policy_reason and not self.applied_reason:
+            self.applied_reason = self.policy_reason
 
 
 def run_calibration_for_underlying(
@@ -123,17 +138,27 @@ def run_calibration_for_underlying(
     try:
         result = run_historical_calibration_from_harvest(config, validate_quality=True)
     except Exception as e:
-        print(f"\n  ERROR: Calibration failed - {e}")
+        err = f"Calibration failed: {e}"
+        print(f"\n  ERROR: {err}")
         return CalibrationRunResult(
             underlying=underlying,
             status="failed",
-            reason=f"Calibration exception: {str(e)}",
+            reason=err,
+            multiplier=None,
+            smoothed_multiplier=None,
+            mae_pct=None,
+            vega_weighted_mae_pct=None,
+            num_samples=0,
+            applied=False,
+            applied_reason=err,
+            policy_should_apply=False,
+            policy_reason=err,
         )
-    
+
+    global_metrics = getattr(result, "global_metrics", None)
+    data_quality = getattr(result, "data_quality", None)
+
     rec_mult = result.recommended_iv_multiplier or result.iv_multiplier
-    global_metrics = result.global_metrics
-    data_quality = result.data_quality
-    
     mae_pct = global_metrics.mae_pct if global_metrics else result.mae_pct
     vega_weighted_mae_pct = global_metrics.vega_weighted_mae_pct if global_metrics else None
     bias_pct = global_metrics.bias_pct if global_metrics else result.bias_pct
@@ -145,8 +170,6 @@ def run_calibration_for_underlying(
         vega_weighted_mae_pct=vega_weighted_mae_pct,
         data_quality_status=dq_status,
     )
-    
-    print(f"\n  Metrics:")
     print(f"    Recommended multiplier: {rec_mult:.4f}")
     print(f"    Samples: {result.count:,}")
     if vega_weighted_mae_pct is not None:
@@ -241,8 +264,10 @@ def run_calibration_for_underlying(
         mae_pct=mae_pct,
         vega_weighted_mae_pct=vega_weighted_mae_pct,
         num_samples=result.count,
-        policy_should_apply=policy_should_apply,
-        policy_reason=policy_reason,
+        applied=applied,
+        applied_reason=applied_reason,
+        policy_should_apply=applied,
+        policy_reason=applied_reason,
     )
 
 

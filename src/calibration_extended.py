@@ -1015,16 +1015,31 @@ def run_historical_calibration_from_harvest(
     snapshot_count = len(snapshot_times)
     
     spot_prices = df.groupby("harvest_time")["underlying_price"].first().sort_index()
-    spot_series = [(t, p) for t, p in spot_prices.items()]
+    # NOTE: Harvest snapshots can be intraday (e.g., every few minutes). The backtest
+    # realized-volatility helper annualizes as if observations are daily, so using
+    # intraday points would dramatically under-estimate RV and inflate the suggested
+    # iv_multiplier (look like 6x+ for BTC). To keep RV on a daily scale, resample to
+    # daily closes first.
+    try:
+        daily_spot_prices = spot_prices.resample("1D").last().dropna()
+    except Exception:
+        daily_spot_prices = spot_prices
+
+    spot_series_daily: List[Tuple[datetime, float]] = [
+        (t.to_pydatetime() if hasattr(t, "to_pydatetime") else t, float(p))
+        for t, p in daily_spot_prices.items()
+    ]
     
     all_rows: List[Dict[str, Any]] = []
     rv_values: List[float] = []
     
     for snap_time in snapshot_times:
         snap_df = df[df["harvest_time"] == snap_time]
-        
-        if spot_series:
-            rv = compute_realized_volatility(spot_series, snap_time, config.rv_window_days)
+
+        snap_dt = snap_time.to_pydatetime() if hasattr(snap_time, "to_pydatetime") else snap_time
+
+        if spot_series_daily:
+            rv = compute_realized_volatility(spot_series_daily, snap_dt, config.rv_window_days)
         else:
             rv = config.default_iv
         rv_values.append(rv)
