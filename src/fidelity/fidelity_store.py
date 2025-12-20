@@ -85,14 +85,15 @@ def list_history_runs(limit: int = 30, *, underlying: Optional[str] = None) -> L
             with open(d / "fidelity_report.json", "r", encoding="utf-8") as f:
                 report = json.load(f)
 
-            if want_underlying and (str(report.get("underlying") or "").upper().strip() != want_underlying):
+            report_underlying = _extract_underlying(report)
+            if want_underlying and (str(report_underlying or "").upper().strip() != want_underlying):
                 continue
 
             out.append(
                 {
                     "run_id": report.get("run_id") or d.name,
                     "timestamp": report.get("timestamp"),
-                    "underlying": report.get("underlying"),
+                    "underlying": report_underlying,
                     "overall_score": report.get("overall_score"),
                     "gate_label": report.get("gate_label") or report.get("gate"),
                 }
@@ -114,7 +115,7 @@ def load_latest_report_mvp(*, underlying: Optional[str] = None) -> Optional[Dict
         if report is not None:
             if underlying:
                 want = (underlying or "").upper().strip()
-                got = (str(report.get("underlying") or "").upper().strip())
+                got = (str(_extract_underlying(report) or "").upper().strip())
                 if got == want:
                     return report
             else:
@@ -130,6 +131,36 @@ def load_latest_report_mvp(*, underlying: Optional[str] = None) -> Optional[Dict
     return None
 
 
+def list_recent_reports_mvp_full(*, underlying: str, limit: int = 30) -> List[Dict[str, Any]]:
+    """List full report payloads from the run-id-scoped MVP store.
+
+    Intended as a compatibility fallback for legacy endpoints when legacy writes are disabled.
+    """
+    want = _safe_underlying(underlying)
+    base = base_runs_dir()
+    if not base.exists():
+        return []
+
+    dirs = [p for p in base.iterdir() if p.is_dir() and (p / "fidelity_report.json").exists()]
+    dirs.sort(key=lambda p: p.name, reverse=True)
+
+    out: List[Dict[str, Any]] = []
+    cap = max(0, int(limit))
+    for d in dirs:
+        if len(out) >= cap:
+            break
+        try:
+            with open(d / "fidelity_report.json", "r", encoding="utf-8") as f:
+                report = json.load(f)
+            got = (str(_extract_underlying(report) or "").upper().strip())
+            if got != want:
+                continue
+            out.append(report)
+        except Exception:
+            continue
+    return out
+
+
 @dataclass(frozen=True)
 class FidelityRunRef:
     underlying: str
@@ -142,6 +173,27 @@ def _safe_underlying(underlying: str) -> str:
     if u not in ("BTC", "ETH"):
         raise ValueError("underlying must be BTC or ETH")
     return u
+
+
+def _extract_underlying(report: Dict[str, Any]) -> Optional[str]:
+    """Best-effort underlying extraction across schema versions."""
+    u = (report.get("underlying") or "").upper().strip()
+    if u in ("BTC", "ETH"):
+        return u
+
+    live = report.get("market_live_meta") or {}
+    if isinstance(live, dict):
+        u2 = (live.get("underlying") or live.get("symbol") or "").upper().strip()
+        if u2 in ("BTC", "ETH"):
+            return u2
+
+    synth = report.get("market_synth_meta") or {}
+    if isinstance(synth, dict):
+        u3 = (synth.get("underlying") or synth.get("symbol") or "").upper().strip()
+        if u3 in ("BTC", "ETH"):
+            return u3
+
+    return None
 
 
 def latest_report_path(underlying: str) -> Path:

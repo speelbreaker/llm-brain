@@ -22,19 +22,27 @@ jobs:
           PY
           )
 
-          response=$(curl --fail-with-body --show-error --silent -w "\n%{http_code}" -X POST \
+          set +e
+          response=$(curl --show-error --silent -w "\n%{http_code}" -X POST \
             --connect-timeout 10 \
             --max-time 60 \
             "${{ secrets.REPLIT_DEPLOY_URL }}/deploy-hook" \
             -H "Content-Type: application/json" \
             -H "X-Deploy-Token: ${{ secrets.DEPLOY_WEBHOOK_SECRET }}" \
             -d "$payload")
+          curl_rc=$?
+          set -e
           
           http_code=$(echo "$response" | tail -n1)
           body=$(echo "$response" | head -n -1)
           
           echo "Response: $body"
           echo "HTTP Code: $http_code"
+
+          if [ "$curl_rc" -ne 0 ]; then
+            echo "curl failed with exit code $curl_rc"
+            exit $curl_rc
+          fi
           
           if [ "$http_code" -ge 400 ]; then
             echo "Deploy hook failed with status $http_code"

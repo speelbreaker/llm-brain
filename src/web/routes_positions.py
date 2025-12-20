@@ -625,9 +625,12 @@ def get_fidelity_latest(
 
     try:
         # Backward-compatible legacy store: data/fidelity_runs/{UNDERLYING}/latest/fidelity_report.json
-        from src.fidelity.fidelity_store import load_latest_report
+        # If legacy writes are disabled, fall back to MVP run-id-scoped store.
+        from src.fidelity.fidelity_store import load_latest_report, load_latest_report_mvp
 
         report = load_latest_report(underlying)
+        if report is None:
+            report = load_latest_report_mvp(underlying=underlying)
         return JSONResponse(
             content={
                 "ok": True,
@@ -651,9 +654,12 @@ def get_fidelity_history(
 
     try:
         # Backward-compatible legacy store: data/fidelity_runs/{UNDERLYING}/history/{RUN_ID}/fidelity_report.json
-        from src.fidelity.fidelity_store import list_recent_reports
+        # If legacy writes are disabled, fall back to MVP run-id-scoped store.
+        from src.fidelity.fidelity_store import list_recent_reports, list_recent_reports_mvp_full
 
         runs = list_recent_reports(underlying, limit=int(limit))
+        if not runs:
+            runs = list_recent_reports_mvp_full(underlying=underlying, limit=int(limit))
         return JSONResponse(
             content={
                 "ok": True,
