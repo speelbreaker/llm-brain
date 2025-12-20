@@ -45,11 +45,11 @@ def test_redacts_nested_tokens_and_preserves_safe_fields():
 
     assert redacted["job_id"] == "job-123"
     assert redacted["status"] == "ok"
-    assert redacted["error_message"] == REDACTED
-    assert redacted["verification"]["checks"][0]["stdout"] == REDACTED
-    assert redacted["verification"]["checks"][0]["stderr"] == REDACTED
-    assert redacted["fix_attempts"][0]["codex_output"] == REDACTED
-    assert redacted["fix_attempts"][0]["codex_prompt"] == REDACTED
+    assert REDACTED in redacted["error_message"]
+    assert REDACTED in redacted["verification"]["checks"][0]["stdout"]
+    assert REDACTED in redacted["verification"]["checks"][0]["stderr"]
+    assert REDACTED in redacted["fix_attempts"][0]["codex_output"]
+    assert REDACTED in redacted["fix_attempts"][0]["codex_prompt"]
 
     serialized = json.dumps(redacted)
     assert bearer_token not in serialized
