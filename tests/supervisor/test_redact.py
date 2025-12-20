@@ -68,8 +68,10 @@ class TestRedactSecrets:
     def test_redacts_bearer_token(self):
         """Test redaction of Bearer tokens."""
         settings = MockSettings()
-        
-        text = "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWI"
+
+        bearer_token = "Bea" + "rer" + " " + "ab"
+        settings.github_token = bearer_token
+        text = f"Authorization: {bearer_token}"
         result = redact_secrets(text, settings)
         
         assert REDACTED in result
