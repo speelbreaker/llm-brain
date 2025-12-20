@@ -7,7 +7,18 @@ cd "$root_dir"
 echo "Branch: $(git rev-parse --abbrev-ref HEAD)"
 echo "HEAD: $(git rev-parse HEAD)"
 
-python3 scripts/security/env_safety_gate.py
+env_files=()
+for candidate in docker/pr-supervisor.env docker/.env.supervisor .env .env.local .env.production; do
+  if [ -f "$candidate" ]; then
+    env_files+=("$candidate")
+  fi
+done
+
+if [ "${#env_files[@]}" -gt 0 ]; then
+  python3 scripts/security/env_safety_gate.py "${env_files[@]}"
+else
+  python3 scripts/security/env_safety_gate.py
+fi
 ./scripts/security/run_security_checks.sh
 
 if command -v docker >/dev/null 2>&1 \
