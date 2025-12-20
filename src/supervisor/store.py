@@ -52,16 +52,29 @@ class JobStore:
                 for line in f:
                     line = line.strip()
                     if line:
-                        data = json.loads(line)
-                        job = SupervisorJob(**data)
-                        self._jobs_cache[job.job_id] = job
+                        try:
+                            data = json.loads(line)
+                            job = SupervisorJob(**data)
+                            self._jobs_cache[job.job_id] = job
+                        except json.JSONDecodeError:
+                            logger.warning("Skipping corrupted job history line.")
         except Exception:
             pass
     
     def _save_job_sync(self, job: SupervisorJob) -> None:
         """Synchronously append or update job in storage (called within lock)."""
         self._jobs_cache[job.job_id] = job
-        self._rewrite_store()
+        self._append_job(job)
+
+    def _append_job(self, job: SupervisorJob) -> None:
+        """Append a job record to JSONL storage."""
+        try:
+            with open(self.storage_path, "a") as f:
+                f.write(job.model_dump_json() + "\n")
+                f.flush()
+                os.fsync(f.fileno())
+        except Exception:
+            pass
     
     def _rewrite_store(self) -> None:
         """Rewrite the entire JSONL store from cache with atomic flush."""

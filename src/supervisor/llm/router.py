@@ -58,6 +58,11 @@ def _get_or_create_provider(
     return provider
 
 
+def get_provider(provider_name: str, settings: SupervisorSettings) -> LLMProvider:
+    """Get a provider instance by name."""
+    return _get_or_create_provider(provider_name.lower(), settings)
+
+
 async def cleanup_providers() -> None:
     """Cleanup all cached providers."""
     for provider in _provider_cache.values():

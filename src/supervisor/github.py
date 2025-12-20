@@ -15,6 +15,14 @@ logger = logging.getLogger(__name__)
 GITHUB_TIMEOUT = 30.0
 
 
+class GitHubAuthError(Exception):
+    """Raised when GitHub authentication fails (401/403)."""
+
+
+class GitHubAPIError(Exception):
+    """Raised when GitHub API requests fail."""
+
+
 def verify_signature(payload_body: bytes, signature_header: str, secret: str) -> bool:
     """Verify GitHub webhook signature (X-Hub-Signature-256).
     
@@ -119,11 +127,19 @@ class GitHubClient:
             response.raise_for_status()
             return response
         
-        return await with_retry(
-            do_request,
-            operation_name=operation_name,
-            max_retries=3,
-        )
+        try:
+            return await with_retry(
+                do_request,
+                operation_name=operation_name,
+                max_retries=3,
+            )
+        except httpx.HTTPStatusError as e:
+            status = e.response.status_code
+            if status in (401, 403):
+                raise GitHubAuthError(f"GitHub auth failed ({status})") from e
+            raise GitHubAPIError(f"GitHub API error ({status})") from e
+        except (httpx.TimeoutException, httpx.ConnectError) as e:
+            raise GitHubAPIError("GitHub API timeout") from e
     
     async def get_pr_info(self, repo: str, pr_number: int) -> dict[str, Any]:
         """Get PR details with retry."""
@@ -152,6 +168,30 @@ class GitHubClient:
             json={"body": body},
         )
         return response.json()
+
+    async def get_pr_comments(self, repo: str, pr_number: int) -> list[dict[str, Any]]:
+        """Fetch PR issue comments."""
+        response = await self._request_with_retry(
+            "GET",
+            f"/repos/{repo}/issues/{pr_number}/comments",
+            operation_name=f"github_get_comments_{repo}_{pr_number}",
+        )
+        return response.json()
+
+    async def post_pr_comment_once(
+        self,
+        repo: str,
+        pr_number: int,
+        body: str,
+        marker: str,
+    ) -> bool:
+        """Post a comment only if a marker is not already present."""
+        comments = await self.get_pr_comments(repo, pr_number)
+        for comment in comments:
+            if marker in (comment.get("body") or ""):
+                return False
+        await self.post_pr_comment(repo, pr_number, body)
+        return True
     
     async def update_pr_comment(self, repo: str, comment_id: int, body: str) -> dict[str, Any]:
         """Update an existing PR comment with retry."""

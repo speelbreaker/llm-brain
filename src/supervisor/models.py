@@ -96,6 +96,7 @@ class SupervisorJob(BaseModel):
     
     final_message: str = ""
     error_message: Optional[str] = None
+    reason_code: Optional[str] = None
     
     def update_status(self, status: JobStatus) -> None:
         """Update job status and timestamp."""

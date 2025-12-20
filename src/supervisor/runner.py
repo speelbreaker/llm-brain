@@ -7,6 +7,7 @@ import time
 from typing import Optional
 
 from .config import SupervisorSettings
+from .redact import redact_secrets
 from .models import CheckResult, VerificationReport
 
 
@@ -118,6 +119,8 @@ class VerificationRunner:
             duration = time.time() - start_time
             stdout_str, stdout_truncated = self._truncate_output(stdout.decode(errors="replace"))
             stderr_str, stderr_truncated = self._truncate_output(stderr.decode(errors="replace"))
+            stdout_str = redact_secrets(stdout_str, self.settings)
+            stderr_str = redact_secrets(stderr_str, self.settings)
             
             exit_code = process.returncode if process.returncode is not None else -1
             
@@ -142,12 +145,13 @@ class VerificationRunner:
                 truncated=False,
             )
         except Exception as e:
+            error_msg = redact_secrets(str(e), self.settings)
             return CheckResult(
                 command=command,
                 exit_code=-1,
                 passed=False,
                 stdout="",
-                stderr=f"Error running command: {str(e)}",
+                stderr=f"Error running command: {error_msg}",
                 duration_seconds=time.time() - start_time,
                 truncated=False,
             )
