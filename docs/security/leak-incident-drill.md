@@ -29,3 +29,15 @@
 - Confirm CI gates:
   - `./scripts/security/run_security_checks.sh`
   - Ensure the "Secrets Scan / secret-scan" and "Secrets Scan / tripwire" checks are green on the PR.
+
+## GitGuardian false-positive triage
+- Capture metadata only: file path, detector name, and commit SHA.
+- Do not paste any token strings, payload snippets, or full lines from the finding.
+- Use internal scans (gitleaks/secret tripwire) to corroborate without exposing values.
+- If it is a false positive, adjust tests or fixtures to avoid static token literals.
+
+## If it is a real leak
+- Revoke and rotate credentials immediately.
+- Purge the secret from history (use a dedicated history rewrite task).
+- Re-run deep history scan and document clean results.
+- Add or extend a regression test to prevent recurrence.
