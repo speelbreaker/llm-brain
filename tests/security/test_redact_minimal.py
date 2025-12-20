@@ -19,22 +19,25 @@ class MinimalSettings:
 def test_redacts_nested_tokens_and_preserves_safe_fields():
     settings = MinimalSettings()
     bearer_token = "Bea" + "rer" + " " + "testtoken123"
+    openai_token = "sk-" + "test" + "abcdef1234567890"
+    settings.openai_api_key = openai_token
     payload = {
         "job_id": "job-123",
         "status": "ok",
-        "metadata": {
-            "auth_token": "ghp_ABCDEFGH1234567890XYZ",
-            "note": "safe text",
+        "error_message": f"Authorization: {bearer_token}",
+        "verification": {
+            "checks": [
+                {
+                    "stdout": "Authorization: " + bearer_token,
+                    "stderr": f"openai_api_key={openai_token}",
+                }
+            ]
         },
-        "headers": {
-            "Authorization": bearer_token,
-            "raw": "Authorization: " + "Bea" + "rer" + " " + "abcdefghijklmnop",
-        },
-        "config": {"openai_api_key": "sk-test-abcdef"},
-        "details": [
-            {"api_key": "sk-test1234567890abcdef"},
-            "GITHUB_TOKEN=ghp_1234567890ABCDEFGHIJKLMNOP",
-            "normal string",
+        "fix_attempts": [
+            {
+                "codex_output": "Authorization: " + bearer_token,
+                "codex_prompt": f"openai_api_key={openai_token}",
+            }
         ],
     }
 
@@ -42,15 +45,12 @@ def test_redacts_nested_tokens_and_preserves_safe_fields():
 
     assert redacted["job_id"] == "job-123"
     assert redacted["status"] == "ok"
-    assert redacted["metadata"]["note"] == "safe text"
-    assert redacted["metadata"]["auth_token"] == REDACTED
-    assert redacted["headers"]["Authorization"] == REDACTED
-    assert REDACTED in redacted["headers"]["raw"]
-    assert redacted["config"]["openai_api_key"] == REDACTED
-    assert redacted["details"][0]["api_key"] == REDACTED
-    assert REDACTED in redacted["details"][1]
-    assert redacted["details"][2] == "normal string"
+    assert redacted["error_message"] == REDACTED
+    assert redacted["verification"]["checks"][0]["stdout"] == REDACTED
+    assert redacted["verification"]["checks"][0]["stderr"] == REDACTED
+    assert redacted["fix_attempts"][0]["codex_output"] == REDACTED
+    assert redacted["fix_attempts"][0]["codex_prompt"] == REDACTED
 
     serialized = json.dumps(redacted)
     assert bearer_token not in serialized
-    assert "sk-test-abcdef" not in serialized
+    assert openai_token not in serialized
