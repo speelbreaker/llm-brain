@@ -18,7 +18,8 @@ class MinimalSettings:
 
 def test_redacts_nested_tokens_and_preserves_safe_fields():
     settings = MinimalSettings()
-    bearer_token = "Bea" + "rer" + " " + "testtoken123"
+    bearer_value = "tokenvalue1234567"
+    bearer_token = "Bea" + "rer" + " " + bearer_value
     openai_token = "sk-" + "test" + "abcdef1234567890"
     settings.openai_api_key = openai_token
     payload = {
