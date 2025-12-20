@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -97,3 +98,45 @@ def test_fidelity_mvp_endpoints_with_fixture_run(monkeypatch, tmp_path: Path) ->
     assert data_spec["ok"] is True
     assert "spec" in data_spec
     assert "strategies" in data_spec["spec"]
+
+
+def test_fidelity_mvp_underlying_extraction_backcompat(monkeypatch, tmp_path: Path) -> None:
+    """Regression: MVP store should handle reports missing top-level 'underlying'."""
+    base = tmp_path / "fidelity_runs"
+    monkeypatch.setenv("FIDELITY_RUNS_DIR", str(base))
+
+    run_id = "20250101_000001"
+    report = {
+        "run_id": run_id,
+        "timestamp": "2025-01-01T00:00:01+00:00",
+        "overall_score": 80.0,
+        "gate_label": "TRUSTED",
+        # Intentionally omit top-level "underlying"
+        "market_live_meta": {"underlying": "BTC"},
+        "market_synth_meta": {"pricing": "synthetic_bs"},
+    }
+
+    run_dir = base / run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / "fidelity_report.json").write_text(json.dumps(report), encoding="utf-8")
+
+    # Underlying-scoped latest index points to this run.
+    (base / "BTC").mkdir(parents=True, exist_ok=True)
+    (base / "BTC" / "latest.json").write_text(
+        json.dumps({"run_id": run_id, "timestamp": report["timestamp"]}),
+        encoding="utf-8",
+    )
+
+    from src.fidelity import fidelity_store
+
+    latest = fidelity_store.load_latest_report_mvp(underlying="BTC")
+    assert latest is not None
+    assert latest["run_id"] == run_id
+
+    runs_btc = fidelity_store.list_history_runs(limit=10, underlying="BTC")
+    assert len(runs_btc) == 1
+    assert runs_btc[0]["run_id"] == run_id
+    assert runs_btc[0]["underlying"] == "BTC"
+
+    runs_eth = fidelity_store.list_history_runs(limit=10, underlying="ETH")
+    assert runs_eth == []
