@@ -20,9 +20,18 @@ def gate_label(
     overall_score: float,
     strategy_parity_score: float,
     tail_parity_score: float,
+    coverage_ratio: Optional[float] = None,
+    invalid_trades_missing_quote: int = 0,
     gates: Optional[FidelityGates] = None,
 ) -> str:
     g = gates or FidelityGates()
+
+    # Synthetic fidelity is constrained by data quality: if coverage is materially incomplete,
+    # force UNTRUSTED so the system cannot "false pass" on missing quotes.
+    if coverage_ratio is not None:
+        cr = float(coverage_ratio)
+        if cr < 0.85 or int(invalid_trades_missing_quote) >= 2:
+            return "UNTRUSTED"
 
     if (
         overall_score >= g.trusted_overall
@@ -142,4 +151,44 @@ def score_fidelity_components(
         "redistributed_weights": redistributed,
         "not_available": na_items,
     }
+
+
+def apply_coverage_penalty(
+    scored: Dict[str, Any],
+    *,
+    coverage_ratio: float,
+    invalid_trades_missing_quote: int,
+    component_name: str = "strategy_pnl_parity",
+) -> Dict[str, Any]:
+    """Apply a material penalty to strategy parity when trade coverage is incomplete.
+
+    Rules (P0):
+    - If coverage_ratio < 0.95 OR any invalid-trade missing-quote occurred, multiply the
+      strategy parity component score by coverage_ratio.
+    - Recompute overall_score using redistributed_weights when available.
+    """
+    ratio = float(max(0.0, min(1.0, coverage_ratio)))
+    needs_penalty = (ratio < 0.95) or (int(invalid_trades_missing_quote) > 0)
+    if not needs_penalty:
+        return scored
+
+    out: Dict[str, Any] = dict(scored)
+    comp_scores = dict(out.get("component_scores") or {})
+    if component_name in comp_scores:
+        comp_scores[component_name] = float(comp_scores.get(component_name) or 0.0) * ratio
+    out["component_scores"] = comp_scores
+
+    rw = out.get("redistributed_weights") or {}
+    if isinstance(rw, dict) and rw:
+        overall = 0.0
+        for name, w in rw.items():
+            overall += float(w or 0.0) * float(comp_scores.get(name, 0.0) or 0.0)
+        out["overall_score"] = float(overall)
+
+    out["coverage_penalty"] = {
+        "coverage_ratio": ratio,
+        "invalid_trades_missing_quote": int(invalid_trades_missing_quote),
+        "applied": True,
+    }
+    return out
 

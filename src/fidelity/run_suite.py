@@ -1,5 +1,16 @@
 from __future__ import annotations
 
+# FOUND LOCATIONS (repo scan)
+# - Canonical strategy runner: src/fidelity/canonical_strategies.py (run_strategy)
+# - Suite runner + report writing: src/fidelity/run_suite.py (this file)
+# - Scoring + gating: src/fidelity/scoring.py
+# - Report schema + latest.json writer: src/fidelity/reporting.py
+# - File store readers/writers: src/fidelity/fidelity_store.py
+# - FastAPI routes: src/web/routes_positions.py
+# - UI: src/web/dashboard.py
+# Notes:
+# - Removed duplicates/stubs to keep a single canonical implementation path.
+
 import os
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -20,7 +31,7 @@ from .metrics import (
     _sorted,
 )
 from .reporting import FidelityReport, write_report_json, write_report_md, write_latest_index, write_latest_index_for_underlying
-from .scoring import gate_label, score_fidelity_components
+from .scoring import apply_coverage_penalty, gate_label, score_fidelity_components
 
 
 def _to_ts(dt: datetime) -> int:
@@ -257,12 +268,46 @@ def run_fidelity_suite(
     es_errors: List[float] = []
     dd_errors: List[float] = []
 
+    coverage_live_total = 0
+    coverage_live_valid = 0
+    coverage_live_invalid_missing = 0
+    coverage_synth_total = 0
+    coverage_synth_valid = 0
+    coverage_synth_invalid_missing = 0
+
+    def _accum_cov(trades: List[Any], *, side: str) -> None:
+        nonlocal coverage_live_total, coverage_live_valid, coverage_live_invalid_missing
+        nonlocal coverage_synth_total, coverage_synth_valid, coverage_synth_invalid_missing
+
+        total = len(trades)
+        valid = sum(1 for t in trades if getattr(t, "is_valid", True))
+        invalid_missing = sum(
+            1
+            for t in trades
+            if (not getattr(t, "is_valid", True))
+            and str(getattr(t, "data_quality_status", ""))
+            in ("missing_close_quote", "missing_open_quote", "stale_quote", "expired_no_quote")
+        )
+
+        if side == "live":
+            coverage_live_total += total
+            coverage_live_valid += valid
+            coverage_live_invalid_missing += invalid_missing
+        else:
+            coverage_synth_total += total
+            coverage_synth_valid += valid
+            coverage_synth_invalid_missing += invalid_missing
+
     strategies = canonical_strategies()
     for spec in strategies:
         live_trades = run_strategy(spec=spec, snapshots=live_snaps, slippage_bps=slippage_bps, use_mid=True)
         synth_trades = run_strategy(spec=spec, snapshots=synth_snaps, slippage_bps=slippage_bps, use_mid=True)
-        live_returns = [t.pnl_pct for t in live_trades]
-        synth_returns = [t.pnl_pct for t in synth_trades]
+
+        _accum_cov(live_trades, side="live")
+        _accum_cov(synth_trades, side="synth")
+
+        live_returns = [t.pnl_pct for t in live_trades if getattr(t, "is_valid", True)]
+        synth_returns = [t.pnl_pct for t in synth_trades if getattr(t, "is_valid", True)]
 
         live_m = strategy_metrics_from_returns(live_returns)
         synth_m = strategy_metrics_from_returns(synth_returns)
@@ -306,10 +351,29 @@ def run_fidelity_suite(
         "strategy_pnl_parity": parity_comp,
     }
     scored = score_fidelity_components(components=components)
+
+    live_cov = (coverage_live_valid / max(coverage_live_total, 1))
+    synth_cov = (coverage_synth_valid / max(coverage_synth_total, 1))
+    invalid_missing_total = int(coverage_live_invalid_missing + coverage_synth_invalid_missing)
+    penalty_cov = float(min(live_cov, synth_cov))
+
+    scored = apply_coverage_penalty(
+        scored,
+        coverage_ratio=penalty_cov,
+        invalid_trades_missing_quote=invalid_missing_total,
+        component_name="strategy_pnl_parity",
+    )
+
     overall = float(scored["overall_score"])
     strategy_parity_score = float(scored["component_scores"].get("strategy_pnl_parity", 0.0))
-    tail_parity_score = float(scored["component_scores"].get("strategy_pnl_parity", 0.0))
-    gate = gate_label(overall_score=overall, strategy_parity_score=strategy_parity_score, tail_parity_score=tail_parity_score)
+    tail_parity_score = float(scored["component_scores"].get("underlying_returns", 0.0))
+    gate = gate_label(
+        overall_score=overall,
+        strategy_parity_score=strategy_parity_score,
+        tail_parity_score=tail_parity_score,
+        coverage_ratio=penalty_cov,
+        invalid_trades_missing_quote=invalid_missing_total,
+    )
 
     run_id = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
     base_dir = Path(out_dir) if out_dir else Path(os.getenv("FIDELITY_RUNS_DIR", "data/fidelity_runs"))
@@ -324,6 +388,7 @@ def run_fidelity_suite(
         end_ts=int(end_ts),
         overall_score=overall,
         gate_label=gate,
+        gate=gate,
         component_scores=scored["component_scores"],
         component_status=scored.get("component_status") or {},
         components=components,
@@ -331,6 +396,25 @@ def run_fidelity_suite(
         live_data_status=live_data_status,
         market_live_meta=live_meta,
         market_synth_meta=synth_meta,
+        coverage={
+            "total_trades_opened": int(coverage_live_total + coverage_synth_total),
+            "valid_trades_closed": int(coverage_live_valid + coverage_synth_valid),
+            "invalid_trades_missing_quote": int(invalid_missing_total),
+            "coverage_ratio": float((coverage_live_valid + coverage_synth_valid) / max((coverage_live_total + coverage_synth_total), 1)),
+            "penalty_ratio": float(penalty_cov),
+            "live": {
+                "total_trades_opened": int(coverage_live_total),
+                "valid_trades_closed": int(coverage_live_valid),
+                "invalid_trades_missing_quote": int(coverage_live_invalid_missing),
+                "coverage_ratio": float(live_cov),
+            },
+            "synthetic": {
+                "total_trades_opened": int(coverage_synth_total),
+                "valid_trades_closed": int(coverage_synth_valid),
+                "invalid_trades_missing_quote": int(coverage_synth_invalid_missing),
+                "coverage_ratio": float(synth_cov),
+            },
+        },
         notes=["MVP: yardstick strategies + deterministic scoring"],
     )
 

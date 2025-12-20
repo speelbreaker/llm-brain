@@ -5,7 +5,7 @@ from datetime import datetime
 from typing import Dict, Any, List, Optional
 
 from .market_replay import MarketReplay
-from .strategies_canonical import StrategySpec
+from .canonical_strategies import StrategySpec, run_strategy
 
 
 @dataclass(frozen=True)
@@ -21,11 +21,12 @@ def run_parity_suite(
     strategies: List[StrategySpec],
     live_market: MarketReplay,
     synthetic_market: MarketReplay,
+
 ) -> Dict[str, Any]:
     """Run the strategy parity suite.
 
-    P0: skeleton that proves wiring (same timestamps, two markets, report shape).
-    Next steps will implement strategy execution and real metrics.
+    Executes the same canonical strategies on live vs synthetic market replays and
+    returns a structured payload for reporting.
     """
 
     results: Dict[str, Any] = {
@@ -33,30 +34,28 @@ def run_parity_suite(
         "strategies": [],
     }
 
-    # Minimal smoke check: confirm both markets can snapshot all decision times.
-    live_spots = []
-    synth_spots = []
-    for t in decision_times:
-        live_snap = live_market.snapshot(t)
-        synth_snap = synthetic_market.snapshot(t)
-        live_spots.append(live_snap.spot)
-        synth_spots.append(synth_snap.spot)
-
     for spec in strategies:
+        live_snaps = [live_market.snapshot(t) for t in decision_times]
+        synth_snaps = [synthetic_market.snapshot(t) for t in decision_times]
+
+        live_trades = run_strategy(spec=spec, snapshots=live_snaps)
+        synth_trades = run_strategy(spec=spec, snapshots=synth_snaps)
+
+        live_valid = [t for t in live_trades if getattr(t, "is_valid", True)]
+        synth_valid = [t for t in synth_trades if getattr(t, "is_valid", True)]
+
         results["strategies"].append(
             {
                 "name": spec.name,
                 "live": {
-                    "num_trades": 0,
-                    "notes": "P0 placeholder (execution not implemented)",
-                    "spot_first": live_spots[0] if live_spots else None,
-                    "spot_last": live_spots[-1] if live_spots else None,
+                    "num_trades": len(live_trades),
+                    "valid_trades": len(live_valid),
+                    "coverage_ratio": (len(live_valid) / max(len(live_trades), 1)),
                 },
                 "synthetic": {
-                    "num_trades": 0,
-                    "notes": "P0 placeholder (execution not implemented)",
-                    "spot_first": synth_spots[0] if synth_spots else None,
-                    "spot_last": synth_spots[-1] if synth_spots else None,
+                    "num_trades": len(synth_trades),
+                    "valid_trades": len(synth_valid),
+                    "coverage_ratio": (len(synth_valid) / max(len(synth_trades), 1)),
                 },
             }
         )

@@ -2,6 +2,27 @@
 	"version": "2.0.0",
 	"tasks": [
 		{
+			"label": "Smoke: Pytest (full suite)",
+			"type": "shell",
+			"command": "/bin/zsh",
+			"args": [
+				"-lc",
+				"cd \"${workspaceFolder}\" && bash scripts/smoke_all.sh --unit"
+			],
+			"group": "test",
+			"problemMatcher": []
+		},
+		{
+			"label": "Auto: Commit+Push (smoke first)",
+			"type": "shell",
+			"command": "/bin/zsh",
+			"args": [
+				"-lc",
+				"cd \"${workspaceFolder}\" && bash auto_push.sh"
+			],
+			"problemMatcher": []
+		},
+		{
 			"label": "Test: Pytest (workspace .venv)",
 			"type": "shell",
 			"command": "${workspaceFolder}/.venv/bin/python",

@@ -27,6 +27,9 @@ class FidelityReport:
     per_strategy: Dict[str, Any] = field(default_factory=dict)
     notes: List[str] = field(default_factory=list)
 
+    # Run-level coverage & data quality accounting (P0)
+    coverage: Dict[str, Any] = field(default_factory=dict)
+
     market_live_meta: Dict[str, Any] = field(default_factory=dict)
     market_synth_meta: Dict[str, Any] = field(default_factory=dict)
 
@@ -119,6 +122,7 @@ def write_latest_index(report: FidelityReport, path: Path) -> None:
         "gate_label": report.gate_label or report.gate,
         "component_scores": report.component_scores,
         "live_data_status": report.live_data_status,
+        "coverage": report.coverage,
     }
     _atomic_write_json(path, summary)
 

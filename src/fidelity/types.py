@@ -37,6 +37,8 @@ class Trade:
     close_ts: int
     pnl: float
     pnl_pct: float
+    is_valid: bool = True
+    data_quality_status: str = "ok"  # ok|missing_close_quote|missing_open_quote|stale_quote|expired_no_quote
     metadata: Dict[str, Any] = field(default_factory=dict)
 
 

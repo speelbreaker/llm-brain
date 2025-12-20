@@ -6,6 +6,8 @@ import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+import uuid
+
 
 # File-based store for fidelity reports.
 #
@@ -17,6 +19,24 @@ FIDELITY_RUNS_DIR = Path("data/fidelity_runs")
 
 def base_runs_dir() -> Path:
     return Path(os.getenv("FIDELITY_RUNS_DIR", str(FIDELITY_RUNS_DIR)))
+
+
+def _atomic_write_json(path: Path, payload: Any) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(payload, f, indent=2, sort_keys=True)
+            f.write("\n")
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+    finally:
+        try:
+            if tmp.exists():
+                tmp.unlink()
+        except Exception:
+            pass
 
 
 def latest_index_path() -> Path:
@@ -63,6 +83,70 @@ def load_report_by_id(run_id: str) -> Optional[Dict[str, Any]]:
             return json.load(f)
     except Exception:
         return None
+
+
+def write_run(report_json: Dict[str, Any]) -> str:
+    """Write a run to the MVP run-id-scoped store and update latest indexes.
+
+    Designed for endpoint tests: callers provide a minimal report JSON.
+    """
+    run_id = str(report_json.get("run_id") or "").strip() or uuid.uuid4().hex
+    report_json = dict(report_json)
+    report_json["run_id"] = run_id
+
+    # Normalize timestamp naming.
+    ts = report_json.get("timestamp") or report_json.get("created_at")
+    if ts is not None:
+        report_json["timestamp"] = ts
+
+    _atomic_write_json(run_report_path(run_id), report_json)
+
+    summary = {
+        "run_id": run_id,
+        "timestamp": report_json.get("timestamp"),
+        "underlying": _extract_underlying(report_json),
+        "overall_score": report_json.get("overall_score"),
+        "gate_label": report_json.get("gate_label") or report_json.get("gate"),
+        "component_scores": report_json.get("component_scores") or {},
+        "coverage": report_json.get("coverage") or {},
+    }
+    _atomic_write_json(latest_index_path(), summary)
+
+    u = summary.get("underlying")
+    if u:
+        _atomic_write_json(latest_index_path_for_underlying(str(u)), summary)
+
+    return run_id
+
+
+def list_runs(limit: int = 30) -> List[Dict[str, Any]]:
+    """List run summaries newest->oldest from the MVP run-id-scoped store."""
+    base = base_runs_dir()
+    if not base.exists():
+        return []
+
+    dirs = [p for p in base.iterdir() if p.is_dir() and (p / "fidelity_report.json").exists()]
+    dirs.sort(key=lambda p: p.name, reverse=True)
+
+    out: List[Dict[str, Any]] = []
+    cap = max(0, int(limit))
+    for d in dirs:
+        if len(out) >= cap:
+            break
+        report = load_report_by_id(d.name)
+        if not report:
+            continue
+        out.append(
+            {
+                "run_id": report.get("run_id") or d.name,
+                "created_at": report.get("timestamp"),
+                "overall_score": report.get("overall_score"),
+                "gate_label": report.get("gate_label") or report.get("gate"),
+                "component_scores": report.get("component_scores") or {},
+                "coverage": report.get("coverage") or {},
+            }
+        )
+    return out
 
 
 def list_history_runs(limit: int = 30, *, underlying: Optional[str] = None) -> List[Dict[str, Any]]:

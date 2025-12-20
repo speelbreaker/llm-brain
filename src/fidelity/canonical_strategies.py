@@ -75,6 +75,12 @@ def _find_same_instrument(options: Sequence[OptionQuote], name: str) -> Optional
     return None
 
 
+def _intrinsic_value(*, q: OptionQuote, spot: float) -> float:
+    if _is_call(q):
+        return max(0.0, float(spot) - float(q.strike))
+    return max(0.0, float(q.strike) - float(spot))
+
+
 @dataclass(frozen=True)
 class StrategySpec:
     name: str
@@ -154,19 +160,9 @@ def run_strategy(
     n = len(snapshots)
 
     for i, open_snap in enumerate(snapshots):
-        close_idx = min(n - 1, i + max(1, int(spec.hold_days)))
-        close_snap = snapshots[close_idx]
         spot0 = float(open_snap.spot or 0.0)
         if spot0 <= 0:
             continue
-
-        def close_price_for(name: str, expiry_ts: int, side: str) -> float:
-            if close_snap.ts >= int(expiry_ts):
-                return 0.0
-            q2 = _find_same_instrument(close_snap.options, name)
-            if not q2:
-                return 0.0
-            return _price_for_fill(q2, side=side, slippage_bps=slippage_bps, use_mid=use_mid)
 
         legs: List[Tuple[str, OptionQuote]] = []  # (side, quote)
 
@@ -280,34 +276,86 @@ def run_strategy(
         else:
             continue
 
+        # Close after N days OR at expiry (whichever comes first).
+        # For multi-leg strategies, use the earliest expiry.
+        min_expiry_ts = min(int(q.expiry_ts) for _, q in legs)
+        close_idx_hold = min(n - 1, i + max(1, int(spec.hold_days)))
+        close_idx_expiry = n - 1
+        for j in range(i, n):
+            if int(snapshots[j].ts) >= min_expiry_ts:
+                close_idx_expiry = j
+                break
+        close_idx = min(close_idx_hold, close_idx_expiry)
+        close_snap = snapshots[close_idx]
+
         entry_pnl = 0.0
         exit_pnl = 0.0
         meta: Dict[str, Any] = {"strategy": spec.name, "legs": []}
 
+        is_valid = True
+        dq_status = "ok"
+
+        def mark_invalid(status: str) -> None:
+            nonlocal is_valid, dq_status
+            is_valid = False
+            priority = {
+                "missing_close_quote": 4,
+                "missing_open_quote": 3,
+                "stale_quote": 2,
+                "expired_no_quote": 1,
+                "ok": 0,
+            }
+            if priority.get(status, 0) >= priority.get(dq_status, 0):
+                dq_status = status
+
+        def close_price_for_leg(q: OptionQuote, *, side: str) -> Optional[float]:
+            # If we're at/after expiry and have spot, price as intrinsic.
+            if int(close_snap.ts) >= int(q.expiry_ts):
+                spot_close = float(close_snap.spot or 0.0)
+                if spot_close > 0:
+                    return float(_intrinsic_value(q=q, spot=spot_close))
+                mark_invalid("expired_no_quote")
+                return None
+
+            q2 = _find_same_instrument(close_snap.options, q.instrument_name)
+            if not q2:
+                mark_invalid("missing_close_quote")
+                return None
+            px = float(_price_for_fill(q2, side=side, slippage_bps=slippage_bps, use_mid=use_mid))
+            if px <= 0:
+                mark_invalid("stale_quote")
+                return None
+            return float(px)
+
         for side, q in legs:
             entry = _price_for_fill(q, side=side, slippage_bps=slippage_bps, use_mid=use_mid)
+            if entry <= 0:
+                mark_invalid("missing_open_quote")
             exit_side = "buy" if side == "sell" else "sell"
-            exit_price = close_price_for(q.instrument_name, q.expiry_ts, exit_side)
-            if side == "sell":
-                # Short option: receive premium, pay to buy back.
-                entry_pnl += entry
-                exit_pnl += exit_price
-            else:
-                # Long option: pay premium, receive on sell.
-                entry_pnl -= entry
-                exit_pnl -= exit_price
+            exit_price = close_price_for_leg(q, side=exit_side)
+            if is_valid and exit_price is not None:
+                if side == "sell":
+                    # Short option: receive premium, pay to buy back.
+                    entry_pnl += entry
+                    exit_pnl += float(exit_price)
+                else:
+                    # Long option: pay premium, receive on sell.
+                    entry_pnl -= entry
+                    exit_pnl -= float(exit_price)
             meta["legs"].append(
                 {
                     "instrument": q.instrument_name,
                     "side": side,
                     "expiry_ts": q.expiry_ts,
+                    "strike": q.strike,
+                    "option_type": q.option_type,
                     "entry": entry,
                     "exit": exit_price,
                 }
             )
 
-        pnl = entry_pnl - exit_pnl
-        pnl_pct = pnl / max(1e-9, spot0)
+        pnl = (entry_pnl - exit_pnl) if is_valid else 0.0
+        pnl_pct = (pnl / max(1e-9, spot0)) if is_valid else 0.0
 
         trades.append(
             TradeResult(
@@ -315,6 +363,8 @@ def run_strategy(
                 close_ts=int(close_snap.ts),
                 pnl=float(pnl),
                 pnl_pct=float(pnl_pct),
+                is_valid=bool(is_valid),
+                data_quality_status=str(dq_status),
                 metadata=meta,
             )
         )
