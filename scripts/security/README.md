@@ -12,7 +12,7 @@ Manual scans
 - Working tree: `scripts/security/scan_worktree_secrets.sh`
 - Staged changes: `scripts/security/scan_staged_secrets.sh`
 - Git history: `scripts/security/scan_git_history_secrets.sh [deep|shallow]` (deep scans full history; can be slow)
-- Scripts use local gitleaks if present, or fall back to docker image automatically.
+- Scripts use local gitleaks if present, fall back to docker if available, or download a temp static gitleaks binary (no install).
 
 Rotation helper
 ---------------
