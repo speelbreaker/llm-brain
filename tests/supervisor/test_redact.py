@@ -72,6 +72,16 @@ class TestRedactSecrets:
 
         assert REDACTED in result
 
+    def test_redacts_authorization_bearer_header(self):
+        """Test redaction of Authorization Bearer header tokens."""
+        settings = MockSettings()
+
+        text = "Authorization: Bearer abc123DEF4567890"
+        result = redact_secrets(text, settings)
+
+        assert "abc123DEF4567890" not in result
+        assert REDACTED in result
+
     def test_redacts_gemini_key_pattern(self):
         """Test redaction of Gemini API pattern."""
         settings = MockSettings()

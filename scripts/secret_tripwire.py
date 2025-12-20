@@ -49,6 +49,11 @@ SKIP_SUFFIXES = {
     ".pdf",
 }
 
+SKIP_FILENAMES = {
+    ".env.example",
+    ".env.sample",
+}
+
 
 def iter_tracked_files() -> list[Path]:
     out = subprocess.check_output(["git", "ls-files"], text=True)
@@ -56,6 +61,8 @@ def iter_tracked_files() -> list[Path]:
 
 
 def should_skip(path: Path) -> bool:
+    if path.name in SKIP_FILENAMES:
+        return True
     parts = set(path.parts)
     if parts & SKIP_DIRS:
         return True
