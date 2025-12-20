@@ -13,7 +13,16 @@ from pydantic import BaseModel
 from .codex_fixer import CodexFixer
 from .config import SupervisorSettings, get_settings
 from .debate import DebateSystem, LLMFailure
-from .github import GitHubClient, format_pr_comment, format_fallback_comment, parse_webhook_payload, verify_signature
+from .github import (
+    GitHubAPIError,
+    GitHubAuthError,
+    GitHubClient,
+    format_pr_comment,
+    format_fallback_comment,
+    parse_webhook_payload,
+    verify_signature,
+)
+from .llm.fallback import get_provider_health
 from .models import (
     ArbiterDecision,
     FixAttempt,
@@ -31,6 +40,7 @@ from .workspace import WorkspaceManager
 logger = logging.getLogger(__name__)
 
 MAX_TRUNCATE_CHARS = 5000
+AUTO_FIX_MARKER_PREFIX = "<!-- supervisor:autofix:"
 
 
 class HealthResponse(BaseModel):
@@ -39,6 +49,11 @@ class HealthResponse(BaseModel):
     ready: bool
     version: str = "0.2.0"
     error: Optional[str] = None
+
+
+class DiagResponse(BaseModel):
+    ok: bool
+    provider_health: dict[str, dict[str, object]]
 
 
 class JobResponse(BaseModel):
@@ -100,6 +115,10 @@ def truncate_job_for_api(job_dict: dict) -> dict:
                 attempt["codex_prompt_truncated"] = truncated["truncated"]
     
     return job_dict
+
+
+def _autofix_marker(commit_sha: str) -> str:
+    return f"{AUTO_FIX_MARKER_PREFIX}{commit_sha} -->"
 
 
 async def job_worker(app: FastAPI) -> None:
@@ -219,6 +238,12 @@ async def health(request: Request):
         ready=ready,
         error=f"Missing: {', '.join(errors)}" if errors else None,
     )
+
+
+@app.get("/api/diag", response_model=DiagResponse)
+async def diag(request: Request):
+    """Diagnostics endpoint (safe, no secrets)."""
+    return DiagResponse(ok=True, provider_health=get_provider_health())
 
 
 @app.post("/github/webhook")
@@ -524,6 +549,7 @@ async def run_supervisor_job(job: SupervisorJob, app: FastAPI) -> None:
         logger.error(f"Job {job.job_id}: GitHub client not available")
         job.update_status(JobStatus.ERROR)
         job.error_message = "GitHub client not configured"
+        job.reason_code = "GITHUB_AUTH"
         store.save(job)
         return
     
@@ -541,17 +567,32 @@ async def run_supervisor_job(job: SupervisorJob, app: FastAPI) -> None:
         
         await notifier.notify_job_start(job)
         
-        clone_url = await github_client.get_repo_clone_url(job.repo_full_name)
-        workspace_path = await workspace_manager.setup_workspace(
-            job_id=job.job_id,
-            repo_url=clone_url,
-            head_sha=job.head_sha,
-            head_ref=job.head_ref,
-            base_ref=job.base_ref,
-            pr_number=job.pr_number,
-        )
-        job.workspace_path = workspace_path
-        store.save(job)
+        try:
+            clone_url = await github_client.get_repo_clone_url(job.repo_full_name)
+            workspace_path = await workspace_manager.setup_workspace(
+                job_id=job.job_id,
+                repo_url=clone_url,
+                head_sha=job.head_sha,
+                head_ref=job.head_ref,
+                base_ref=job.base_ref,
+                pr_number=job.pr_number,
+            )
+            job.workspace_path = workspace_path
+            store.save(job)
+        except GitHubAuthError:
+            job.update_status(JobStatus.NEEDS_HUMAN)
+            job.reason_code = "GITHUB_AUTH"
+            job.final_message = "GitHub authentication failed"
+            store.save(job)
+            await notifier.notify_final_result(job, success=False, message=job.final_message)
+            return
+        except GitHubAPIError:
+            job.update_status(JobStatus.NEEDS_HUMAN)
+            job.reason_code = "REPO_FETCH"
+            job.final_message = "GitHub API unavailable during repo fetch"
+            store.save(job)
+            await notifier.notify_final_result(job, success=False, message=job.final_message)
+            return
         
         verification = await runner.run_checks(workspace_path, job.head_sha)
         job.verification = verification
@@ -636,19 +677,20 @@ async def run_supervisor_job(job: SupervisorJob, app: FastAPI) -> None:
             comment = redact_secrets(comment, settings)
             await github_client.post_pr_comment(job.repo_full_name, job.pr_number, comment)
             
-            final_status = JobStatus.CHECKS_FAILED if not verification.all_passed else JobStatus.CHECKS_PASSED
-            job.update_status(final_status)
+            job.update_status(JobStatus.NEEDS_HUMAN)
+            job.reason_code = "LLM_UNAVAILABLE"
             job.final_message = f"LLM unavailable: {llm_err.failure_reason}"
             store.save(job)
             await notifier.notify_final_result(
                 job, 
-                success=verification.all_passed,
-                message=f"OpenAI analysis skipped: {llm_err.failure_reason}"
+                success=False,
+                message=f"LLM analysis skipped: {llm_err.failure_reason}"
             )
             return
         
         if not arbiter_decision.auto_fix_allowed:
             job.update_status(JobStatus.NEEDS_HUMAN)
+            job.reason_code = "CHECKS_FAIL"
             job.final_message = f"Auto-fix denied: {arbiter_decision.stop_reason}"
             store.save(job)
             await notifier.notify_final_result(job, success=False, message=arbiter_decision.stop_reason or "")
@@ -669,6 +711,7 @@ async def run_supervisor_job(job: SupervisorJob, app: FastAPI) -> None:
         if not autofix_decision.allowed:
             status = JobStatus.NEEDS_HUMAN if autofix_decision.needs_human else JobStatus.NEEDS_HUMAN
             job.update_status(status)
+            job.reason_code = "CHECKS_FAIL"
             job.final_message = autofix_decision.reason
             store.save(job)
             await notifier.notify_final_result(job, success=False, message=autofix_decision.reason)
@@ -704,6 +747,7 @@ async def run_supervisor_job(job: SupervisorJob, app: FastAPI) -> None:
             
             if not diff_stats.within_thresholds(settings.max_files_changed, settings.max_loc_changed):
                 job.update_status(JobStatus.NEEDS_HUMAN)
+                job.reason_code = "CHECKS_FAIL"
                 job.final_message = (
                     f"Fix too large: {diff_stats.files_changed} files, "
                     f"{diff_stats.total_loc_changed} LOC (max: {settings.max_files_changed} files, "
@@ -744,12 +788,18 @@ async def run_supervisor_job(job: SupervisorJob, app: FastAPI) -> None:
                     
                     await notifier.notify_fix_pushed(job, commit_sha)
                     
-                    await github_client.post_pr_comment(
-                        job.repo_full_name,
-                        job.pr_number,
+                    marker = _autofix_marker(commit_sha)
+                    comment_body = (
                         f"✅ **Auto-fix successful**\n\n"
                         f"Pushed commit `{commit_sha[:8]}` with fixes.\n"
-                        f"All checks now pass."
+                        f"All checks now pass.\n\n"
+                        f"{marker}"
+                    )
+                    await github_client.post_pr_comment_once(
+                        job.repo_full_name,
+                        job.pr_number,
+                        comment_body,
+                        marker,
                     )
                     await notifier.notify_final_result(job, success=True)
                     return
@@ -759,6 +809,7 @@ async def run_supervisor_job(job: SupervisorJob, app: FastAPI) -> None:
             store.save(job)
         
         job.update_status(JobStatus.NEEDS_HUMAN)
+        job.reason_code = "CHECKS_FAIL"
         job.final_message = f"Max loops ({settings.max_loops}) reached without fixing all issues"
         store.save(job)
         
@@ -770,13 +821,27 @@ async def run_supervisor_job(job: SupervisorJob, app: FastAPI) -> None:
         )
         await notifier.notify_final_result(job, success=False, message=job.final_message)
     
+    except GitHubAuthError as e:
+        logger.exception("Job %s GitHub auth error", job.job_id)
+        job.update_status(JobStatus.NEEDS_HUMAN)
+        job.reason_code = "GITHUB_AUTH"
+        job.error_message = "GitHub authentication failed"
+        store.save(job)
+        await notifier.notify_final_result(job, success=False, message=job.error_message)
+    except GitHubAPIError as e:
+        logger.exception("Job %s GitHub API error", job.job_id)
+        job.update_status(JobStatus.NEEDS_HUMAN)
+        job.reason_code = "REPO_FETCH"
+        job.error_message = "GitHub API unavailable"
+        store.save(job)
+        await notifier.notify_final_result(job, success=False, message=job.error_message)
     except Exception as e:
-        logger.error(f"Job {job.job_id} failed with error: {type(e).__name__}", exc_info=False)
-        job.update_status(JobStatus.ERROR)
         error_msg = redact_secrets(str(e)[:500], settings)
+        logger.exception("Job %s failed: %s", job.job_id, error_msg)
+        job.update_status(JobStatus.ERROR)
+        job.reason_code = "INTERNAL_ERROR"
         job.error_message = error_msg
         store.save(job)
-        
         await notifier.notify_final_result(job, success=False, message=f"Error: {error_msg[:100]}")
     
     finally:

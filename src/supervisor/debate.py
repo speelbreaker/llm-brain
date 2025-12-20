@@ -1,13 +1,13 @@
 """3-agent debate system with multi-provider support: Optimist, Skeptic, Arbiter."""
 
-import json
 import logging
 from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, ValidationError
 
 from .config import SupervisorSettings
-from .llm import get_provider_for_role, DebateResponse
+from .llm import DebateResponse
+from .llm.fallback import LLMUnavailable, generate_json_with_fallback
 from .models import ArbiterDecision, VerificationReport
 
 logger = logging.getLogger(__name__)
@@ -72,15 +72,14 @@ class DebateSystem:
             
             return arbiter_decision
         except Exception as e:
-            error_msg = str(e)
-            if "insufficient_quota" in error_msg.lower():
-                raise LLMFailure("OpenAI quota exceeded", e)
-            elif "rate_limit" in error_msg.lower():
-                raise LLMFailure("OpenAI rate limited", e)
-            elif "api" in error_msg.lower() or "openai" in error_msg.lower():
-                raise LLMFailure(f"LLM API error: {error_msg[:100]}", e)
-            else:
-                raise LLMFailure(f"LLM call failed: {error_msg[:100]}", e)
+            error_msg = str(e).lower()
+            if "insufficient_quota" in error_msg:
+                raise LLMFailure("LLM quota exceeded", e)
+            if "rate_limit" in error_msg or "rate limit" in error_msg:
+                raise LLMFailure("LLM rate limited", e)
+            if "api" in error_msg or "openai" in error_msg or "gemini" in error_msg:
+                raise LLMFailure("LLM API error", e)
+            raise LLMFailure("LLM call failed", e)
     
     def _build_context(
         self,
@@ -122,37 +121,36 @@ class DebateSystem:
         optimist_view: Optional[dict] = None,
     ) -> dict:
         """Call an agent (Optimist or Skeptic) with retry for JSON validation."""
-        provider, model = get_provider_for_role(role, self.settings)
-        
         if role == "optimist":
             prompt = self._build_optimist_prompt(context)
         else:
             prompt = self._build_skeptic_prompt(context, optimist_view or {})
-        
-        for attempt in range(2):
-            try:
-                result = await provider.generate_json(
-                    prompt=prompt,
-                    model=model,
-                    schema_hint=DEBATE_SCHEMA,
-                    max_tokens=600,
-                    temperature=0.7 if attempt == 0 else 0.3,
-                )
-                
-                response = DebateResponse(role=role, **result)
-                return response.model_dump()
-                
-            except (json.JSONDecodeError, ValidationError) as e:
-                logger.warning(f"JSON validation failed for {role} (attempt {attempt + 1}): {e}")
-                if attempt == 0:
-                    prompt = f"{prompt}\n\nIMPORTANT: Return ONLY valid JSON matching the schema."
-                continue
-        
-        return {
-            "role": role,
-            "summary": "Failed to generate valid response",
-            "bullets": [],
+
+        provider_chain = ["openai", "gemini"]
+        model_for_provider = {
+            "openai": self.settings.model_optimist if role == "optimist" else self.settings.model_skeptic,
+            "gemini": self.settings.model_optimist if role == "optimist" else self.settings.model_skeptic,
         }
+
+        def validator(result: dict) -> None:
+            DebateResponse(role=role, **result)
+
+        try:
+            result, _provider_used = await generate_json_with_fallback(
+                settings=self.settings,
+                provider_chain=provider_chain,
+                model_for_provider=model_for_provider,
+                prompt=prompt,
+                schema_hint=DEBATE_SCHEMA,
+                validator=validator,
+                max_tokens=600,
+                temperature=0.7,
+                max_retries=2,
+            )
+            response = DebateResponse(role=role, **result)
+            return response.model_dump()
+        except LLMUnavailable as exc:
+            raise LLMFailure("LLM unavailable", exc)
     
     async def _call_arbiter(
         self,
@@ -161,41 +159,39 @@ class DebateSystem:
         skeptic_view: dict,
     ) -> ArbiterDecision:
         """Call the Arbiter agent to make final decision with retry."""
-        provider, model = get_provider_for_role("arbiter", self.settings)
         prompt = self._build_arbiter_prompt(context, optimist_view, skeptic_view)
-        
-        for attempt in range(2):
-            try:
-                result = await provider.generate_json(
-                    prompt=prompt,
-                    model=model,
-                    schema_hint=DEBATE_SCHEMA,
-                    max_tokens=500,
-                    temperature=0.3,
-                )
-                
-                response = DebateResponse(role="arbiter", **result)
-                
-                return ArbiterDecision(
-                    auto_fix_allowed=response.auto_fix_allowed or False,
-                    fix_objectives=response.objectives or [],
-                    risk_level=response.risk_level or "unknown",
-                    stop_reason=response.stop_reason,
-                    arbiter_reasoning=response.summary,
-                )
-                
-            except (json.JSONDecodeError, ValidationError) as e:
-                logger.warning(f"JSON validation failed for arbiter (attempt {attempt + 1}): {e}")
-                if attempt == 0:
-                    prompt = f"{prompt}\n\nIMPORTANT: Return ONLY valid JSON matching the schema."
-                continue
-        
-        return ArbiterDecision(
-            auto_fix_allowed=False,
-            risk_level="unknown",
-            stop_reason="debate_output_invalid",
-            arbiter_reasoning="Failed to parse arbiter response",
-        )
+
+        provider_chain = ["openai", "gemini"]
+        model_for_provider = {
+            "openai": self.settings.model_arbiter,
+            "gemini": self.settings.model_arbiter,
+        }
+
+        def validator(result: dict) -> None:
+            DebateResponse(role="arbiter", **result)
+
+        try:
+            result, _provider_used = await generate_json_with_fallback(
+                settings=self.settings,
+                provider_chain=provider_chain,
+                model_for_provider=model_for_provider,
+                prompt=prompt,
+                schema_hint=DEBATE_SCHEMA,
+                validator=validator,
+                max_tokens=500,
+                temperature=0.3,
+                max_retries=2,
+            )
+            response = DebateResponse(role="arbiter", **result)
+            return ArbiterDecision(
+                auto_fix_allowed=response.auto_fix_allowed or False,
+                fix_objectives=response.objectives or [],
+                risk_level=response.risk_level or "unknown",
+                stop_reason=response.stop_reason,
+                arbiter_reasoning=response.summary,
+            )
+        except LLMUnavailable as exc:
+            raise LLMFailure("LLM unavailable", exc)
     
     def _build_optimist_prompt(self, context: str) -> str:
         """Build the Optimist agent prompt."""
