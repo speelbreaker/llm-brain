@@ -12,11 +12,23 @@ jobs:
     steps:
       - name: Trigger Replit Deploy Hook
         run: |
-          response=$(curl -s -w "\n%{http_code}" -X POST \
+          payload=$(python - <<'PY'
+          import json, os
+          print(json.dumps({
+              "ref": os.environ.get("GITHUB_REF", ""),
+              "sha": os.environ.get("GITHUB_SHA", ""),
+              "message": os.environ.get("COMMIT_MESSAGE", ""),
+          }))
+          PY
+          )
+
+          response=$(curl --fail-with-body --show-error --silent -w "\n%{http_code}" -X POST \
+            --connect-timeout 10 \
+            --max-time 60 \
             "${{ secrets.REPLIT_DEPLOY_URL }}/deploy-hook" \
             -H "Content-Type: application/json" \
             -H "X-Deploy-Token: ${{ secrets.DEPLOY_WEBHOOK_SECRET }}" \
-            -d '{"ref": "${{ github.ref }}", "sha": "${{ github.sha }}", "message": "${{ github.event.head_commit.message }}"}')
+            -d "$payload")
           
           http_code=$(echo "$response" | tail -n1)
           body=$(echo "$response" | head -n -1)
@@ -30,3 +42,5 @@ jobs:
           fi
           
           echo "Deploy hook triggered successfully"
+        env:
+          COMMIT_MESSAGE: ${{ github.event.head_commit.message }}

@@ -107,9 +107,10 @@ def score_fidelity_components(
         else:
             na_items.append(name)
 
-    # Compute raw component scores.
-    raw = score_components({k: v for k, v in components.items() if True})
-    comp_scores = raw["component_scores"]
+    # Compute raw component scores only for ok components.
+    raw_ok = score_components({k: v for k, v in ok_items}) if ok_items else {"component_scores": {}, "overall_score": 0.0}
+    comp_scores: Dict[str, float] = {k: 0.0 for k in components}
+    comp_scores.update({k: float(v) for k, v in (raw_ok.get("component_scores") or {}).items()})
 
     # Redistribute weights.
     total_weight_ok = sum(float(comp.get("weight") or 0.0) for _, comp in ok_items)

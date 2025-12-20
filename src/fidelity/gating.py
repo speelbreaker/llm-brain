@@ -9,12 +9,22 @@ def get_fidelity_gate_status(*, underlying: str = "BTC") -> Dict[str, Any]:
     This is intentionally defensive: if no report exists, it returns available=False.
     """
     u = (underlying or "BTC").upper().strip()
+    report = None
     try:
-        from src.fidelity.fidelity_store import load_latest_report
+        from src.fidelity.fidelity_store import load_latest_report_mvp
 
-        report = load_latest_report(u)
+        report = load_latest_report_mvp(underlying=u)
     except Exception:
         report = None
+
+    if not report:
+        # Backward-compat fallback: legacy underlying-scoped store.
+        try:
+            from src.fidelity.fidelity_store import load_latest_report
+
+            report = load_latest_report(u)
+        except Exception:
+            report = None
 
     if not report:
         return {

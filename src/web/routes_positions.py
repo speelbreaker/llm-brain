@@ -8,7 +8,9 @@ from typing import Any, Dict, List, Literal, Optional
 
 import httpx
 
-from fastapi import APIRouter
+import logging
+
+from fastapi import APIRouter, Query
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
@@ -18,6 +20,8 @@ from src.position_tracker import position_tracker
 from src.calibration_extended import run_calibration_extended, CalibrationConfig
 
 router = APIRouter()
+
+logger = logging.getLogger(__name__)
 
 
 class ForceApplyCalibrationRequest(BaseModel):
@@ -620,6 +624,7 @@ def get_fidelity_latest(
         return JSONResponse(status_code=400, content={"error": "underlying must be BTC or ETH"})
 
     try:
+        # Backward-compatible legacy store: data/fidelity_runs/{UNDERLYING}/latest/fidelity_report.json
         from src.fidelity.fidelity_store import load_latest_report
 
         report = load_latest_report(underlying)
@@ -631,22 +636,24 @@ def get_fidelity_latest(
             }
         )
     except Exception as e:
-        return JSONResponse(status_code=500, content={"ok": False, "error": str(e)})
+        logger.exception("Failed to get fidelity latest", extra={"underlying": underlying})
+        return JSONResponse(status_code=500, content={"ok": False, "error": "internal_error"})
 
 
 @router.get("/api/calibration/fidelity/history")
 def get_fidelity_history(
     underlying: str = "BTC",
-    limit: int = 30,
+    limit: int = Query(30, ge=1, le=200),
 ) -> JSONResponse:
     """Return recent Synthetic Fidelity reports from the file-based history store."""
     if underlying not in ("BTC", "ETH"):
         return JSONResponse(status_code=400, content={"error": "underlying must be BTC or ETH"})
 
     try:
+        # Backward-compatible legacy store: data/fidelity_runs/{UNDERLYING}/history/{RUN_ID}/fidelity_report.json
         from src.fidelity.fidelity_store import list_recent_reports
 
-        runs = list_recent_reports(underlying, limit=limit)
+        runs = list_recent_reports(underlying, limit=int(limit))
         return JSONResponse(
             content={
                 "ok": True,
@@ -655,16 +662,19 @@ def get_fidelity_history(
             }
         )
     except Exception as e:
-        return JSONResponse(status_code=500, content={"ok": False, "error": str(e)})
+        logger.exception("Failed to get fidelity history", extra={"underlying": underlying, "limit": limit})
+        return JSONResponse(status_code=500, content={"ok": False, "error": "internal_error"})
 
 
 @router.get("/calibration/fidelity/latest")
-def get_fidelity_latest_mvp() -> JSONResponse:
+def get_fidelity_latest_mvp(underlying: Optional[str] = None) -> JSONResponse:
     """MVP endpoint: return the latest fidelity report (run_id-scoped store)."""
+    if underlying is not None and underlying.upper().strip() not in ("BTC", "ETH"):
+        return JSONResponse(status_code=400, content={"ok": False, "error": "underlying must be BTC or ETH"})
     try:
         from src.fidelity.fidelity_store import load_latest_index, load_report_by_id
 
-        latest = load_latest_index()
+        latest = load_latest_index(underlying)
         if not latest or not latest.get("run_id"):
             return JSONResponse(content={"ok": True, "run_id": None, "report": None})
 
@@ -672,19 +682,26 @@ def get_fidelity_latest_mvp() -> JSONResponse:
         report = load_report_by_id(run_id)
         return JSONResponse(content={"ok": True, "run_id": run_id, "report": report, "latest": latest})
     except Exception as e:
-        return JSONResponse(status_code=500, content={"ok": False, "error": str(e)})
+        logger.exception("Failed to get MVP fidelity latest", extra={"underlying": underlying})
+        return JSONResponse(status_code=500, content={"ok": False, "error": "internal_error"})
 
 
 @router.get("/calibration/fidelity/history")
-def get_fidelity_history_mvp(limit: int = 30) -> JSONResponse:
+def get_fidelity_history_mvp(
+    limit: int = Query(30, ge=1, le=200),
+    underlying: Optional[str] = None,
+) -> JSONResponse:
     """MVP endpoint: list recent fidelity runs (run_id-scoped store)."""
+    if underlying is not None and underlying.upper().strip() not in ("BTC", "ETH"):
+        return JSONResponse(status_code=400, content={"ok": False, "error": "underlying must be BTC or ETH"})
     try:
         from src.fidelity.fidelity_store import list_history_runs
 
-        runs = list_history_runs(limit=limit)
+        runs = list_history_runs(limit=int(limit), underlying=underlying)
         return JSONResponse(content={"ok": True, "runs": runs})
     except Exception as e:
-        return JSONResponse(status_code=500, content={"ok": False, "error": str(e)})
+        logger.exception("Failed to get MVP fidelity history", extra={"underlying": underlying, "limit": limit})
+        return JSONResponse(status_code=500, content={"ok": False, "error": "internal_error"})
 
 
 @router.get("/calibration/fidelity/report/{run_id}")
@@ -698,7 +715,8 @@ def get_fidelity_report_mvp(run_id: str) -> JSONResponse:
             return JSONResponse(status_code=404, content={"ok": False, "error": "not_found"})
         return JSONResponse(content={"ok": True, "run_id": run_id, "report": report})
     except Exception as e:
-        return JSONResponse(status_code=500, content={"ok": False, "error": str(e)})
+        logger.exception("Failed to get MVP fidelity report", extra={"run_id": run_id})
+        return JSONResponse(status_code=500, content={"ok": False, "error": "internal_error"})
 
 
 @router.get("/calibration/fidelity/spec")
@@ -709,7 +727,8 @@ def get_fidelity_spec_mvp() -> JSONResponse:
 
         return JSONResponse(content={"ok": True, "spec": fidelity_spec()})
     except Exception as e:
-        return JSONResponse(status_code=500, content={"ok": False, "error": str(e)})
+        logger.exception("Failed to get MVP fidelity spec")
+        return JSONResponse(status_code=500, content={"ok": False, "error": "internal_error"})
 
 
 @router.post("/api/calibration/force_apply")

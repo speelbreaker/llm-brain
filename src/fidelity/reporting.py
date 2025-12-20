@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import os
 import json
+import uuid
 from dataclasses import dataclass, asdict, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -40,10 +42,29 @@ def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def write_report_json(report: FidelityReport, path: Path) -> None:
+def _atomic_write_text(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(asdict(report), f, indent=2, sort_keys=True)
+    tmp = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write(text)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+    finally:
+        try:
+            if tmp.exists():
+                tmp.unlink()
+        except Exception:
+            pass
+
+
+def _atomic_write_json(path: Path, payload: Any) -> None:
+    _atomic_write_text(path, json.dumps(payload, indent=2, sort_keys=True) + "\n")
+
+
+def write_report_json(report: FidelityReport, path: Path) -> None:
+    _atomic_write_json(path, asdict(report))
 
 
 def write_report_md(report: FidelityReport, path: Path) -> None:
@@ -83,13 +104,11 @@ def write_report_md(report: FidelityReport, path: Path) -> None:
     lines.append(json.dumps(payload, indent=2, sort_keys=True))
     lines.append("```")
 
-    with open(path, "w", encoding="utf-8") as f:
-        f.write("\n".join(lines) + "\n")
+    _atomic_write_text(path, "\n".join(lines) + "\n")
 
 
 def write_latest_index(report: FidelityReport, path: Path) -> None:
     """Write the global latest.json index expected by the MVP endpoints."""
-    path.parent.mkdir(parents=True, exist_ok=True)
     summary = {
         "run_id": report.run_id,
         "timestamp": report.timestamp,
@@ -101,6 +120,10 @@ def write_latest_index(report: FidelityReport, path: Path) -> None:
         "component_scores": report.component_scores,
         "live_data_status": report.live_data_status,
     }
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(summary, f, indent=2, sort_keys=True)
+    _atomic_write_json(path, summary)
+
+
+def write_latest_index_for_underlying(report: FidelityReport, path: Path) -> None:
+    """Write an underlying-scoped latest index (used by the UI + gate)."""
+    write_latest_index(report, path)
 

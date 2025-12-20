@@ -49,12 +49,40 @@ def test_fidelity_mvp_endpoints_with_fixture_run(monkeypatch, tmp_path: Path) ->
     assert data_latest["run_id"] == report.run_id
     assert data_latest["report"]["run_id"] == report.run_id
 
+    # Underlying-scoped latest should return BTC run and not leak into ETH.
+    resp_latest_btc = client.get("/calibration/fidelity/latest?underlying=BTC")
+    assert resp_latest_btc.status_code == 200
+    data_latest_btc = resp_latest_btc.json()
+    assert data_latest_btc["ok"] is True
+    assert data_latest_btc["run_id"] == report.run_id
+    assert data_latest_btc["report"]["underlying"] == "BTC"
+
+    resp_latest_eth = client.get("/calibration/fidelity/latest?underlying=ETH")
+    assert resp_latest_eth.status_code == 200
+    data_latest_eth = resp_latest_eth.json()
+    assert data_latest_eth["ok"] is True
+    assert data_latest_eth["run_id"] is None
+    assert data_latest_eth["report"] is None
+
     resp_hist = client.get("/calibration/fidelity/history?limit=10")
     assert resp_hist.status_code == 200
     data_hist = resp_hist.json()
     assert data_hist["ok"] is True
     assert len(data_hist["runs"]) >= 1
     assert data_hist["runs"][0]["run_id"] == report.run_id
+
+    resp_hist_btc = client.get("/calibration/fidelity/history?underlying=BTC&limit=10")
+    assert resp_hist_btc.status_code == 200
+    data_hist_btc = resp_hist_btc.json()
+    assert data_hist_btc["ok"] is True
+    assert len(data_hist_btc["runs"]) >= 1
+    assert data_hist_btc["runs"][0]["underlying"] == "BTC"
+
+    resp_hist_eth = client.get("/calibration/fidelity/history?underlying=ETH&limit=10")
+    assert resp_hist_eth.status_code == 200
+    data_hist_eth = resp_hist_eth.json()
+    assert data_hist_eth["ok"] is True
+    assert data_hist_eth["runs"] == []
 
     resp_report = client.get(f"/calibration/fidelity/report/{report.run_id}")
     assert resp_report.status_code == 200

@@ -19,7 +19,7 @@ from .metrics import (
     strategy_metrics_from_returns,
     _sorted,
 )
-from .reporting import FidelityReport, write_report_json, write_report_md, write_latest_index
+from .reporting import FidelityReport, write_report_json, write_report_md, write_latest_index, write_latest_index_for_underlying
 from .scoring import gate_label, score_fidelity_components
 
 
@@ -337,14 +337,17 @@ def run_fidelity_suite(
     write_report_json(report, run_dir / "fidelity_report.json")
     write_report_md(report, run_dir / "fidelity_report.md")
     write_latest_index(report, base_dir / "latest.json")
+    write_latest_index_for_underlying(report, base_dir / u / "latest.json")
 
-    # Also write to the legacy UI paths (underlying-scoped) for existing dashboard widgets.
-    legacy_latest = Path("data/fidelity_runs") / u / "latest"
-    legacy_hist = Path("data/fidelity_runs") / u / "history" / run_id
-    write_report_json(report, legacy_latest / "fidelity_report.json")
-    write_report_md(report, legacy_latest / "fidelity_report.md")
-    write_report_json(report, legacy_hist / "fidelity_report.json")
-    write_report_md(report, legacy_hist / "fidelity_report.md")
+    # Optionally write to legacy UI paths (underlying-scoped) for compatibility.
+    write_legacy = (os.getenv("FIDELITY_WRITE_LEGACY") or "0").strip().lower() in ("1", "true", "yes")
+    if write_legacy:
+        legacy_latest = Path("data/fidelity_runs") / u / "latest"
+        legacy_hist = Path("data/fidelity_runs") / u / "history" / run_id
+        write_report_json(report, legacy_latest / "fidelity_report.json")
+        write_report_md(report, legacy_latest / "fidelity_report.md")
+        write_report_json(report, legacy_hist / "fidelity_report.json")
+        write_report_md(report, legacy_hist / "fidelity_report.md")
 
     return report
 

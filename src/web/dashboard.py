@@ -6765,7 +6765,7 @@ def render_dashboard_html() -> str:
         return;
       }}
 
-      gateEl.innerHTML = fidelityGateBadge(report.gate);
+      gateEl.innerHTML = fidelityGateBadge(report.gate_label || report.gate);
       scoreEl.textContent = formatFidelityScore(report.overall_score);
       runEl.textContent = report.run_id || '-';
       tsEl.textContent = report.timestamp ? new Date(report.timestamp).toLocaleString() : '-';

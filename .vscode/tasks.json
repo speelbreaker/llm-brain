@@ -1,16 +1,89 @@
 {
-  "version": "2.0.0",
-  "tasks": [
-    {
-      "label": "Test: Pytest (workspace .venv)",
-      "type": "shell",
-      "command": "${workspaceFolder}/.venv/bin/python",
-      "args": ["-m", "pytest", "-q"],
-      "group": {
-        "kind": "test",
-        "isDefault": true
-      },
-      "problemMatcher": []
-    }
-  ]
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "Test: Pytest (workspace .venv)",
+			"type": "shell",
+			"command": "${workspaceFolder}/.venv/bin/python",
+			"args": [
+				"-m",
+				"pytest",
+				"-q"
+			],
+			"group": {
+				"kind": "test",
+				"isDefault": true
+			},
+			"problemMatcher": []
+		},
+		{
+			"label": "Test: Pytest (first failure)",
+			"type": "shell",
+			"command": "${workspaceFolder}/.venv/bin/python",
+			"args": [
+				"-m",
+				"pytest",
+				"-q",
+				"--maxfail=1",
+				"-x"
+			],
+			"isBackground": false,
+			"group": "test"
+		},
+		{
+			"label": "Test: Pytest (last failed only)",
+			"type": "shell",
+			"command": "${workspaceFolder}/.venv/bin/python",
+			"args": [
+				"-m",
+				"pytest",
+				"-q",
+				"--lf",
+				"-x"
+			],
+			"isBackground": false,
+			"group": "test"
+		},
+		{
+			"label": "Test: Pytest (stop on first failure, verbose)",
+			"type": "shell",
+			"command": "${workspaceFolder}/.venv/bin/python",
+			"args": [
+				"-m",
+				"pytest",
+				"-x",
+				"--maxfail=1",
+				"-vv",
+				"--tb=short",
+				"--disable-warnings"
+			],
+			"isBackground": false,
+			"group": "test"
+		},
+		{
+			"label": "Test: Pytest (only failures)",
+			"type": "shell",
+			"command": "${workspaceFolder}/.venv/bin/python",
+			"args": [
+				"-m",
+				"pytest",
+				"-qq",
+				"--maxfail=1",
+				"-x"
+			],
+			"isBackground": false,
+			"group": "test"
+		},
+		{
+			"label": "Test: Pytest (capture tail)",
+			"type": "shell",
+			"command": "/bin/zsh",
+			"args": [
+				"-lc",
+				"${workspaceFolder}/.venv/bin/python -m pytest -q > /tmp/pytest_out.txt 2>&1; echo \"EXIT:$?\"; tail -n 200 /tmp/pytest_out.txt"
+			],
+			"isBackground": false,
+			"group": "test"
+		}
+	]
 }
