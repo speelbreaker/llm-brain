@@ -1,0 +1,73 @@
+ROLE
+You are a senior product-minded engineer. Update the repo’s roadmap file to reflect the new North Star discovered during Synthetic Fidelity + live replay work.
+
+FILE TO EDIT
+- ROADMAP_BACKLOG.md (if the repo uses a different name, locate the exact roadmap file; in this workspace it’s “ROADMAP_BACKLOG (2).md” content)
+
+CONTEXT YOU MUST PRESERVE
+The current roadmap already contains:
+- Phases 1–3 at the top
+- A strong section [E1.5] “Synthetic Fidelity Score + trading gate”
+- Recently Completed includes: synthetic regimes, live_deribit datasource, compare/diff modules, backtest lab UI, shared state_core, etc.
+
+You must keep the existing content, but REFRAME the plan so Fidelity Gate + measurement integrity are the organizing principle.
+
+GOALS
+1) Update the North Star / Phase plan to add a new Phase 0 (Truth Foundation + Fidelity Gate).
+2) Promote E1.5 from “one backlog item” into the prime directive, with enforcement language and clear exit criteria.
+3) Add a new P0 backlog section: “Measurement Integrity & Data Contracts” with concrete items.
+4) Ensure priorities are explicit: Truth → Trust → Trade, then scale strategies/bots, then SaaS.
+
+EDIT SPEC (DETAILED)
+
+A) Update the “Phases:” block near the top
+Replace the existing Phase list with:
+
+- Phase 0 – Truth Foundation + Fidelity Gate (new, must be complete before trusting backtests)
+- Phase 1 – One good covered-call bot on testnet with gate enforced (mostly done, but now “done” means TRUSTED)
+- Phase 2 – Strategy Packs (GregBot + others) with deterministic replay + parity
+- Phase 3 – Multi-bot supervisor + real historical data + production ops + heavy quant research
+
+Add a short “Definition of Done” bullet under the Phase list:
+- A strategy is “done” only if deterministic replay + audited PnL + passes Fidelity Gate.
+
+B) Add a new section near the top (after “Recently Completed” and before “A. Architecture & Design”)
+Title: “0. North Star: Truth → Trust → Trade”
+Include:
+- Why: synthetic backtests are untrusted unless fidelity gate is green
+- The gate labels: TRUSTED / WARNING / UNTRUSTED
+- Promotion ladder: synthetic → live replay → paper → testnet → mainnet
+- Hard rule: no auto-promotion; fidelity must pass
+
+C) Add a new P0 section (place it under “B. Persistence & Infrastructure” or create a new section “B0. Measurement Integrity & Data Contracts”)
+Items (P0):
+- Enforce premium units contract (option premiums are USD inside backtester; live_deribit premiums must be converted from underlying units)
+- Add invariant tests:
+  - drawdown sanity (non-negative, bounded in normal runs)
+  - PnL unit sanity (premium_usd vs underlying_price)
+- Document the contract in-doc: “units at each boundary” (harvester → exam → datasource → simulator)
+
+D) Update [E1.5] section
+Keep the existing content, but add:
+- “Enforcement” subsection:
+  - backtest UI must show gate label
+  - optimizer/strategy factory blocked unless TRUSTED (or tagged “exploratory-only”)
+  - live trading blocked unless latest calibration bundle is TRUSTED and not stale
+- “Exit criteria” subsection:
+  - min coverage threshold
+  - min strategy parity threshold for canonical strategies
+  - max allowed IV bucket MAE / vega-weighted MAE
+
+E) Add a small note under “G2 Backtest Lab enhancements” that fidelity badges must be shown
+(Do not build UI here; just make it explicit in roadmap that the backtest lab must surface gate status.)
+
+STYLE REQUIREMENTS
+- Keep the existing headings/IDs (A1, A2, E1.5, etc.) intact.
+- Add new sections without deleting old ones.
+- Be concise: roadmap is a control document, not an essay.
+
+ACCEPTANCE CRITERIA
+- Roadmap has Phase 0 added and clearly defines “done”
+- E1.5 explicitly states enforcement (gate blocks trust/trading)
+- New P0 “Measurement Integrity & Data Contracts” exists and is prioritized above strategy expansion
+- No loss of existing backlog items
