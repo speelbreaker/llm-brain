@@ -282,12 +282,12 @@ def _extract_underlying(report: Dict[str, Any]) -> Optional[str]:
 
 def latest_report_path(underlying: str) -> Path:
     u = _safe_underlying(underlying)
-    return FIDELITY_RUNS_DIR / u / "latest" / "fidelity_report.json"
+    return base_runs_dir() / u / "latest" / "fidelity_report.json"
 
 
 def history_dir(underlying: str) -> Path:
     u = _safe_underlying(underlying)
-    return FIDELITY_RUNS_DIR / u / "history"
+    return base_runs_dir() / u / "history"
 
 
 def load_latest_report(underlying: str) -> Optional[Dict[str, Any]]:
