@@ -168,7 +168,7 @@ class TestRedactJobForApi:
             "fix_attempts": [
                 {
                     "codex_output": f"Applied fix with {dummy_secret}",
-                    "codex_prompt": "fix the issue safely",
+                    "codex_prompt": f"prompt includes {dummy_secret}",
                 }
             ]
         }
@@ -176,7 +176,7 @@ class TestRedactJobForApi:
         result = redact_job_for_api(job_dict, settings)
 
         assert REDACTED in result["fix_attempts"][0]["codex_output"]
-        assert result["fix_attempts"][0]["codex_prompt"] == "fix the issue safely"
+        assert REDACTED in result["fix_attempts"][0]["codex_prompt"]
 
     def test_preserves_non_sensitive_fields(self):
         """Test that non-sensitive fields are preserved."""
