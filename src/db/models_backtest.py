@@ -15,6 +15,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    JSON,
     String,
     Text,
     UniqueConstraint,
@@ -54,7 +55,7 @@ class BacktestRun(Base):
     sharpe_primary = Column(Float, nullable=True)
     sortino_primary = Column(Float, nullable=True)
     
-    config_json = Column(JSONB, nullable=True)
+    config_json = Column(JSON().with_variant(JSONB, "postgresql"), nullable=True)
     notes = Column(Text, nullable=True)
     
     metrics = relationship("BacktestMetric", back_populates="run", cascade="all, delete-orphan")
@@ -181,7 +182,7 @@ class BacktestChain(Base):
     max_drawdown_pct = Column(Float, nullable=True)
     max_drawdown_usd = Column(Float, nullable=True)
     
-    details_json = Column(JSONB, nullable=True)
+    details_json = Column(JSON().with_variant(JSONB, "postgresql"), nullable=True)
     
     run = relationship("BacktestRun", back_populates="chains")
     
@@ -229,7 +230,7 @@ class BacktestEvent(Base):
     position_id = Column(String(128), nullable=True)
     pnl = Column(Float, nullable=True)
     
-    reason_json = Column(JSONB, nullable=True)
+    reason_json = Column(JSON().with_variant(JSONB, "postgresql"), nullable=True)
     
     run = relationship("BacktestRun")
     

@@ -84,7 +84,7 @@ class CalibrationHistory(Base):
         Index("ix_calibration_history_lookup", "underlying", "dte_min", "dte_max"),
     )
 
-    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    id = Column(BigInteger().with_variant(Integer, "sqlite"), primary_key=True, autoincrement=True)
     underlying = Column(String(16), nullable=False)
     dte_min = Column(Integer, nullable=False)
     dte_max = Column(Integer, nullable=False)
@@ -197,7 +197,13 @@ def get_latest_calibration(
         if skip_failed:
             query = query.filter(CalibrationHistory.status != "failed")
         
-        row = query.order_by(CalibrationHistory.created_at.desc()).first()
+        row = (
+            query.order_by(
+                CalibrationHistory.created_at.desc(),
+                CalibrationHistory.id.desc(),
+            )
+            .first()
+        )
         
         if row is None:
             return None
@@ -234,7 +240,7 @@ def list_recent_calibrations(
         rows = (
             db.query(CalibrationHistory)
             .filter(CalibrationHistory.underlying == underlying.upper())
-            .order_by(CalibrationHistory.created_at.desc())
+            .order_by(CalibrationHistory.created_at.desc(), CalibrationHistory.id.desc())
             .limit(limit)
             .all()
         )

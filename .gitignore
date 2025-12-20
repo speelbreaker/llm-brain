@@ -63,6 +63,7 @@ data/*.db
 # Data artifacts (generated files - do not commit)
 data/**/*.parquet
 data/**/backtest*.json
+data/backtests/**/result.json
 data/**/training*
 data/**/candidates*
 data/**/market_data*

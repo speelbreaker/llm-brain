@@ -13,7 +13,14 @@ from sqlalchemy.orm import declarative_base, sessionmaker, Session
 DATABASE_URL = os.environ.get("DATABASE_URL")
 
 if DATABASE_URL:
-    engine = create_engine(DATABASE_URL, pool_pre_ping=True, pool_size=5, max_overflow=10)
+    if DATABASE_URL.startswith("sqlite"):
+        engine = create_engine(
+            DATABASE_URL,
+            pool_pre_ping=True,
+            connect_args={"check_same_thread": False},
+        )
+    else:
+        engine = create_engine(DATABASE_URL, pool_pre_ping=True, pool_size=5, max_overflow=10)
 else:
     engine = None
 
