@@ -14,6 +14,20 @@ if TYPE_CHECKING:
 
 REDACTED = "***REDACTED***"
 
+SENSITIVE_KEYWORDS = [
+    "token",
+    "secret",
+    "password",
+    "apikey",
+    "api_key",
+    "auth",
+    "bearer",
+    "cookie",
+    "key",
+    "credential",
+    "session",
+]
+
 TOKEN_PATTERNS = [
     re.compile(r"ghp_[A-Za-z0-9]{20,}"),
     re.compile(r"gho_[A-Za-z0-9]{20,}"),
@@ -21,8 +35,10 @@ TOKEN_PATTERNS = [
     re.compile(r"github_pat_[A-Za-z0-9_]{20,}"),
     re.compile(r"Bearer\s+[A-Za-z0-9\-_\.]{15,}", re.IGNORECASE),
     re.compile(r"x-goog-api-key[:=]\s*\S+", re.IGNORECASE),
+    re.compile(r"bearer\s+[A-Za-z0-9\-_\.]{15,}", re.IGNORECASE),
     re.compile(r"sk-[A-Za-z0-9]{20,}"),
     re.compile(r"sk-proj-[A-Za-z0-9\-_]{20,}"),
+    re.compile(r"sk-or-[A-Za-z0-9\-_]{20,}"),
     re.compile(r"AIza[A-Za-z0-9\-_]{35}"),
     re.compile(r"[0-9]{9,12}:[A-Za-z0-9_\-]{35}"),
     re.compile(r"xoxb-[A-Za-z0-9\-]{50,}"),
@@ -71,69 +87,29 @@ def redact_secrets(text: str, settings: "SupervisorSettings") -> str:
     return result
 
 
+def _is_sensitive_key(key: str) -> bool:
+    lowered = key.lower()
+    return any(keyword in lowered for keyword in SENSITIVE_KEYWORDS)
+
+
+def _redact_value(value, settings: "SupervisorSettings", key: str | None = None):
+    if isinstance(value, dict):
+        return {
+            k: _redact_value(v, settings, k) if not _is_sensitive_key(str(k)) else REDACTED
+            for k, v in value.items()
+        }
+    if isinstance(value, list):
+        return [_redact_value(item, settings) for item in value]
+    if isinstance(value, str):
+        redacted_value = redact_secrets(value, settings)
+        if key and _is_sensitive_key(key):
+            return REDACTED
+        return redacted_value
+    if key and _is_sensitive_key(str(key)):
+        return REDACTED
+    return value
+
+
 def redact_job_for_api(job_dict: dict, settings: "SupervisorSettings") -> dict:
-    """Redact secrets from a job dict before returning via API.
-
-    Args:
-        job_dict: The job data as a dictionary
-        settings: SupervisorSettings containing configured secrets
-
-    Returns:
-        Job dict with secrets redacted from text fields
-    """
-    sensitive_fields = [
-        "error_message",
-        "final_message",
-        "workspace_path",
-    ]
-
-    result = job_dict.copy()
-
-    for field in sensitive_fields:
-        if field in result and isinstance(result[field], str):
-            result[field] = redact_secrets(result[field], settings)
-
-    if "verification" in result and isinstance(result["verification"], dict):
-        verification = result["verification"].copy()
-        if "failure_summary" in verification and isinstance(
-            verification["failure_summary"], str
-        ):
-            verification["failure_summary"] = redact_secrets(
-                verification["failure_summary"], settings
-            )
-        if "checks" in verification and isinstance(verification["checks"], list):
-            checks = []
-            for check in verification["checks"]:
-                check_copy = check.copy()
-                if "stdout" in check_copy and isinstance(check_copy["stdout"], str):
-                    check_copy["stdout"] = redact_secrets(
-                        check_copy["stdout"], settings
-                    )
-                if "stderr" in check_copy and isinstance(check_copy["stderr"], str):
-                    check_copy["stderr"] = redact_secrets(
-                        check_copy["stderr"], settings
-                    )
-                checks.append(check_copy)
-            verification["checks"] = checks
-        result["verification"] = verification
-
-    if "fix_attempts" in result and isinstance(result["fix_attempts"], list):
-        fix_attempts = []
-        for attempt in result["fix_attempts"]:
-            attempt_copy = attempt.copy()
-            if "codex_output" in attempt_copy and isinstance(
-                attempt_copy["codex_output"], str
-            ):
-                attempt_copy["codex_output"] = redact_secrets(
-                    attempt_copy["codex_output"], settings
-                )
-            if "codex_prompt" in attempt_copy and isinstance(
-                attempt_copy["codex_prompt"], str
-            ):
-                attempt_copy["codex_prompt"] = redact_secrets(
-                    attempt_copy["codex_prompt"], settings
-                )
-            fix_attempts.append(attempt_copy)
-        result["fix_attempts"] = fix_attempts
-
-    return result
+    """Redact secrets from a job dict before returning via API or logging."""
+    return _redact_value(job_dict, settings)

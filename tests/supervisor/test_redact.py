@@ -7,11 +7,11 @@ class MockSettings:
     """Mock settings for testing."""
 
     def __init__(self):
-        self.github_token = "ghp_abcdefghijklmnopqrstuvwxyz123456"
-        self.github_webhook_secret = "my_webhook_secret_12345"
-        self.openai_api_key = "sk-abcdefghij1234567890abcdefghij"
-        self.telegram_bot_token = "1234567890:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefgh"
-        self.gemini_api_key = "AIzaSyB1234567890abcdefghijklmnopqrstuv"
+        self.github_token = "ghp_DUMMYEXAMPLE1234567890"
+        self.github_webhook_secret = "dummy_webhook_secret_value"
+        self.openai_api_key = "sk-DUMMY12345678901234567890"
+        self.telegram_bot_token = "1234567890:ABCDEFGHIJKLMNOPQRSTUVWXYZabcd"
+        self.gemini_api_key = "AIzaSyDUMMY_NOT_REAL_1234567890123"
 
 
 class TestRedactSecrets:
@@ -58,7 +58,7 @@ class TestRedactSecrets:
         settings = MockSettings()
         settings.github_token = None
 
-        text = "Found token ghp_1234567890abcdefghijklmnopqr in output"
+        text = "Found token ghp_DUMMYEXAMPLE1234567890 in output"
         result = redact_secrets(text, settings)
 
         assert "ghp_" not in result or REDACTED in result
@@ -68,6 +68,16 @@ class TestRedactSecrets:
         settings = MockSettings()
 
         text = "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWI"
+        result = redact_secrets(text, settings)
+
+        assert REDACTED in result
+
+    def test_redacts_gemini_key_pattern(self):
+        """Test redaction of Gemini API pattern."""
+        settings = MockSettings()
+        settings.gemini_api_key = None
+
+        text = "Gemini key AIzaSyDUMMY_NOT_REAL_1234567890123456 present"
         result = redact_secrets(text, settings)
 
         assert REDACTED in result
@@ -153,18 +163,20 @@ class TestRedactJobForApi:
     def test_redacts_codex_output(self):
         """Test redaction in fix_attempts codex_output."""
         settings = MockSettings()
+        dummy_secret = "sk-DUMMY12345678901234567890"
         job_dict = {
             "fix_attempts": [
                 {
-                    "codex_output": f"Applied fix with {settings.gemini_api_key}",
-                    "codex_prompt": "fix the issue",
+                    "codex_output": f"Applied fix with {dummy_secret}",
+                    "codex_prompt": "fix the issue safely",
                 }
             ]
         }
 
         result = redact_job_for_api(job_dict, settings)
 
-        assert settings.gemini_api_key not in result["fix_attempts"][0]["codex_output"]
+        assert REDACTED in result["fix_attempts"][0]["codex_output"]
+        assert result["fix_attempts"][0]["codex_prompt"] == "fix the issue safely"
 
     def test_preserves_non_sensitive_fields(self):
         """Test that non-sensitive fields are preserved."""
@@ -180,3 +192,25 @@ class TestRedactJobForApi:
         assert result["job_id"] == "pr-123-abc"
         assert result["status"] == "completed"
         assert result["pr_number"] == 123
+
+    def test_redacts_nested_sensitive_keys(self):
+        """Ensure nested sensitive keys are redacted recursively."""
+        settings = MockSettings()
+        job_dict = {
+            "metadata": {
+                "auth_token": "ghp_DUMMYEXAMPLE1234567890",
+                "note": "safe text",
+            },
+            "list_field": [
+                {"password": "supersecret", "ok": "keep"},
+                "Bearer TOKENVALUEEXAMPLE12345",
+            ],
+        }
+
+        result = redact_job_for_api(job_dict, settings)
+
+        assert result["metadata"]["auth_token"] == REDACTED
+        assert result["metadata"]["note"] == "safe text"
+        assert result["list_field"][0]["password"] == REDACTED
+        assert result["list_field"][0]["ok"] == "keep"
+        assert REDACTED in result["list_field"][1]
