@@ -378,6 +378,33 @@ def start_backtest(req: BacktestStartRequest) -> JSONResponse:
     
     warnings = list(validation.warnings)
 
+    # Optional fidelity gate (MVP): controlled via env var.
+    # Values:
+    #   - off/"" (default): no enforcement
+    #   - warn: adds a warning if UNTRUSTED
+    #   - block: refuses to start if UNTRUSTED
+    import os
+
+    gate_mode = (os.getenv("FIDELITY_GATE_MODE") or "off").strip().lower()
+    fidelity_gate = None
+    try:
+        from src.fidelity.gating import get_fidelity_gate_status
+
+        fidelity_gate = get_fidelity_gate_status(underlying=req.underlying)
+        gate_label = (fidelity_gate.get("gate_label") or "").upper()
+        if gate_mode == "warn" and gate_label == "UNTRUSTED":
+            warnings.append("Fidelity gate is UNTRUSTED (FIDELITY_GATE_MODE=warn).")
+        if gate_mode == "block" and gate_label == "UNTRUSTED":
+            raise HTTPException(
+                status_code=400,
+                detail="Backtest blocked: Fidelity gate is UNTRUSTED (FIDELITY_GATE_MODE=block).",
+            )
+    except HTTPException:
+        raise
+    except Exception:
+        # Never block backtests if the gate check itself fails.
+        fidelity_gate = fidelity_gate or {"available": False}
+
     effective_margin_type = req.margin_type
     effective_settlement_ccy = req.settlement_ccy
 
@@ -421,6 +448,7 @@ def start_backtest(req: BacktestStartRequest) -> JSONResponse:
         "started": True,
         "backtest_type": "generic",
         "warnings": warnings,
+        "fidelity_gate": fidelity_gate,
         "effective_config": {
             **validation.effective_config,
             "chain_mode": effective_chain_mode,

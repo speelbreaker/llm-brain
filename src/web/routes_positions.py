@@ -658,6 +658,60 @@ def get_fidelity_history(
         return JSONResponse(status_code=500, content={"ok": False, "error": str(e)})
 
 
+@router.get("/calibration/fidelity/latest")
+def get_fidelity_latest_mvp() -> JSONResponse:
+    """MVP endpoint: return the latest fidelity report (run_id-scoped store)."""
+    try:
+        from src.fidelity.fidelity_store import load_latest_index, load_report_by_id
+
+        latest = load_latest_index()
+        if not latest or not latest.get("run_id"):
+            return JSONResponse(content={"ok": True, "run_id": None, "report": None})
+
+        run_id = str(latest.get("run_id"))
+        report = load_report_by_id(run_id)
+        return JSONResponse(content={"ok": True, "run_id": run_id, "report": report, "latest": latest})
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"ok": False, "error": str(e)})
+
+
+@router.get("/calibration/fidelity/history")
+def get_fidelity_history_mvp(limit: int = 30) -> JSONResponse:
+    """MVP endpoint: list recent fidelity runs (run_id-scoped store)."""
+    try:
+        from src.fidelity.fidelity_store import list_history_runs
+
+        runs = list_history_runs(limit=limit)
+        return JSONResponse(content={"ok": True, "runs": runs})
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"ok": False, "error": str(e)})
+
+
+@router.get("/calibration/fidelity/report/{run_id}")
+def get_fidelity_report_mvp(run_id: str) -> JSONResponse:
+    """MVP endpoint: fetch a specific run's report by run_id."""
+    try:
+        from src.fidelity.fidelity_store import load_report_by_id
+
+        report = load_report_by_id(run_id)
+        if report is None:
+            return JSONResponse(status_code=404, content={"ok": False, "error": "not_found"})
+        return JSONResponse(content={"ok": True, "run_id": run_id, "report": report})
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"ok": False, "error": str(e)})
+
+
+@router.get("/calibration/fidelity/spec")
+def get_fidelity_spec_mvp() -> JSONResponse:
+    """MVP endpoint: return the suite spec (strategies + scoring components)."""
+    try:
+        from src.fidelity.spec import fidelity_spec
+
+        return JSONResponse(content={"ok": True, "spec": fidelity_spec()})
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"ok": False, "error": str(e)})
+
+
 @router.post("/api/calibration/force_apply")
 def force_apply_calibration(request: ForceApplyCalibrationRequest) -> JSONResponse:
     """

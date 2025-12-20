@@ -651,6 +651,34 @@
     "name": "toggle_training_mode"
   },
   {
+    "path": "/calibration/fidelity/history",
+    "methods": [
+      "GET"
+    ],
+    "name": "get_fidelity_history_mvp"
+  },
+  {
+    "path": "/calibration/fidelity/latest",
+    "methods": [
+      "GET"
+    ],
+    "name": "get_fidelity_latest_mvp"
+  },
+  {
+    "path": "/calibration/fidelity/report/{run_id}",
+    "methods": [
+      "GET"
+    ],
+    "name": "get_fidelity_report_mvp"
+  },
+  {
+    "path": "/calibration/fidelity/spec",
+    "methods": [
+      "GET"
+    ],
+    "name": "get_fidelity_spec_mvp"
+  },
+  {
     "path": "/chat",
     "methods": [
       "POST"

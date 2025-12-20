@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, asdict, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 
 @dataclass(frozen=True)
@@ -12,14 +12,28 @@ class FidelityReport:
     run_id: str
     timestamp: str
 
-    market_live_meta: Dict[str, Any]
-    market_synth_meta: Dict[str, Any]
+    # New (MVP spec)
+    underlying: str = "BTC"
+    start_ts: int = 0
+    end_ts: int = 0
+    gate_label: str = "UNTRUSTED"
+    live_data_status: str = "missing"  # ok|missing
 
-    component_scores: Dict[str, float]
-    overall_score: float
-    gate: str
+    # New: richer report payloads
+    component_status: Dict[str, str] = field(default_factory=dict)
+    components: Dict[str, Any] = field(default_factory=dict)
+    per_strategy: Dict[str, Any] = field(default_factory=dict)
+    notes: List[str] = field(default_factory=list)
 
-    strategy_parity: Dict[str, Any]
+    market_live_meta: Dict[str, Any] = field(default_factory=dict)
+    market_synth_meta: Dict[str, Any] = field(default_factory=dict)
+
+    # Keep these for backwards compatibility with the existing UI.
+    component_scores: Dict[str, float] = field(default_factory=dict)
+    overall_score: float = 0.0
+    gate: str = "UNTRUSTED"
+
+    strategy_parity: Dict[str, Any] = field(default_factory=dict)
 
 
 def now_iso() -> str:
@@ -40,7 +54,7 @@ def write_report_md(report: FidelityReport, path: Path) -> None:
     lines.append("")
     lines.append(f"- Run ID: {report.run_id}")
     lines.append(f"- Timestamp (UTC): {report.timestamp}")
-    lines.append(f"- Gate: **{report.gate}**")
+    lines.append(f"- Gate: **{report.gate_label or report.gate}**")
     lines.append("")
     lines.append(f"## Scores")
     lines.append("")
@@ -62,11 +76,31 @@ def write_report_md(report: FidelityReport, path: Path) -> None:
     lines.append("```")
 
     lines.append("")
-    lines.append("## Strategy Parity (P0 placeholder)")
+    lines.append("## Strategy Parity")
     lines.append("")
     lines.append("```json")
-    lines.append(json.dumps(report.strategy_parity, indent=2, sort_keys=True))
+    payload = report.strategy_parity or report.per_strategy or {}
+    lines.append(json.dumps(payload, indent=2, sort_keys=True))
     lines.append("```")
 
     with open(path, "w", encoding="utf-8") as f:
         f.write("\n".join(lines) + "\n")
+
+
+def write_latest_index(report: FidelityReport, path: Path) -> None:
+    """Write the global latest.json index expected by the MVP endpoints."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    summary = {
+        "run_id": report.run_id,
+        "timestamp": report.timestamp,
+        "underlying": report.underlying,
+        "start_ts": report.start_ts,
+        "end_ts": report.end_ts,
+        "overall_score": report.overall_score,
+        "gate_label": report.gate_label or report.gate,
+        "component_scores": report.component_scores,
+        "live_data_status": report.live_data_status,
+    }
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(summary, f, indent=2, sort_keys=True)
+

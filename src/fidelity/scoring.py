@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, Tuple
 
 from .metrics import exp_score
 
@@ -80,3 +80,65 @@ def score_components(components: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
         "component_scores": component_scores,
         "overall_score": float(overall_score),
     }
+
+
+def score_fidelity_components(
+    *,
+    components: Dict[str, Dict[str, Any]],
+) -> Dict[str, Any]:
+    """Score components with partial availability.
+
+    Expected per component:
+      {
+        "weight": 0.2,
+        "status": "ok"|"not_available",
+        "metrics": {metric_name: {"error": x, "tolerance": y, "k": 1.0, "weight": 1.0}},
+        "meta": {...}
+      }
+
+    If status != ok, weight is redistributed proportionally across ok components.
+    """
+    ok_items: list[Tuple[str, Dict[str, Any]]] = []
+    na_items: list[str] = []
+    for name, comp in components.items():
+        status = (comp.get("status") or "ok").lower()
+        if status == "ok":
+            ok_items.append((name, comp))
+        else:
+            na_items.append(name)
+
+    # Compute raw component scores.
+    raw = score_components({k: v for k, v in components.items() if True})
+    comp_scores = raw["component_scores"]
+
+    # Redistribute weights.
+    total_weight_ok = sum(float(comp.get("weight") or 0.0) for _, comp in ok_items)
+    if total_weight_ok <= 0:
+        return {
+            "overall_score": 0.0,
+            "component_scores": comp_scores,
+            "component_status": {k: (components[k].get("status") or "ok") for k in components},
+            "redistributed_weights": {},
+        }
+
+    redistributed: Dict[str, float] = {}
+    for name, comp in components.items():
+        w = float(comp.get("weight") or 0.0)
+        if (comp.get("status") or "ok").lower() != "ok":
+            redistributed[name] = 0.0
+        else:
+            redistributed[name] = float(w / total_weight_ok)
+
+    overall = 0.0
+    for name, comp in ok_items:
+        overall += redistributed[name] * float(comp_scores.get(name, 0.0))
+    overall = float(overall)
+
+    return {
+        "overall_score": overall,
+        "component_scores": comp_scores,
+        "component_status": {k: (components[k].get("status") or "ok") for k in components},
+        "redistributed_weights": redistributed,
+        "not_available": na_items,
+    }
+

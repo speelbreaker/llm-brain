@@ -6661,7 +6661,7 @@ def render_dashboard_html() -> str:
       compsEl.textContent = '';
 
       try {{
-        const res = await fetch(`/api/calibration/fidelity/latest?underlying=${{underlying}}`);
+        const res = await fetch(`/calibration/fidelity/latest?underlying=${{underlying}}`);
         if (!res.ok) throw new Error(`HTTP ${{res.status}}`);
         const data = await res.json();
 
@@ -6672,7 +6672,8 @@ def render_dashboard_html() -> str:
           return;
         }}
 
-        gateEl.innerHTML = fidelityGateBadge(report.gate);
+  const gate = report.gate_label || report.gate;
+  gateEl.innerHTML = fidelityGateBadge(gate);
         scoreEl.textContent = formatFidelityScore(report.overall_score);
         runIdEl.textContent = report.run_id || '-';
         tsEl.textContent = report.timestamp ? new Date(report.timestamp).toLocaleString() : '-';
@@ -6695,7 +6696,7 @@ def render_dashboard_html() -> str:
       tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;color:#666;">Loading...</td></tr>';
 
       try {{
-        const res = await fetch(`/api/calibration/fidelity/history?underlying=${{underlying}}&limit=10`);
+        const res = await fetch(`/calibration/fidelity/history?underlying=${{underlying}}&limit=10`);
         if (!res.ok) throw new Error(`HTTP ${{res.status}}`);
         const data = await res.json();
 
@@ -6708,7 +6709,7 @@ def render_dashboard_html() -> str:
         tbody.innerHTML = runs.map(r => {{
           const ts = r.timestamp ? new Date(r.timestamp).toLocaleString() : 'N/A';
           const runId = r.run_id || '-';
-          const gate = fidelityGateBadge(r.gate);
+          const gate = fidelityGateBadge(r.gate_label || r.gate);
           const score = formatFidelityScore(r.overall_score);
           return `<tr>
             <td style="font-size:0.8rem;white-space:nowrap;">${{ts}}</td>
@@ -6778,8 +6779,8 @@ def render_dashboard_html() -> str:
 
       try {{
         const [btcRes, ethRes] = await Promise.all([
-          fetch('/api/calibration/fidelity/latest?underlying=BTC'),
-          fetch('/api/calibration/fidelity/latest?underlying=ETH'),
+          fetch('/calibration/fidelity/latest?underlying=BTC'),
+          fetch('/calibration/fidelity/latest?underlying=ETH'),
         ]);
 
         const btcData = btcRes.ok ? await btcRes.json() : null;
