@@ -26,6 +26,8 @@ from .models import (
     JobStatus,
     SupervisorJob,
 )
+from .mvp_runner import run_mvp_cycle
+from .trace_store import TraceStore
 from .policy import check_autofix_policy
 from .redact import redact_job_for_api, redact_secrets
 from .runner import VerificationRunner
@@ -1001,3 +1003,36 @@ async def run_supervisor_job(job: SupervisorJob, app: FastAPI) -> None:
         if job.workspace_path:
             repo_name = job.repo_full_name.split("/")[-1]
             await workspace_manager.cleanup_workspace(job.job_id, repo_name)
+
+
+# MVP Endpoints
+
+@app.get("/api/mvp/traces")
+async def list_mvp_traces(request: Request, limit: int = 50):
+    """List recent MVP decision traces."""
+    store = TraceStore()
+    traces = store.list_traces(limit)
+    settings: SupervisorSettings = request.app.state.settings
+    return [redact_job_for_api(t.model_dump(), settings) for t in traces]
+
+
+@app.get("/api/mvp/traces/{trace_id}")
+async def get_mvp_trace(request: Request, trace_id: str):
+    """Get a specific MVP decision trace."""
+    store = TraceStore()
+    trace = store.get_trace(trace_id)
+    if not trace:
+        raise HTTPException(status_code=404, detail="Trace not found")
+    settings: SupervisorSettings = request.app.state.settings
+    return redact_job_for_api(trace.model_dump(), settings)
+
+
+@app.post("/api/mvp/run")
+async def run_mvp(request: Request):
+    """Trigger an MVP cycle manually (localhost only)."""
+    if not _is_local_request(request):
+        raise HTTPException(status_code=403, detail="Localhost only")
+    
+    # Run synchronously for MVP simplicity
+    trace = run_mvp_cycle(run_reason="manual")
+    return {"ok": True, "trace_id": trace.trace_id}
