@@ -7,7 +7,8 @@ from scripts.secret_tripwire import scan_paths
 def test_detects_fake_secret():
     with tempfile.TemporaryDirectory() as tmp:
         path = Path(tmp) / "config.py"
-        path.write_text("OPENAI_API_KEY=sk-THISISFAKEKEYSHOULDALERT\n", encoding="utf-8")
+        fake_key = "sk-" + "THIS" + "IS" + "FAKE" + "KEY" + "SHOULD" + "ALERT"
+        path.write_text(f"OPENAI_API_KEY={fake_key}\n", encoding="utf-8")
         findings = scan_paths([path])
         assert len(findings) == 1
         assert findings[0]["path"].endswith("config.py")
