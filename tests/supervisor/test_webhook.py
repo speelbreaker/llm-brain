@@ -3,119 +3,104 @@
 import hashlib
 import hmac
 
-import pytest
 
 from src.supervisor.github import verify_signature
 
 
 class TestWebhookSignature:
     """Tests for GitHub webhook signature validation."""
-    
+
     def test_valid_signature_accepted(self):
         """Test that valid HMAC SHA-256 signature is accepted."""
         secret = "test_secret_key"
         payload = b'{"action": "opened", "pull_request": {}}'
-        
-        expected = hmac.new(
-            secret.encode("utf-8"),
-            payload,
-            hashlib.sha256
-        ).hexdigest()
+
+        expected = hmac.new(secret.encode("utf-8"), payload, hashlib.sha256).hexdigest()
         signature = f"sha256={expected}"
-        
+
         assert verify_signature(payload, signature, secret) is True
-    
+
     def test_invalid_signature_rejected(self):
         """Test that invalid signature is rejected."""
         secret = "test_secret_key"
         payload = b'{"action": "opened", "pull_request": {}}'
-        
-        wrong_signature = "sha256=0000000000000000000000000000000000000000000000000000000000000000"
-        
+
+        wrong_signature = (
+            "sha256=0000000000000000000000000000000000000000000000000000000000000000"
+        )
+
         assert verify_signature(payload, wrong_signature, secret) is False
-    
+
     def test_missing_signature_rejected(self):
         """Test that missing signature is rejected."""
         secret = "test_secret_key"
         payload = b'{"action": "opened"}'
-        
+
         assert verify_signature(payload, "", secret) is False
-    
+
     def test_wrong_prefix_rejected(self):
         """Test that signature with wrong prefix is rejected."""
         secret = "test_secret_key"
         payload = b'{"action": "opened"}'
-        
-        expected = hmac.new(
-            secret.encode("utf-8"),
-            payload,
-            hashlib.sha256
-        ).hexdigest()
-        
+
+        expected = hmac.new(secret.encode("utf-8"), payload, hashlib.sha256).hexdigest()
+
         assert verify_signature(payload, f"md5={expected}", secret) is False
         assert verify_signature(payload, expected, secret) is False
-    
+
     def test_modified_payload_rejected(self):
         """Test that modified payload fails validation."""
         secret = "test_secret_key"
         original_payload = b'{"action": "opened"}'
         modified_payload = b'{"action": "closed"}'
-        
+
         signature = hmac.new(
-            secret.encode("utf-8"),
-            original_payload,
-            hashlib.sha256
+            secret.encode("utf-8"), original_payload, hashlib.sha256
         ).hexdigest()
-        
-        assert verify_signature(modified_payload, f"sha256={signature}", secret) is False
-    
+
+        assert (
+            verify_signature(modified_payload, f"sha256={signature}", secret) is False
+        )
+
     def test_wrong_secret_rejected(self):
         """Test that wrong secret fails validation."""
         correct_secret = "correct_secret"
         wrong_secret = "wrong_secret"
         payload = b'{"action": "opened"}'
-        
+
         signature = hmac.new(
-            correct_secret.encode("utf-8"),
-            payload,
-            hashlib.sha256
+            correct_secret.encode("utf-8"), payload, hashlib.sha256
         ).hexdigest()
-        
+
         assert verify_signature(payload, f"sha256={signature}", wrong_secret) is False
-    
+
     def test_empty_secret_rejected(self):
         """Test that empty secret always fails (P0 critical: empty-secret bypass)."""
         payload = b'{"action": "opened"}'
-        
-        empty_secret_sig = hmac.new(
-            b"",
-            payload,
-            hashlib.sha256
-        ).hexdigest()
-        
+
+        empty_secret_sig = hmac.new(b"", payload, hashlib.sha256).hexdigest()
+
         assert verify_signature(payload, f"sha256={empty_secret_sig}", "") is False
         assert verify_signature(payload, "", "") is False
-    
+
     def test_whitespace_only_secret_rejected(self):
         """Test that whitespace-only secret is rejected (P0 critical: bypass prevention)."""
         payload = b'{"action": "opened"}'
-        
+
         whitespace_secrets = ["   ", "\t", "\n", " \t\n "]
         for ws_secret in whitespace_secrets:
             ws_sig = hmac.new(
-                ws_secret.encode("utf-8"),
-                payload,
-                hashlib.sha256
+                ws_secret.encode("utf-8"), payload, hashlib.sha256
             ).hexdigest()
-            
+
             assert verify_signature(payload, f"sha256={ws_sig}", ws_secret) is False, (
                 f"Whitespace-only secret '{repr(ws_secret)}' should be rejected"
             )
-    
+
     def test_short_signature_rejected(self):
         """Test that signature with wrong length is rejected."""
         secret = "test_secret_key"
         payload = b'{"action": "opened"}'
-        
+
         assert verify_signature(payload, "sha256=abc123", secret) is False
         assert verify_signature(payload, "sha256=", secret) is False
