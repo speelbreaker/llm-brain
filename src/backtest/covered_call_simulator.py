@@ -23,6 +23,7 @@ from .pricing import bs_call_price, bs_call_delta, get_synthetic_iv, compute_rea
 from src.models import MarketContext
 from src.metrics.volatility import compute_ivrv_ratio
 from src.scoring.candidates import score_option_candidate
+from .units import assert_premium_usd_sane
 
 State = Dict[str, Any]
 PolicyFn = Callable[[State], bool]
@@ -442,6 +443,9 @@ class CoveredCallSimulator:
         if spot_df.empty:
             return None
 
+        spot_at_open = float(spot_df["close"].iloc[0])
+        assert_premium_usd_sane(open_price, spot_at_open, context=f"simulate_single_call {target.instrument_name}")
+
         opt_df = ds.get_option_ohlc(
             instrument_name=target.instrument_name,
             start=decision_time,
@@ -703,6 +707,9 @@ class CoveredCallSimulator:
             open_price = float(option_snapshot.mark_price or 0.0)
             if open_price <= 0:
                 return None
+
+            spot_at_open = float(spot_df["close"].iloc[0])
+            assert_premium_usd_sane(open_price, spot_at_open, context=f"open {instrument_name}")
             
             opt_df = ds.get_option_ohlc(
                 instrument_name=instrument_name,

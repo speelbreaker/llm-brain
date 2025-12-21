@@ -15,6 +15,7 @@ import numpy as np
 
 from .data_source import Timeframe
 from .types import OptionSnapshot
+from .units import premium_underlying_to_usd, assert_premium_usd_sane
 
 if TYPE_CHECKING:
     pass
@@ -191,6 +192,8 @@ class LiveDeribitDataSource:
         
         for _, row in df.iterrows():
             try:
+                spot = row.get("underlying_price")
+                spot = float(spot) if pd.notna(spot) else 0.0
                 expiry_ts = row.get("expiry_timestamp")
                 if pd.notna(expiry_ts):
                     expiry_dt = datetime.fromtimestamp(float(expiry_ts), tz=timezone.utc)
@@ -220,10 +223,21 @@ class LiveDeribitDataSource:
                         iv = iv / 100.0
                 
                 mark_price = row.get("mark_price")
-                if pd.isna(mark_price):
-                    mark_price = None
+                mark_price_usd = row.get("mark_price_usd")
+                if pd.notna(mark_price_usd):
+                    mark_price = float(mark_price_usd)
                 else:
-                    mark_price = float(mark_price)
+                    if pd.isna(mark_price):
+                        mark_price = None
+                    else:
+                        mark_price = premium_underlying_to_usd(float(mark_price), spot)
+
+                if mark_price is not None and spot > 0:
+                    assert_premium_usd_sane(
+                        mark_price,
+                        spot,
+                        context=f"{self._canonical_underlying} {row.get('instrument_name', '')} @ {snap_time}",
+                    )
                 
                 option_type = row.get("option_type", "C")
                 kind = "call" if str(option_type).upper().startswith("C") else "put"
@@ -279,7 +293,14 @@ class LiveDeribitDataSource:
         
         df = df.sort_values("harvest_time")
         
-        ohlc = df.groupby("harvest_time")["mark_price"].agg(
+        price_col = "mark_price_usd" if "mark_price_usd" in df.columns else "mark_price"
+        if price_col == "mark_price" and "underlying_price" in df.columns:
+            df["_mark_price_usd"] = pd.to_numeric(df["mark_price"], errors="coerce") * pd.to_numeric(
+                df["underlying_price"], errors="coerce"
+            )
+            price_col = "_mark_price_usd"
+
+        ohlc = df.groupby("harvest_time")[price_col].agg(
             open="first",
             high="max",
             low="min",

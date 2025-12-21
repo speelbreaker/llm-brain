@@ -795,6 +795,12 @@ def run_calibration_with_policy_endpoint(request: ForceApplyCalibrationRequest) 
             min_dte=request.min_dte,
             max_dte=request.max_dte,
         )
+
+        why: List[str] = []
+        if decision.reason:
+            why = [p.strip() for p in decision.reason.split(";") if p.strip()]
+        if not why:
+            why = ["no_reason_provided"]
         
         return JSONResponse(content={
             "status": "ok",
@@ -804,6 +810,12 @@ def run_calibration_with_policy_endpoint(request: ForceApplyCalibrationRequest) 
             "smoothed_iv_multiplier": record.smoothed_global_multiplier,
             "applied": record.applied,
             "applied_reason": record.applied_reason,
+            "decision": {
+                "should_apply": decision.should_apply,
+                "applied": record.applied,
+                "why": why,
+                "details": decision.details or {},
+            },
             "sample_size": record.sample_size,
             "timestamp": record.timestamp.isoformat() if record.timestamp else None,
         })

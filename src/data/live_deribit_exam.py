@@ -195,6 +195,41 @@ def load_and_stitch(files: List[Tuple[Path, datetime]]) -> pd.DataFrame:
     return combined
 
 
+def _add_usd_premium_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """Add *_usd premium columns derived from BTC-quoted premiums.
+
+    Harvester snapshots store option premiums in underlying units (e.g., BTC).
+    For linear USDC backtests, we need USD premiums.
+
+    Adds (if inputs exist):
+    - mark_price_usd
+    - best_bid_price_usd
+    - best_ask_price_usd
+    """
+    if df.empty:
+        return df
+
+    if "underlying_price" not in df.columns:
+        return df
+
+    spot = pd.to_numeric(df["underlying_price"], errors="coerce")
+    spot = spot.where(spot > 0)
+
+    conversions = {
+        "mark_price": "mark_price_usd",
+        "best_bid_price": "best_bid_price_usd",
+        "best_ask_price": "best_ask_price_usd",
+    }
+
+    for src_col, dst_col in conversions.items():
+        if src_col not in df.columns:
+            continue
+        prem = pd.to_numeric(df[src_col], errors="coerce")
+        df[dst_col] = prem * spot
+
+    return df
+
+
 def compute_summary(
     underlying: str,
     num_files: int,
@@ -298,6 +333,8 @@ def build_live_deribit_exam_dataset(
     
     if df.empty:
         raise ValueError("No data after stitching. DataFrame is empty.")
+
+    df = _add_usd_premium_columns(df)
     
     summary = compute_summary(underlying, len(files), df, start_date, end_date)
     

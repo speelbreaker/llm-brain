@@ -11,6 +11,7 @@ from unittest.mock import patch
 from src.config import Settings
 from src.healthcheck import (
     CheckStatus,
+    HealthCheckResult,
     check_config,
     check_risk_config,
     check_llm_config,
@@ -144,14 +145,14 @@ class TestCheckLLMConfig:
     
     @patch.dict(os.environ, {}, clear=True)
     def test_llm_enabled_without_key_returns_fail(self):
-        """LLM enabled without API key should return FAIL."""
+        """LLM enabled without API key should return WARN."""
         for key in ["OPENAI_API_KEY", "AI_INTEGRATIONS_OPENAI_API_KEY"]:
             if key in os.environ:
                 del os.environ[key]
         
         cfg = Settings(llm_enabled=True)
         result = check_llm_config(cfg)
-        assert result.status == CheckStatus.FAIL
+        assert result.status == CheckStatus.WARN
         assert "OPENAI_API_KEY not set" in result.detail
     
     @patch.dict(os.environ, {"OPENAI_API_KEY": "sk-test-key"}, clear=False)
@@ -243,7 +244,13 @@ class TestRunAgentHealthcheck:
         mock_client.return_value.get_account_summary.return_value = {"equity": 10000}
         
         with patch("src.healthcheck.check_state_builder") as mock_state:
-            mock_state.return_value = type("R", (), {"name": "state_builder", "status": CheckStatus.OK, "detail": "ok"})()
+            mock_state.return_value = HealthCheckResult(
+                name="state_builder",
+                status=CheckStatus.OK,
+                detail="ok",
+                severity="OK",
+                can_trade=True,
+            )
             
             cfg = Settings(
                 deribit_env="testnet",
@@ -252,7 +259,7 @@ class TestRunAgentHealthcheck:
             )
             result = run_agent_healthcheck(cfg)
             
-            has_warn = any(r["status"] == "warn" for r in result["results"])
+            has_warn = any(r["status"] == "WARN" for r in result["results"])
             assert has_warn
             if result["overall_status"] != "FAIL":
                 assert result["overall_status"] == "WARN"

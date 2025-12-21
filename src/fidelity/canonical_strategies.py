@@ -31,9 +31,81 @@ def _closest_by_delta_and_dte(
     want_call: bool,
     target_abs_delta: float,
     target_dte_days: float,
+    spot: Optional[float] = None,
+    diag: Optional[Dict[str, int]] = None,
+    moneyness_call_target: float = 1.12,
+    moneyness_put_target: float = 0.88,
     delta_tol: float = 0.10,
     dte_tol_days: float = 10.0,
 ) -> Optional[OptionQuote]:
+    if diag is None:
+        diag = {}
+
+    def inc(k: str, n: int = 1) -> None:
+        diag[k] = int(diag.get(k, 0)) + int(n)
+
+    if not options:
+        inc("no_options_in_snapshot")
+        return None
+
+    # First filter to the DTE band and option side; we will then choose by delta
+    # if available, otherwise fall back to moneyness selection.
+    dte_band: List[OptionQuote] = []
+    missing_delta_in_band = 0
+    missing_iv_in_band = 0
+    missing_mark_price_in_band = 0
+
+    for q in options:
+        if want_call and not _is_call(q):
+            continue
+        if (not want_call) and not _is_put(q):
+            continue
+        if q.expiry_ts <= snapshot_ts:
+            continue
+        dte = _dte_days(snapshot_ts, q.expiry_ts)
+        if abs(dte - target_dte_days) > float(dte_tol_days):
+            continue
+        dte_band.append(q)
+        if q.delta is None:
+            missing_delta_in_band += 1
+        if q.mark_iv is None:
+            missing_iv_in_band += 1
+        if float(q.mark_price or 0.0) <= 0:
+            missing_mark_price_in_band += 1
+
+    if not dte_band:
+        inc("no_contract_in_dte_band")
+        return None
+
+    if missing_iv_in_band:
+        inc("missing_iv", missing_iv_in_band)
+    if missing_mark_price_in_band:
+        inc("missing_mark_price", missing_mark_price_in_band)
+
+    have_any_delta = any(q.delta is not None for q in dte_band)
+    if not have_any_delta:
+        inc("missing_delta", missing_delta_in_band or len(dte_band))
+        spot_v = float(spot or 0.0)
+        if spot_v <= 0:
+            inc("missing_spot")
+            return None
+        target_m = float(moneyness_call_target if want_call else moneyness_put_target)
+        best_m: Optional[Tuple[float, OptionQuote]] = None
+        for q in dte_band:
+            strike = float(q.strike or 0.0)
+            if strike <= 0:
+                continue
+            m = strike / spot_v
+            score = abs(m - target_m)
+            if best_m is None or score < best_m[0]:
+                best_m = (score, q)
+        if best_m is None:
+            inc("no_contract_in_moneyness_band")
+            return None
+        inc("moneyness_fallback_used")
+        return best_m[1]
+
+    # Delta-based selection.
     best: Optional[Tuple[float, OptionQuote]] = None
     for q in options:
         if want_call and not _is_call(q):
@@ -53,6 +125,12 @@ def _closest_by_delta_and_dte(
         score = abs(ad - target_abs_delta) + 0.01 * abs(dte - target_dte_days)
         if best is None or score < best[0]:
             best = (score, q)
+    if not best:
+        inc("no_contract_in_delta_band")
+        # We had a DTE band match but delta constraints prevented selection.
+        # If many options are missing delta, record that as a clue.
+        if missing_delta_in_band:
+            inc("missing_delta", missing_delta_in_band)
     return best[1] if best else None
 
 
@@ -147,24 +225,57 @@ def run_strategy(
     slippage_bps: float = 0.0,
     use_mid: bool = True,
 ) -> List[TradeResult]:
-    """Run a deterministic yardstick strategy.
+    trades, _ = run_strategy_with_diagnostics(
+        spec=spec,
+        snapshots=snapshots,
+        slippage_bps=slippage_bps,
+        use_mid=use_mid,
+    )
+    return trades
 
-    Entry schedule (MVP): first snapshot of each UTC day from the provided snapshots.
-    Exit (MVP): close after N days or at expiry (whichever comes first).
+
+def run_strategy_with_diagnostics(
+    *,
+    spec: StrategySpec,
+    snapshots: Sequence[MarketSnapshot],
+    slippage_bps: float = 0.0,
+    use_mid: bool = True,
+    moneyness_call_target: float = 1.12,
+    moneyness_put_target: float = 0.88,
+) -> Tuple[List[TradeResult], Dict[str, Any]]:
+    """Run a deterministic yardstick strategy and return diagnostics.
+
+    Diagnostics are intentionally lightweight counters so the suite can explain
+    why no trades were opened.
     """
-    if not snapshots:
-        return []
+    diag: Dict[str, Any] = {
+        "strategy": spec.name,
+        "kind": spec.kind,
+        "attempted_entries": 0,
+        "opened_trades": 0,
+        "skip_reasons": {},
+    }
 
-    # We assume snapshots are already one-per-day in chronological order.
+    def inc(reason: str, n: int = 1) -> None:
+        sr = diag["skip_reasons"]
+        sr[reason] = int(sr.get(reason, 0)) + int(n)
+
+    if not snapshots:
+        inc("no_snapshots")
+        return [], diag
+
     trades: List[TradeResult] = []
     n = len(snapshots)
 
     for i, open_snap in enumerate(snapshots):
+        diag["attempted_entries"] = int(diag["attempted_entries"]) + 1
         spot0 = float(open_snap.spot or 0.0)
         if spot0 <= 0:
+            inc("missing_spot")
             continue
 
         legs: List[Tuple[str, OptionQuote]] = []  # (side, quote)
+        sel_diag: Dict[str, int] = {}
 
         if spec.kind == "short_call":
             q = _closest_by_delta_and_dte(
@@ -173,10 +284,18 @@ def run_strategy(
                 want_call=True,
                 target_abs_delta=spec.entry_target_abs_delta,
                 target_dte_days=spec.entry_target_dte_days,
+                spot=spot0,
+                diag=sel_diag,
+                moneyness_call_target=moneyness_call_target,
+                moneyness_put_target=moneyness_put_target,
             )
             if not q:
+                for k, v in sel_diag.items():
+                    inc(k, v)
                 continue
             legs = [("sell", q)]
+            for k, v in sel_diag.items():
+                inc(k, v)
 
         elif spec.kind == "short_put":
             q = _closest_by_delta_and_dte(
@@ -185,10 +304,18 @@ def run_strategy(
                 want_call=False,
                 target_abs_delta=spec.entry_target_abs_delta,
                 target_dte_days=spec.entry_target_dte_days,
+                spot=spot0,
+                diag=sel_diag,
+                moneyness_call_target=moneyness_call_target,
+                moneyness_put_target=moneyness_put_target,
             )
             if not q:
+                for k, v in sel_diag.items():
+                    inc(k, v)
                 continue
             legs = [("sell", q)]
+            for k, v in sel_diag.items():
+                inc(k, v)
 
         elif spec.kind == "short_strangle":
             qc = _closest_by_delta_and_dte(
@@ -197,6 +324,10 @@ def run_strategy(
                 want_call=True,
                 target_abs_delta=spec.entry_target_abs_delta,
                 target_dte_days=spec.entry_target_dte_days,
+                spot=spot0,
+                diag=sel_diag,
+                moneyness_call_target=moneyness_call_target,
+                moneyness_put_target=moneyness_put_target,
             )
             qp = _closest_by_delta_and_dte(
                 options=open_snap.options,
@@ -204,11 +335,18 @@ def run_strategy(
                 want_call=False,
                 target_abs_delta=spec.entry_target_abs_delta,
                 target_dte_days=spec.entry_target_dte_days,
+                spot=spot0,
+                diag=sel_diag,
+                moneyness_call_target=moneyness_call_target,
+                moneyness_put_target=moneyness_put_target,
             )
             if not qc or not qp:
+                for k, v in sel_diag.items():
+                    inc(k, v)
                 continue
-            # Align expiries roughly by using the nearer expiry.
             legs = [("sell", qc), ("sell", qp)]
+            for k, v in sel_diag.items():
+                inc(k, v)
 
         elif spec.kind == "put_credit_spread":
             short_put = _closest_by_delta_and_dte(
@@ -217,6 +355,10 @@ def run_strategy(
                 want_call=False,
                 target_abs_delta=spec.entry_target_abs_delta,
                 target_dte_days=spec.entry_target_dte_days,
+                spot=spot0,
+                diag=sel_diag,
+                moneyness_call_target=moneyness_call_target,
+                moneyness_put_target=moneyness_put_target,
             )
             long_put = _closest_by_delta_and_dte(
                 options=open_snap.options,
@@ -224,12 +366,20 @@ def run_strategy(
                 want_call=False,
                 target_abs_delta=0.10,
                 target_dte_days=spec.entry_target_dte_days,
+                spot=spot0,
+                diag=sel_diag,
+                moneyness_call_target=moneyness_call_target,
+                moneyness_put_target=moneyness_put_target,
                 delta_tol=0.15,
                 dte_tol_days=20.0,
             )
             if not short_put or not long_put:
+                for k, v in sel_diag.items():
+                    inc(k, v)
                 continue
             legs = [("sell", short_put), ("buy", long_put)]
+            for k, v in sel_diag.items():
+                inc(k, v)
 
         elif spec.kind == "call_debit_spread":
             long_call = _closest_by_delta_and_dte(
@@ -238,6 +388,10 @@ def run_strategy(
                 want_call=True,
                 target_abs_delta=spec.entry_target_abs_delta,
                 target_dte_days=spec.entry_target_dte_days,
+                spot=spot0,
+                diag=sel_diag,
+                moneyness_call_target=moneyness_call_target,
+                moneyness_put_target=moneyness_put_target,
             )
             short_call = _closest_by_delta_and_dte(
                 options=open_snap.options,
@@ -245,12 +399,20 @@ def run_strategy(
                 want_call=True,
                 target_abs_delta=0.10,
                 target_dte_days=spec.entry_target_dte_days,
+                spot=spot0,
+                diag=sel_diag,
+                moneyness_call_target=moneyness_call_target,
+                moneyness_put_target=moneyness_put_target,
                 delta_tol=0.15,
                 dte_tol_days=20.0,
             )
             if not long_call or not short_call:
+                for k, v in sel_diag.items():
+                    inc(k, v)
                 continue
             legs = [("buy", long_call), ("sell", short_call)]
+            for k, v in sel_diag.items():
+                inc(k, v)
 
         elif spec.kind == "calendar_call":
             short_call = _closest_by_delta_and_dte(
@@ -259,6 +421,10 @@ def run_strategy(
                 want_call=True,
                 target_abs_delta=spec.entry_target_abs_delta,
                 target_dte_days=14.0,
+                spot=spot0,
+                diag=sel_diag,
+                moneyness_call_target=moneyness_call_target,
+                moneyness_put_target=moneyness_put_target,
                 dte_tol_days=14.0,
             )
             long_call = _closest_by_delta_and_dte(
@@ -267,17 +433,25 @@ def run_strategy(
                 want_call=True,
                 target_abs_delta=spec.entry_target_abs_delta,
                 target_dte_days=30.0,
+                spot=spot0,
+                diag=sel_diag,
+                moneyness_call_target=moneyness_call_target,
+                moneyness_put_target=moneyness_put_target,
                 dte_tol_days=20.0,
             )
             if not short_call or not long_call:
+                for k, v in sel_diag.items():
+                    inc(k, v)
                 continue
             legs = [("sell", short_call), ("buy", long_call)]
+            for k, v in sel_diag.items():
+                inc(k, v)
 
         else:
+            inc("unsupported_strategy_kind")
             continue
 
         # Close after N days OR at expiry (whichever comes first).
-        # For multi-leg strategies, use the earliest expiry.
         min_expiry_ts = min(int(q.expiry_ts) for _, q in legs)
         close_idx_hold = min(n - 1, i + max(1, int(spec.hold_days)))
         close_idx_expiry = n - 1
@@ -309,7 +483,6 @@ def run_strategy(
                 dq_status = status
 
         def close_price_for_leg(q: OptionQuote, *, side: str) -> Optional[float]:
-            # If we're at/after expiry and have spot, price as intrinsic.
             if int(close_snap.ts) >= int(q.expiry_ts):
                 spot_close = float(close_snap.spot or 0.0)
                 if spot_close > 0:
@@ -335,11 +508,9 @@ def run_strategy(
             exit_price = close_price_for_leg(q, side=exit_side)
             if is_valid and exit_price is not None:
                 if side == "sell":
-                    # Short option: receive premium, pay to buy back.
                     entry_pnl += entry
                     exit_pnl += float(exit_price)
                 else:
-                    # Long option: pay premium, receive on sell.
                     entry_pnl -= entry
                     exit_pnl -= float(exit_price)
             meta["legs"].append(
@@ -368,5 +539,6 @@ def run_strategy(
                 metadata=meta,
             )
         )
+        diag["opened_trades"] = int(diag["opened_trades"]) + 1
 
-    return trades
+    return trades, diag

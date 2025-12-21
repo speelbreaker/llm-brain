@@ -653,7 +653,7 @@ def render_dashboard_html() -> str:
 
     <div class="section">
       <h2>Synthetic Fidelity</h2>
-      <p style="color:#666;margin-bottom:1rem;">Latest PnL-parity gate/score for BTC and ETH (from the fidelity suite).</p>
+      <p style="color:#666;margin-bottom:1rem;">Latest PnL-parity gate/score (from the Backtest Lab fidelity suite).</p>
       <div style="margin-bottom: 8px;">
         <button onclick="refreshFidelityDashboard()" style="background:#1565c0;color:#fff;border:none;padding:6px 12px;border-radius:4px;cursor:pointer;">Refresh Fidelity</button>
       </div>
@@ -662,30 +662,29 @@ def render_dashboard_html() -> str:
           <thead>
             <tr>
               <th>Metric</th>
-              <th>BTC</th>
-              <th>ETH</th>
+              <th>Value</th>
             </tr>
           </thead>
           <tbody>
             <tr>
               <td style="font-weight:600;">Gate</td>
-              <td id="fidelity-btc-gate">Loading...</td>
-              <td id="fidelity-eth-gate">Loading...</td>
+              <td id="fidelity-dashboard-gate">Loading...</td>
             </tr>
             <tr>
               <td style="font-weight:600;">Overall Score</td>
-              <td id="fidelity-btc-score">-</td>
-              <td id="fidelity-eth-score">-</td>
+              <td id="fidelity-dashboard-score">-</td>
             </tr>
             <tr>
               <td style="font-weight:600;">Run ID</td>
-              <td id="fidelity-btc-run" style="font-family:monospace;font-size:0.85rem;">-</td>
-              <td id="fidelity-eth-run" style="font-family:monospace;font-size:0.85rem;">-</td>
+              <td id="fidelity-dashboard-run" style="font-family:monospace;font-size:0.85rem;">-</td>
             </tr>
             <tr>
               <td style="font-weight:600;">Timestamp</td>
-              <td id="fidelity-btc-ts">-</td>
-              <td id="fidelity-eth-ts">-</td>
+              <td id="fidelity-dashboard-ts">-</td>
+            </tr>
+            <tr>
+              <td style="font-weight:600;">Underlying</td>
+              <td id="fidelity-dashboard-underlying">-</td>
             </tr>
           </tbody>
         </table>
@@ -2045,18 +2044,11 @@ def render_dashboard_html() -> str:
       <div class="card" style="margin-top:1rem;border-left:4px solid #1565c0;">
         <h3 style="margin-top:0;color:#1565c0;">Synthetic Fidelity (PnL Parity)</h3>
         <p style="color:#666;font-size:0.9rem;margin-bottom:12px;">
-          Shows the latest Synthetic Fidelity gate/score and recent run history.
-          Runs are produced by <code>scripts/run_fidelity_suite.py</code> and stored on disk.
+          Shows the latest Synthetic Fidelity gate/score.
+          Runs are produced by <code>scripts/run_fidelity_from_lab.py</code> and stored on disk.
         </p>
 
         <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:12px;">
-          <label>
-            Underlying:
-            <select id="fidelity-underlying" style="padding:6px 12px;border-radius:4px;border:1px solid #ccc;">
-              <option value="BTC">BTC</option>
-              <option value="ETH">ETH</option>
-            </select>
-          </label>
           <button onclick="refreshFidelityUI()" style="background:#1565c0;color:#fff;border:none;padding:6px 12px;border-radius:4px;cursor:pointer;">
             Refresh Fidelity
           </button>
@@ -2081,24 +2073,7 @@ def render_dashboard_html() -> str:
           </div>
         </div>
 
-        <div id="fidelity-component-scores" style="font-size:0.85rem;color:#555;margin-bottom:12px;"></div>
-
-        <h4 style="margin:0 0 8px 0;color:#555;">Recent Fidelity Runs</h4>
-        <div style="overflow-x:auto;max-height:240px;overflow-y:auto;">
-          <table class="steps-table" style="font-size:0.85rem;">
-            <thead>
-              <tr>
-                <th>Time</th>
-                <th>Run ID</th>
-                <th>Gate</th>
-                <th>Overall</th>
-              </tr>
-            </thead>
-            <tbody id="fidelity-history-body">
-              <tr><td colspan="4" style="text-align:center;color:#666;">Loading...</td></tr>
-            </tbody>
-          </table>
-        </div>
+        <div id="fidelity-component-scores" style="font-size:0.85rem;color:#555;margin-bottom:0;"></div>
       </div>
       
       <div class="card" style="margin-top:1rem;">
@@ -2685,6 +2660,15 @@ def render_dashboard_html() -> str:
             <summary style="cursor: pointer; font-size: 0.8rem; color: #666;">Show details</summary>
             <pre id="healthcheck-details-content" style="font-size: 0.75rem; background: white; padding: 0.5rem; border-radius: 4px; overflow-x: auto; margin-top: 0.5rem;"></pre>
           </details>
+        </div>
+
+        <!-- System Health -->
+        <div style="background: #f8f9fa; padding: 1.25rem; border-radius: 8px; border-left: 4px solid #00695c;">
+          <h3 style="margin: 0 0 0.75rem 0; color: #00695c; font-size: 1rem;">System Health</h3>
+          <div id="ops-health-status-line" style="font-size: 0.85rem; color: #666; margin-bottom: 0.75rem;">Status: loading...</div>
+          <div id="ops-health-summary" style="font-size: 0.85rem; min-height: 2rem; padding: 0.5rem; background: white; border-radius: 4px; margin-bottom: 0.5rem;"></div>
+          <div id="ops-health-details" style="font-size: 0.8rem; color: #555; line-height: 1.4;"></div>
+          <button id="ops-health-run-btn" onclick="runOpsHealthcheck()" style="width: 100%; margin-top: 0.75rem;">Run Ops Healthcheck</button>
         </div>
         
       </div>
@@ -4847,12 +4831,153 @@ def render_dashboard_html() -> str:
       
       // Load LLM & Strategy tuning config
       await loadLLMStrategyConfig();
+
+      // Load ops-grade health status
+      await loadOpsHealthStatus();
       
       // Auto-trigger healthcheck if not run recently
       const now = Date.now();
       if (now - lastHealthcheckTime > HEALTHCHECK_THROTTLE_MS) {{
         lastHealthcheckTime = now;
         runHealthcheck();
+      }}
+    }}
+
+    function formatAgeMinutes(ageMinutes) {{
+      if (ageMinutes === null || ageMinutes === undefined) return 'missing';
+      if (ageMinutes < 60) return `${{Math.round(ageMinutes)}}m`;
+      const hours = Math.floor(ageMinutes / 60);
+      const mins = Math.round(ageMinutes % 60);
+      return mins > 0 ? `${{hours}}h ${{mins}}m` : `${{hours}}h`;
+    }}
+
+    function formatAgeHours(ageHours) {{
+      if (ageHours === null || ageHours === undefined) return 'missing';
+      if (ageHours < 1) return `${{Math.round(ageHours * 60)}}m`;
+      if (ageHours < 24) return `${{ageHours.toFixed(1)}}h`;
+      return `${{(ageHours / 24).toFixed(1)}}d`;
+    }}
+
+    function renderOpsHealthStatus(data) {{
+      const statusEl = document.getElementById('ops-health-status-line');
+      const summaryEl = document.getElementById('ops-health-summary');
+      const detailsEl = document.getElementById('ops-health-details');
+      if (!statusEl || !summaryEl || !detailsEl) return;
+
+      const gateOverall = data.gate_overall || {{}};
+      const globalGate = gateOverall.global || gateOverall || {{}};
+      const overall = globalGate.status || data.overall_status || 'UNKNOWN';
+      const worst = globalGate.severity || data.worst_severity || 'OK';
+      const canTradeRaw = (globalGate.can_trade !== undefined) ? globalGate.can_trade : data.can_trade;
+      const canTrade = canTradeRaw === true ? 'YES' : (canTradeRaw === false ? 'NO' : 'UNKNOWN');
+
+      const byUnderlying = gateOverall.by_underlying || {{}};
+      const perLines = Object.keys(byUnderlying).sort().map(u => {{
+        const g = byUnderlying[u] || {{}};
+        const ct = (g.can_trade === true) ? 'YES' : (g.can_trade === false ? 'NO' : 'UNKNOWN');
+        return `${{u}}: ${{g.status || 'UNKNOWN'}} / ${{g.severity || 'UNKNOWN'}} / ${{ct}}`;
+      }});
+      const suffix = perLines.length ? ` | ${{perLines.join(' | ')}}` : '';
+      statusEl.textContent = `Status: ${{overall}} | Severity: ${{worst}} | Can trade: ${{canTrade}}${{suffix}}`;
+      summaryEl.innerHTML = data.summary ? data.summary : 'No summary available.';
+
+      const esc = (s) => String(s ?? '')
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&#39;');
+
+      const gates = data.gates || [];
+      if (!gates.length) {{
+        detailsEl.innerHTML = data.checked_at
+          ? `Checked: ${{new Date(data.checked_at).toLocaleString()}}`
+          : 'No gate details available.';
+        return;
+      }}
+
+      const sortedGates = [...gates].sort((a, b) => {{
+        const ua = String(a.underlying || '').toUpperCase();
+        const ub = String(b.underlying || '').toUpperCase();
+        if (ua !== ub) return ua.localeCompare(ub);
+        return String(a.name || '').localeCompare(String(b.name || ''));
+      }});
+
+      const rows = sortedGates.map(g => `
+        <tr>
+          <td>${{esc(g.underlying || (g.scope === 'global' ? 'GLOBAL' : ''))}}</td>
+          <td>${{esc(g.name)}}</td>
+          <td>${{esc(g.mode)}}</td>
+          <td>${{esc(g.status)}}</td>
+          <td>${{esc(g.code || '')}}</td>
+          <td>${{esc(g.message || '')}}</td>
+        </tr>
+      `).join('');
+
+      const checkedLine = data.checked_at
+        ? `<div style="margin-top: 0.5rem; color: #666;">Checked: ${{new Date(data.checked_at).toLocaleString()}}</div>`
+        : '';
+
+      detailsEl.innerHTML = `
+        <table style="width: 100%; border-collapse: collapse; font-size: 0.9rem;">
+          <thead>
+            <tr>
+              <th style="text-align:left; border-bottom: 1px solid #ddd; padding: 0.25rem;">Underlying</th>
+              <th style="text-align:left; border-bottom: 1px solid #ddd; padding: 0.25rem;">Name</th>
+              <th style="text-align:left; border-bottom: 1px solid #ddd; padding: 0.25rem;">Mode</th>
+              <th style="text-align:left; border-bottom: 1px solid #ddd; padding: 0.25rem;">Status</th>
+              <th style="text-align:left; border-bottom: 1px solid #ddd; padding: 0.25rem;">Code</th>
+              <th style="text-align:left; border-bottom: 1px solid #ddd; padding: 0.25rem;">Message</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${{rows}}
+          </tbody>
+        </table>
+        ${{checkedLine}}
+      `;
+    }}
+
+    async function loadOpsHealthStatus() {{
+      const statusEl = document.getElementById('ops-health-status-line');
+      const summaryEl = document.getElementById('ops-health-summary');
+      const detailsEl = document.getElementById('ops-health-details');
+      if (!statusEl || !summaryEl || !detailsEl) return;
+
+      summaryEl.innerHTML = '<span style="color: #666;">Loading...</span>';
+      detailsEl.innerHTML = '';
+
+      try {{
+        const res = await fetch('/api/ops/health/status');
+        if (res.status === 404) {{
+          statusEl.textContent = 'Status: no cached health yet';
+          summaryEl.innerHTML = 'No cached health yet.';
+          detailsEl.innerHTML = 'Run the ops healthcheck to populate the cache.';
+          return;
+        }}
+        const data = await res.json();
+        renderOpsHealthStatus(data);
+      }} catch (e) {{
+        statusEl.textContent = 'Status: error';
+        summaryEl.innerHTML = `<span style="color: #c62828;">Error: ${{e.message}}</span>`;
+        detailsEl.innerHTML = '';
+      }}
+    }}
+
+    async function runOpsHealthcheck() {{
+      const summaryEl = document.getElementById('ops-health-summary');
+      if (summaryEl) summaryEl.innerHTML = '<span style="color: #666;">Running ops healthcheck...</span>';
+      try {{
+        const res = await fetch('/api/ops/health/run', {{ method: 'POST' }});
+        if (!res.ok) {{
+          const err = await res.json();
+          if (summaryEl) summaryEl.innerHTML = `<span style="color: #c62828;">${{err.error || 'Healthcheck failed'}}</span>`;
+          return;
+        }}
+        const data = await res.json();
+        renderOpsHealthStatus(data);
+      }} catch (e) {{
+        if (summaryEl) summaryEl.innerHTML = `<span style="color: #c62828;">${{e.message}}</span>`;
       }}
     }}
     
@@ -6647,7 +6772,6 @@ def render_dashboard_html() -> str:
     }}
 
     async function fetchFidelityLatest() {{
-      const underlying = document.getElementById('fidelity-underlying')?.value || 'BTC';
       const gateEl = document.getElementById('fidelity-latest-gate');
       const scoreEl = document.getElementById('fidelity-latest-score');
       const runIdEl = document.getElementById('fidelity-latest-run-id');
@@ -6661,22 +6785,21 @@ def render_dashboard_html() -> str:
       compsEl.textContent = '';
 
       try {{
-        const res = await fetch(`/calibration/fidelity/latest?underlying=${{underlying}}`);
-        if (!res.ok) throw new Error(`HTTP ${{res.status}}`);
-        const data = await res.json();
-
-        const report = data.report;
-        if (!report) {{
+        const res = await fetch(`/api/fidelity/latest`);
+        if (res.status === 404) {{
           gateEl.innerHTML = '<span style="color:#666;">No fidelity run yet</span>';
-          compsEl.innerHTML = '<span style="color:#888;">Run <code>scripts/run_fidelity_suite.py</code> to generate a report.</span>';
+          compsEl.innerHTML = '<span style="color:#888;">No fidelity runs yet. Run <code>scripts/run_fidelity_from_lab.py</code> to generate a report.</span>';
           return;
         }}
+        if (!res.ok) throw new Error(`HTTP ${{res.status}}`);
+        const report = await res.json();
 
-  const gate = report.gate_label || report.gate;
-  gateEl.innerHTML = fidelityGateBadge(gate);
+        const gate = report.gate_label || report.gate;
+        gateEl.innerHTML = fidelityGateBadge(gate);
         scoreEl.textContent = formatFidelityScore(report.overall_score);
         runIdEl.textContent = report.run_id || '-';
-        tsEl.textContent = report.timestamp ? new Date(report.timestamp).toLocaleString() : '-';
+        const ts = report.created_at || report.timestamp;
+        tsEl.textContent = ts ? new Date(ts).toLocaleString() : '-';
 
         const componentScores = report.component_scores || {{}};
         const keys = Object.keys(componentScores);
@@ -6690,85 +6813,52 @@ def render_dashboard_html() -> str:
       }}
     }}
 
-    async function fetchFidelityHistory() {{
-      const underlying = document.getElementById('fidelity-underlying')?.value || 'BTC';
-      const tbody = document.getElementById('fidelity-history-body');
-      tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;color:#666;">Loading...</td></tr>';
-
-      try {{
-        const res = await fetch(`/calibration/fidelity/history?underlying=${{underlying}}&limit=10`);
-        if (!res.ok) throw new Error(`HTTP ${{res.status}}`);
-        const data = await res.json();
-
-        const runs = data.runs || [];
-        if (runs.length === 0) {{
-          tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;color:#666;">No fidelity history yet</td></tr>';
-          return;
-        }}
-
-        tbody.innerHTML = runs.map(r => {{
-          const ts = r.timestamp ? new Date(r.timestamp).toLocaleString() : 'N/A';
-          const runId = r.run_id || '-';
-          const gate = fidelityGateBadge(r.gate_label || r.gate);
-          const score = formatFidelityScore(r.overall_score);
-          return `<tr>
-            <td style="font-size:0.8rem;white-space:nowrap;">${{ts}}</td>
-            <td style="font-family:monospace;font-size:0.8rem;">${{runId}}</td>
-            <td>${{gate}}</td>
-            <td style="font-weight:600;">${{score}}</td>
-          </tr>`;
-        }}).join('');
-      }} catch (err) {{
-        console.error('Failed to fetch fidelity history:', err);
-        tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;color:#c00;">Error loading history</td></tr>';
-      }}
-    }}
-
     async function refreshFidelityUI() {{
-      await Promise.all([
-        fetchFidelityLatest(),
-        fetchFidelityHistory(),
-      ]);
+      await fetchFidelityLatest();
     }}
 
     // ===== Synthetic Fidelity (Dashboard Tab) =====
 
     function _setFidelityDashboardLoading() {{
       const ids = [
-        'fidelity-btc-gate','fidelity-eth-gate',
-        'fidelity-btc-score','fidelity-eth-score',
-        'fidelity-btc-run','fidelity-eth-run',
-        'fidelity-btc-ts','fidelity-eth-ts'
+        'fidelity-dashboard-gate',
+        'fidelity-dashboard-score',
+        'fidelity-dashboard-run',
+        'fidelity-dashboard-ts',
+        'fidelity-dashboard-underlying'
       ];
       ids.forEach(id => {{
         const el = document.getElementById(id);
-        if (el) el.textContent = (id.endsWith('-gate') ? 'Loading...' : '-');
+        if (!el) return;
+        if (id === 'fidelity-dashboard-gate') el.textContent = 'Loading...';
+        else el.textContent = '-';
       }});
     }}
 
-    function _applyFidelityDashboardReport(underlying, report) {{
-      const u = (underlying || '').toUpperCase();
-      const p = u === 'BTC' ? 'btc' : 'eth';
+    function _applyFidelityDashboardReport(report) {{
+      const gateEl = document.getElementById('fidelity-dashboard-gate');
+      const scoreEl = document.getElementById('fidelity-dashboard-score');
+      const runEl = document.getElementById('fidelity-dashboard-run');
+      const tsEl = document.getElementById('fidelity-dashboard-ts');
+      const uEl = document.getElementById('fidelity-dashboard-underlying');
 
-      const gateEl = document.getElementById(`fidelity-${{p}}-gate`);
-      const scoreEl = document.getElementById(`fidelity-${{p}}-score`);
-      const runEl = document.getElementById(`fidelity-${{p}}-run`);
-      const tsEl = document.getElementById(`fidelity-${{p}}-ts`);
-
-      if (!gateEl || !scoreEl || !runEl || !tsEl) return;
+      if (!gateEl || !scoreEl || !runEl || !tsEl || !uEl) return;
 
       if (!report) {{
         gateEl.innerHTML = '<span style="color:#666;">No run yet</span>';
         scoreEl.textContent = '-';
         runEl.textContent = '-';
         tsEl.textContent = '-';
+        uEl.textContent = '-';
         return;
       }}
 
       gateEl.innerHTML = fidelityGateBadge(report.gate_label || report.gate);
       scoreEl.textContent = formatFidelityScore(report.overall_score);
       runEl.textContent = report.run_id || '-';
-      tsEl.textContent = report.timestamp ? new Date(report.timestamp).toLocaleString() : '-';
+      const ts = report.created_at || report.timestamp;
+      tsEl.textContent = ts ? new Date(ts).toLocaleString() : '-';
+      uEl.textContent = report.underlying || '-';
     }}
 
     async function refreshFidelityDashboard() {{
@@ -6778,20 +6868,12 @@ def render_dashboard_html() -> str:
       _setFidelityDashboardLoading();
 
       try {{
-        const [btcRes, ethRes] = await Promise.all([
-          fetch('/calibration/fidelity/latest?underlying=BTC'),
-          fetch('/calibration/fidelity/latest?underlying=ETH'),
-        ]);
+        const res = await fetch('/api/fidelity/latest');
+        const data = res.ok ? await res.json() : null;
+        _applyFidelityDashboardReport(data);
 
-        const btcData = btcRes.ok ? await btcRes.json() : null;
-        const ethData = ethRes.ok ? await ethRes.json() : null;
-
-        _applyFidelityDashboardReport('BTC', btcData ? btcData.report : null);
-        _applyFidelityDashboardReport('ETH', ethData ? ethData.report : null);
-
-        const anyReport = (btcData && btcData.report) || (ethData && ethData.report);
-        if (!anyReport && hintEl) {{
-          hintEl.innerHTML = 'No fidelity runs found yet. Run <code>scripts/run_fidelity_suite.py</code> to generate reports.';
+        if (!data && hintEl) {{
+          hintEl.innerHTML = 'No fidelity runs found yet. Run <code>scripts/run_fidelity_from_lab.py</code> to generate reports.';
         }}
       }} catch (err) {{
         console.error('Failed to refresh fidelity dashboard:', err);

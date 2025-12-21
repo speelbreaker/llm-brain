@@ -17,6 +17,7 @@ from src.healthcheck import (
 )
 from src.config import Settings
 from src.deribit_client import DeribitAPIError
+from src.deribit.base_client import DeribitErrorCode
 
 
 class FakeDeribitClient:
@@ -38,7 +39,7 @@ class FakeDeribitClient:
 
     def get_index_price(self, underlying: str) -> float:
         if self.fail_public:
-            raise DeribitAPIError(-1, "public API unavailable")
+            raise DeribitAPIError(-1, "public API unavailable", error_code=DeribitErrorCode.NETWORK)
         if underlying == "BTC":
             return self.btc_price
         elif underlying == "ETH":
@@ -47,7 +48,7 @@ class FakeDeribitClient:
 
     def get_account_summary(self, currency: str) -> dict:
         if self.fail_private:
-            raise DeribitAPIError(-1, "authentication failed")
+            raise DeribitAPIError(-1, "authentication failed", error_code=DeribitErrorCode.AUTH)
         return {"equity": self.equity, "currency": currency}
 
     def __enter__(self):
@@ -173,7 +174,32 @@ class TestRunAgentHealthcheck:
             MockClient.return_value.__enter__ = MagicMock(return_value=mock_client)
             MockClient.return_value.__exit__ = MagicMock(return_value=False)
 
-            with patch("src.state_builder.build_agent_state", return_value=mock_state):
+            ok_harvest = HealthCheckResult(
+                name="harvest_freshness",
+                status=CheckStatus.OK,
+                detail="harvest ok",
+                severity="OK",
+                can_trade=True,
+            )
+            ok_calibration = HealthCheckResult(
+                name="calibration_freshness",
+                status=CheckStatus.OK,
+                detail="calibration ok",
+                severity="OK",
+                can_trade=True,
+            )
+            ok_fidelity = HealthCheckResult(
+                name="fidelity_gate",
+                status=CheckStatus.OK,
+                detail="fidelity ok",
+                severity="OK",
+                can_trade=True,
+            )
+
+            with patch("src.state_builder.build_agent_state", return_value=mock_state), \
+                patch("src.healthcheck.check_harvest_freshness", return_value=ok_harvest), \
+                patch("src.healthcheck.check_calibration_freshness", return_value=ok_calibration), \
+                patch("src.healthcheck.check_fidelity_gate", return_value=ok_fidelity):
                 result = run_agent_healthcheck(cfg)
 
         assert result["overall_status"] in ("OK", "WARN")
@@ -191,7 +217,7 @@ class TestRunAgentHealthcheck:
 
         assert result["overall_status"] == "FAIL"
         config_result = next(r for r in result["results"] if r["name"] == "config")
-        assert config_result["status"] == "fail"
+        assert config_result["status"] == "FAIL"
 
 
 class TestHealthCheckResult:
@@ -206,17 +232,19 @@ class TestHealthCheckResult:
         assert result.name == "test"
         assert result.status == CheckStatus.OK
         assert result.detail == "all good"
+        assert result.severity == "OK"
+        assert result.can_trade is True
 
 
 class TestCheckStatus:
     """Tests for CheckStatus enum."""
 
     def test_status_values(self):
-        assert CheckStatus.OK.value == "ok"
-        assert CheckStatus.WARN.value == "warn"
-        assert CheckStatus.FAIL.value == "fail"
-        assert CheckStatus.SKIPPED.value == "skipped"
+        assert CheckStatus.OK.value == "OK"
+        assert CheckStatus.WARN.value == "WARN"
+        assert CheckStatus.FAIL.value == "FAIL"
+        assert CheckStatus.SKIPPED.value == "SKIPPED"
 
     def test_status_is_string_enum(self):
         assert isinstance(CheckStatus.OK, str)
-        assert CheckStatus.OK == "ok"
+        assert CheckStatus.OK == "OK"

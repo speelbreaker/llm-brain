@@ -306,7 +306,15 @@ def get_synthetic_iv(
     if regime_state is not None and regime_state.regime is not None:
         return regime_state.iv_atm / 100.0
     
-    return rv * config.synthetic_iv_multiplier
+    try:
+        from src.synthetic.vol_surface import get_vol_surface_config
+
+        vs = get_vol_surface_config()
+        iv_mult = vs.get_iv_multiplier_for_dte(float(config.target_dte))
+    except Exception:
+        iv_mult = 1.0
+
+    return rv * float(config.synthetic_iv_multiplier) * float(iv_mult)
 
 
 def get_atm_iv_from_chain(
@@ -421,7 +429,7 @@ def get_sigma_for_option(
     
     effective_dte = dte_days if dte_days is not None else float(config.target_dte)
     
-    iv_multiplier = vs.get_iv_multiplier_for_dte(effective_dte)
+    iv_multiplier = vs.get_iv_multiplier_for_dte(effective_dte) * float(getattr(config, "synthetic_iv_multiplier", 1.0))
     
     if sigma_mode == "mark_iv_x_multiplier":
         if option_mark_iv is not None and option_mark_iv > 0:

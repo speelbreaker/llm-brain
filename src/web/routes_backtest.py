@@ -314,6 +314,7 @@ def start_backtest(req: BacktestStartRequest) -> JSONResponse:
     """Start a new backtest in the background."""
     from src.backtest.manager import backtest_manager
     from src.backtest.strategy_caps import apply_strategy_overrides
+    from src.web.api_errors import ApiErrorCode, api_error
     
     backtest_type_value = req.backtest_type.value if hasattr(req.backtest_type, 'value') else str(req.backtest_type)
     
@@ -324,7 +325,11 @@ def start_backtest(req: BacktestStartRequest) -> JSONResponse:
         start_dt = datetime.fromisoformat(req.start.replace("Z", "+00:00"))
         end_dt = datetime.fromisoformat(req.end.replace("Z", "+00:00"))
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=f"Invalid date format: {e}")
+        return api_error(
+            status_code=400,
+            code=ApiErrorCode.INVALID_DATE_FORMAT,
+            message=f"Invalid date format: {e}",
+        )
     
     if start_dt.tzinfo is None:
         start_dt = start_dt.replace(tzinfo=timezone.utc)
@@ -332,7 +337,11 @@ def start_backtest(req: BacktestStartRequest) -> JSONResponse:
         end_dt = end_dt.replace(tzinfo=timezone.utc)
     
     if start_dt >= end_dt:
-        raise HTTPException(status_code=400, detail="Start date must be before end date")
+        return api_error(
+            status_code=400,
+            code=ApiErrorCode.INVALID_DATE_RANGE,
+            message="Start date must be before end date",
+        )
 
     is_historical = is_historical_backtest(end_dt)
     
@@ -343,9 +352,10 @@ def start_backtest(req: BacktestStartRequest) -> JSONResponse:
     )
     
     if is_historical and effective_skew_source == SkewSourceType.LIVE:
-        raise HTTPException(
+        return api_error(
             status_code=400,
-            detail=(
+            code=ApiErrorCode.INVALID_REQUEST,
+            message=(
                 "skew_source='live' is not allowed for historical backtests "
                 "(look-ahead bias). Use 'harvested' or 'none'."
             ),
@@ -367,43 +377,25 @@ def start_backtest(req: BacktestStartRequest) -> JSONResponse:
     effective_exit_style = effective.get("exit_style", req.exit_style)
     
     if effective_exit_style == "gregbot_managed" and req.selector_name != "gregbot":
-        raise HTTPException(
+        return api_error(
             status_code=400,
-            detail="exit_style 'gregbot_managed' is only valid for the gregbot selector"
+            code=ApiErrorCode.INVALID_REQUEST,
+            message="exit_style 'gregbot_managed' is only valid for the gregbot selector",
         )
     
     valid_exit_styles = ["hold_to_expiry", "tp_and_roll", "both", "gregbot_managed"]
     if effective_exit_style not in valid_exit_styles:
-        raise HTTPException(status_code=400, detail=f"Invalid exit_style. Must be one of: {valid_exit_styles}")
+        return api_error(
+            status_code=400,
+            code=ApiErrorCode.INVALID_REQUEST,
+            message=f"Invalid exit_style. Must be one of: {valid_exit_styles}",
+        )
     
     warnings = list(validation.warnings)
 
-    # Optional fidelity gate (MVP): controlled via env var.
-    # Values:
-    #   - off/"" (default): no enforcement
-    #   - warn: adds a warning if UNTRUSTED
-    #   - block: refuses to start if UNTRUSTED
     import os
 
     gate_mode = (os.getenv("FIDELITY_GATE_MODE") or "off").strip().lower()
-    fidelity_gate = None
-    try:
-        from src.fidelity.gating import get_fidelity_gate_status
-
-        fidelity_gate = get_fidelity_gate_status(underlying=req.underlying)
-        gate_label = (fidelity_gate.get("gate_label") or "").upper()
-        if gate_mode == "warn" and gate_label == "UNTRUSTED":
-            warnings.append("Fidelity gate is UNTRUSTED (FIDELITY_GATE_MODE=warn).")
-        if gate_mode == "block" and gate_label == "UNTRUSTED":
-            raise HTTPException(
-                status_code=400,
-                detail="Backtest blocked: Fidelity gate is UNTRUSTED (FIDELITY_GATE_MODE=block).",
-            )
-    except HTTPException:
-        raise
-    except Exception:
-        # Never block backtests if the gate check itself fails.
-        fidelity_gate = fidelity_gate or {"available": False}
 
     effective_margin_type = req.margin_type
     effective_settlement_ccy = req.settlement_ccy
@@ -415,6 +407,70 @@ def start_backtest(req: BacktestStartRequest) -> JSONResponse:
         warnings.append(
             "Normalized margin_type/settlement_ccy to linear/USDC for backtest correctness (unit consistency)."
         )
+
+    preflight = backtest_manager.preflight_backtest(
+        underlying=req.underlying,
+        start_date=start_dt,
+        end_date=end_dt,
+        chain_mode=effective_chain_mode,
+        fidelity_gate_mode=gate_mode,
+    )
+
+    warnings.extend(preflight.get("warnings") or [])
+
+    gates = preflight.get("gates") or []
+    gate_overall = preflight.get("gate_overall") or {}
+    gate_overall_underlying = preflight.get("gate_overall_underlying") or {}
+
+    fidelity_gate_result = next(
+        (
+            g
+            for g in gates
+            if str(g.get("key") or "").lower() in ("fidelity", "synthetic_fidelity")
+            or str(g.get("name") or "").lower() == "fidelity"
+        ),
+        None,
+    )
+    fidelity_gate = (preflight.get("data_readiness") or {}).get("fidelity")
+    fidelity_warning = None
+    if fidelity_gate_result is not None:
+        status = str(fidelity_gate_result.get("status") or "").upper()
+        mode = str(fidelity_gate_result.get("mode") or "").lower()
+        if status in ("WARN", "FAIL") and mode == "warn":
+            fidelity_warning = {
+                **(fidelity_gate or {}),
+                "message": str(fidelity_gate_result.get("message") or ""),
+                "code": fidelity_gate_result.get("code"),
+            }
+        elif status == "WARN":
+            fidelity_warning = {
+                **(fidelity_gate or {}),
+                "message": str(fidelity_gate_result.get("message") or ""),
+                "code": fidelity_gate_result.get("code"),
+            }
+
+    if not preflight.get("ok", False):
+        code = str(preflight.get("error_code") or ApiErrorCode.INVALID_REQUEST)
+        message = str(preflight.get("error_message") or "Preflight failed")
+        return api_error(
+            status_code=400,
+            code=code,
+            message=message,
+            details={
+                "data_readiness": preflight.get("data_readiness"),
+                "gates": gates,
+                "gate_overall": gate_overall,
+                "gate_overall_underlying": gate_overall_underlying,
+                "effective_config": {
+                    **validation.effective_config,
+                    "chain_mode": effective_chain_mode,
+                    "skew_source": effective_skew_source.value,
+                    "is_historical": is_historical,
+                },
+            },
+        )
+
+    data_readiness = preflight.get("data_readiness")
 
     started = backtest_manager.start(
         underlying=req.underlying,
@@ -441,14 +497,27 @@ def start_backtest(req: BacktestStartRequest) -> JSONResponse:
     if not started:
         return JSONResponse(
             status_code=409,
-            content={"started": False, "error": "Backtest already running"},
+            content={
+                "started": False,
+                "ok": False,
+                "error": {
+                    "code": ApiErrorCode.BACKTEST_ALREADY_RUNNING,
+                    "message": "Backtest already running",
+                },
+            },
         )
     
     return JSONResponse(content={
         "started": True,
+        "ok": True,
         "backtest_type": "generic",
         "warnings": warnings,
         "fidelity_gate": fidelity_gate,
+        "fidelity_warning": fidelity_warning,
+        "data_readiness": data_readiness,
+        "gates": gates,
+        "gate_overall": gate_overall,
+        "gate_overall_underlying": gate_overall_underlying,
         "effective_config": {
             **validation.effective_config,
             "chain_mode": effective_chain_mode,

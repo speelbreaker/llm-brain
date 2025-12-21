@@ -11,13 +11,20 @@ from typing import Optional
 
 import httpx
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from src.config import settings
 
 router = APIRouter()
+
+
+def _ops_health_run_authorized(request: Request) -> bool:
+    secret = os.environ.get("OPS_HEALTH_RUN_SECRET")
+    if not secret:
+        return True
+    return request.headers.get("X-OPS-HEALTH-SECRET", "") == secret
 
 
 class LLMConfigUpdate(BaseModel):
@@ -427,6 +434,34 @@ def get_system_health_status() -> JSONResponse:
         })
     except Exception as e:
         return JSONResponse(content={"ok": False, "error": str(e)})
+
+
+@router.post("/api/ops/health/run")
+def run_ops_healthcheck(request: Request) -> JSONResponse:
+    """Run ops healthcheck and return cached status."""
+    try:
+        if not _ops_health_run_authorized(request):
+            return JSONResponse(content={"error": "unauthorized"}, status_code=403)
+
+        from src.healthcheck import run_and_cache_healthcheck, get_health_status_for_api
+
+        run_and_cache_healthcheck(settings)
+        return JSONResponse(content=get_health_status_for_api())
+    except Exception as e:
+        return JSONResponse(content={"error": str(e)}, status_code=500)
+
+
+@router.get("/api/ops/health/status")
+def get_ops_health_status() -> JSONResponse:
+    """Get cached ops health status."""
+    try:
+        from src.healthcheck import get_cached_health_status, get_health_status_for_api
+
+        if get_cached_health_status() is None:
+            return JSONResponse(status_code=404, content={"error": "no_healthcheck_cached"})
+        return JSONResponse(content=get_health_status_for_api())
+    except Exception as e:
+        return JSONResponse(content={"error": str(e)}, status_code=500)
 
 
 @router.get("/api/llm_readiness")

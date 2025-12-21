@@ -10,6 +10,23 @@ def get_fidelity_gate_status(*, underlying: str = "BTC") -> Dict[str, Any]:
     """
     u = (underlying or "BTC").upper().strip()
     report = None
+
+    # Preferred source of truth: lab-based file store used by /api/fidelity/*
+    try:
+        from src.backtest import fidelity_store as lab_store
+
+        latest = lab_store.load_latest()
+        if latest:
+            return {
+                "available": True,
+                "underlying": u,
+                "run_id": latest.get("run_id"),
+                "overall_score": latest.get("overall_score"),
+                "gate_label": latest.get("gate_label") or latest.get("gate"),
+            }
+    except Exception:
+        pass
+
     try:
         from src.fidelity.fidelity_store import load_latest_report_mvp
 

@@ -138,6 +138,7 @@ class GlobalMetrics(BaseModel):
     bias_pct: float = Field(..., description="Bias (mean signed error) percentage")
     mae_vol_points: Optional[float] = Field(default=None, description="MAE in absolute vol points")
     vega_weighted_mae_pct: Optional[float] = Field(default=None, description="Vega-weighted MAE percentage")
+    vega_sum: Optional[float] = Field(default=None, description="Sum of positive vega across included samples")
 
 
 class SkewFitResult(BaseModel):

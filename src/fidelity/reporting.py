@@ -30,6 +30,12 @@ class FidelityReport:
     # Run-level coverage & data quality accounting (P0)
     coverage: Dict[str, Any] = field(default_factory=dict)
 
+    # Replay diagnostics: snapshot/chain availability & field presence.
+    replay_diagnostics: Dict[str, Any] = field(default_factory=dict)
+
+    # Strategy diagnostics: per-strategy skip reasons / opened trade counts.
+    strategy_diagnostics: Dict[str, Any] = field(default_factory=dict)
+
     market_live_meta: Dict[str, Any] = field(default_factory=dict)
     market_synth_meta: Dict[str, Any] = field(default_factory=dict)
 
@@ -123,6 +129,7 @@ def write_latest_index(report: FidelityReport, path: Path) -> None:
         "component_scores": report.component_scores,
         "live_data_status": report.live_data_status,
         "coverage": report.coverage,
+        "replay_diagnostics": report.replay_diagnostics,
     }
     _atomic_write_json(path, summary)
 

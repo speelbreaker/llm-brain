@@ -34,6 +34,36 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
+    telegram_bot_token: str = Field(
+        default="",
+        description="Telegram bot token used to send replies",
+    )
+    telegram_allowed_chat_ids: str = Field(
+        default="",
+        description="Comma-separated list of Telegram chat IDs allowed to use the bot",
+    )
+    telegram_webhook_path_secret: str = Field(
+        default="",
+        description="Secret path segment for Telegram webhook routing",
+    )
+
+    openai_api_key: str = Field(
+        default="",
+        description="OpenAI API key for Conversations + Responses API",
+    )
+    openai_model: str = Field(
+        default="gpt-4.1",
+        description="Default OpenAI model used for Telegram responses",
+    )
+    telegram_bootstrap_context: str = Field(
+        default="You are a concise, helpful assistant for Telegram chats.",
+        description="Bootstrap context inserted once per Telegram chat conversation",
+    )
+    telegram_store_path: str = Field(
+        default="data/telegram_conversations.json",
+        description="JSON store path when database is not configured",
+    )
+
     mode: Literal["production", "research"] = Field(
         default="research",
         description="Operating mode: 'production' for mainnet, 'research' for testnet exploration",

@@ -4,7 +4,98 @@ This document lists quick commands to verify that core parts of the system are w
 
 ---
 
-## Quick Smoke Tests
+## Operational Health (watchdog-ready)
+
+This is the ops-grade health model used by automation and dashboards. It is designed for watchdogs and runtime guardrails.
+
+### Endpoints
+
+- `GET /api/ops/health/status` (cached)
+- `POST /api/ops/health/run` (force refresh + cache)
+
+### Three Layers
+
+- **Liveness**: Core pipeline checks (config validity, Deribit connectivity, state builder).
+- **Truth → Trust → Trade**:
+  - **Truth (facts)**: raw observations from the filesystem/stores (harvest presence + age, calibration last run, fidelity last run).
+  - **Trust (gates)**: normalized gate results with explicit `mode` (`off|warn|block`) and `status` (`PASS|WARN|FAIL`).
+  - **Trade (policy)**: aggregated `gate_overall` (`status|severity|can_trade`) used by dashboards and automation.
+
+### Thresholds & Policies
+
+- **Harvest freshness**:
+  - OK: `age_minutes <= 60`
+  - WARN: `60 < age_minutes <= 180`
+  - FAIL: `age_minutes > 180` or missing files
+- **Calibration freshness**:
+  - OK: `last_calibration_at <= 36h` and applied
+  - WARN: `36-72h` or `applied=False`
+  - FAIL: `>72h`, missing bundle, or last run failed
+- **Fidelity gate**:
+  - TRUSTED: OK
+  - WARNING: WARN (degraded)
+  - UNTRUSTED: WARN by default; `HEALTH_STRICT_SYNTHETIC_GATE=1` escalates to FATAL + `can_trade=False`
+  - Missing: WARN in research mode; FAIL in strict mode
+
+### Manual Ops Commands
+
+```bash
+curl -s http://localhost:5000/api/ops/health/status
+curl -s -X POST http://localhost:5000/api/ops/health/run
+```
+
+> When `OPS_HEALTH_RUN_SECRET` is defined, add `-H "X-OPS-HEALTH-SECRET: $OPS_HEALTH_RUN_SECRET"` to the guarded POST so only authorized tooling can refresh the cache.
+
+### Guarding the Ops Health endpoint
+
+- `POST /api/ops/health/run` will reject requests without the matching `X-OPS-HEALTH-SECRET` header whenever `OPS_HEALTH_RUN_SECRET` is set. The handshake ensures operators cannot accidentally hammer Deribit / synthetic-data gates from a public dashboard.
+- The dashboard’s “System Health” card is wired to `GET /api/ops/health/status`. When the cached status is missing (HTTP 404), the card displays “No cached health yet” and a call-to-action button. Clicking that button hits the guarded `/api/ops/health/run`, populates the cache, and re-renders the badge/summary once the data returns.
+
+### Gate Error Codes
+
+The unified gate framework uses standardized codes in each gate's `code` field:
+
+- Harvest: `NO_HARVESTED_FILES`, `HARVEST_RANGE_EMPTY`, `HARVEST_STALE`, `HARVEST_AGE_UNKNOWN`
+- Fidelity: `FIDELITY_MISSING`, `FIDELITY_WARNING`, `FIDELITY_UNTRUSTED`, `FIDELITY_UNKNOWN`
+- Calibration: `CALIBRATION_MISSING`, `CALIBRATION_FAILED`, `CALIBRATION_STALE`, `CALIBRATION_BLOCKED`, `CALIBRATION_AGE_UNKNOWN`
+
+---
+
+## Backtest Preflight (fail-fast)
+
+`POST /api/backtest/start` performs a **preflight** before spawning the backtest worker.
+
+- If the backtest is **historical** and uses `chain_mode=live_chain` (the default for historical), the system requires harvested snapshots under `data/live_deribit/*/*.parquet`.
+- Preflight failures return a canonical error envelope:
+
+```json
+{
+  "ok": false,
+  "error": {
+    "code": "NO_HARVESTED_FILES",
+    "message": "No harvested files available for requested date range.",
+    "details": {
+      "data_readiness": {
+        "harvest_required": true,
+        "harvest": {"available": false},
+        "fidelity": {"available": false},
+        "calibration": {"available": false}
+      },
+      "gates": [
+        {"name": "harvest", "mode": "block", "status": "FAIL", "code": "NO_HARVESTED_FILES", "message": "No harvested files available."}
+      ],
+      "gate_overall": {"status": "FAIL", "severity": "FATAL", "can_trade": false},
+      "effective_config": {"chain_mode": "live_chain", "is_historical": true}
+    }
+  }
+}
+```
+
+Preflight also enforces the optional fidelity gate (`FIDELITY_GATE_MODE=warn|block`) without spawning workers.
+
+## Smoke Tests (manual after changes)
+
+Smoke tests are manual and are not substitutes for the operational health checks above.
 
 ### 1. Live Agent Dry-Run Test
 

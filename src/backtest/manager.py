@@ -319,6 +319,140 @@ class BacktestManager:
         self._pause_event = Event()
         self._pause_event.set()
 
+    def preflight_backtest(
+        self,
+        *,
+        underlying: str,
+        start_date: datetime,
+        end_date: datetime,
+        chain_mode: str,
+        fidelity_gate_mode: str = "off",
+    ) -> Dict[str, Any]:
+        """Preflight checks that must pass before starting a worker.
+
+        Uses the unified gate framework so backtest start + ops health share the
+        same facts and gate semantics.
+        """
+        import os
+
+        from src.ops.gates import GateMode, GateRunner, GateStatus
+        from src.ops.gate_factories import build_underlying_gate_fns
+        from src.ops.facts_resolver import resolve_ops_facts
+
+        now_utc = datetime.utcnow()
+        end_date_naive = end_date.replace(tzinfo=None) if end_date.tzinfo else end_date
+        harvest_required = chain_mode == "live_chain" and end_date_naive < now_utc
+
+        fidelity_mode = GateMode((fidelity_gate_mode or "off").strip().lower())
+        calibration_mode = GateMode((os.getenv("CALIBRATION_GATE_MODE") or "warn").strip().lower())
+
+        # Harvest should always block when required for historical harvested chain usage.
+        harvest_mode = GateMode.BLOCK if harvest_required else GateMode.WARN
+
+        # Resolve dirs + facts once (single source of truth)
+        from src.config import settings as _settings
+
+        ops_facts = resolve_ops_facts(_settings)
+        paths = ops_facts.get("paths") or {}
+
+        u = (underlying or "").upper().strip()
+        harvest_facts = (
+            (ops_facts.get("harvest") or {}).get(u)
+            or {}
+        )
+        # Range scan (expensive): only for preflight where range is required.
+        from src.harvest_status import get_harvest_facts as _get_harvest_facts
+
+        harvest_facts = _get_harvest_facts(
+            underlying=u,
+            base_dir=paths.get("live_deribit_data_dir"),
+            range_start=start_date.date(),
+            range_end=end_date.date(),
+        )
+        # Normalize range count to a single key used by the gate.
+        harvest_facts["file_count"] = int(harvest_facts.get("range_file_count") or 0)
+
+        fidelity_facts = (ops_facts.get("fidelity") or {}).get(u) or {}
+        calibration_facts = (ops_facts.get("calibration") or {}).get(u) or {}
+
+        # Backtests normalize to linear/USDC. Enforce directory key to prevent unit mismatch drift.
+        required_dir = str(harvest_facts.get("expected_dir") or f"{u}_USDC")
+
+        gates = build_underlying_gate_fns(
+            underlying=u,
+            harvest_mode=harvest_mode,
+            harvest_required=harvest_required,
+            harvest_facts=harvest_facts,
+            require_harvest_dir=required_dir,
+            fidelity_mode=fidelity_mode,
+            fidelity_facts=fidelity_facts,
+            calibration_mode=calibration_mode,
+            calibration_facts=calibration_facts,
+            range_start=start_date.date(),
+            range_end=end_date.date(),
+        )
+
+        runner = GateRunner()
+        gate_out = runner.run(gates)
+        gate_results = gate_out.get("gates") or []
+        gate_overall = gate_out.get("gate_overall") or {}
+
+        primary_overall = (gate_overall.get("by_underlying") or {}).get(u) or gate_overall.get("global") or {}
+
+        warnings: List[str] = []
+        for g in gate_results:
+            try:
+                mode = str(g.get("mode") or "").lower()
+                status = str(g.get("status") or "").upper()
+                if status == GateStatus.WARN.value:
+                    warnings.append(str(g.get("message") or ""))
+                elif mode == GateMode.WARN.value and status == GateStatus.FAIL.value:
+                    warnings.append(str(g.get("message") or ""))
+            except Exception:
+                continue
+        warnings = [w for w in warnings if w]
+
+        data_readiness: Dict[str, Any] = {
+            "harvest_required": harvest_required,
+            "harvest": harvest_facts,
+            "fidelity": fidelity_facts,
+            "calibration": calibration_facts,
+        }
+
+        # Blocking preflight: only fail fast if the per-underlying overall is FAIL.
+        # In warn mode, individual FAIL gates are allowed but should surface in warnings.
+        overall_status = str(primary_overall.get("status") or "").upper()
+        blocking = next(
+            (
+                g
+                for g in gate_results
+                if str(g.get("mode") or "").lower() == GateMode.BLOCK.value
+                and str(g.get("status") or "").upper() == GateStatus.FAIL.value
+            ),
+            None,
+        )
+
+        if overall_status == GateStatus.FAIL.value and blocking is not None:
+            return {
+                "ok": False,
+                "warnings": warnings,
+                "gates": gate_results,
+                "gate_overall": gate_overall,
+                "gate_overall_underlying": primary_overall,
+                "data_readiness": data_readiness,
+                "error_code": blocking.get("code"),
+                "error_message": blocking.get("message"),
+            }
+
+        return {
+            "ok": True,
+            "warnings": warnings,
+            "gates": gate_results,
+            "gate_overall": gate_overall,
+            "gate_overall_underlying": primary_overall,
+            "data_readiness": data_readiness,
+        }
+
     def get_status(self) -> Dict[str, Any]:
         with self._lock:
             chains_json = []
@@ -1192,9 +1326,16 @@ class BacktestManager:
                     self._save_run_to_store()
 
             except Exception as e:
-                import traceback
-                traceback.print_exc()
-                self._set_error(str(e))
+                msg = str(e)
+                # Missing local harvested datasets is a common/expected operator state,
+                # especially in unit tests and fresh checkouts. Record the error but
+                # avoid dumping a full traceback.
+                if isinstance(e, ValueError) and msg.startswith("No files found for"):
+                    print(f"[BacktestManager] {msg}")
+                else:
+                    import traceback
+                    traceback.print_exc()
+                self._set_error(msg)
 
         self._thread = Thread(target=worker, daemon=True)
         self._thread.start()
