@@ -2,7 +2,6 @@
 
 import asyncio
 import os
-from typing import Optional
 
 from .config import SupervisorSettings
 from .models import ArbiterDecision, VerificationReport
@@ -10,11 +9,11 @@ from .models import ArbiterDecision, VerificationReport
 
 class CodexFixer:
     """Invokes Codex CLI to apply minimal fixes."""
-    
+
     def __init__(self, settings: SupervisorSettings):
         self.settings = settings
         self.max_prompt_chars = 6000
-    
+
     def build_fix_prompt(
         self,
         arbiter_decision: ArbiterDecision,
@@ -23,11 +22,11 @@ class CodexFixer:
     ) -> str:
         """Build a constrained prompt for Codex."""
         objectives = "\n".join(f"- {obj}" for obj in arbiter_decision.fix_objectives)
-        
+
         failure_excerpt = verification.failure_summary[:2000]
-        
+
         files_list = "\n".join(f"- {f}" for f in changed_files[:15])
-        
+
         prompt = f"""Fix the following test/lint failures with MINIMAL changes.
 
 ## Fix Objectives
@@ -51,8 +50,8 @@ class CodexFixer:
 
 Focus only on fixing the specific failures. Be surgical and precise."""
 
-        return prompt[:self.max_prompt_chars]
-    
+        return prompt[: self.max_prompt_chars]
+
     async def run_codex(
         self,
         workspace_path: str,
@@ -61,18 +60,20 @@ Focus only on fixing the specific failures. Be surgical and precise."""
         """Run Codex CLI in the workspace."""
         codex_bin = self.settings.codex_bin
         model = self.settings.codex_model
-        
+
         env = os.environ.copy()
         env["CODEX_WORKDIR"] = workspace_path
-        
+
         cmd = [
             codex_bin,
-            "--model", model,
-            "--approval-mode", "full-auto",
+            "--model",
+            model,
+            "--approval-mode",
+            "full-auto",
             "--quiet",
             prompt,
         ]
-        
+
         try:
             process = await asyncio.create_subprocess_exec(
                 *cmd,
@@ -81,29 +82,86 @@ Focus only on fixing the specific failures. Be surgical and precise."""
                 stderr=asyncio.subprocess.PIPE,
                 env=env,
             )
-            
+
             try:
                 stdout, stderr = await asyncio.wait_for(
-                    process.communicate(),
-                    timeout=300
+                    process.communicate(), timeout=300
                 )
             except asyncio.TimeoutError:
                 process.kill()
                 await process.wait()
                 return False, "Codex timed out after 5 minutes"
-            
+
             output = stdout.decode(errors="replace")
             if stderr:
                 output += "\n" + stderr.decode(errors="replace")
-            
+
             success = process.returncode == 0
             return success, output[:5000]
-        
+
         except FileNotFoundError:
             return False, f"Codex binary not found: {codex_bin}"
         except Exception as e:
             return False, f"Error running Codex: {str(e)}"
-    
+
+    def _is_ruff_only_failure(self, verification: VerificationReport) -> bool:
+        if not verification or not verification.checks:
+            return False
+
+        def _is_pytest(cmd: str) -> bool:
+            return "pytest" in cmd.lower()
+
+        def _is_ruff(cmd: str) -> bool:
+            cmd_lower = cmd.lower()
+            return "ruff" in cmd_lower and "check" in cmd_lower
+
+        pytest_checks = [c for c in verification.checks if _is_pytest(c.command)]
+        if not pytest_checks or not all(c.passed for c in pytest_checks):
+            return False
+
+        failed_checks = [c for c in verification.checks if not c.passed]
+        if not failed_checks:
+            return False
+
+        return all(_is_ruff(c.command) for c in failed_checks)
+
+    async def _run_ruff_fix(self, workspace_path: str) -> tuple[bool, str]:
+        cmd = "python -m ruff check --fix ."
+        process = await asyncio.create_subprocess_shell(
+            cmd,
+            cwd=workspace_path,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await process.communicate()
+        output = stdout.decode(errors="replace")
+        if stderr:
+            output += "\n" + stderr.decode(errors="replace")
+        if process.returncode != 0:
+            return False, output[:5000]
+
+        if self._should_run_ruff_format():
+            format_cmd = "python -m ruff format ."
+            format_proc = await asyncio.create_subprocess_shell(
+                format_cmd,
+                cwd=workspace_path,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            fmt_stdout, fmt_stderr = await format_proc.communicate()
+            fmt_output = fmt_stdout.decode(errors="replace")
+            if fmt_stderr:
+                fmt_output += "\n" + fmt_stderr.decode(errors="replace")
+            output = f"{output}\n---\n{fmt_output}"
+            return format_proc.returncode == 0, output[:5000]
+
+        return True, output[:5000]
+
+    def _should_run_ruff_format(self) -> bool:
+        return any(
+            "ruff format" in cmd.lower() for cmd in self.settings.get_check_commands()
+        )
+
     async def apply_fix(
         self,
         workspace_path: str,
@@ -113,4 +171,10 @@ Focus only on fixing the specific failures. Be surgical and precise."""
     ) -> tuple[bool, str]:
         """Build prompt and run Codex to apply fixes."""
         prompt = self.build_fix_prompt(arbiter_decision, verification, changed_files)
-        return await self.run_codex(workspace_path, prompt)
+        success, output = await self.run_codex(workspace_path, prompt)
+        if (not success) and "Codex binary not found" in output:
+            if self._is_ruff_only_failure(verification):
+                ruff_success, ruff_output = await self._run_ruff_fix(workspace_path)
+                combined = f"{output}\n---\nRuff fix fallback:\n{ruff_output}"
+                return ruff_success, combined[:5000]
+        return success, output

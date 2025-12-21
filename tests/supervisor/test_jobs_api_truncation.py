@@ -17,10 +17,11 @@ def make_mock_job(
 ):
     """Create a mock job with optionally huge fields."""
     import copy
+
     job = MagicMock()
-    
+
     huge_text = "Error at line 1. " * 600
-    
+
     job_dict = {
         "job_id": job_id,
         "status": "completed",
@@ -47,18 +48,18 @@ def make_mock_job(
             }
         ],
     }
-    
+
     job.model_dump.side_effect = lambda: copy.deepcopy(job_dict)
     return job, job_dict
 
 
 class TestJobsApiTruncation:
     """Tests for /jobs API endpoint truncation.
-    
+
     Note: These tests set up mocks on app.state directly and use TestClient
     without context manager to avoid lifespan overwriting the mocks.
     """
-    
+
     @pytest.fixture
     def app_with_store(self):
         """Create app with mock store containing jobs."""
@@ -69,30 +70,30 @@ class TestJobsApiTruncation:
             settings.github_token = "test_token"
             settings.base_jobs_dir = "/tmp/test_jobs"
             mock_settings.return_value = settings
-            
+
             from src.supervisor.app import app
-            
+
             app.state.settings = settings
             app.state.ready = True
             app.state.startup_errors = []
             app.state.store = MagicMock()
-            
+
             yield app
-    
+
     def test_list_jobs_truncates_stdout(self, app_with_store):
         """Test that /jobs endpoint truncates large stdout."""
         job, _ = make_mock_job(huge_stdout=True)
         app_with_store.state.store.list_recent.return_value = [job]
-        
+
         client = TestClient(app_with_store, raise_server_exceptions=False)
         response = client.get("/jobs")
-        
+
         assert response.status_code == 200
         data = response.json()
-        
+
         assert len(data["jobs"]) == 1
         check = data["jobs"][0]["verification"]["checks"][0]
-        
+
         assert len(check["stdout"]) <= MAX_TRUNCATE_CHARS
         assert check["stdout_truncated"] is True
 
@@ -100,15 +101,15 @@ class TestJobsApiTruncation:
         """Test that /jobs endpoint truncates large stderr."""
         job, _ = make_mock_job(huge_stderr=True)
         app_with_store.state.store.list_recent.return_value = [job]
-        
+
         client = TestClient(app_with_store, raise_server_exceptions=False)
         response = client.get("/jobs")
-        
+
         assert response.status_code == 200
         data = response.json()
-        
+
         check = data["jobs"][0]["verification"]["checks"][0]
-        
+
         assert len(check["stderr"]) <= MAX_TRUNCATE_CHARS
         assert check["stderr_truncated"] is True
 
@@ -116,15 +117,15 @@ class TestJobsApiTruncation:
         """Test that /jobs endpoint truncates large failure_summary."""
         job, _ = make_mock_job(huge_failure_summary=True)
         app_with_store.state.store.list_recent.return_value = [job]
-        
+
         client = TestClient(app_with_store, raise_server_exceptions=False)
         response = client.get("/jobs")
-        
+
         assert response.status_code == 200
         data = response.json()
-        
+
         verification = data["jobs"][0]["verification"]
-        
+
         assert len(verification["failure_summary"]) <= MAX_TRUNCATE_CHARS
         assert verification["failure_summary_truncated"] is True
 
@@ -137,23 +138,23 @@ class TestJobsApiTruncation:
             huge_codex_output=True,
         )
         app_with_store.state.store.get.return_value = job
-        
+
         client = TestClient(app_with_store, raise_server_exceptions=False)
         response = client.get("/jobs/test-job-123")
-        
+
         assert response.status_code == 200
         data = response.json()
-        
+
         verification = data["verification"]
         assert len(verification["failure_summary"]) <= MAX_TRUNCATE_CHARS
         assert verification["failure_summary_truncated"] is True
-        
+
         check = verification["checks"][0]
         assert len(check["stdout"]) <= MAX_TRUNCATE_CHARS
         assert check["stdout_truncated"] is True
         assert len(check["stderr"]) <= MAX_TRUNCATE_CHARS
         assert check["stderr_truncated"] is True
-        
+
         attempt = data["fix_attempts"][0]
         assert len(attempt["codex_output"]) <= MAX_TRUNCATE_CHARS
         assert attempt["codex_output_truncated"] is True
@@ -162,13 +163,13 @@ class TestJobsApiTruncation:
         """Test that short fields are not marked as truncated."""
         job, _ = make_mock_job()
         app_with_store.state.store.get.return_value = job
-        
+
         client = TestClient(app_with_store, raise_server_exceptions=False)
         response = client.get("/jobs/test-job-123")
-        
+
         assert response.status_code == 200
         data = response.json()
-        
+
         check = data["verification"]["checks"][0]
         assert check["stdout"] == "short stdout"
         assert check["stdout_truncated"] is False
@@ -178,8 +179,8 @@ class TestJobsApiTruncation:
     def test_job_not_found_returns_404(self, app_with_store):
         """Test that missing job returns 404."""
         app_with_store.state.store.get.return_value = None
-        
+
         client = TestClient(app_with_store, raise_server_exceptions=False)
         response = client.get("/jobs/nonexistent")
-        
+
         assert response.status_code == 404

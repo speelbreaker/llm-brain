@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 
 class DebateResponse(BaseModel):
     """Strict JSON schema for debate agent responses."""
+
     role: Literal["optimist", "skeptic", "arbiter"]
     summary: str
     bullets: list[str] = Field(default_factory=list, max_length=3)
@@ -19,7 +20,7 @@ class DebateResponse(BaseModel):
 
 class LLMProvider(ABC):
     """Abstract base class for LLM providers."""
-    
+
     @abstractmethod
     async def generate(
         self,
@@ -30,7 +31,7 @@ class LLMProvider(ABC):
     ) -> str:
         """Generate a completion from the LLM."""
         pass
-    
+
     @abstractmethod
     async def generate_json(
         self,
@@ -42,7 +43,7 @@ class LLMProvider(ABC):
     ) -> dict:
         """Generate a JSON response from the LLM with schema enforcement."""
         pass
-    
+
     async def close(self) -> None:
         """Cleanup resources (optional override)."""
         pass

@@ -2,23 +2,15 @@
 
 import json
 import logging
-from typing import Any, Literal, Optional
+from typing import Literal, Optional
 
-from pydantic import BaseModel, ValidationError
+from pydantic import ValidationError
 
 from .config import SupervisorSettings
 from .llm import get_provider_for_role, DebateResponse
 from .models import ArbiterDecision, VerificationReport
 
 logger = logging.getLogger(__name__)
-
-
-class LLMFailure(Exception):
-    """Raised when LLM calls fail (quota, network, etc)."""
-    def __init__(self, message: str, original_error: Optional[Exception] = None):
-        super().__init__(message)
-        self.original_error = original_error
-        self.failure_reason = message
 
 
 DEBATE_SCHEMA = """{
@@ -32,13 +24,50 @@ DEBATE_SCHEMA = """{
 }"""
 
 
+def _is_pytest_command(command: str) -> bool:
+    return "pytest" in command.lower()
+
+
+def _is_ruff_check_command(command: str) -> bool:
+    cmd = command.lower()
+    return "ruff" in cmd and "check" in cmd
+
+
+def lint_only_decision(
+    verification: VerificationReport,
+) -> Optional[ArbiterDecision]:
+    """Return a safe auto-fix decision for ruff-only failures with pytest passing."""
+    if not verification or not verification.checks:
+        return None
+
+    pytest_checks = [c for c in verification.checks if _is_pytest_command(c.command)]
+    if not pytest_checks or not all(c.passed for c in pytest_checks):
+        return None
+
+    failed_checks = [c for c in verification.checks if not c.passed]
+    if not failed_checks:
+        return None
+
+    if any(not _is_ruff_check_command(c.command) for c in failed_checks):
+        return None
+
+    return ArbiterDecision(
+        auto_fix_allowed=True,
+        fix_objectives=[
+            "Fix ruff lint errors (e.g., unused imports) and re-run checks"
+        ],
+        risk_level="low",
+        arbiter_reasoning="Ruff-only lint failure with pytest passing",
+    )
+
+
 class DebateSystem:
     """Runs Optimist/Skeptic/Arbiter debate with multi-provider support."""
-    
+
     def __init__(self, settings: SupervisorSettings):
         self.settings = settings
         self.max_context_chars = 4000
-    
+
     async def run_debate(
         self,
         verification: VerificationReport,
@@ -46,42 +75,26 @@ class DebateSystem:
         pr_title: str = "",
         pr_body: str = "",
     ) -> ArbiterDecision:
-        """Run the 3-agent debate and return Arbiter's decision.
-        
-        Raises:
-            LLMFailure: If LLM calls fail (quota exceeded, network error, etc).
-                The caller should handle this and generate a fallback comment.
-        """
+        """Run the 3-agent debate and return Arbiter's decision."""
+        lint_decision = lint_only_decision(verification)
+        if lint_decision:
+            return lint_decision
+
         context = self._build_context(verification, changed_files, pr_title, pr_body)
-        
-        try:
-            optimist_response = await self._call_agent("optimist", context)
-            skeptic_response = await self._call_agent(
-                "skeptic", 
-                context, 
-                optimist_view=optimist_response
-            )
-            arbiter_decision = await self._call_arbiter(
-                context, 
-                optimist_response, 
-                skeptic_response
-            )
-            
-            arbiter_decision.optimist_summary = optimist_response.get("summary", "")[:500]
-            arbiter_decision.skeptic_summary = skeptic_response.get("summary", "")[:500]
-            
-            return arbiter_decision
-        except Exception as e:
-            error_msg = str(e)
-            if "insufficient_quota" in error_msg.lower():
-                raise LLMFailure("OpenAI quota exceeded", e)
-            elif "rate_limit" in error_msg.lower():
-                raise LLMFailure("OpenAI rate limited", e)
-            elif "api" in error_msg.lower() or "openai" in error_msg.lower():
-                raise LLMFailure(f"LLM API error: {error_msg[:100]}", e)
-            else:
-                raise LLMFailure(f"LLM call failed: {error_msg[:100]}", e)
-    
+
+        optimist_response = await self._call_agent("optimist", context)
+        skeptic_response = await self._call_agent(
+            "skeptic", context, optimist_view=optimist_response
+        )
+        arbiter_decision = await self._call_arbiter(
+            context, optimist_response, skeptic_response
+        )
+
+        arbiter_decision.optimist_summary = optimist_response.get("summary", "")[:500]
+        arbiter_decision.skeptic_summary = skeptic_response.get("summary", "")[:500]
+
+        return arbiter_decision
+
     def _build_context(
         self,
         verification: VerificationReport,
@@ -96,25 +109,29 @@ class DebateSystem:
             "",
             f"Changed files ({len(changed_files)}):",
         ]
-        
+
         for f in changed_files[:20]:
             parts.append(f"  - {f}")
-        
+
         if len(changed_files) > 20:
             parts.append(f"  ... and {len(changed_files) - 20} more")
-        
-        parts.extend([
-            "",
-            "Verification Results:",
-            f"  All passed: {verification.all_passed}",
-            f"  Failing tests: {', '.join(verification.failing_tests[:5])}",
-            "",
-            "Failure Summary:",
-            verification.failure_summary[:1500] if verification.failure_summary else "None",
-        ])
-        
-        return "\n".join(parts)[:self.max_context_chars]
-    
+
+        parts.extend(
+            [
+                "",
+                "Verification Results:",
+                f"  All passed: {verification.all_passed}",
+                f"  Failing tests: {', '.join(verification.failing_tests[:5])}",
+                "",
+                "Failure Summary:",
+                verification.failure_summary[:1500]
+                if verification.failure_summary
+                else "None",
+            ]
+        )
+
+        return "\n".join(parts)[: self.max_context_chars]
+
     async def _call_agent(
         self,
         role: Literal["optimist", "skeptic"],
@@ -123,12 +140,12 @@ class DebateSystem:
     ) -> dict:
         """Call an agent (Optimist or Skeptic) with retry for JSON validation."""
         provider, model = get_provider_for_role(role, self.settings)
-        
+
         if role == "optimist":
             prompt = self._build_optimist_prompt(context)
         else:
             prompt = self._build_skeptic_prompt(context, optimist_view or {})
-        
+
         for attempt in range(2):
             try:
                 result = await provider.generate_json(
@@ -138,22 +155,27 @@ class DebateSystem:
                     max_tokens=600,
                     temperature=0.7 if attempt == 0 else 0.3,
                 )
-                
-                response = DebateResponse(role=role, **result)
+
+                # Providers may include "role" in the payload; avoid double-passing
+                payload = dict(result or {})
+                agent_role = payload.pop("role", role)
+                response = DebateResponse(role=agent_role, **payload)
                 return response.model_dump()
-                
+
             except (json.JSONDecodeError, ValidationError) as e:
-                logger.warning(f"JSON validation failed for {role} (attempt {attempt + 1}): {e}")
+                logger.warning(
+                    f"JSON validation failed for {role} (attempt {attempt + 1}): {e}"
+                )
                 if attempt == 0:
                     prompt = f"{prompt}\n\nIMPORTANT: Return ONLY valid JSON matching the schema."
                 continue
-        
+
         return {
             "role": role,
             "summary": "Failed to generate valid response",
             "bullets": [],
         }
-    
+
     async def _call_arbiter(
         self,
         context: str,
@@ -163,7 +185,7 @@ class DebateSystem:
         """Call the Arbiter agent to make final decision with retry."""
         provider, model = get_provider_for_role("arbiter", self.settings)
         prompt = self._build_arbiter_prompt(context, optimist_view, skeptic_view)
-        
+
         for attempt in range(2):
             try:
                 result = await provider.generate_json(
@@ -173,9 +195,11 @@ class DebateSystem:
                     max_tokens=500,
                     temperature=0.3,
                 )
-                
-                response = DebateResponse(role="arbiter", **result)
-                
+
+                payload = dict(result or {})
+                payload_role = payload.pop("role", "arbiter")
+                response = DebateResponse(role=payload_role, **payload)
+
                 return ArbiterDecision(
                     auto_fix_allowed=response.auto_fix_allowed or False,
                     fix_objectives=response.objectives or [],
@@ -183,20 +207,22 @@ class DebateSystem:
                     stop_reason=response.stop_reason,
                     arbiter_reasoning=response.summary,
                 )
-                
+
             except (json.JSONDecodeError, ValidationError) as e:
-                logger.warning(f"JSON validation failed for arbiter (attempt {attempt + 1}): {e}")
+                logger.warning(
+                    f"JSON validation failed for arbiter (attempt {attempt + 1}): {e}"
+                )
                 if attempt == 0:
                     prompt = f"{prompt}\n\nIMPORTANT: Return ONLY valid JSON matching the schema."
                 continue
-        
+
         return ArbiterDecision(
             auto_fix_allowed=False,
             risk_level="unknown",
             stop_reason="debate_output_invalid",
             arbiter_reasoning="Failed to parse arbiter response",
         )
-    
+
     def _build_optimist_prompt(self, context: str) -> str:
         """Build the Optimist agent prompt."""
         return f"""You are the OPTIMIST in a code review debate. Your role is to:
@@ -220,7 +246,7 @@ Be concise. Max 3 bullet points. Focus on solutions."""
         """Build the Skeptic agent prompt."""
         optimist_summary = optimist_view.get("summary", "")
         optimist_bullets = optimist_view.get("bullets", [])
-        
+
         return f"""You are the SKEPTIC in a code review debate. Your role is to:
 1. Find hidden risks and edge cases
 2. Challenge the Optimist's assumptions
@@ -231,7 +257,7 @@ Context:
 
 Optimist's view:
 Summary: {optimist_summary}
-Points: {', '.join(optimist_bullets[:3])}
+Points: {", ".join(optimist_bullets[:3])}
 
 Respond with JSON matching this schema:
 {{
@@ -255,12 +281,12 @@ Context:
 {context}
 
 Optimist's view:
-{optimist_view.get('summary', '')}
-{', '.join(optimist_view.get('bullets', [])[:3])}
+{optimist_view.get("summary", "")}
+{", ".join(optimist_view.get("bullets", [])[:3])}
 
 Skeptic's view:
-{skeptic_view.get('summary', '')}
-{', '.join(skeptic_view.get('bullets', [])[:3])}
+{skeptic_view.get("summary", "")}
+{", ".join(skeptic_view.get("bullets", [])[:3])}
 
 Respond with JSON matching this schema:
 {{
