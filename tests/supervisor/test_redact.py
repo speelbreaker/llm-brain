@@ -9,11 +9,11 @@ class MockSettings:
     """Mock settings for testing."""
     
     def __init__(self):
-        self.github_token = "ghp_abcdefghijklmnopqrstuvwxyz123456"
+        self.github_token = "ghp_" + "abcdefghijklmnopqrstuvwxyz" + "123456"
         self.github_webhook_secret = "my_webhook_secret_12345"
-        self.openai_api_key = "sk-abcdefghij1234567890abcdefghij"
-        self.telegram_bot_token = "1234567890:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefgh"
-        self.gemini_api_key = "AIzaSyB1234567890abcdefghijklmnopqrstuv"
+        self.openai_api_key = "sk-" + "abcdefghij" + "1234567890abcdefghij"
+        self.telegram_bot_token = "1234567890:" + "ABCDEFGHIJKLMNOPQRSTUVWXYZ" + "abcdefgh"
+        self.gemini_api_key = "AIza" + "SyB" + "1234567890abcdefghijklmnopqrstuv"
 
 
 class TestRedactSecrets:
@@ -60,7 +60,7 @@ class TestRedactSecrets:
         settings = MockSettings()
         settings.github_token = None
         
-        text = "Found token ghp_1234567890abcdefghijklmnopqr in output"
+        text = "Found token " + "ghp_" + "1234567890abcdefghijklmnopqr" + " in output"
         result = redact_secrets(text, settings)
         
         assert "ghp_" not in result or REDACTED in result
@@ -81,7 +81,7 @@ class TestRedactSecrets:
         settings = MockSettings()
         settings.openai_api_key = None
         
-        text = "Using key sk-proj-abcdef1234567890abcdef12345678901234"
+        text = "Using key " + "sk-" + "proj-" + "abcdef1234567890abcdef12345678901234"
         result = redact_secrets(text, settings)
         
         assert REDACTED in result

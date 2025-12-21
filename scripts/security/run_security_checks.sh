@@ -9,12 +9,14 @@ TOOL_MISSING_EXIT=2
 run_scan() {
   local label="$1"
   shift
-  if "$@"; then
+  set +e
+  "$@"
+  local status=$?
+  set -e
+  if [ "$status" -eq 0 ]; then
     echo "OK: $label"
     return 0
   fi
-
-  local status=$?
   if [ "$status" -eq 1 ]; then
     echo "ERROR: leaks detected by $label" >&2
     exit 1

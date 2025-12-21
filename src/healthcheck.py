@@ -12,6 +12,7 @@ Features:
 """
 from __future__ import annotations
 
+import logging
 import os
 import threading
 from dataclasses import dataclass, field
@@ -23,6 +24,8 @@ from typing import Any, Optional
 from src.config import Settings, settings
 from src.deribit_client import DeribitClient, DeribitAPIError
 from src.deribit.base_client import DeribitErrorCode
+
+logger = logging.getLogger(__name__)
 
 
 class CheckStatus(str, Enum):
@@ -87,6 +90,11 @@ def _compute_worst_severity(result: dict) -> tuple[str, bool]:
             can_trade = False
 
     return worst, can_trade
+
+
+def _error_message(err: Exception) -> str:
+    msg = getattr(err, "message", None)
+    return msg if msg else str(err)
 
 
 def run_and_cache_healthcheck(cfg: Settings | None = None) -> CachedHealthStatus:
@@ -710,11 +718,12 @@ def _classify_deribit_error(
     """Classify Deribit errors into status, detail, error_code, severity, can_trade."""
     error_code = getattr(e, "error_code", DeribitErrorCode.UNKNOWN)
     http_status = getattr(e, "http_status", None)
+    msg = _error_message(e)
 
     if error_code == DeribitErrorCode.AUTH:
         return (
             CheckStatus.FAIL,
-            f"Authentication error (401): {e.message}",
+            f"Authentication error (401): {msg}",
             "DERIBIT_AUTH",
             "FATAL",
             False,
@@ -722,7 +731,7 @@ def _classify_deribit_error(
     if error_code == DeribitErrorCode.FORBIDDEN:
         return (
             CheckStatus.FAIL,
-            f"Access forbidden (403): {e.message}",
+            f"Access forbidden (403): {msg}",
             "DERIBIT_AUTH",
             "FATAL",
             False,
@@ -730,7 +739,7 @@ def _classify_deribit_error(
     if error_code == DeribitErrorCode.RATE_LIMIT:
         return (
             CheckStatus.WARN,
-            f"Rate limited (429): {e.message}",
+            f"Rate limited (429): {msg}",
             "DERIBIT_RATE_LIMIT",
             "DEGRADED",
             True,
@@ -738,7 +747,7 @@ def _classify_deribit_error(
     if error_code == DeribitErrorCode.TIMEOUT:
         return (
             CheckStatus.WARN,
-            f"Request timeout: {e.message}",
+            f"Request timeout: {msg}",
             "DERIBIT_TIMEOUT",
             "DEGRADED",
             True,
@@ -746,7 +755,7 @@ def _classify_deribit_error(
     if error_code == DeribitErrorCode.NETWORK:
         return (
             CheckStatus.FAIL,
-            f"Network error: {e.message}",
+            f"Network error: {msg}",
             "DERIBIT_NETWORK",
             "DEGRADED",
             False,
@@ -754,14 +763,14 @@ def _classify_deribit_error(
     if error_code == DeribitErrorCode.SERVER_ERROR:
         return (
             CheckStatus.WARN,
-            f"Server error ({http_status or '5xx'}): {e.message}",
+            f"Server error ({http_status or '5xx'}): {msg}",
             "DERIBIT_SERVER_ERROR",
             "DEGRADED",
             True,
         )
     return (
         CheckStatus.FAIL,
-        f"API error [{error_code.value}]: {e.message}",
+        f"API error [{error_code.value}]: {msg}",
         "DERIBIT_ERROR",
         "DEGRADED",
         False,
@@ -868,7 +877,7 @@ def check_state_builder(client: DeribitClient, cfg: Settings) -> HealthCheckResu
         return HealthCheckResult(
             name="state_builder",
             status=CheckStatus.FAIL,
-            detail=f"failed to build state: {e.message}",
+            detail=f"failed to build state: {_error_message(e)}",
             error_code="STATE_BUILD_FAILED",
             severity="DEGRADED",
             can_trade=False,
@@ -1011,10 +1020,23 @@ def run_agent_healthcheck(cfg: Settings | None = None) -> dict[str, Any]:
         by_u = (gate_overall or {}).get("by_underlying") if isinstance(gate_overall, dict) else None
         if isinstance(by_u, dict):
             can_trade_by_underlying = {k: bool(v.get("can_trade")) for (k, v) in by_u.items()}
-    except Exception:
+    except Exception as exc:
+        logger.exception("Health gate evaluation failed")
         gates = []
-        gate_overall = None
+        gate_overall = {
+            "status": "FAIL",
+            "detail": "gate evaluation failed",
+            "error": _error_message(exc),
+        }
         can_trade_by_underlying = None
+        results.append(HealthCheckResult(
+            name="gate_runner",
+            status=CheckStatus.FAIL,
+            detail=f"gate evaluation failed: {_error_message(exc)}",
+            error_code="GATE_EVAL_ERROR",
+            severity="FATAL",
+            can_trade=False,
+        ))
 
     has_fail = any(r.status == CheckStatus.FAIL for r in results)
     has_warn = any(r.status == CheckStatus.WARN for r in results)

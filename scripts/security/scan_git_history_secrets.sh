@@ -13,9 +13,9 @@ cd "$root_dir"
 repo_path="$root_dir"
 
 TOOL_MISSING_EXIT=2
-TOOL_ERROR_EXIT=3
+TOOL_ERROR_EXIT=2
 GITLEAKS_VERSION="8.21.0"
-GITLEAKS_IMAGE="${GITLEAKS_IMAGE:-ghcr.io/gitleaks/gitleaks:latest}"
+GITLEAKS_IMAGE="${GITLEAKS_IMAGE:-ghcr.io/gitleaks/gitleaks:v${GITLEAKS_VERSION}}"
 
 run_gitleaks() { gitleaks "$@"; }
 
@@ -58,7 +58,7 @@ ensure_gitleaks() {
     echo "docker image unavailable; falling back to temp binary..." >&2
   fi
 
-  echo "gitleaks not found; downloading temp binary (no install required)..." >&2
+  echo "WARN: gitleaks not found; downloading temp binary (no checksum verification)..." >&2
   tmp_dir="$(mktemp -d)"
   cleanup() { rm -rf "$tmp_dir"; }
   trap cleanup EXIT
@@ -93,20 +93,44 @@ ensure_gitleaks() {
 ensure_gitleaks
 
 mode="${1:-shallow}"
+case "$mode" in
+  --deep) mode="deep" ;;
+  --shallow) mode="shallow" ;;
+esac
+if [[ "$mode" != "deep" && "$mode" != "shallow" ]]; then
+  echo "ERROR: unknown scan mode '$mode' (expected deep/shallow or --deep/--shallow)" >&2
+  exit "$TOOL_ERROR_EXIT"
+fi
+
+set +e
+version_out="$(run_gitleaks version 2>/dev/null | head -n 1)"
+version_status=$?
+set -e
+if [ "$version_status" -eq 0 ] && [ -n "$version_out" ]; then
+  echo "INFO: gitleaks ${version_out}" >&2
+else
+  echo "WARN: unable to read gitleaks version" >&2
+fi
+echo "INFO: gitleaks config: $repo_path/.gitleaks.toml (extends default rules)" >&2
 
 if [[ "$mode" == "deep" ]]; then
   echo "Running deep history scan (full git history)..."
-  if run_gitleaks detect --redact --config "$repo_path/.gitleaks.toml" --source "$repo_path" --log-opts="--all"; then
-    exit 0
-  fi
+  set +e
+  run_gitleaks detect --redact --config "$repo_path/.gitleaks.toml" --source "$repo_path" --log-opts="--all"
+  status=$?
+  set -e
 else
   echo "Running lightweight history scan (current tree)..."
-  if run_gitleaks detect --redact --config "$repo_path/.gitleaks.toml" --source "$repo_path" --no-git; then
-    exit 0
-  fi
+  set +e
+  run_gitleaks detect --redact --config "$repo_path/.gitleaks.toml" --source "$repo_path" --no-git
+  status=$?
+  set -e
 fi
 
-status=$?
+if [ "$status" -eq 0 ]; then
+  exit 0
+fi
+
 if [ "$status" -eq 1 ]; then
   echo "Leaks detected." >&2
   exit 1
