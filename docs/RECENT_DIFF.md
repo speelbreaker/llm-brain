@@ -1,11 +1,12 @@
 # Recent Diff
 
-generated_at_utc: 2025-12-22T16:55:23Z
+generated_at_utc: 2025-12-22T17:02:24Z
 branch: main
-head_sha: fa5a78ae1468dc7400666f0d575cceae866df4a8
+head_sha: f6e339582a45a38469c24cc6b14a910fdfc49bdd
 base: origin/main
 
 ## git log --oneline -n 25
+f6e3395 chore: refresh latest artifacts
 fa5a78a Auto-commit 2025-12-22T16:38:19Z
 3bc7e86 Ops health per-underlying gates + facts resolver
 522ef78 feat(fidelity): deterministic per-underlying latest + source/path metadata + tests
@@ -30,7 +31,6 @@ bd1d2e7 Fix harvested calibration RV scaling
 84d4601 Block Deribit live_chain historically
 c403e9c Backtest correctness: no overlap + linear USDC + cap expiry
 e39b4a7 Finish regime IV plumbing + add provenance summary
-ecd19fa Saved progress at the end of the loop
 
 ## git diff --stat origin/main..HEAD
  .vscode/tasks.json                                 |    2 +-
@@ -38,7 +38,7 @@ ecd19fa Saved progress at the end of the loop
  Makefile                                           |   14 +
  POEM.md                                            |   22 +
  README.md                                          |   41 +
- ROADMAP_BACKLOG.md                                 |   40 +
+ ROADMAP_BACKLOG.md                                 |   45 +
  agent_loop.py                                      |   21 +
  ...uct-minded-engineer-Update-th_1766256235012.txt |   73 -
  data/backtests/index.jsonl                         |   18 +
@@ -49,10 +49,10 @@ ecd19fa Saved progress at the end of the loop
  docs/CONTEXT_PACK.md                               |  219 +-
  docs/FIDELITY_BTC_latest.json                      |  349 ++
  docs/FIDELITY_BTC_latest.md                        |  252 ++
- docs/OPS_HEALTH_latest.json                        |   19 +
+ docs/OPS_HEALTH_latest.json                        |   10 +
  docs/RECENT_DIFF.md                                | 2002 ++++++++++
  docs/REPO_MANIFEST.json                            | 3903 ++++++++++++++++++++
- docs/ROADMAP_BACKLOG_latest.md                     |  853 +++++
+ docs/ROADMAP_BACKLOG_latest.md                     |  858 +++++
  docs/TEST_SUMMARY_latest.txt                       |    2 +
  scripts/capture_pytest_summary.sh                  |   49 +
  scripts/gen_fidelity_latest_docs.py                |   94 +
@@ -130,7 +130,7 @@ ecd19fa Saved progress at the end of the loop
  tests/test_ops_health_endpoints.py                 |  809 ++++
  tests/web/expected_routes.json                     |  443 ++-
  tests/web/test_telegram_webhook.py                 |  126 +
- 97 files changed, 15626 insertions(+), 1734 deletions(-)
+ 97 files changed, 15627 insertions(+), 1734 deletions(-)
 
 ## git diff origin/main..HEAD
 diff --git a/.vscode/tasks.json b/.vscode/tasks.json
@@ -384,10 +384,10 @@ index dea428a..0752cb6 100644
  
  ```
 diff --git a/ROADMAP_BACKLOG.md b/ROADMAP_BACKLOG.md
-index 21bce55..39c9972 100644
+index 21bce55..131a69a 100644
 --- a/ROADMAP_BACKLOG.md
 +++ b/ROADMAP_BACKLOG.md
-@@ -811,3 +811,43 @@ The system supports three levels of automation, rolled out incrementally:
+@@ -811,3 +811,48 @@ The system supports three levels of automation, rolled out incrementally:
  5. **Audit trail:** Every run, every LLM suggestion, and every parameter change is logged and traceable.
  
  ---
@@ -395,6 +395,11 @@ index 21bce55..39c9972 100644
 +## Changelog (auto)
 +- (entries appended newest-first)
 +
++- 2025-12-22T16:55Z [COPILOT] sha=fa5a78a
++  - Summary: Refresh TEST_SUMMARY_latest.txt after full-suite run; Refresh context-pack latest artifacts prior to push
++  - Tests: 822 passed, 5 skipped, 53 warnings in 335.18s (0:05:35)
++  - Endpoints: none
++  - Context-pack: uploaded (no)
 +- 2025-12-21T21:51Z [COPILOT] sha=3bc7e86
 +  - Summary: Document context-pack + Drive publishing (rclone) in README; Document Fidelity latest artifacts in docs/
 +  - Tests: not run (docs-only)
@@ -1993,10 +1998,5 @@ index 0000000..8cb6960
 +      "quantile_diffs": {
 +        "q05": 0.0,
 +        "q25": 0.0,
-+        "q50": 0.0,
-+        "q75": 0.0,
-+        "q95": 0.0,
-+        "q99": 0.0
-+      }
 
 TRUNCATED

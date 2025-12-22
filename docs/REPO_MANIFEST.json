@@ -627,48 +627,48 @@
       "path": "/telegram/webhook/{path_secret}"
     }
   ],
-  "generated_at_utc": "2025-12-22T16:55:21.695657Z",
+  "generated_at_utc": "2025-12-22T17:02:21.991396Z",
   "git": {
     "branch": "main",
-    "head_sha": "fa5a78ae1468dc7400666f0d575cceae866df4a8",
-    "head_summary": "Auto-commit 2025-12-22T16:38:19Z",
+    "head_sha": "f6e339582a45a38469c24cc6b14a910fdfc49bdd",
+    "head_summary": "chore: refresh latest artifacts",
     "is_dirty": true
   },
   "hotspots": [
     {
-      "mtime_utc": "2025-12-22T16:55:16.800416Z",
+      "mtime_utc": "2025-12-22T17:00:22.017853Z",
+      "path": "docs/OPS_HEALTH_latest.json",
+      "size_bytes": 567
+    },
+    {
+      "mtime_utc": "2025-12-22T16:57:22.416131Z",
+      "path": "docs/RECENT_DIFF.md",
+      "size_bytes": 75052
+    },
+    {
+      "mtime_utc": "2025-12-22T16:57:20.173634Z",
+      "path": "docs/REPO_MANIFEST.json",
+      "size_bytes": 113196
+    },
+    {
+      "mtime_utc": "2025-12-22T16:55:27.548753Z",
       "path": "docs/ROADMAP_BACKLOG_latest.md",
       "size_bytes": 32973
+    },
+    {
+      "mtime_utc": "2025-12-22T16:55:26.731352Z",
+      "path": "docs/FIDELITY_BTC_latest.md",
+      "size_bytes": 5216
+    },
+    {
+      "mtime_utc": "2025-12-22T16:55:26.730119Z",
+      "path": "docs/FIDELITY_BTC_latest.json",
+      "size_bytes": 8116
     },
     {
       "mtime_utc": "2025-12-22T16:55:16.799901Z",
       "path": "ROADMAP_BACKLOG.md",
       "size_bytes": 32973
-    },
-    {
-      "mtime_utc": "2025-12-22T16:55:10.119265Z",
-      "path": "docs/OPS_HEALTH_latest.json",
-      "size_bytes": 268
-    },
-    {
-      "mtime_utc": "2025-12-22T16:55:09.637013Z",
-      "path": "docs/FIDELITY_BTC_latest.md",
-      "size_bytes": 5216
-    },
-    {
-      "mtime_utc": "2025-12-22T16:55:09.635608Z",
-      "path": "docs/FIDELITY_BTC_latest.json",
-      "size_bytes": 8116
-    },
-    {
-      "mtime_utc": "2025-12-22T16:55:09.283617Z",
-      "path": "docs/RECENT_DIFF.md",
-      "size_bytes": 74865
-    },
-    {
-      "mtime_utc": "2025-12-22T16:55:06.452425Z",
-      "path": "docs/REPO_MANIFEST.json",
-      "size_bytes": 113196
     },
     {
       "mtime_utc": "2025-12-22T16:54:58.755052Z",
@@ -2245,32 +2245,32 @@
       "size_bytes": 8110
     },
     {
-      "mtime_utc": "2025-12-22T16:55:09.635608Z",
+      "mtime_utc": "2025-12-22T16:55:26.730119Z",
       "path": "docs/FIDELITY_BTC_latest.json",
       "size_bytes": 8116
     },
     {
-      "mtime_utc": "2025-12-22T16:55:09.637013Z",
+      "mtime_utc": "2025-12-22T16:55:26.731352Z",
       "path": "docs/FIDELITY_BTC_latest.md",
       "size_bytes": 5216
     },
     {
-      "mtime_utc": "2025-12-22T16:55:10.119265Z",
+      "mtime_utc": "2025-12-22T17:00:22.017853Z",
       "path": "docs/OPS_HEALTH_latest.json",
-      "size_bytes": 268
+      "size_bytes": 567
     },
     {
-      "mtime_utc": "2025-12-22T16:55:09.283617Z",
+      "mtime_utc": "2025-12-22T16:57:22.416131Z",
       "path": "docs/RECENT_DIFF.md",
-      "size_bytes": 74865
+      "size_bytes": 75052
     },
     {
-      "mtime_utc": "2025-12-22T16:55:06.452425Z",
+      "mtime_utc": "2025-12-22T16:57:20.173634Z",
       "path": "docs/REPO_MANIFEST.json",
       "size_bytes": 113196
     },
     {
-      "mtime_utc": "2025-12-22T16:55:16.800416Z",
+      "mtime_utc": "2025-12-22T16:55:27.548753Z",
       "path": "docs/ROADMAP_BACKLOG_latest.md",
       "size_bytes": 32973
     },
