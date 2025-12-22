@@ -38,8 +38,22 @@ logger = logging.getLogger(__name__)
 MAX_TRUNCATE_CHARS = 5000
 
 
+_original_get_event_loop = asyncio.get_event_loop
+
+
+def _patched_get_event_loop():
+    """Wrap asyncio.get_event_loop so callers always get a loop."""
+    try:
+        return _original_get_event_loop()
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        return loop
+
+
 def _ensure_event_loop() -> None:
     """Ensure a default event loop exists for sync test contexts."""
+    asyncio.get_event_loop = _patched_get_event_loop
     policy = asyncio.get_event_loop_policy()
     try:
         loop = policy.get_event_loop()
