@@ -627,18 +627,33 @@
       "path": "/telegram/webhook/{path_secret}"
     }
   ],
-  "generated_at_utc": "2025-12-22T20:59:20.071166Z",
+  "generated_at_utc": "2025-12-22T22:06:04.605604Z",
   "git": {
     "branch": "main",
-    "head_sha": "382ac492bbd46b61d5e58f6ed79deab6fac53e3f",
-    "head_summary": "chore: refresh generated docs",
+    "head_sha": "2d60e1f135590e2728398fadcc3049e277bebbb2",
+    "head_summary": "Auto-commit 2025-12-22T20:57:23Z",
     "is_dirty": true
   },
   "hotspots": [
     {
-      "mtime_utc": "2025-12-22T20:59:19.225457Z",
+      "mtime_utc": "2025-12-22T22:06:03.749841Z",
+      "path": "docs/ROADMAP_BACKLOG_latest.md",
+      "size_bytes": 33301
+    },
+    {
+      "mtime_utc": "2025-12-22T22:06:03.353736Z",
+      "path": "docs/OPS_HEALTH_latest.json",
+      "size_bytes": 666
+    },
+    {
+      "mtime_utc": "2025-12-22T21:06:14.404754Z",
+      "path": "docs/RECENT_DIFF.md",
+      "size_bytes": 73733
+    },
+    {
+      "mtime_utc": "2025-12-22T21:06:11.562707Z",
       "path": "docs/REPO_MANIFEST.json",
-      "size_bytes": 113900
+      "size_bytes": 113904
     },
     {
       "mtime_utc": "2025-12-22T19:57:05.392154Z",
@@ -664,21 +679,6 @@
       "mtime_utc": "2025-12-22T19:57:05.055450Z",
       "path": "docs/FIDELITY_BTC_latest.json",
       "size_bytes": 3555
-    },
-    {
-      "mtime_utc": "2025-12-22T19:57:04.417213Z",
-      "path": "docs/RECENT_DIFF.md",
-      "size_bytes": 1610
-    },
-    {
-      "mtime_utc": "2025-12-22T19:57:00.345384Z",
-      "path": "docs/ROADMAP_BACKLOG_latest.md",
-      "size_bytes": 33301
-    },
-    {
-      "mtime_utc": "2025-12-22T19:57:00.021760Z",
-      "path": "docs/OPS_HEALTH_latest.json",
-      "size_bytes": 666
     },
     {
       "mtime_utc": "2025-12-22T19:18:53.649473Z",
@@ -2260,14 +2260,14 @@
       "size_bytes": 3356
     },
     {
-      "mtime_utc": "2025-12-22T19:57:00.021760Z",
+      "mtime_utc": "2025-12-22T22:06:03.353736Z",
       "path": "docs/OPS_HEALTH_latest.json",
       "size_bytes": 666
     },
     {
-      "mtime_utc": "2025-12-22T19:57:04.417213Z",
+      "mtime_utc": "2025-12-22T21:06:14.404754Z",
       "path": "docs/RECENT_DIFF.md",
-      "size_bytes": 1610
+      "size_bytes": 73733
     },
     {
       "mtime_utc": "2025-12-22T19:57:05.390609Z",
@@ -2275,9 +2275,9 @@
       "size_bytes": 1610
     },
     {
-      "mtime_utc": "2025-12-22T20:59:19.225457Z",
+      "mtime_utc": "2025-12-22T21:06:11.562707Z",
       "path": "docs/REPO_MANIFEST.json",
-      "size_bytes": 113900
+      "size_bytes": 113904
     },
     {
       "mtime_utc": "2025-12-22T19:57:05.291768Z",
@@ -2290,7 +2290,7 @@
       "size_bytes": 47
     },
     {
-      "mtime_utc": "2025-12-22T19:57:00.345384Z",
+      "mtime_utc": "2025-12-22T22:06:03.749841Z",
       "path": "docs/ROADMAP_BACKLOG_latest.md",
       "size_bytes": 33301
     },
