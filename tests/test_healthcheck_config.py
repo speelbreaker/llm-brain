@@ -237,7 +237,7 @@ class TestRunAgentHealthcheck:
     
     @patch("src.healthcheck.DeribitClient")
     def test_healthcheck_warn_propagates(self, mock_client):
-        """A WARN should make overall status WARN if no FAILs."""
+        """Non-blocking WARN checks should not override gate OK when gates are present."""
         mock_client.return_value.__enter__ = lambda s: s
         mock_client.return_value.__exit__ = lambda s, *args: None
         mock_client.return_value.get_index_price.return_value = 50000
@@ -252,17 +252,52 @@ class TestRunAgentHealthcheck:
                 can_trade=True,
             )
             
-            cfg = Settings(
-                deribit_env="testnet",
-                kill_switch_enabled=True,
-                llm_enabled=False,
+            # Make the rest of the system clean/isolated.
+            ok = HealthCheckResult(
+                name="ok",
+                status=CheckStatus.OK,
+                detail="ok",
+                severity="OK",
+                can_trade=True,
             )
-            result = run_agent_healthcheck(cfg)
-            
+            with patch("src.healthcheck.check_harvest_freshness", return_value=ok), \
+                patch("src.healthcheck.check_calibration_freshness", return_value=ok), \
+                patch("src.healthcheck.check_fidelity_gate", return_value=ok), \
+                patch("src.ops.facts_resolver.resolve_ops_facts") as mock_facts, \
+                patch("src.ops.gate_factories.build_underlying_gate_fns", return_value=[]), \
+                patch("src.ops.gates.GateRunner.run") as mock_gate_run:
+
+                mock_facts.return_value = {
+                    "now": "2025-01-01T00:00:00+00:00",
+                    "underlyings_active": ["BTC"],
+                    "paths": {
+                        "live_deribit_data_dir": "data/live_deribit",
+                        "calibration_dir": "data/calibration_runs",
+                        "fidelity_dir": "data/fidelity_runs",
+                    },
+                    "harvest": {"BTC": {}},
+                    "calibration": {"BTC": {}},
+                    "fidelity": {"BTC": {}},
+                }
+                mock_gate_run.return_value = {
+                    "gates": [],
+                    "gate_overall": {
+                        "global": {"status": "PASS", "severity": "OK", "can_trade": True},
+                        "by_underlying": {"BTC": {"status": "PASS", "severity": "OK", "can_trade": True}},
+                    },
+                }
+
+                # Risk config will WARN (daily_drawdown_limit_pct=0) but should not downgrade overall.
+                cfg = Settings(
+                    deribit_env="testnet",
+                    daily_drawdown_limit_pct=0.0,
+                    llm_enabled=False,
+                )
+                result = run_agent_healthcheck(cfg)
+
             has_warn = any(r["status"] == "WARN" for r in result["results"])
             assert has_warn
-            if result["overall_status"] != "FAIL":
-                assert result["overall_status"] == "WARN"
+            assert result["overall_status"] == "OK"
     
     def test_healthcheck_returns_summary(self):
         """Healthcheck should return a summary string."""

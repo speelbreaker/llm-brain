@@ -20,9 +20,11 @@ Output root keys:
 
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import subprocess
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict
@@ -34,6 +36,13 @@ def _now_utc() -> str:
 
 def _repo_root() -> Path:
     return Path(__file__).resolve().parents[1]
+
+
+def _validate_repo_root(root: Path) -> None:
+    if not (root / "pyproject.toml").exists():
+        raise SystemExit(
+            f"Refusing to run: repo root does not look valid (missing pyproject.toml): {root}"
+        )
 
 
 def _head_sha(repo_root: Path) -> str | None:
@@ -84,11 +93,55 @@ def _real_payload(repo_root: Path) -> Dict[str, Any]:
     return out
 
 
-def main() -> int:
-    repo_root = _repo_root()
+def _error_payload(repo_root: Path, exc: Exception) -> Dict[str, Any]:
+    # Always emit the keys the API would normally include, so downstream consumers
+    # (and tests) can rely on schema presence.
+    return {
+        "generated_at_utc": _now_utc(),
+        "head_sha": _head_sha(repo_root),
+        "checked_at": None,
+        "cache_age_seconds": None,
+        "last_run_at": None,
+        "overall_status": "FAIL",
+        "checks_overall": "FAIL",
+        "checks_summary": None,
+        "worst_severity": "FATAL",
+        "can_trade": False,
+        "summary": "OPS_HEALTH_GENERATION_ERROR",
+        "error_code": "OPS_HEALTH_GENERATION_ERROR",
+        "error_message": str(exc),
+        "checks": [],
+        "gates": [],
+        "gate_overall": None,
+        "can_trade_by_underlying": None,
+        "agent_paused_due_to_health": None,
+        "error": {"type": type(exc).__name__, "message": str(exc)},
+    }
+
+
+def main(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(
+        description="Generate docs/OPS_HEALTH_latest.json offline (no web server)."
+    )
+    parser.add_argument(
+        "--repo-root",
+        default=None,
+        help="Repo root (defaults to script parent repo). Used by tests.",
+    )
+    parser.add_argument(
+        "--out-path",
+        default=None,
+        help="Override output path (defaults to <repo_root>/docs/OPS_HEALTH_latest.json).",
+    )
+
+    args = parser.parse_args(argv)
+
+    repo_root = Path(args.repo_root).resolve() if args.repo_root else _repo_root()
+    _validate_repo_root(repo_root)
+
     docs_dir = repo_root / "docs"
     docs_dir.mkdir(parents=True, exist_ok=True)
-    out_path = docs_dir / "OPS_HEALTH_latest.json"
+    out_path = Path(args.out_path).resolve() if args.out_path else (docs_dir / "OPS_HEALTH_latest.json")
 
     if (os.environ.get("CONTEXT_PACK_FAKE_OPS_HEALTH") or "").strip().lower() in {"1", "true", "yes"}:
         payload = _fake_payload(repo_root)
@@ -96,14 +149,7 @@ def main() -> int:
         try:
             payload = _real_payload(repo_root)
         except Exception as e:
-            # Always write a JSON artifact, even if healthcheck fails.
-            payload = {
-                "generated_at_utc": _now_utc(),
-                "head_sha": _head_sha(repo_root),
-                "overall_status": "FAIL",
-                "summary": "OPS_HEALTH_GENERATION_ERROR",
-                "error": {"type": type(e).__name__, "message": str(e)},
-            }
+            payload = _error_payload(repo_root, e)
 
     out_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     print(f"Wrote {out_path}")
@@ -111,4 +157,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(main(sys.argv[1:]))

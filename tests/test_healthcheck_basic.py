@@ -428,6 +428,25 @@ class TestRunAgentHealthcheckGateDecision:
         assert result["checks_overall"] == "FAIL"
         assert "check_config FAIL" in result["summary"]
 
+    def test_gate_eval_error_fails_closed_when_gates_enabled(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from src.ops.gates import GateRunner
+
+        self._patch_common(monkeypatch)
+        monkeypatch.setenv("FIDELITY_GATE_MODE", "block")
+        monkeypatch.setenv("CALIBRATION_GATE_MODE", "off")
+
+        def _boom(self, gate_fns):
+            raise RuntimeError("boom")
+
+        monkeypatch.setattr(GateRunner, "run", _boom)
+
+        result = run_agent_healthcheck(Settings())
+        assert result["overall_status"] == "FAIL"
+        assert result["can_trade"] is False
+        gates_runner = next((c for c in (result.get("checks") or []) if c.get("name") == "gates_runner"), None)
+        assert gates_runner is not None
+        assert gates_runner.get("error_code") == "GATES_EVAL_ERROR"
+
 
 class TestHealthCheckResult:
     """Tests for HealthCheckResult dataclass."""

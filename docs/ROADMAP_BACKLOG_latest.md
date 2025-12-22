@@ -815,6 +815,11 @@ The system supports three levels of automation, rolled out incrementally:
 ## Changelog (auto)
 - (entries appended newest-first)
 
+- 2025-12-22T19:11Z [COPILOT] sha=382ac49
+  - Summary: Ops health single-truth: gate_overall drives overall_status/summary when present; checks only block if can_trade=false; fail-closed on gate eval error when gate modes enabled
+  - Tests: 825 passed, 5 skipped (full suite)
+  - Endpoints: none
+  - Context-pack: uploaded (no)
 - 2025-12-22T16:55Z [COPILOT] sha=fa5a78a
   - Summary: Refresh TEST_SUMMARY_latest.txt after full-suite run; Refresh context-pack latest artifacts prior to push
   - Tests: 822 passed, 5 skipped, 53 warnings in 335.18s (0:05:35)

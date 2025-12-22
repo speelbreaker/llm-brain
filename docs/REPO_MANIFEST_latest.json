@@ -627,7 +627,7 @@
       "path": "/telegram/webhook/{path_secret}"
     }
   ],
-  "generated_at_utc": "2025-12-22T20:59:20.071166Z",
+  "generated_at_utc": "2025-12-22T19:57:01.090032Z",
   "git": {
     "branch": "main",
     "head_sha": "382ac492bbd46b61d5e58f6ed79deab6fac53e3f",
@@ -635,41 +635,6 @@
     "is_dirty": true
   },
   "hotspots": [
-    {
-      "mtime_utc": "2025-12-22T20:59:19.225457Z",
-      "path": "docs/REPO_MANIFEST.json",
-      "size_bytes": 113900
-    },
-    {
-      "mtime_utc": "2025-12-22T19:57:05.392154Z",
-      "path": "docs/REPO_MANIFEST_latest.md",
-      "size_bytes": 47
-    },
-    {
-      "mtime_utc": "2025-12-22T19:57:05.390609Z",
-      "path": "docs/RECENT_DIFF_latest.md",
-      "size_bytes": 1610
-    },
-    {
-      "mtime_utc": "2025-12-22T19:57:05.291768Z",
-      "path": "docs/REPO_MANIFEST_latest.json",
-      "size_bytes": 113535
-    },
-    {
-      "mtime_utc": "2025-12-22T19:57:05.056391Z",
-      "path": "docs/FIDELITY_BTC_latest.md",
-      "size_bytes": 3356
-    },
-    {
-      "mtime_utc": "2025-12-22T19:57:05.055450Z",
-      "path": "docs/FIDELITY_BTC_latest.json",
-      "size_bytes": 3555
-    },
-    {
-      "mtime_utc": "2025-12-22T19:57:04.417213Z",
-      "path": "docs/RECENT_DIFF.md",
-      "size_bytes": 1610
-    },
     {
       "mtime_utc": "2025-12-22T19:57:00.345384Z",
       "path": "docs/ROADMAP_BACKLOG_latest.md",
@@ -679,6 +644,26 @@
       "mtime_utc": "2025-12-22T19:57:00.021760Z",
       "path": "docs/OPS_HEALTH_latest.json",
       "size_bytes": 666
+    },
+    {
+      "mtime_utc": "2025-12-22T19:19:09.851988Z",
+      "path": "docs/FIDELITY_BTC_latest.md",
+      "size_bytes": 3356
+    },
+    {
+      "mtime_utc": "2025-12-22T19:19:09.850104Z",
+      "path": "docs/FIDELITY_BTC_latest.json",
+      "size_bytes": 3555
+    },
+    {
+      "mtime_utc": "2025-12-22T19:19:09.344722Z",
+      "path": "docs/RECENT_DIFF.md",
+      "size_bytes": 1610
+    },
+    {
+      "mtime_utc": "2025-12-22T19:19:07.022949Z",
+      "path": "docs/REPO_MANIFEST.json",
+      "size_bytes": 113535
     },
     {
       "mtime_utc": "2025-12-22T19:18:53.649473Z",
@@ -734,6 +719,21 @@
       "mtime_utc": "2025-12-22T17:02:54.644898Z",
       "path": "tests/test_ops_health_endpoints.py",
       "size_bytes": 26046
+    },
+    {
+      "mtime_utc": "2025-12-22T17:02:54.643947Z",
+      "path": "tests/test_ops_health_artifact.py",
+      "size_bytes": 976
+    },
+    {
+      "mtime_utc": "2025-12-22T17:02:54.642909Z",
+      "path": "tests/test_ops_fidelity_coverage_penalty.py",
+      "size_bytes": 1144
+    },
+    {
+      "mtime_utc": "2025-12-22T17:02:54.642134Z",
+      "path": "tests/test_ops_fidelity_clamping_and_schema.py",
+      "size_bytes": 3415
     }
   ],
   "important_paths": [
@@ -2250,12 +2250,12 @@
       "size_bytes": 8110
     },
     {
-      "mtime_utc": "2025-12-22T19:57:05.055450Z",
+      "mtime_utc": "2025-12-22T19:19:09.850104Z",
       "path": "docs/FIDELITY_BTC_latest.json",
       "size_bytes": 3555
     },
     {
-      "mtime_utc": "2025-12-22T19:57:05.056391Z",
+      "mtime_utc": "2025-12-22T19:19:09.851988Z",
       "path": "docs/FIDELITY_BTC_latest.md",
       "size_bytes": 3356
     },
@@ -2265,29 +2265,14 @@
       "size_bytes": 666
     },
     {
-      "mtime_utc": "2025-12-22T19:57:04.417213Z",
+      "mtime_utc": "2025-12-22T19:19:09.344722Z",
       "path": "docs/RECENT_DIFF.md",
       "size_bytes": 1610
     },
     {
-      "mtime_utc": "2025-12-22T19:57:05.390609Z",
-      "path": "docs/RECENT_DIFF_latest.md",
-      "size_bytes": 1610
-    },
-    {
-      "mtime_utc": "2025-12-22T20:59:19.225457Z",
+      "mtime_utc": "2025-12-22T19:19:07.022949Z",
       "path": "docs/REPO_MANIFEST.json",
-      "size_bytes": 113900
-    },
-    {
-      "mtime_utc": "2025-12-22T19:57:05.291768Z",
-      "path": "docs/REPO_MANIFEST_latest.json",
       "size_bytes": 113535
-    },
-    {
-      "mtime_utc": "2025-12-22T19:57:05.392154Z",
-      "path": "docs/REPO_MANIFEST_latest.md",
-      "size_bytes": 47
     },
     {
       "mtime_utc": "2025-12-22T19:57:00.345384Z",
