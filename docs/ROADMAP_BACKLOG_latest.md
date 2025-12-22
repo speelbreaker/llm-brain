@@ -815,6 +815,11 @@ The system supports three levels of automation, rolled out incrementally:
 ## Changelog (auto)
 - (entries appended newest-first)
 
+- 2025-12-22T16:55Z [COPILOT] sha=fa5a78a
+  - Summary: Refresh TEST_SUMMARY_latest.txt after full-suite run; Refresh context-pack latest artifacts prior to push
+  - Tests: 822 passed, 5 skipped, 53 warnings in 335.18s (0:05:35)
+  - Endpoints: none
+  - Context-pack: uploaded (no)
 - 2025-12-21T21:51Z [COPILOT] sha=3bc7e86
   - Summary: Document context-pack + Drive publishing (rclone) in README; Document Fidelity latest artifacts in docs/
   - Tests: not run (docs-only)

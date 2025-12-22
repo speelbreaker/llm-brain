@@ -1,19 +1,10 @@
 {
-  "_note": "Deterministic stub written because CONTEXT_PACK_FAKE_OPS_HEALTH=1",
-  "cache_age_seconds": 0.0,
-  "can_trade": true,
-  "can_trade_by_underlying": null,
-  "checked_at": "2000-01-01T00:00:00+00:00",
-  "checks": [],
-  "checks_overall": "OK",
-  "checks_summary": "",
-  "gate_overall": null,
-  "gates": [],
-  "generated_at_utc": "2000-01-01T00:00Z",
-  "head_sha": "0000000000000000000000000000000000000000",
-  "last_run_at": "2000-01-01T00:00:00+00:00",
-  "ops_facts": {},
-  "overall_status": "OK",
-  "summary": "FAKE_OPS_HEALTH",
-  "worst_severity": "OK"
+  "error": {
+    "message": "No module named 'src'",
+    "type": "ModuleNotFoundError"
+  },
+  "generated_at_utc": "2025-12-22T16:55Z",
+  "head_sha": "fa5a78ae1468dc7400666f0d575cceae866df4a8",
+  "overall_status": "FAIL",
+  "summary": "OPS_HEALTH_GENERATION_ERROR"
 }
