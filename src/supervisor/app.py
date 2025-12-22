@@ -392,7 +392,13 @@ async def github_webhook(
             message="Supervisor is disabled. Set SUPERVISOR_ENABLED=1 to enable.",
         )
     
-    if not settings.github_webhook_secret or not settings.github_webhook_secret.strip():
+    startup_errors = getattr(request.app.state, "startup_errors", []) or []
+    missing_secret = (
+        not settings.github_webhook_secret or not settings.github_webhook_secret.strip()
+        or "GITHUB_WEBHOOK_SECRET" in startup_errors
+    )
+
+    if missing_secret:
         return JSONResponse(
             status_code=503,
             content={
