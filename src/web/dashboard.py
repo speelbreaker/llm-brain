@@ -5078,6 +5078,43 @@ def render_dashboard_html() -> str:
       }}
     }}
     
+    function updateTradeModeDescription(mode) {{
+      const descEl = document.getElementById('trade-mode-desc');
+      if (!descEl) return;
+      const descriptions = {{
+        'normal': 'All actions allowed (subject to risk checks)',
+        'close_only': 'Only CLOSE + DO_NOTHING allowed',
+        'halt': 'Only DO_NOTHING allowed (full stop)'
+      }};
+      descEl.textContent = descriptions[mode] || descriptions['normal'];
+      descEl.style.color = mode === 'halt' ? '#c62828' : (mode === 'close_only' ? '#e65100' : '#555');
+    }}
+    
+    async function updateTradeMode(mode) {{
+      const feedbackEl = document.getElementById('trade-mode-feedback');
+      feedbackEl.innerHTML = '<span style="color: #666;">Updating...</span>';
+      try {{
+        const res = await fetch('/api/system/runtime-config', {{
+          method: 'POST',
+          headers: {{'Content-Type': 'application/json'}},
+          body: JSON.stringify({{trade_mode: mode}})
+        }});
+        const data = await res.json();
+        if (data.ok) {{
+          updateTradeModeDescription(mode);
+          feedbackEl.innerHTML = `<span style="color: #2e7d32;">✓ Trade mode set to ${{mode}}</span>`;
+          setTimeout(() => {{ feedbackEl.innerHTML = ''; }}, 3000);
+          loadSystemHealthStatus();
+        }} else {{
+          feedbackEl.innerHTML = `<span style="color: #c62828;">✗ ${{data.errors?.join(', ') || 'Update failed'}}</span>`;
+          loadRuntimeConfig();
+        }}
+      }} catch (e) {{
+        feedbackEl.innerHTML = `<span style="color: #c62828;">✗ Error: ${{e.message}}</span>`;
+        loadRuntimeConfig();
+      }}
+    }}
+    
     async function updateDrawdownLimit() {{
       const inputEl = document.getElementById('drawdown-limit-input');
       const feedbackEl = document.getElementById('drawdown-limit-feedback');
