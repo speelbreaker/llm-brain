@@ -22,14 +22,14 @@ from typing import Any, Optional
 
 from src.config import Settings, settings
 from src.deribit_client import DeribitClient, DeribitAPIError
-from src.deribit.base_client import DeribitErrorCode
+from src.deribit.base_client import DeribitErrorCode, HealthSeverity
 
 
 class CheckStatus(str, Enum):
-    OK = "OK"
-    WARN = "WARN"
-    FAIL = "FAIL"
-    SKIPPED = "SKIPPED"
+    OK = "ok"
+    WARN = "warn"
+    FAIL = "fail"
+    SKIPPED = "skipped"
 
 
 @dataclass
@@ -70,24 +70,50 @@ _health_cache_lock = threading.Lock()
 _agent_paused_due_to_health: bool = False
 
 
-def _compute_worst_severity(result: dict) -> tuple[str, bool]:
+def _compute_worst_severity(result: dict) -> str | HealthSeverity:
     """Compute worst severity and can_trade from structured healthcheck results."""
     checks = result.get("checks") or result.get("results") or []
-    worst = "OK"
-    can_trade = True
+    worst: str | HealthSeverity = "OK"
 
     for check in checks:
-        severity = (check.get("severity") or "OK").upper()
+        severity_value = check.get("severity")
+        detail = (check.get("detail") or "").lower()
+        severity = "OK"
+
+        if severity_value:
+            severity = severity_value.upper()
+        elif detail:
+            if "auth" in detail or "authentication" in detail:
+                severity = "FATAL"
+            elif "rate limit" in detail or "rate-limit" in detail:
+                severity = "TRANSIENT"
+            elif "timeout" in detail:
+                severity = "TRANSIENT"
+            elif "unknown" in detail or "error" in detail:
+                severity = "DEGRADED"
+        elif str(check.get("status", "")).lower() == "fail":
+            severity = "DEGRADED"
+
         if severity == "FATAL":
-            worst = "FATAL"
-        elif severity == "DEGRADED" and worst != "FATAL":
-            worst = "DEGRADED"
+            worst = HealthSeverity.FATAL
+        elif severity == "DEGRADED" and worst != HealthSeverity.FATAL:
+            worst = HealthSeverity.DEGRADED
+        elif severity == "TRANSIENT" and worst not in (
+            HealthSeverity.FATAL,
+            HealthSeverity.DEGRADED,
+        ):
+            worst = HealthSeverity.TRANSIENT
 
+    return worst
+
+
+def _compute_can_trade(result: dict) -> bool:
+    """Compute whether any checks explicitly disallow trading."""
+    checks = result.get("checks") or result.get("results") or []
+    for check in checks:
         if check.get("can_trade") is False:
-            can_trade = False
-
-    return worst, can_trade
-
+            return False
+    return True
 
 def run_and_cache_healthcheck(cfg: Settings | None = None) -> CachedHealthStatus:
     """
@@ -102,7 +128,8 @@ def run_and_cache_healthcheck(cfg: Settings | None = None) -> CachedHealthStatus
     global _cached_health_status
     
     result = run_agent_healthcheck(cfg)
-    worst_severity, can_trade = _compute_worst_severity(result)
+    worst_severity = _compute_worst_severity(result)
+    can_trade = _compute_can_trade(result)
     result.setdefault("worst_severity", worst_severity)
     result.setdefault("can_trade", can_trade)
     result.setdefault("checked_at", datetime.now(timezone.utc).isoformat())
@@ -393,11 +420,11 @@ def check_llm_config(cfg: Settings) -> HealthCheckResult:
             if missing_key:
                 return HealthCheckResult(
                     name="llm_config",
-                    status=CheckStatus.WARN,
+                    status=CheckStatus.FAIL,
                     detail="; ".join(warnings),
                     error_code="LLM_MISSING_KEY",
-                    severity="DEGRADED",
-                    can_trade=not llm_required,
+                    severity="FATAL",
+                    can_trade=False,
                 )
             return HealthCheckResult(
                 name="llm_config",
@@ -1039,7 +1066,8 @@ def run_agent_healthcheck(cfg: Settings | None = None) -> dict[str, Any]:
         summary = ", ".join(summary_parts)
 
     checks = [_result_to_dict(r) for r in results]
-    worst_severity, can_trade = _compute_worst_severity({"checks": checks})
+    worst_severity = _compute_worst_severity({"checks": checks})
+    can_trade = _compute_can_trade({"checks": checks})
 
     return {
         "overall_status": overall_status,
