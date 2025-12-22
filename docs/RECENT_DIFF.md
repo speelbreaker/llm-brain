@@ -1,11 +1,12 @@
 # Recent Diff
 
-generated_at_utc: 2025-12-22T22:06:06Z
+generated_at_utc: 2025-12-22T22:17:03Z
 branch: main
-head_sha: 2d60e1f135590e2728398fadcc3049e277bebbb2
+head_sha: 99220a3df19cd3ca0536b87aec37b15d3600f8f7
 base: origin/main
 
 ## git log --oneline -n 25
+99220a3 Update context-pack artifacts
 2d60e1f Auto-commit 2025-12-22T20:57:23Z
 382ac49 chore: refresh generated docs
 3525f55 chore: refresh latest artifacts
@@ -30,7 +31,6 @@ cdf29b6 Harden fidelity MVP + restore legacy API
 ac51b37 Roadmap: define calibration acceptance criteria and fidelity gate
 ae29c66 Add build SHA indicator endpoint and UI
 bba4c05 Add fidelity suite UI + API endpoints
-ef5aa6f test
 
 ## git diff --stat origin/main..HEAD
  .ci_bump                                 |    3 -
@@ -39,10 +39,10 @@ ef5aa6f test
  ROADMAP_BACKLOG.md                       |    5 +
  docs/FIDELITY_BTC_latest.json            |  420 +---
  docs/FIDELITY_BTC_latest.md              |  305 +--
- docs/OPS_HEALTH_latest.json              |   25 +-
- docs/RECENT_DIFF.md                      | 1981 +--------------
+ docs/OPS_HEALTH_latest.json              |   20 +-
+ docs/RECENT_DIFF.md                      | 3798 ++++++++++++++---------------
  docs/RECENT_DIFF_latest.md               |   37 +
- docs/REPO_MANIFEST.json                  |  349 +--
+ docs/REPO_MANIFEST.json                  |  351 +--
  docs/REPO_MANIFEST_latest.json           | 3913 ++++++++++++++++++++++++++++++
  docs/REPO_MANIFEST_latest.md             |    3 +
  docs/ROADMAP_BACKLOG_latest.md           |    5 +
@@ -80,7 +80,7 @@ ef5aa6f test
  tests/test_healthcheck_basic.py          |   19 +
  tests/test_healthcheck_config.py         |   53 +-
  tests/test_supervisor.py                 |    8 +-
- 47 files changed, 5183 insertions(+), 4752 deletions(-)
+ 47 files changed, 7075 insertions(+), 4674 deletions(-)
 
 ## git diff origin/main..HEAD
 diff --git a/.ci_bump b/.ci_bump
@@ -945,55 +945,56 @@ index 8cb6960..68f3de9 100644
  }
  ```
 diff --git a/docs/OPS_HEALTH_latest.json b/docs/OPS_HEALTH_latest.json
-index d6e6250..89a5c17 100644
+index d6e6250..918be3c 100644
 --- a/docs/OPS_HEALTH_latest.json
 +++ b/docs/OPS_HEALTH_latest.json
-@@ -1,10 +1,19 @@
+@@ -1,10 +1,24 @@
  {
--  "error": {
--    "message": "No module named 'src'",
--    "type": "ModuleNotFoundError"
--  },
++  "agent_paused_due_to_health": null,
++  "cache_age_seconds": null,
++  "can_trade": false,
++  "can_trade_by_underlying": null,
++  "checked_at": null,
++  "checks": [],
++  "checks_overall": "FAIL",
++  "checks_summary": null,
+   "error": {
+     "message": "No module named 'src'",
+     "type": "ModuleNotFoundError"
+   },
 -  "generated_at_utc": "2025-12-22T17:02Z",
 -  "head_sha": "f6e339582a45a38469c24cc6b14a910fdfc49bdd",
--  "overall_status": "FAIL",
--  "summary": "OPS_HEALTH_GENERATION_ERROR"
-+  "_note": "Deterministic stub written because CONTEXT_PACK_FAKE_OPS_HEALTH=1",
-+  "cache_age_seconds": 0.0,
-+  "can_trade": true,
-+  "can_trade_by_underlying": null,
-+  "checked_at": "2000-01-01T00:00:00+00:00",
-+  "checks": [],
-+  "checks_overall": "OK",
-+  "checks_summary": "",
++  "error_code": "OPS_HEALTH_GENERATION_ERROR",
++  "error_message": "No module named 'src'",
 +  "gate_overall": null,
 +  "gates": [],
-+  "generated_at_utc": "2000-01-01T00:00Z",
-+  "head_sha": "0000000000000000000000000000000000000000",
-+  "last_run_at": "2000-01-01T00:00:00+00:00",
-+  "ops_facts": {},
-+  "overall_status": "OK",
-+  "summary": "FAKE_OPS_HEALTH",
-+  "worst_severity": "OK"
++  "generated_at_utc": "2025-12-22T22:06Z",
++  "head_sha": "2d60e1f135590e2728398fadcc3049e277bebbb2",
++  "last_run_at": null,
+   "overall_status": "FAIL",
+-  "summary": "OPS_HEALTH_GENERATION_ERROR"
++  "summary": "OPS_HEALTH_GENERATION_ERROR",
++  "worst_severity": "FATAL"
  }
 diff --git a/docs/RECENT_DIFF.md b/docs/RECENT_DIFF.md
-index 8b52c51..84dbfd7 100644
+index 8b52c51..de4abfe 100644
 --- a/docs/RECENT_DIFF.md
 +++ b/docs/RECENT_DIFF.md
-@@ -1,14 +1,17 @@
+@@ -1,14 +1,18 @@
  # Recent Diff
  
 -generated_at_utc: 2025-12-22T17:02:24Z
-+generated_at_utc: 2025-12-22T20:59:21Z
++generated_at_utc: 2025-12-22T22:06:06Z
  branch: main
 -head_sha: f6e339582a45a38469c24cc6b14a910fdfc49bdd
-+head_sha: 382ac492bbd46b61d5e58f6ed79deab6fac53e3f
++head_sha: 2d60e1f135590e2728398fadcc3049e277bebbb2
  base: origin/main
  
  ## git log --oneline -n 25
 -f6e3395 chore: refresh latest artifacts
 -fa5a78a Auto-commit 2025-12-22T16:38:19Z
 -3bc7e86 Ops health per-underlying gates + facts resolver
++2d60e1f Auto-commit 2025-12-22T20:57:23Z
 +382ac49 chore: refresh generated docs
 +3525f55 chore: refresh latest artifacts
 +ccfd131 Auto-commit 2025-12-22T16:38:19Z
@@ -1003,10 +1004,11 @@ index 8b52c51..84dbfd7 100644
  522ef78 feat(fidelity): deterministic per-underlying latest + source/path metadata + tests
  e5046b2 Merge pull request #5 from speelbreaker/security-secret-hygiene-clean
  95d9b23 test: ensure bearer redaction hits regex threshold
-@@ -28,1975 +31,7 @@ ae29c66 Add build SHA indicator endpoint and UI
+@@ -27,1976 +31,1972 @@ ac51b37 Roadmap: define calibration acceptance criteria and fidelity gate
+ ae29c66 Add build SHA indicator endpoint and UI
  bba4c05 Add fidelity suite UI + API endpoints
  ef5aa6f test
- bd1d2e7 Fix harvested calibration RV scaling
+-bd1d2e7 Fix harvested calibration RV scaling
 -84d4601 Block Deribit live_chain historically
 -c403e9c Backtest correctness: no overlap + linear USDC + cap expiry
 -e39b4a7 Finish regime IV plumbing + add provenance summary
@@ -1110,6 +1112,54 @@ index 8b52c51..84dbfd7 100644
 - tests/web/expected_routes.json                     |  443 ++-
 - tests/web/test_telegram_webhook.py                 |  126 +
 - 97 files changed, 15627 insertions(+), 1734 deletions(-)
++ .ci_bump                                 |    3 -
++ Makefile                                 |   29 +-
++ POEM.md                                  |    4 +
++ ROADMAP_BACKLOG.md                       |    5 +
++ docs/FIDELITY_BTC_latest.json            |  420 +---
++ docs/FIDELITY_BTC_latest.md              |  305 +--
++ docs/OPS_HEALTH_latest.json              |   25 +-
++ docs/RECENT_DIFF.md                      | 1981 +--------------
++ docs/RECENT_DIFF_latest.md               |   37 +
++ docs/REPO_MANIFEST.json                  |  349 +--
++ docs/REPO_MANIFEST_latest.json           | 3913 ++++++++++++++++++++++++++++++
++ docs/REPO_MANIFEST_latest.md             |    3 +
++ docs/ROADMAP_BACKLOG_latest.md           |    5 +
++ docs/TEST_SUMMARY_latest.txt             |    4 +-
++ docs/supervisor-loop.md                  |   57 -
++ scripts/capture_pytest_summary.sh        |   79 +-
++ scripts/gen_ops_health_latest.py         |   70 +-
++ scripts/gen_recent_diff.sh               |  115 +-
++ scripts/gen_repo_manifest.py             |  258 +-
++ scripts/gen_repo_manifest_md.py          |   70 -
++ scripts/gen_roadmap_latest.sh            |   27 -
++ scripts/gen_test_summary_latest.sh       |   29 -
++ scripts/push_context_pack_to_drive.sh    |   97 +-
++ src/healthcheck.py                       |   66 +-
++ src/ops/__init__.py                      |    3 -
++ src/supervisor/app.py                    |  813 ++-----
++ src/supervisor/config.py                 |    7 -
++ src/supervisor/loop/__init__.py          |    6 -
++ src/supervisor/loop/arbiter.py           |   43 -
++ src/supervisor/loop/fixers.py            |  111 -
++ src/supervisor/loop/optimist.py          |   30 -
++ src/supervisor/loop/policy.py            |   88 -
++ src/supervisor/loop/policy_defaults.json |    9 -
++ src/supervisor/loop/skeptic.py           |   20 -
++ src/supervisor/loop/types.py             |   31 -
++ src/supervisor/models.py                 |   78 +-
++ src/supervisor/policy.py                 |    2 +-
++ src/supervisor/redact.py                 |   19 +-
++ src/supervisor/telegram_notify.py        |    2 +-
++ src/web/dashboard.py                     |    8 +-
++ tests/supervisor/test_loop_invariants.py |  243 --
++ tests/supervisor/test_loop_limits.py     |  217 --
++ tests/test_context_pack.py               |  104 +-
++ tests/test_context_pack_ops_health.py    |   70 +
++ tests/test_healthcheck_basic.py          |   19 +
++ tests/test_healthcheck_config.py         |   53 +-
++ tests/test_supervisor.py                 |    8 +-
++ 47 files changed, 5183 insertions(+), 4752 deletions(-)
  
  ## git diff origin/main..HEAD
 -diff --git a/.vscode/tasks.json b/.vscode/tasks.json
@@ -1262,26 +1312,53 @@ index 8b52c51..84dbfd7 100644
 - 
 - ### 1. Live Agent Dry-Run Test
 - 
--diff --git a/Makefile b/Makefile
++diff --git a/.ci_bump b/.ci_bump
++deleted file mode 100644
++index ae63d90..0000000
++--- a/.ci_bump
+++++ /dev/null
++@@ -1,3 +0,0 @@
++-
++-ci bump 2025-12-22T18:47:34Z
++-ci bump 2025-12-22T18:59:04Z
+ diff --git a/Makefile b/Makefile
 -new file mode 100644
 -index 0000000..07d1860
 ---- /dev/null
--+++ b/Makefile
++index 8f635ba..5bf1a75 100644
++--- a/Makefile
+ +++ b/Makefile
 -@@ -0,0 +1,14 @@
 -+context-pack:
 -+	python3 scripts/gen_repo_manifest.py
 -+	bash scripts/gen_recent_diff.sh
 -+	python3 scripts/gen_fidelity_latest_docs.py
 -+
--+extras:
--+	python3 scripts/gen_ops_health_latest.py
++@@ -1,15 +1,14 @@
++-.PHONY: context-pack context-pack-extras context-pack-all context-pack-push
++-
++-context-pack:
++-	./scripts/gen_repo_manifest.py
++-	./scripts/gen_repo_manifest_md.py
++-	./scripts/gen_recent_diff.sh
++-
++-context-pack-extras:
++-	./scripts/gen_roadmap_latest.sh
++-	./scripts/gen_test_summary_latest.sh
++-
++-context-pack-all: context-pack context-pack-extras
++-
++-context-pack-push: context-pack-all
++-	CONTEXT_PACK_PUSH_DIRECT=1 ./scripts/push_context_pack_to_drive.sh
+ +extras:
+ +	python3 scripts/gen_ops_health_latest.py
 -+
 -+context-pack-push: context-pack extras
--+	@if [ ! -f docs/TEST_SUMMARY_latest.txt ]; then \
--+		printf "%s\n%s\n" "$$(date -u +%Y-%m-%dT%H:%MZ)" "pytest summary unavailable" > docs/TEST_SUMMARY_latest.txt; \
--+	fi
--+	cp ROADMAP_BACKLOG.md docs/ROADMAP_BACKLOG_latest.md
--+	@echo "Updated docs/ROADMAP_BACKLOG_latest.md (upload handled externally)"
+ +	@if [ ! -f docs/TEST_SUMMARY_latest.txt ]; then \
+ +		printf "%s\n%s\n" "$$(date -u +%Y-%m-%dT%H:%MZ)" "pytest summary unavailable" > docs/TEST_SUMMARY_latest.txt; \
+ +	fi
+ +	cp ROADMAP_BACKLOG.md docs/ROADMAP_BACKLOG_latest.md
+ +	@echo "Updated docs/ROADMAP_BACKLOG_latest.md (upload handled externally)"
 -diff --git a/POEM.md b/POEM.md
 -new file mode 100644
 -index 0000000..2744d6e
@@ -1289,7 +1366,7 @@ index 8b52c51..84dbfd7 100644
 -+++ b/POEM.md
 -@@ -0,0 +1,22 @@
 -+# The Algorithm's Dance
--+
+ +
 -+In circuits deep where logic flows,
 -+A trader wakes, the market knows.
 -+Each five-minute tick, a chance to see
@@ -1309,7 +1386,11 @@ index 8b52c51..84dbfd7 100644
 -+The agent learns, the agent grows.
 -+So here's to code that trades with care,
 -+A faithful servant, always there.
--+
+++context-pack: extras
+++	python3 scripts/gen_repo_manifest.py
+++	bash scripts/gen_recent_diff.sh
+++	python3 scripts/gen_fidelity_latest_docs.py
+ +
 -diff --git a/README.md b/README.md
 -index dea428a..0752cb6 100644
 ---- a/README.md
@@ -1317,7 +1398,15 @@ index 8b52c51..84dbfd7 100644
 -@@ -92,6 +92,47 @@ python agent_loop.py
 - python -m backtest.env_simulator
 - ```
-- 
+++context-pack-push: context-pack
++diff --git a/POEM.md b/POEM.md
++index 2744d6e..ac8a4d2 100644
++--- a/POEM.md
+++++ b/POEM.md
++@@ -20,3 +20,7 @@ The agent learns, the agent grows.
++ So here's to code that trades with care,
++ A faithful servant, always there.
+  
 -+## Context Pack & Drive Publishing
 -+
 -+This repo can generate a deterministic "context pack" under `docs/` for external consumers (e.g., a Google Drive folder used as LLM context).
@@ -1330,16 +1419,16 @@ index 8b52c51..84dbfd7 100644
 -+```
 -+
 -+### Fidelity “latest” artifacts
--+
+ +
 -+If Fidelity has been run and the canonical store exists, the context-pack generator will also publish Fidelity reports into `docs/`:
--+
+ +
 -+- `docs/FIDELITY_BTC_latest.json` / `docs/FIDELITY_BTC_latest.md`
 -+  - copied from `data/fidelity_runs/BTC/latest/fidelity_report.json` and `.md`
 -+- `docs/FIDELITY_ETH_latest.json` / `docs/FIDELITY_ETH_latest.md` (if present)
 -+  - copied from `data/fidelity_runs/ETH/latest/fidelity_report.json` and `.md`
--+
+ +
 -+Missing sources do **not** fail context-pack generation; the generator prints a warning and skips those files.
--+
+ +
 -+You can also run the generator directly:
 -+
 -+```bash
@@ -1362,13 +1451,17 @@ index 8b52c51..84dbfd7 100644
 - ## Project Structure
 - 
 - ```
--diff --git a/ROADMAP_BACKLOG.md b/ROADMAP_BACKLOG.md
+ diff --git a/ROADMAP_BACKLOG.md b/ROADMAP_BACKLOG.md
 -index 21bce55..131a69a 100644
----- a/ROADMAP_BACKLOG.md
--+++ b/ROADMAP_BACKLOG.md
++index 131a69a..74b0dcd 100644
+ --- a/ROADMAP_BACKLOG.md
+ +++ b/ROADMAP_BACKLOG.md
 -@@ -811,3 +811,48 @@ The system supports three levels of automation, rolled out incrementally:
 - 5. **Audit trail:** Every run, every LLM suggestion, and every parameter change is logged and traceable.
-- 
++@@ -815,6 +815,11 @@ The system supports three levels of automation, rolled out incrementally:
++ ## Changelog (auto)
++ - (entries appended newest-first)
+  
 - ---
 -+
 -+## Changelog (auto)
@@ -1392,8 +1485,11 @@ index 8b52c51..84dbfd7 100644
 -+- 2025-12-21T20:34Z [COPILOT] sha=3bc7e86
 -+  - Summary: Fix ROADMAP_BACKLOG duplicate Changelog (auto) header; Update changelog append script to target last section
 -+  - Tests: not run (docs/script-only change)
--+  - Endpoints: none
--+  - Context-pack: uploaded (no)
+++- 2025-12-22T19:11Z [COPILOT] sha=382ac49
+++  - Summary: Ops health single-truth: gate_overall drives overall_status/summary when present; checks only block if can_trade=false; fail-closed on gate eval error when gate modes enabled
+++  - Tests: 825 passed, 5 skipped (full suite)
+ +  - Endpoints: none
+ +  - Context-pack: uploaded (no)
 -+- 2025-12-21T20:31Z [COPILOT] sha=3bc7e86
 -+  - Summary: Add OPS_HEALTH_latest.json context-pack artifact generator (fake mode for tests); Wire ops health + test summary into context-pack-push; Make ops fidelity auditable: raw scores + clamping warnings + schema hard-fail
 -+  - Tests: 5 passed, 4 warnings in 10.55s
@@ -1589,7 +1685,28 @@ index 8b52c51..84dbfd7 100644
 --    "cfg_class": "CallSimulationConfig",
 --    "type": "synthetic_replay",
 --    "underlying": "BTC"
---  },
++ - 2025-12-22T16:55Z [COPILOT] sha=fa5a78a
++   - Summary: Refresh TEST_SUMMARY_latest.txt after full-suite run; Refresh context-pack latest artifacts prior to push
++   - Tests: 822 passed, 5 skipped, 53 warnings in 335.18s (0:05:35)
++diff --git a/docs/FIDELITY_BTC_latest.json b/docs/FIDELITY_BTC_latest.json
++index ff44c7f..135e9e4 100644
++--- a/docs/FIDELITY_BTC_latest.json
+++++ b/docs/FIDELITY_BTC_latest.json
++@@ -1,118 +1,9 @@
++ {
++   "component_scores": {
++-    "iv_surface_level": 100.0,
++-    "spot_iv_coupling": 100.0,
++-    "strategy_pnl_parity": 100.00000000000001,
+++    "strategy_pnl_parity": 100.0,
++     "underlying_returns": 100.0
++   },
++-  "component_status": {
++-    "iv_surface_level": "not_available",
++-    "spot_iv_coupling": "not_available",
++-    "strategy_pnl_parity": "not_available",
++-    "underlying_returns": "not_available"
+ -  },
 --  "overall_score": 100.0,
 --  "run_id": "20251219_234717",
 --  "strategy_parity": {
@@ -1638,7 +1755,13 @@ index 8b52c51..84dbfd7 100644
 --          "spot_first": 0.0,
 --          "spot_last": 85758.41
 --        }
---      },
++-  "components": {
++-    "iv_surface_level": {
++-      "meta": {
++-        "coverage": 0.0,
++-        "mae": null,
++-        "mae_by_bucket": {}
+ -      },
 --      {
 --        "live": {
 --          "notes": "P0 placeholder (execution not implemented)",
@@ -1652,8 +1775,14 @@ index 8b52c51..84dbfd7 100644
 --          "num_trades": 0,
 --          "spot_first": 0.0,
 --          "spot_last": 85758.41
---        }
---      },
++-      "metrics": {
++-        "iv_bucket_mae": {
++-          "error": 0.0,
++-          "k": 1.0,
++-          "tolerance": 0.05,
++-          "weight": 1.0
+ -        }
+ -      },
 --      {
 --        "live": {
 --          "notes": "P0 placeholder (execution not implemented)",
@@ -1808,14 +1937,20 @@ index 8b52c51..84dbfd7 100644
 --        "spot_first": 0.0,
 --        "spot_last": 85758.41
 --      }
---    },
++-      "status": "not_available",
++-      "weight": 0.3
+ -    },
 --    {
 --      "live": {
 --        "notes": "P0 placeholder (execution not implemented)",
 --        "num_trades": 0,
 --        "spot_first": 0.0,
 --        "spot_last": 0.0
---      },
++-    "spot_iv_coupling": {
++-      "meta": {
++-        "corr_live": null,
++-        "corr_synth": null
+ -      },
 --      "name": "put_spread_credit",
 --      "synthetic": {
 --        "notes": "P0 placeholder (execution not implemented)",
@@ -1830,7 +1965,14 @@ index 8b52c51..84dbfd7 100644
 --        "num_trades": 0,
 --        "spot_first": 0.0,
 --        "spot_last": 0.0
---      },
++-      "metrics": {
++-        "corr_spot_div_diff": {
++-          "error": 0.0,
++-          "k": 1.0,
++-          "tolerance": 0.3,
++-          "weight": 1.0
++-        }
+ -      },
 --      "name": "call_spread_debit",
 --      "synthetic": {
 --        "notes": "P0 placeholder (execution not implemented)",
@@ -1838,165 +1980,23 @@ index 8b52c51..84dbfd7 100644
 --        "spot_first": 0.0,
 --        "spot_last": 85758.41
 --      }
---    },
++-      "status": "not_available",
++-      "weight": 0.2
+ -    },
 --    {
 --      "live": {
 --        "notes": "P0 placeholder (execution not implemented)",
 --        "num_trades": 0,
 --        "spot_first": 0.0,
 --        "spot_last": 0.0
---      },
++-    "strategy_pnl_parity": {
++-      "meta": {
++-        "n_strategies": 6
+ -      },
 --      "name": "calendar",
 --      "synthetic": {
 --        "notes": "P0 placeholder (execution not implemented)",
 --        "num_trades": 0,
 --        "spot_first": 0.0,
---        "spot_last": 85758.41
---      }
---    }
---  ]
---}
---```
--diff --git a/data/fidelity_runs/BTC/latest/fidelity_report.json b/data/fidelity_runs/BTC/latest/fidelity_report.json
--deleted file mode 100644
--index 135e9e4..0000000
----- a/data/fidelity_runs/BTC/latest/fidelity_report.json
--+++ /dev/null
--@@ -1,131 +0,0 @@
---{
---  "component_scores": {
---    "strategy_pnl_parity": 100.0,
---    "underlying_returns": 100.0
---  },
---  "gate": "TRUSTED",
---  "market_live_meta": {
---    "ds_class": "LiveDeribitDataSource",
---    "margin_type": "linear",
---    "settlement_ccy": "USDC",
---    "type": "live_replay",
---    "underlying": "BTC"
---  },
---  "market_synth_meta": {
---    "cfg_class": "CallSimulationConfig",
---    "type": "synthetic_replay",
---    "underlying": "BTC"
---  },
---  "overall_score": 100.0,
---  "run_id": "20251219_234717",
---  "strategy_parity": {
---    "decision_times": [
---      "2025-12-07T00:00:00+00:00",
---      "2025-12-08T00:00:00+00:00",
---      "2025-12-09T00:00:00+00:00",
---      "2025-12-10T00:00:00+00:00",
---      "2025-12-11T00:00:00+00:00",
---      "2025-12-12T00:00:00+00:00",
---      "2025-12-13T00:00:00+00:00",
---      "2025-12-14T00:00:00+00:00",
---      "2025-12-15T00:00:00+00:00",
---      "2025-12-16T00:00:00+00:00",
---      "2025-12-17T00:00:00+00:00",
---      "2025-12-18T00:00:00+00:00",
---      "2025-12-19T00:00:00+00:00"
---    ],
---    "strategies": [
---      {
---        "live": {
---          "notes": "P0 placeholder (execution not implemented)",
---          "num_trades": 0,
---          "spot_first": 0.0,
---          "spot_last": 0.0
---        },
---        "name": "covered_call",
---        "synthetic": {
---          "notes": "P0 placeholder (execution not implemented)",
---          "num_trades": 0,
---          "spot_first": 0.0,
---          "spot_last": 85758.41
---        }
---      },
---      {
---        "live": {
---          "notes": "P0 placeholder (execution not implemented)",
---          "num_trades": 0,
---          "spot_first": 0.0,
---          "spot_last": 0.0
---        },
---        "name": "cash_secured_put",
---        "synthetic": {
---          "notes": "P0 placeholder (execution not implemented)",
---          "num_trades": 0,
---          "spot_first": 0.0,
---          "spot_last": 85758.41
---        }
---      },
---      {
---        "live": {
---          "notes": "P0 placeholder (execution not implemented)",
---          "num_trades": 0,
---          "spot_first": 0.0,
---          "spot_last": 0.0
---        },
---        "name": "short_strangle",
---        "synthetic": {
---          "notes": "P0 placeholder (execution not implemented)",
---          "num_trades": 0,
---          "spot_first": 0.0,
---          "spot_last": 85758.41
---        }
---      },
---      {
---        "live": {
---          "notes": "P0 placeholder (execution not implemented)",
---          "num_trades": 0,
---          "spot_first": 0.0,
---          "spot_last": 0.0
---        },
---        "name": "put_spread_credit",
---        "synthetic": {
---          "notes": "P0 placeholder (execution not implemented)",
---          "num_trades": 0,
---          "spot_first": 0.0,
---          "spot_last": 85758.41
---        }
---      },
---      {
---        "live": {
---          "notes": "P0 placeholder (execution not implemented)",
---          "num_trades": 0,
---          "spot_first": 0.0,
---          "spot_last": 0.0
---        },
---        "name": "call_spread_debit",
---        "synthetic": {
---          "notes": "P0 placeholder (execution not implemented)",
---          "num_trades": 0,
---          "spot_first": 0.0,
---          "spot_last": 85758.41
---        }
---      },
---      {
---        "live": {
---          "notes": "P0 placeholder (execution not implemented)",
---          "num_trades": 0,
---          "spot_first": 0.0,
---          "spot_last": 0.0
---        },
---        "name": "calendar",
---        "synthetic": {
---          "notes": "P0 placeholder (execution not implemented)",
---          "num_trades": 0,
---          "spot_first": 0.0,
---          "spot_last": 85758.41
---        }
---      }
---    ]
---  },
---  "timestamp": "2025-12-19T23:47:17.593360+00:00"
---}
--\ No newline at end of file
--diff --git a/data/fidelity_runs/BTC/latest/fidelity_report.md b/data/fidelity_runs/BTC/latest/fidelity_report.md
--deleted file mode 100644
--index 68f3de9..0000000
 
 TRUNCATED

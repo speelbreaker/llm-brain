@@ -1,24 +1,19 @@
 {
-  "agent_paused_due_to_health": null,
-  "cache_age_seconds": null,
-  "can_trade": false,
+  "_note": "Deterministic stub written because CONTEXT_PACK_FAKE_OPS_HEALTH=1",
+  "cache_age_seconds": 0.0,
+  "can_trade": true,
   "can_trade_by_underlying": null,
-  "checked_at": null,
+  "checked_at": "2000-01-01T00:00:00+00:00",
   "checks": [],
-  "checks_overall": "FAIL",
-  "checks_summary": null,
-  "error": {
-    "message": "No module named 'src'",
-    "type": "ModuleNotFoundError"
-  },
-  "error_code": "OPS_HEALTH_GENERATION_ERROR",
-  "error_message": "No module named 'src'",
+  "checks_overall": "OK",
+  "checks_summary": "",
   "gate_overall": null,
   "gates": [],
-  "generated_at_utc": "2025-12-22T22:06Z",
-  "head_sha": "2d60e1f135590e2728398fadcc3049e277bebbb2",
-  "last_run_at": null,
-  "overall_status": "FAIL",
-  "summary": "OPS_HEALTH_GENERATION_ERROR",
-  "worst_severity": "FATAL"
+  "generated_at_utc": "2000-01-01T00:00Z",
+  "head_sha": "0000000000000000000000000000000000000000",
+  "last_run_at": "2000-01-01T00:00:00+00:00",
+  "ops_facts": {},
+  "overall_status": "OK",
+  "summary": "FAKE_OPS_HEALTH",
+  "worst_severity": "OK"
 }
