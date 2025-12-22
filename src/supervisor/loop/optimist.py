@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from typing import Iterable
-
 from .types import FixPlan
 from ..models import VerificationReport
 

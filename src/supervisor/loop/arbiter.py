@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
-from typing import Iterable
+from typing import TYPE_CHECKING
 
 from .policy import PolicyContext, PolicyDefinition, evaluate_policy, load_policy
-from .types import FixPlan, LoopDecision, SkepticReport
+from .types import FixPlan, LoopDecision
+
+if TYPE_CHECKING:
+    from .types import SkepticReport
 
 
 DEFAULT_POLICY = load_policy()
@@ -13,7 +16,7 @@ DEFAULT_POLICY = load_policy()
 
 def arbitrate(
     plan: FixPlan,
-    skeptic: SkepticReport,
+    skeptic: "SkepticReport",
     policy: PolicyDefinition,
     changed_files: list[str],
     pr_labels: list[str],

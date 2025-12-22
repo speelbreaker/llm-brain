@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from typing import Optional
 
 from .config import SupervisorSettings
-from .store import JobStore, PRApprovalState
+from .store import JobStore
 
 
 @dataclass

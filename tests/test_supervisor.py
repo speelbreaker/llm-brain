@@ -1,12 +1,11 @@
 """Unit tests for PR Supervisor."""
 
-import json
 import os
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import patch
 
 from src.supervisor.config import SupervisorSettings
-from src.supervisor.github import format_pr_comment, parse_webhook_payload, verify_signature
+from src.supervisor.github import format_fallback_comment, format_pr_comment, parse_webhook_payload, verify_signature
 from src.supervisor.models import (
     ArbiterDecision,
     CheckResult,
@@ -15,8 +14,7 @@ from src.supervisor.models import (
     SupervisorJob,
     VerificationReport,
 )
-from src.supervisor.runner import VerificationRunner, get_sanitized_env
-from src.supervisor.github import format_fallback_comment
+from src.supervisor.runner import get_sanitized_env
 from src.supervisor.debate import LLMFailure
 
 

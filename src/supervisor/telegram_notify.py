@@ -17,7 +17,7 @@ from typing import Optional
 import httpx
 
 from .config import SupervisorSettings
-from .models import ArbiterDecision, CheckResult, DiffStats, JobStatus, SupervisorJob
+from .models import ArbiterDecision, CheckResult, DiffStats, SupervisorJob
 from .retry import with_retry
 
 logger = logging.getLogger(__name__)
