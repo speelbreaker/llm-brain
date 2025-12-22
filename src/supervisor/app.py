@@ -38,6 +38,17 @@ logger = logging.getLogger(__name__)
 MAX_TRUNCATE_CHARS = 5000
 
 
+def _ensure_event_loop() -> None:
+    """Ensure a default event loop exists for sync test contexts."""
+    try:
+        asyncio.get_event_loop()
+    except RuntimeError:
+        asyncio.set_event_loop(asyncio.new_event_loop())
+
+
+_ensure_event_loop()
+
+
 class HealthResponse(BaseModel):
     ok: bool
     enabled: bool
@@ -254,6 +265,8 @@ async def lifespan(app: FastAPI):
     """Application lifespan with startup validation and worker management."""
     import httpx
     use_preconfigured_settings = getattr(app.state, "use_preconfigured_settings", False)
+    if hasattr(app.state, "use_preconfigured_settings"):
+        app.state.use_preconfigured_settings = False
     preconfigured_settings = getattr(app.state, "settings", None)
     if use_preconfigured_settings and isinstance(preconfigured_settings, SupervisorSettings):
         settings = preconfigured_settings
@@ -264,6 +277,8 @@ async def lifespan(app: FastAPI):
     app.state.startup_errors = []  # list[str]
 
     use_preconfigured_job_queue = getattr(app.state, "use_preconfigured_job_queue", False)
+    if hasattr(app.state, "use_preconfigured_job_queue"):
+        app.state.use_preconfigured_job_queue = False
     job_queue = getattr(app.state, "job_queue", None)
     if job_queue is None or not use_preconfigured_job_queue:
         job_queue = asyncio.Queue()
@@ -271,10 +286,14 @@ async def lifespan(app: FastAPI):
     app.state.supervisor_worker_task = None  # Optional[asyncio.Task]
 
     use_preconfigured_store = getattr(app.state, "use_preconfigured_store", False)
+    if hasattr(app.state, "use_preconfigured_store"):
+        app.state.use_preconfigured_store = False
     if not use_preconfigured_store or not getattr(app.state, "store", None):
         app.state.store = JobStore(f"{settings.base_jobs_dir}/job_history.jsonl")
 
     use_preconfigured_github_client = getattr(app.state, "use_preconfigured_github_client", False)
+    if hasattr(app.state, "use_preconfigured_github_client"):
+        app.state.use_preconfigured_github_client = False
     if use_preconfigured_github_client and getattr(app.state, "github_client", None):
         pass
     else:
