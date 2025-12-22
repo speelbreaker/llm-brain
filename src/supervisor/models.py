@@ -128,7 +128,7 @@ class SupervisorJob(BaseModel):
     fix_plan: Optional[dict] = None
     skeptic_report: Optional[dict] = None
     loop_decision: Optional[dict] = None
-    fix_attempts: list[FixAttempt] = Field(default_factory=list)
+    fix_attempt_history: list[FixAttempt] = Field(default_factory=list)
     pr_comment_id: Optional[int] = None
     
     final_message: str = ""

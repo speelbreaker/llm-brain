@@ -173,6 +173,10 @@ def test_loop_invariants_lint_only(tmp_path, monkeypatch):
     supervisor_app.state.github_client = github_client
     supervisor_app.state.telegram_http = None
     supervisor_app.state.job_queue = SimpleNamespace(put=AsyncMock())
+    supervisor_app.state.use_preconfigured_settings = True
+    supervisor_app.state.use_preconfigured_store = True
+    supervisor_app.state.use_preconfigured_job_queue = True
+    supervisor_app.state.use_preconfigured_github_client = True
 
     payload = {
         "action": "opened",

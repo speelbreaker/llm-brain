@@ -106,15 +106,24 @@ def redact_job_for_api(job_dict: dict, settings: "SupervisorSettings") -> dict:
             verification["checks"] = checks
         result["verification"] = verification
     
-    if "fix_attempts" in result and isinstance(result["fix_attempts"], list):
-        fix_attempts = []
-        for attempt in result["fix_attempts"]:
+    def _redact_fix_attempts(attempts: list[dict]) -> list[dict]:
+        redacted = []
+        for attempt in attempts:
             attempt_copy = attempt.copy()
             if "codex_output" in attempt_copy and isinstance(attempt_copy["codex_output"], str):
                 attempt_copy["codex_output"] = redact_secrets(attempt_copy["codex_output"], settings)
             if "codex_prompt" in attempt_copy and isinstance(attempt_copy["codex_prompt"], str):
                 attempt_copy["codex_prompt"] = redact_secrets(attempt_copy["codex_prompt"], settings)
-            fix_attempts.append(attempt_copy)
-        result["fix_attempts"] = fix_attempts
+            redacted.append(attempt_copy)
+        return redacted
+
+    if "fix_attempt_history" in result and isinstance(result["fix_attempt_history"], list):
+        result["fix_attempt_history"] = _redact_fix_attempts(result["fix_attempt_history"])
+
+    if "fix_attempts" in result and isinstance(result["fix_attempts"], list):
+        result["fix_attempts"] = _redact_fix_attempts(result["fix_attempts"])
+
+    if "fix_attempt_history" not in result and "fix_attempts" in result:
+        result["fix_attempt_history"] = result["fix_attempts"]
     
     return result

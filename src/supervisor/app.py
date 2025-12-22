@@ -93,8 +93,20 @@ def truncate_job_for_api(job_dict: dict) -> dict:
                     check["stderr"] = truncated["value"]
                     check["stderr_truncated"] = truncated["truncated"]
     
-    if job_dict.get("fix_attempts") and isinstance(job_dict["fix_attempts"], list):
-        for attempt in job_dict["fix_attempts"]:
+    attempts_key = "fix_attempt_history"
+    fallback_key = "fix_attempts"
+    attempts = job_dict.get(attempts_key)
+    key_used = attempts_key if isinstance(attempts, list) else None
+    if not key_used:
+        attempts = job_dict.get(fallback_key)
+        if isinstance(attempts, list):
+            key_used = fallback_key
+        else:
+            attempts = None
+            key_used = None
+
+    if attempts and isinstance(attempts, list):
+        for attempt in attempts:
             if "codex_output" in attempt:
                 truncated = truncate_field(attempt.get("codex_output"))
                 attempt["codex_output"] = truncated["value"]
@@ -103,7 +115,8 @@ def truncate_job_for_api(job_dict: dict) -> dict:
                 truncated = truncate_field(attempt.get("codex_prompt"))
                 attempt["codex_prompt"] = truncated["value"]
                 attempt["codex_prompt_truncated"] = truncated["truncated"]
-    
+        if key_used != attempts_key:
+            job_dict[attempts_key] = attempts
     return job_dict
 
 
@@ -240,19 +253,35 @@ async def job_worker(app: FastAPI) -> None:
 async def lifespan(app: FastAPI):
     """Application lifespan with startup validation and worker management."""
     import httpx
-    
-    settings = get_settings()
-    app.state.settings = settings
+    use_preconfigured_settings = getattr(app.state, "use_preconfigured_settings", False)
+    preconfigured_settings = getattr(app.state, "settings", None)
+    if use_preconfigured_settings and isinstance(preconfigured_settings, SupervisorSettings):
+        settings = preconfigured_settings
+    else:
+        settings = get_settings()
+        app.state.settings = settings
     app.state.ready = False
     app.state.startup_errors = []  # list[str]
-    
-    app.state.job_queue = asyncio.Queue()
+
+    use_preconfigured_job_queue = getattr(app.state, "use_preconfigured_job_queue", False)
+    job_queue = getattr(app.state, "job_queue", None)
+    if job_queue is None or not use_preconfigured_job_queue:
+        job_queue = asyncio.Queue()
+        app.state.job_queue = job_queue
     app.state.supervisor_worker_task = None  # Optional[asyncio.Task]
-    
-    app.state.store = JobStore(f"{settings.base_jobs_dir}/job_history.jsonl")
-    app.state.github_client = None
-    app.state.telegram_http = None
-    
+
+    use_preconfigured_store = getattr(app.state, "use_preconfigured_store", False)
+    if not use_preconfigured_store or not getattr(app.state, "store", None):
+        app.state.store = JobStore(f"{settings.base_jobs_dir}/job_history.jsonl")
+
+    use_preconfigured_github_client = getattr(app.state, "use_preconfigured_github_client", False)
+    if use_preconfigured_github_client and getattr(app.state, "github_client", None):
+        pass
+    else:
+        app.state.github_client = None
+    if not hasattr(app.state, "telegram_http"):
+        app.state.telegram_http = None
+
     if settings.enabled:
         missing = []
         if not settings.github_webhook_secret or not settings.github_webhook_secret.strip():
@@ -266,13 +295,18 @@ async def lifespan(app: FastAPI):
             app.state.startup_errors = missing
             app.state.ready = False
         else:
-            app.state.github_client = GitHubClient(settings.github_token)  # type: ignore[arg-type]
+            if not getattr(app.state, "github_client", None):
+                app.state.github_client = GitHubClient(settings.github_token)  # type: ignore[arg-type]
             if settings.telegram_enabled and settings.telegram_bot_token and settings.telegram_chat_id:
-                app.state.telegram_http = httpx.AsyncClient(timeout=httpx.Timeout(20.0))
+                if not getattr(app.state, "telegram_http", None):
+                    app.state.telegram_http = httpx.AsyncClient(timeout=httpx.Timeout(20.0))
             app.state.ready = True
-            
-            app.state.supervisor_worker_task = asyncio.create_task(job_worker(app))
-            logger.info("Supervisor ready with job worker started")
+
+            if hasattr(job_queue, "get"):
+                app.state.supervisor_worker_task = asyncio.create_task(job_worker(app))
+                logger.info("Supervisor ready with job worker started")
+            else:
+                logger.info("Supervisor ready (custom job queue, worker not started)")
     else:
         logger.info("Supervisor disabled (SUPERVISOR_ENABLED=0)")
         app.state.ready = True
@@ -288,8 +322,13 @@ async def lifespan(app: FastAPI):
             pass
         logger.info("Job worker stopped")
     
-    if app.state.github_client:
-        await app.state.github_client.close()
+    github_client = getattr(app.state, "github_client", None)
+    if github_client:
+        close_method = getattr(github_client, "close", None)
+        if close_method:
+            close_result = close_method()
+            if inspect.isawaitable(close_result):
+                await close_result
     
     if app.state.telegram_http:
         await app.state.telegram_http.aclose()
@@ -897,7 +936,7 @@ async def run_supervisor_job(job: SupervisorJob, app: FastAPI) -> None:
                     f"{loop_policy.max_loc_changed} LOC)"
                 )
                 fix_attempt.committed = False
-                job.fix_attempts.append(fix_attempt)
+                job.fix_attempt_history.append(fix_attempt)
                 job.transition_stage(JobStage.VERIFYING)
                 store.save(job)
 
@@ -921,7 +960,7 @@ async def run_supervisor_job(job: SupervisorJob, app: FastAPI) -> None:
             new_verification = await runner.run_checks(workspace_path, job.head_sha)
             job.increment_verify_attempt()
             fix_attempt.verification = new_verification
-            job.fix_attempts.append(fix_attempt)
+            job.fix_attempt_history.append(fix_attempt)
             store.save(job)
 
             if new_verification.all_passed:
@@ -1058,7 +1097,7 @@ async def run_supervisor_job(job: SupervisorJob, app: FastAPI) -> None:
 
             if not success:
                 fix_attempt.committed = False
-                job.fix_attempts.append(fix_attempt)
+                job.fix_attempt_history.append(fix_attempt)
                 store.save(job)
                 backoff = _compute_fix_backoff(job.fix_attempts, settings)
                 if backoff > 0:
@@ -1081,7 +1120,7 @@ async def run_supervisor_job(job: SupervisorJob, app: FastAPI) -> None:
                     f"{loop_policy.max_loc_changed} LOC)"
                 )
                 fix_attempt.committed = False
-                job.fix_attempts.append(fix_attempt)
+                job.fix_attempt_history.append(fix_attempt)
                 job.transition_stage(JobStage.VERIFYING)
                 store.save(job)
 
@@ -1117,7 +1156,7 @@ async def run_supervisor_job(job: SupervisorJob, app: FastAPI) -> None:
                 if commit_sha:
                     fix_attempt.committed = True
                     fix_attempt.commit_sha = commit_sha
-                    job.fix_attempts.append(fix_attempt)
+                    job.fix_attempt_history.append(fix_attempt)
 
                     job.update_status(JobStatus.FIXED)
                     job.final_message = f"Fixed and pushed: {commit_sha[:8]}"
@@ -1146,7 +1185,7 @@ async def run_supervisor_job(job: SupervisorJob, app: FastAPI) -> None:
 
                 job.update_status(JobStatus.FIXED)
                 job.final_message = "Fixed in DRY RUN; not pushed"
-                job.fix_attempts.append(fix_attempt)
+                job.fix_attempt_history.append(fix_attempt)
                 job.transition_stage(JobStage.VERIFYING)
                 store.save(job)
 
@@ -1167,7 +1206,7 @@ async def run_supervisor_job(job: SupervisorJob, app: FastAPI) -> None:
                 return
 
             verification = new_verification
-            job.fix_attempts.append(fix_attempt)
+            job.fix_attempt_history.append(fix_attempt)
             store.save(job)
             backoff = _compute_fix_backoff(job.fix_attempts, settings)
             if backoff > 0:
