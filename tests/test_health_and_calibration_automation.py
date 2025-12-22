@@ -21,7 +21,6 @@ from src.healthcheck import (
     is_agent_paused_due_to_health,
     get_health_status_for_api,
 )
-from src.deribit.base_client import HealthSeverity
 
 
 class TestCachedHealthStatus:
@@ -53,7 +52,13 @@ class TestCachedHealthStatus:
             "overall_status": "OK",
             "summary": "All checks passed",
             "results": [
-                {"name": "config", "status": "ok", "detail": "mode=research"},
+                {
+                    "name": "config",
+                    "status": "OK",
+                    "detail": "mode=research",
+                    "severity": "OK",
+                    "can_trade": True,
+                },
             ],
         }
         
@@ -76,48 +81,76 @@ class TestHealthSeverityComputation:
         
         result = {
             "results": [
-                {"name": "deribit_private", "status": "fail", "detail": "Authentication failed"},
+                {
+                    "name": "deribit_private",
+                    "status": "FAIL",
+                    "detail": "Authentication failed",
+                    "severity": "FATAL",
+                    "can_trade": False,
+                },
             ]
         }
         
-        severity = _compute_worst_severity(result)
-        assert severity == HealthSeverity.FATAL
+        severity, can_trade = _compute_worst_severity(result)
+        assert severity == "FATAL"
+        assert can_trade is False
 
     def test_transient_severity_for_rate_limit(self):
         from src.healthcheck import _compute_worst_severity
         
         result = {
             "results": [
-                {"name": "deribit_public", "status": "fail", "detail": "Rate limit exceeded"},
+                {
+                    "name": "deribit_public",
+                    "status": "WARN",
+                    "detail": "Rate limit exceeded",
+                    "severity": "DEGRADED",
+                    "can_trade": True,
+                },
             ]
         }
         
-        severity = _compute_worst_severity(result)
-        assert severity == HealthSeverity.TRANSIENT
+        severity, can_trade = _compute_worst_severity(result)
+        assert severity == "DEGRADED"
+        assert can_trade is True
 
     def test_transient_severity_for_timeout(self):
         from src.healthcheck import _compute_worst_severity
         
         result = {
             "results": [
-                {"name": "deribit_public", "status": "fail", "detail": "Request timeout"},
+                {
+                    "name": "deribit_public",
+                    "status": "WARN",
+                    "detail": "Request timeout",
+                    "severity": "DEGRADED",
+                    "can_trade": True,
+                },
             ]
         }
         
-        severity = _compute_worst_severity(result)
-        assert severity == HealthSeverity.TRANSIENT
+        severity, can_trade = _compute_worst_severity(result)
+        assert severity == "DEGRADED"
+        assert can_trade is True
 
     def test_degraded_severity_for_unknown_errors(self):
         from src.healthcheck import _compute_worst_severity
         
         result = {
             "results": [
-                {"name": "state_builder", "status": "fail", "detail": "Unknown error"},
+                {
+                    "name": "state_builder",
+                    "status": "FAIL",
+                    "detail": "Unknown error",
+                    "severity": "DEGRADED",
+                    "can_trade": False,
+                },
             ]
         }
         
-        severity = _compute_worst_severity(result)
-        assert severity == HealthSeverity.DEGRADED
+        severity, can_trade = _compute_worst_severity(result)
+        assert severity == "DEGRADED"
+        assert can_trade is False
 
 
 class TestAgentPauseState:
@@ -140,7 +173,13 @@ class TestAgentPauseState:
             "overall_status": "FAIL",
             "summary": "config FAIL",
             "results": [
-                {"name": "config", "status": "fail", "detail": "Invalid config"},
+                {
+                    "name": "config",
+                    "status": "FAIL",
+                    "detail": "Invalid config",
+                    "severity": "FATAL",
+                    "can_trade": False,
+                },
             ],
         }
         
@@ -267,7 +306,13 @@ class TestHealthGuardIntegration:
             "overall_status": "FAIL",
             "summary": "deribit_public FAIL",
             "results": [
-                {"name": "deribit_public", "status": "fail", "detail": "Connection failed"},
+                {
+                    "name": "deribit_public",
+                    "status": "FAIL",
+                    "detail": "Connection failed",
+                    "severity": "DEGRADED",
+                    "can_trade": False,
+                },
             ],
         }
         
@@ -281,8 +326,20 @@ class TestHealthGuardIntegration:
             "overall_status": "OK",
             "summary": "All checks passed",
             "results": [
-                {"name": "config", "status": "ok", "detail": "mode=research"},
-                {"name": "deribit_public", "status": "ok", "detail": "API OK"},
+                {
+                    "name": "config",
+                    "status": "OK",
+                    "detail": "mode=research",
+                    "severity": "OK",
+                    "can_trade": True,
+                },
+                {
+                    "name": "deribit_public",
+                    "status": "OK",
+                    "detail": "API OK",
+                    "severity": "OK",
+                    "can_trade": True,
+                },
             ],
         }
         

@@ -92,6 +92,47 @@ python agent_loop.py
 python -m backtest.env_simulator
 ```
 
+## Context Pack & Drive Publishing
+
+This repo can generate a deterministic "context pack" under `docs/` for external consumers (e.g., a Google Drive folder used as LLM context).
+
+### Generate latest artifacts locally
+
+```bash
+# Generates docs/REPO_MANIFEST.json, docs/RECENT_DIFF.md, and other "latest" artifacts
+make context-pack-push
+```
+
+### Fidelity “latest” artifacts
+
+If Fidelity has been run and the canonical store exists, the context-pack generator will also publish Fidelity reports into `docs/`:
+
+- `docs/FIDELITY_BTC_latest.json` / `docs/FIDELITY_BTC_latest.md`
+  - copied from `data/fidelity_runs/BTC/latest/fidelity_report.json` and `.md`
+- `docs/FIDELITY_ETH_latest.json` / `docs/FIDELITY_ETH_latest.md` (if present)
+  - copied from `data/fidelity_runs/ETH/latest/fidelity_report.json` and `.md`
+
+Missing sources do **not** fail context-pack generation; the generator prints a warning and skips those files.
+
+You can also run the generator directly:
+
+```bash
+python3 scripts/gen_fidelity_latest_docs.py
+```
+
+### Upload to Google Drive (rclone)
+
+If you use `rclone` to publish the `docs/` “latest” artifacts to Drive, use:
+
+```bash
+bash scripts/push_context_pack_to_drive.sh
+```
+
+Notes:
+- Requires `rclone` configured with a `gdrive:` remote.
+- The target can be overridden with `CONTEXT_PACK_DRIVE_REMOTE`.
+- To also upload a timestamped snapshot under `history/`, set `CONTEXT_PACK_UPLOAD_HISTORY=1`.
+
 ## Project Structure
 
 ```

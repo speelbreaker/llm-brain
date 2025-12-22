@@ -22,9 +22,11 @@ from src.web.routes_main import router as main_router
 from src.web.routes_backtest import router as backtest_router
 from src.web.routes_backtest import BacktestStartRequest
 from src.web.routes_positions import router as positions_router
+from src.web.routes_fidelity import router as fidelity_router
 from src.web.routes_bots import router as bots_router
 from src.web.routes_health import router as health_router
 from src.web.routes_deploy import router as deploy_router
+from src.web.routes_telegram import router as telegram_router
 
 
 
@@ -37,10 +39,23 @@ app = FastAPI(
 app.include_router(main_router)
 app.include_router(backtest_router)
 app.include_router(positions_router)
+app.include_router(fidelity_router)
 app.include_router(bots_router)
 app.include_router(health_router)
+app.include_router(telegram_router)
 if os.environ.get("DEPLOY_WEBHOOK_SECRET"):
     app.include_router(deploy_router)
+
+
+def _background_threads_enabled() -> bool:
+    # Tests frequently construct a TestClient(app), which triggers FastAPI startup.
+    # Starting the live agent loop in unit tests is both noisy and can require
+    # local market data fixtures that aren't present.
+    if os.environ.get("PYTEST_CURRENT_TEST"):
+        return False
+    if (os.environ.get("DISABLE_BACKGROUND_THREADS") or "").strip().lower() in {"1", "true", "yes"}:
+        return False
+    return True
 
 
 def _agent_thread_target() -> None:
@@ -87,6 +102,9 @@ def _healthcheck_scheduler_target() -> None:
 @app.on_event("startup")
 def start_background_agent() -> None:
     """Start the agent loop in a background thread on FastAPI startup."""
+    if not _background_threads_enabled():
+        return
+
     try:
         from src.db import init_db
         init_db()

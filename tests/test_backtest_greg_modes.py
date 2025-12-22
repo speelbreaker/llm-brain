@@ -20,14 +20,14 @@ class TestGenericBacktestMode:
     """Test generic covered call backtest mode (unchanged behavior)."""
 
     def test_backtest_start_generic_mode_returns_200_or_409(self, client):
-        """Generic mode backtest should return 200 (started) or 409 (already running)."""
+        """Generic mode backtest returns 200/409, or 400 if preflight fails (e.g., no harvest)."""
         response = client.post("/api/backtest/start", json={
             "underlying": "BTC",
             "start": "2024-01-01",
             "end": "2024-01-07",
             "backtest_type": "generic",
         })
-        assert response.status_code in [200, 409]
+        assert response.status_code in [200, 409, 400]
 
     def test_backtest_start_generic_mode_has_expected_fields(self, client):
         """Generic mode should return expected response fields."""
@@ -41,13 +41,53 @@ class TestGenericBacktestMode:
         assert "started" in data or "ok" in data or "error" in data
 
     def test_backtest_start_default_mode_accepted(self, client):
-        """Default backtest_type should be accepted (200 or 409 if running)."""
+        """Default backtest_type should be accepted (200/409), or 400 if preflight fails."""
         response = client.post("/api/backtest/start", json={
             "underlying": "BTC",
             "start": "2024-01-01",
             "end": "2024-01-07",
         })
-        assert response.status_code in [200, 409]
+        assert response.status_code in [200, 409, 400]
+
+    def test_backtest_blocked_when_fidelity_untrusted(self, client, monkeypatch, tmp_path):
+        """FIDELITY_GATE_MODE=block should refuse backtests when latest gate is UNTRUSTED."""
+        monkeypatch.setenv("FIDELITY_GATE_MODE", "block")
+        monkeypatch.setenv("FIDELITY_RUNS_DIR", str(tmp_path / "fidelity_runs"))
+        monkeypatch.setenv("HARVEST_DATA_DIR", str(tmp_path / "live_deribit"))
+
+        # Provide minimal harvest file so harvest preflight passes.
+        harvest_dir = tmp_path / "live_deribit" / "BTC_USDC"
+        harvest_dir.mkdir(parents=True, exist_ok=True)
+        (harvest_dir / "BTC_USDC_2024-01-02_0000.parquet").write_text("")
+
+        from src.backtest import fidelity_store
+
+        fidelity_store.write_fidelity_report(
+            {
+                "run_id": "20250101_000001",
+                "created_at": "2025-01-01T00:00:01+00:00",
+                "underlying": "BTC",
+                "overall_score": 10.0,
+                "gate_label": "UNTRUSTED",
+                "component_scores": {"strategy_pnl_parity": 0.0},
+                "coverage": {"coverage_ratio": 0.5, "invalid_trades_missing_quote": 3},
+            }
+        )
+
+        resp = client.post(
+            "/api/backtest/start",
+            json={
+                "underlying": "BTC",
+                "start": "2024-01-01",
+                "end": "2024-01-07",
+                "backtest_type": "generic",
+            },
+        )
+        assert resp.status_code == 400
+        body = resp.json()
+        assert body.get("ok") is False
+        assert body.get("error", {}).get("code") == "FIDELITY_UNTRUSTED"
+        assert "Synthetic fidelity UNTRUSTED" in (body.get("error", {}).get("message") or "")
 
 
 class TestGregSelectorBacktestMode:

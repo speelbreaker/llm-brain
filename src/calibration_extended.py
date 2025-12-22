@@ -223,18 +223,21 @@ def compute_global_metrics(
         mae_vol_points = float(np.mean(iv_diffs))
     
     vega_weighted_mae = None
+    vega_sum = None
     vega_rows = [(r, r.get("vega", 0.0)) for r in rows if r.get("vega") and r.get("vega") > 0]
     if vega_rows:
         total_vega = sum(v for _, v in vega_rows)
         if total_vega > 0:
             weighted_sum = sum(abs(r.get("diff_pct", 0.0)) * v for r, v in vega_rows)
             vega_weighted_mae = weighted_sum / total_vega
+            vega_sum = float(total_vega)
     
     return GlobalMetrics(
         mae_pct=mae_pct,
         bias_pct=bias_pct,
         mae_vol_points=mae_vol_points,
         vega_weighted_mae_pct=vega_weighted_mae,
+        vega_sum=vega_sum,
     )
 
 

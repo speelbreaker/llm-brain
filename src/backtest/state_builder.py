@@ -175,6 +175,8 @@ def _generate_live_chain_candidates(
         max_dte=cfg.max_dte,
         delta_min=cfg.delta_min,
         delta_max=cfg.delta_max,
+        spot=spot,
+        cfg=cfg,
     )
     
     # For mark_iv_x_multiplier mode, use each option's own mark_iv
@@ -300,6 +302,8 @@ def _filter_option_chain(
     max_dte: int,
     delta_min: float,
     delta_max: float,
+    spot: Optional[float] = None,
+    cfg: Optional[CallSimulationConfig] = None,
 ) -> List[OptionSnapshot]:
     """
     Filter option chain using shared logic from state_core.
@@ -333,17 +337,31 @@ def _filter_option_chain(
         if dte < min_dte or dte > max_dte:
             continue
         
-        if opt.delta is None:
-            continue
-        delta_abs = abs(float(opt.delta))
+        effective_opt = opt
+        if effective_opt.delta is None:
+            # Many harvested datasets don't include per-option deltas.
+            # Estimate delta using BS when we have spot + mark IV.
+            if spot is None or spot <= 0:
+                continue
+            if effective_opt.iv is None or effective_opt.iv <= 0:
+                continue
+            r = float(getattr(cfg, "risk_free_rate", 0.0) or 0.0)
+            t_years = max(float(dte) / 365.0, 1e-6)
+            try:
+                delta_est = bs_call_delta(float(spot), float(effective_opt.strike), t_years, float(effective_opt.iv), r)
+            except Exception:
+                continue
+            effective_opt = replace(effective_opt, delta=float(delta_est))
+
+        delta_abs = abs(float(effective_opt.delta))
         if delta_abs < delta_min or delta_abs > delta_max:
             continue
         
-        if getattr(opt, "expiry", None) is None:
-            opt_with_expiry = replace(opt, expiry=expiry)
+        if getattr(effective_opt, "expiry", None) is None:
+            opt_with_expiry = replace(effective_opt, expiry=expiry)
             candidates.append(opt_with_expiry)
         else:
-            candidates.append(opt)
+            candidates.append(effective_opt)
     
     return candidates
 
@@ -437,6 +455,8 @@ def build_historical_state(
             max_dte=cfg.max_dte,
             delta_min=cfg.delta_min,
             delta_max=cfg.delta_max,
+            spot=spot,
+            cfg=cfg,
         )
     elif chain_mode == "live_chain":
         # Hybrid mode: live chain with configurable sigma mode

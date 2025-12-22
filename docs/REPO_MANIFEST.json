@@ -1,0 +1,3903 @@
+{
+  "data_present": true,
+  "endpoints_index": [
+    {
+      "files": [
+        "src/web_app.py"
+      ],
+      "path": "/"
+    },
+    {
+      "files": [
+        "src/web/routes_main.py"
+      ],
+      "path": "/api/agent/decisions"
+    },
+    {
+      "files": [
+        "src/web/routes_health.py"
+      ],
+      "path": "/api/agent_healthcheck"
+    },
+    {
+      "files": [
+        "src/web/routes_backtest.py"
+      ],
+      "path": "/api/backtest/insights"
+    },
+    {
+      "files": [
+        "src/web/routes_backtest.py"
+      ],
+      "path": "/api/backtest/pause"
+    },
+    {
+      "files": [
+        "src/web/routes_backtest.py"
+      ],
+      "path": "/api/backtest/presets"
+    },
+    {
+      "files": [
+        "src/web/routes_backtest.py"
+      ],
+      "path": "/api/backtest/resolve-config"
+    },
+    {
+      "files": [
+        "src/web/routes_backtest.py"
+      ],
+      "path": "/api/backtest/resume"
+    },
+    {
+      "files": [
+        "src/web/routes_backtest.py"
+      ],
+      "path": "/api/backtest/run"
+    },
+    {
+      "files": [
+        "src/web/routes_backtest.py"
+      ],
+      "path": "/api/backtest/selector_heatmap"
+    },
+    {
+      "files": [
+        "src/web/routes_backtest.py"
+      ],
+      "path": "/api/backtest/selector_scan"
+    },
+    {
+      "files": [
+        "src/web/routes_backtest.py"
+      ],
+      "path": "/api/backtest/start"
+    },
+    {
+      "files": [
+        "src/web/routes_backtest.py"
+      ],
+      "path": "/api/backtest/status"
+    },
+    {
+      "files": [
+        "src/web/routes_backtest.py"
+      ],
+      "path": "/api/backtest/stop"
+    },
+    {
+      "files": [
+        "src/web/routes_backtest.py"
+      ],
+      "path": "/api/backtest/strategies"
+    },
+    {
+      "files": [
+        "src/web/routes_backtest.py"
+      ],
+      "path": "/api/backtest/strategy_caps"
+    },
+    {
+      "files": [
+        "src/web/routes_backtest.py"
+      ],
+      "path": "/api/backtest/strategy_caps/{selector_name}"
+    },
+    {
+      "files": [
+        "src/web/routes_backtest.py"
+      ],
+      "path": "/api/backtests"
+    },
+    {
+      "files": [
+        "src/web/routes_backtest.py"
+      ],
+      "path": "/api/backtests/{run_id}"
+    },
+    {
+      "files": [
+        "src/web/routes_backtest.py"
+      ],
+      "path": "/api/backtests/{run_id}/download"
+    },
+    {
+      "files": [
+        "src/web/routes_backtest.py"
+      ],
+      "path": "/api/backtests/{run_id}/events"
+    },
+    {
+      "files": [
+        "src/web/routes_backtest.py"
+      ],
+      "path": "/api/backtests/{run_id}/events/download"
+    },
+    {
+      "files": [
+        "src/web/routes_backtest.py"
+      ],
+      "path": "/api/backtests/{run_id}/strategy_summary"
+    },
+    {
+      "files": [
+        "src/web/routes_backtest.py"
+      ],
+      "path": "/api/backtests/{run_id}/strategy_summary/download"
+    },
+    {
+      "files": [
+        "src/web/routes_bots.py"
+      ],
+      "path": "/api/bots/global_risk"
+    },
+    {
+      "files": [
+        "src/web/routes_bots.py"
+      ],
+      "path": "/api/bots/greg/execute_suggestion"
+    },
+    {
+      "files": [
+        "src/web/routes_bots.py"
+      ],
+      "path": "/api/bots/greg/hedge_history"
+    },
+    {
+      "files": [
+        "src/web/routes_bots.py"
+      ],
+      "path": "/api/bots/greg/hedging"
+    },
+    {
+      "files": [
+        "src/web/routes_bots.py"
+      ],
+      "path": "/api/bots/greg/hedging/dry_run"
+    },
+    {
+      "files": [
+        "src/web/routes_bots.py"
+      ],
+      "path": "/api/bots/greg/hedging/evaluate"
+    },
+    {
+      "files": [
+        "src/web/routes_bots.py"
+      ],
+      "path": "/api/bots/greg/management"
+    },
+    {
+      "files": [
+        "src/web/routes_bots.py"
+      ],
+      "path": "/api/bots/greg/management/evaluate"
+    },
+    {
+      "files": [
+        "src/web/routes_bots.py"
+      ],
+      "path": "/api/bots/greg/management/mock"
+    },
+    {
+      "files": [
+        "src/web/routes_bots.py"
+      ],
+      "path": "/api/bots/market_sensors"
+    },
+    {
+      "files": [
+        "src/web/routes_bots.py"
+      ],
+      "path": "/api/bots/strategies"
+    },
+    {
+      "files": [
+        "src/web/routes_bots.py"
+      ],
+      "path": "/api/bots/{bot_id}/entry_rules"
+    },
+    {
+      "files": [
+        "src/web/routes_bots.py"
+      ],
+      "path": "/api/bots/{bot_id}/risk"
+    },
+    {
+      "files": [
+        "src/web/routes_positions.py"
+      ],
+      "path": "/api/calibration"
+    },
+    {
+      "files": [
+        "src/web/routes_positions.py"
+      ],
+      "path": "/api/calibration/apply_direct"
+    },
+    {
+      "files": [
+        "src/web/routes_positions.py"
+      ],
+      "path": "/api/calibration/apply_skew"
+    },
+    {
+      "files": [
+        "src/web/routes_positions.py"
+      ],
+      "path": "/api/calibration/auto_status"
+    },
+    {
+      "files": [
+        "src/web/routes_positions.py"
+      ],
+      "path": "/api/calibration/current_multipliers"
+    },
+    {
+      "files": [
+        "src/web/routes_positions.py"
+      ],
+      "path": "/api/calibration/fidelity/history"
+    },
+    {
+      "files": [
+        "src/web/routes_positions.py"
+      ],
+      "path": "/api/calibration/fidelity/latest"
+    },
+    {
+      "files": [
+        "src/web/routes_positions.py"
+      ],
+      "path": "/api/calibration/force_apply"
+    },
+    {
+      "files": [
+        "src/web/routes_positions.py"
+      ],
+      "path": "/api/calibration/history"
+    },
+    {
+      "files": [
+        "src/web/routes_positions.py"
+      ],
+      "path": "/api/calibration/overrides"
+    },
+    {
+      "files": [
+        "src/web/routes_positions.py"
+      ],
+      "path": "/api/calibration/policy"
+    },
+    {
+      "files": [
+        "src/web/routes_positions.py"
+      ],
+      "path": "/api/calibration/run_with_policy"
+    },
+    {
+      "files": [
+        "src/web/routes_positions.py"
+      ],
+      "path": "/api/calibration/runs"
+    },
+    {
+      "files": [
+        "src/web/routes_positions.py"
+      ],
+      "path": "/api/calibration/use_latest"
+    },
+    {
+      "files": [
+        "src/web/routes_positions.py"
+      ],
+      "path": "/api/data_status/intraday"
+    },
+    {
+      "files": [
+        "src/web/routes_backtest.py"
+      ],
+      "path": "/api/environment_heatmap"
+    },
+    {
+      "files": [
+        "src/web/routes_fidelity.py"
+      ],
+      "path": "/api/fidelity/history"
+    },
+    {
+      "files": [
+        "src/web/routes_fidelity.py"
+      ],
+      "path": "/api/fidelity/latest"
+    },
+    {
+      "files": [
+        "src/web/routes_bots.py"
+      ],
+      "path": "/api/greg/calibration"
+    },
+    {
+      "files": [
+        "src/web/routes_bots.py"
+      ],
+      "path": "/api/greg/decision_log"
+    },
+    {
+      "files": [
+        "src/web/routes_bots.py"
+      ],
+      "path": "/api/greg/positions"
+    },
+    {
+      "files": [
+        "src/web/routes_bots.py"
+      ],
+      "path": "/api/greg/positions/{position_id}/logs"
+    },
+    {
+      "files": [
+        "src/web/routes_bots.py"
+      ],
+      "path": "/api/greg/trading_mode"
+    },
+    {
+      "files": [
+        "src/web/routes_health.py"
+      ],
+      "path": "/api/greg_sweetspots"
+    },
+    {
+      "files": [
+        "src/web/routes_health.py"
+      ],
+      "path": "/api/greg_sweetspots/run"
+    },
+    {
+      "files": [
+        "src/web/routes_health.py"
+      ],
+      "path": "/api/health/iv_sanity"
+    },
+    {
+      "files": [
+        "src/supervisor/app.py"
+      ],
+      "path": "/api/jobs"
+    },
+    {
+      "files": [
+        "src/supervisor/app.py"
+      ],
+      "path": "/api/jobs/{job_id}"
+    },
+    {
+      "files": [
+        "src/web/routes_health.py"
+      ],
+      "path": "/api/llm_readiness"
+    },
+    {
+      "files": [
+        "src/web/routes_health.py"
+      ],
+      "path": "/api/llm_status"
+    },
+    {
+      "files": [
+        "src/web/routes_main.py"
+      ],
+      "path": "/api/meta/version"
+    },
+    {
+      "files": [
+        "src/web/routes_health.py"
+      ],
+      "path": "/api/ops/health/run"
+    },
+    {
+      "files": [
+        "src/web/routes_health.py"
+      ],
+      "path": "/api/ops/health/status"
+    },
+    {
+      "files": [
+        "src/web/routes_positions.py"
+      ],
+      "path": "/api/positions/closed"
+    },
+    {
+      "files": [
+        "src/web/routes_positions.py"
+      ],
+      "path": "/api/positions/open"
+    },
+    {
+      "files": [
+        "src/web/routes_positions.py"
+      ],
+      "path": "/api/reconcile_positions"
+    },
+    {
+      "files": [
+        "src/web/routes_positions.py"
+      ],
+      "path": "/api/reconciliation_config"
+    },
+    {
+      "files": [
+        "src/web/routes_health.py"
+      ],
+      "path": "/api/risk_limits"
+    },
+    {
+      "files": [
+        "src/web/routes_main.py"
+      ],
+      "path": "/api/rules-summary"
+    },
+    {
+      "files": [
+        "src/web/routes_health.py"
+      ],
+      "path": "/api/steward/report"
+    },
+    {
+      "files": [
+        "src/web/routes_health.py"
+      ],
+      "path": "/api/steward/run"
+    },
+    {
+      "files": [
+        "src/web/routes_bots.py"
+      ],
+      "path": "/api/strategies/greg/selector"
+    },
+    {
+      "files": [
+        "src/web/routes_main.py"
+      ],
+      "path": "/api/strategy-status"
+    },
+    {
+      "files": [
+        "src/web/routes_health.py"
+      ],
+      "path": "/api/strategy_thresholds"
+    },
+    {
+      "files": [
+        "src/web/routes_health.py"
+      ],
+      "path": "/api/supervisor/jobs"
+    },
+    {
+      "files": [
+        "src/web/routes_health.py"
+      ],
+      "path": "/api/supervisor/jobs/{job_id}"
+    },
+    {
+      "files": [
+        "src/web/routes_health.py"
+      ],
+      "path": "/api/system/runtime-config"
+    },
+    {
+      "files": [
+        "src/web/routes_health.py"
+      ],
+      "path": "/api/system_health/status"
+    },
+    {
+      "files": [
+        "src/web/routes_health.py"
+      ],
+      "path": "/api/test_kill_switch"
+    },
+    {
+      "files": [
+        "src/web/routes_health.py"
+      ],
+      "path": "/api/test_llm_decision"
+    },
+    {
+      "files": [
+        "src/web/routes_main.py"
+      ],
+      "path": "/api/training/status"
+    },
+    {
+      "files": [
+        "src/web/routes_main.py"
+      ],
+      "path": "/api/training/toggle"
+    },
+    {
+      "files": [
+        "src/web/routes_positions.py"
+      ],
+      "path": "/calibration/fidelity/history"
+    },
+    {
+      "files": [
+        "src/web/routes_positions.py"
+      ],
+      "path": "/calibration/fidelity/latest"
+    },
+    {
+      "files": [
+        "src/web/routes_positions.py"
+      ],
+      "path": "/calibration/fidelity/report/{run_id}"
+    },
+    {
+      "files": [
+        "src/web/routes_positions.py"
+      ],
+      "path": "/calibration/fidelity/spec"
+    },
+    {
+      "files": [
+        "src/web/routes_main.py"
+      ],
+      "path": "/chat"
+    },
+    {
+      "files": [
+        "src/web/routes_main.py"
+      ],
+      "path": "/chat/clear"
+    },
+    {
+      "files": [
+        "src/web/routes_main.py"
+      ],
+      "path": "/chat/messages"
+    },
+    {
+      "files": [
+        "src/web/routes_deploy.py"
+      ],
+      "path": "/deploy-hook"
+    },
+    {
+      "files": [
+        "src/web/routes_deploy.py"
+      ],
+      "path": "/deploy-status"
+    },
+    {
+      "files": [
+        "src/supervisor/app.py"
+      ],
+      "path": "/github/webhook"
+    },
+    {
+      "files": [
+        "src/supervisor/app.py",
+        "src/web/routes_main.py"
+      ],
+      "path": "/health"
+    },
+    {
+      "files": [
+        "src/supervisor/app.py"
+      ],
+      "path": "/jobs"
+    },
+    {
+      "files": [
+        "src/supervisor/app.py"
+      ],
+      "path": "/jobs/{job_id}"
+    },
+    {
+      "files": [
+        "src/web/routes_main.py"
+      ],
+      "path": "/status"
+    },
+    {
+      "files": [
+        "src/web/routes_telegram.py"
+      ],
+      "path": "/telegram/webhook/{path_secret}"
+    }
+  ],
+  "generated_at_utc": "2025-12-22T17:02:21.991396Z",
+  "git": {
+    "branch": "main",
+    "head_sha": "f6e339582a45a38469c24cc6b14a910fdfc49bdd",
+    "head_summary": "chore: refresh latest artifacts",
+    "is_dirty": true
+  },
+  "hotspots": [
+    {
+      "mtime_utc": "2025-12-22T17:00:22.017853Z",
+      "path": "docs/OPS_HEALTH_latest.json",
+      "size_bytes": 567
+    },
+    {
+      "mtime_utc": "2025-12-22T16:57:22.416131Z",
+      "path": "docs/RECENT_DIFF.md",
+      "size_bytes": 75052
+    },
+    {
+      "mtime_utc": "2025-12-22T16:57:20.173634Z",
+      "path": "docs/REPO_MANIFEST.json",
+      "size_bytes": 113196
+    },
+    {
+      "mtime_utc": "2025-12-22T16:55:27.548753Z",
+      "path": "docs/ROADMAP_BACKLOG_latest.md",
+      "size_bytes": 32973
+    },
+    {
+      "mtime_utc": "2025-12-22T16:55:26.731352Z",
+      "path": "docs/FIDELITY_BTC_latest.md",
+      "size_bytes": 5216
+    },
+    {
+      "mtime_utc": "2025-12-22T16:55:26.730119Z",
+      "path": "docs/FIDELITY_BTC_latest.json",
+      "size_bytes": 8116
+    },
+    {
+      "mtime_utc": "2025-12-22T16:55:16.799901Z",
+      "path": "ROADMAP_BACKLOG.md",
+      "size_bytes": 32973
+    },
+    {
+      "mtime_utc": "2025-12-22T16:54:58.755052Z",
+      "path": "docs/TEST_SUMMARY_latest.txt",
+      "size_bytes": 74
+    },
+    {
+      "mtime_utc": "2025-12-21T23:34:02.492942Z",
+      "path": "tests/test_ops_health_endpoints.py",
+      "size_bytes": 26046
+    },
+    {
+      "mtime_utc": "2025-12-21T23:33:33.108282Z",
+      "path": "src/healthcheck.py",
+      "size_bytes": 46275
+    },
+    {
+      "mtime_utc": "2025-12-21T21:50:54.375462Z",
+      "path": "README.md",
+      "size_bytes": 15541
+    },
+    {
+      "mtime_utc": "2025-12-21T21:49:39.351225Z",
+      "path": "tests/test_gen_ops_health_latest.py",
+      "size_bytes": 2024
+    },
+    {
+      "mtime_utc": "2025-12-21T21:49:39.344075Z",
+      "path": "scripts/gen_ops_health_latest.py",
+      "size_bytes": 3441
+    },
+    {
+      "mtime_utc": "2025-12-21T20:48:49.677821Z",
+      "path": "tests/test_fidelity_latest_docs_generator.py",
+      "size_bytes": 1796
+    },
+    {
+      "mtime_utc": "2025-12-21T20:48:49.660083Z",
+      "path": "scripts/push_context_pack_to_drive.sh",
+      "size_bytes": 2422
+    },
+    {
+      "mtime_utc": "2025-12-21T20:48:49.646589Z",
+      "path": "Makefile",
+      "size_bytes": 520
+    },
+    {
+      "mtime_utc": "2025-12-21T20:48:49.646589Z",
+      "path": "scripts/gen_fidelity_latest_docs.py",
+      "size_bytes": 2918
+    },
+    {
+      "mtime_utc": "2025-12-21T20:47:52.906267Z",
+      "path": "tests/test_ops_health_artifact.py",
+      "size_bytes": 976
+    },
+    {
+      "mtime_utc": "2025-12-21T20:36:47.103320Z",
+      "path": "tests/test_healthcheck_basic.py",
+      "size_bytes": 16792
+    },
+    {
+      "mtime_utc": "2025-12-21T20:35:33.139787Z",
+      "path": "HEALTHCHECK.md",
+      "size_bytes": 20507
+    }
+  ],
+  "important_paths": [
+    "HEALTHCHECK.md",
+    "ROADMAP_BACKLOG.md",
+    "docs/",
+    "src/",
+    "src/backtest/",
+    "src/fidelity/",
+    "src/ops/",
+    "src/web/",
+    "tests/"
+  ],
+  "repo_root": "/Users/admin/Desktop/LLMAgentBrain 2",
+  "tree": [
+    {
+      "mtime_utc": "2025-12-21T19:36:00.033646Z",
+      "path": ".DS_Store",
+      "size_bytes": 18436
+    },
+    {
+      "mtime_utc": "2025-12-20T20:21:37.488093Z",
+      "path": ".env",
+      "size_bytes": 363
+    },
+    {
+      "mtime_utc": "2025-12-08T19:47:20Z",
+      "path": ".env.example",
+      "size_bytes": 658
+    },
+    {
+      "mtime_utc": "2025-12-20T01:35:53.414199Z",
+      "path": ".gitignore",
+      "size_bytes": 1506
+    },
+    {
+      "mtime_utc": "2025-12-20T23:48:46.379178Z",
+      "path": ".gitleaks.toml",
+      "size_bytes": 274
+    },
+    {
+      "mtime_utc": "2025-12-18T19:36:43.528765Z",
+      "path": ".replit",
+      "size_bytes": 1700
+    },
+    {
+      "mtime_utc": "2025-12-20T01:30:08.679330Z",
+      "path": ".test_db.sqlite",
+      "size_bytes": 118784
+    },
+    {
+      "mtime_utc": "2025-12-07T19:41:49Z",
+      "path": "ARCHITECTURE_OVERVIEW.md",
+      "size_bytes": 22474
+    },
+    {
+      "mtime_utc": "2025-12-21T20:35:33.139787Z",
+      "path": "HEALTHCHECK.md",
+      "size_bytes": 20507
+    },
+    {
+      "mtime_utc": "2025-12-21T20:48:49.646589Z",
+      "path": "Makefile",
+      "size_bytes": 520
+    },
+    {
+      "mtime_utc": "2025-12-21T20:15:03.900002Z",
+      "path": "POEM.md",
+      "size_bytes": 597
+    },
+    {
+      "mtime_utc": "2025-12-07T16:54:54Z",
+      "path": "README (copy).md",
+      "size_bytes": 6375
+    },
+    {
+      "mtime_utc": "2025-12-21T21:50:54.375462Z",
+      "path": "README.md",
+      "size_bytes": 15541
+    },
+    {
+      "mtime_utc": "2025-12-19T23:21:48.234351Z",
+      "path": "ROADMAP.md",
+      "size_bytes": 7871
+    },
+    {
+      "mtime_utc": "2025-12-22T16:55:16.799901Z",
+      "path": "ROADMAP_BACKLOG.md",
+      "size_bytes": 32973
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:52.224318Z",
+      "path": "UI_FEATURE_GAPS.md",
+      "size_bytes": 14615
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:52.224532Z",
+      "path": "agent/__init__.py",
+      "size_bytes": 245
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:52.224763Z",
+      "path": "agent/analyzers.py",
+      "size_bytes": 7681
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:52.224997Z",
+      "path": "agent/change_detector.py",
+      "size_bytes": 10138
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:52.225265Z",
+      "path": "agent/chat_controller.py",
+      "size_bytes": 11499
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:52.225608Z",
+      "path": "agent/chat_tools.py",
+      "size_bytes": 40959
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:52.225907Z",
+      "path": "agent/codex_cli_runner.py",
+      "size_bytes": 7304
+    },
+    {
+      "mtime_utc": "2025-12-14T00:02:03.665317Z",
+      "path": "agent/codex_remote.py",
+      "size_bytes": 18674
+    },
+    {
+      "mtime_utc": "2025-12-19T18:57:56.256667Z",
+      "path": "agent/config.py",
+      "size_bytes": 3089
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:52.226964Z",
+      "path": "agent/llm_client.py",
+      "size_bytes": 18852
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:52.227263Z",
+      "path": "agent/review_service.py",
+      "size_bytes": 11050
+    },
+    {
+      "mtime_utc": "2025-12-19T18:57:56.257825Z",
+      "path": "agent/storage.py",
+      "size_bytes": 14906
+    },
+    {
+      "mtime_utc": "2025-12-14T00:02:03.665997Z",
+      "path": "agent/telegram_bot.py",
+      "size_bytes": 38873
+    },
+    {
+      "mtime_utc": "2025-12-20T23:48:47.682248Z",
+      "path": "agent_loop.py",
+      "size_bytes": 39395
+    },
+    {
+      "mtime_utc": "2025-12-08T20:14:25Z",
+      "path": "attached_assets/Pasted--A-strategy-factory-experiment-lab-AI-researcher-that-k_1765224865629.txt",
+      "size_bytes": 9677
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:52.229378Z",
+      "path": "attached_assets/Pasted--AI-BUILDER-PROMPT-Synthetic-Universe-Calibration-Harve_1765399112041.txt",
+      "size_bytes": 18555
+    },
+    {
+      "mtime_utc": "2025-12-18T19:36:43.531719Z",
+      "path": "attached_assets/Pasted--Coding-assistant-Review-Result-MEDIUM-Model-gpt-5-df83_1765830493458.txt",
+      "size_bytes": 4264
+    },
+    {
+      "mtime_utc": "2025-12-18T19:36:43.531950Z",
+      "path": "attached_assets/Pasted--Engineering-Constitution-Non-Negotiable-Quality-Gates-_1765838333092.txt",
+      "size_bytes": 3702
+    },
+    {
+      "mtime_utc": "2025-12-18T19:36:43.532181Z",
+      "path": "attached_assets/Pasted--GregBot-Backtesting-Configuration-Prompt-This-prompt-o_1765834601130.txt",
+      "size_bytes": 3239
+    },
+    {
+      "mtime_utc": "2025-12-18T19:36:43.532438Z",
+      "path": "attached_assets/Pasted--HIGH-Strategy-summary-miscomputes-PnL-when-pnl-0-0-src_1765832826105.txt",
+      "size_bytes": 4033
+    },
+    {
+      "mtime_utc": "2025-12-07T23:55:44Z",
+      "path": "attached_assets/Pasted--Options-Trading-Agent-Backlog-Roadmap-Last-updated-202_1765151744116.txt",
+      "size_bytes": 15497
+    },
+    {
+      "mtime_utc": "2025-12-18T19:36:43.532659Z",
+      "path": "attached_assets/Pasted--Risks-review-18-HIGH-Conditional-Telegram-client-creat_1765831105043.txt",
+      "size_bytes": 2520
+    },
+    {
+      "mtime_utc": "2025-12-18T19:36:43.532899Z",
+      "path": "attached_assets/Pasted--Risks-review-25-HIGH-Potential-path-traversal-in-backt_1765841642429.txt",
+      "size_bytes": 3770
+    },
+    {
+      "mtime_utc": "2025-12-07T22:50:44Z",
+      "path": "attached_assets/Pasted-1-3-Run-a-tiny-backtest-and-see-if-it-lands-in-MySQL-Fr_1765147844090.txt",
+      "size_bytes": 2861
+    },
+    {
+      "mtime_utc": "2025-12-06T16:54:06Z",
+      "path": "attached_assets/Pasted-1-Add-OpenAPI-friendly-examples-to-the-models-Here-s-an_1765040045794.txt",
+      "size_bytes": 17116
+    },
+    {
+      "mtime_utc": "2025-12-05T00:01:52Z",
+      "path": "attached_assets/Pasted-1-Add-a-MarketContext-section-to-your-state-1-1-New-dat_1764892909793.txt",
+      "size_bytes": 12860
+    },
+    {
+      "mtime_utc": "2025-12-05T18:42:28Z",
+      "path": "attached_assets/Pasted-1-Add-imports-month-map-parser-helper-At-the-top-of-src_1764960148321.txt",
+      "size_bytes": 9099
+    },
+    {
+      "mtime_utc": "2025-12-06T16:52:41Z",
+      "path": "attached_assets/Pasted-1-Backtesting-should-every-parameter-have-a-checkbox-Sh_1765039961694.txt",
+      "size_bytes": 4691
+    },
+    {
+      "mtime_utc": "2025-12-05T22:57:03Z",
+      "path": "attached_assets/Pasted-1-Candidate-level-dataset-what-we-want-Right-now-your-t_1764975422274.txt",
+      "size_bytes": 13596
+    },
+    {
+      "mtime_utc": "2025-12-04T18:29:19Z",
+      "path": "attached_assets/Pasted-1-Clean-architecture-build-plan-Overall-goal-A-modular-_1764872958910.txt",
+      "size_bytes": 10980
+    },
+    {
+      "mtime_utc": "2025-12-04T23:17:55Z",
+      "path": "attached_assets/Pasted-1-Concept-production-vs-research-mode-We-ll-add-mode-pr_1764890275021.txt",
+      "size_bytes": 12902
+    },
+    {
+      "mtime_utc": "2025-12-04T23:48:19Z",
+      "path": "attached_assets/Pasted-1-DeribitDataSource-using-Deribit-s-TradingView-style-d_1764892098862.txt",
+      "size_bytes": 15560
+    },
+    {
+      "mtime_utc": "2025-12-05T15:02:33Z",
+      "path": "attached_assets/Pasted-1-Design-for-a-multi-roll-call-chain-New-config-knobs-i_1764946951306.txt",
+      "size_bytes": 9857
+    },
+    {
+      "mtime_utc": "2025-12-04T18:24:09Z",
+      "path": "attached_assets/Pasted-1-Example-agent-brain-llm-py-LLM-decision-brain-This-as_1764872641212.txt",
+      "size_bytes": 7140
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:52.229748Z",
+      "path": "attached_assets/Pasted-1-High-level-architecture-components-data-flow-Assumpti_1765629006173.txt",
+      "size_bytes": 28437
+    },
+    {
+      "mtime_utc": "2025-12-05T18:37:16Z",
+      "path": "attached_assets/Pasted-1-PositionTracker-module-drop-in-file-Create-a-new-file_1764959835994.txt",
+      "size_bytes": 17654
+    },
+    {
+      "mtime_utc": "2025-12-06T16:56:20Z",
+      "path": "attached_assets/Pasted-1-Python-summary-builder-for-ResolvedBacktestConfig-Cre_1765040180370.txt",
+      "size_bytes": 13094
+    },
+    {
+      "mtime_utc": "2025-12-08T20:08:15Z",
+      "path": "attached_assets/Pasted-1-Quick-repo-check-honest-status-I-just-checked-the-Git_1765224494798.txt",
+      "size_bytes": 8596
+    },
+    {
+      "mtime_utc": "2025-12-05T17:44:12Z",
+      "path": "attached_assets/Pasted-1-README-section-drop-in-You-can-paste-this-under-somet_1764956652154.txt",
+      "size_bytes": 13804
+    },
+    {
+      "mtime_utc": "2025-12-05T13:33:12Z",
+      "path": "attached_assets/Pasted-1-Scoring-score-candidate-features-0-10-We-ll-add-a-hel_1764941589224.txt",
+      "size_bytes": 18696
+    },
+    {
+      "mtime_utc": "2025-12-05T19:55:04Z",
+      "path": "attached_assets/Pasted-1-Script-scripts-calibrate-synthetic-vs-deribit-py-Crea_1764964503344.txt",
+      "size_bytes": 14229
+    },
+    {
+      "mtime_utc": "2025-12-04T23:47:30Z",
+      "path": "attached_assets/Pasted-1-Simulator-API-sketch-Think-in-layers-MarketDataSource_1764892049720.txt",
+      "size_bytes": 6711
+    },
+    {
+      "mtime_utc": "2025-12-04T22:40:45Z",
+      "path": "attached_assets/Pasted-1-Small-but-important-upgrades-to-risk-engine-py-Here-s_1764888045056.txt",
+      "size_bytes": 9701
+    },
+    {
+      "mtime_utc": "2025-12-04T22:58:49Z",
+      "path": "attached_assets/Pasted-1-What-chat-with-agent-py-should-do-Goal-Let-you-ask-na_1764889127407.txt",
+      "size_bytes": 9690
+    },
+    {
+      "mtime_utc": "2025-12-05T13:33:41Z",
+      "path": "attached_assets/Pasted-1-What-state-builder-should-do-high-level-For-each-hist_1764941618646.txt",
+      "size_bytes": 11552
+    },
+    {
+      "mtime_utc": "2025-12-04T23:49:42Z",
+      "path": "attached_assets/Pasted-2-Add-simulate-policy-to-the-simulator-Let-s-extend-Cov_1764892182234.txt",
+      "size_bytes": 15177
+    },
+    {
+      "mtime_utc": "2025-12-07T23:33:54Z",
+      "path": "attached_assets/Pasted-2-Design-of-a-small-diff-report-for-backtest-runs-You-a_1765150434073.txt",
+      "size_bytes": 7490
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:52.230015Z",
+      "path": "attached_assets/Pasted-AI-BUILDER-PROMPT-Clean-up-codex-Telegram-output-hide-s_1765651448932.txt",
+      "size_bytes": 3338
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:52.230243Z",
+      "path": "attached_assets/Pasted-AI-BUILDER-PROMPT-Fix-Telegram-parse-errors-harden-repl_1765642853444.txt",
+      "size_bytes": 3751
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:52.231360Z",
+      "path": "attached_assets/Pasted-AI-BUILDER-PROMPT-Fix-auto-calibrate-iv-py-Guardrails-U_1765478100179.txt",
+      "size_bytes": 9169
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:52.231626Z",
+      "path": "attached_assets/Pasted-AI-BUILDER-PROMPT-Harvester-Data-Quality-Reproducibilit_1765406369070.txt",
+      "size_bytes": 11109
+    },
+    {
+      "mtime_utc": "2025-12-14T00:02:03.668029Z",
+      "path": "attached_assets/Pasted-AI-BUILDER-PROMPT-Implement-an-automated-IV-sanity-chec_1765665423081.txt",
+      "size_bytes": 8297
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:52.231904Z",
+      "path": "attached_assets/Pasted-AI-BUILDER-PROMPT-Install-Node-Codex-CLI-in-Replit-and-_1765644049625.txt",
+      "size_bytes": 2795
+    },
+    {
+      "mtime_utc": "2025-12-18T19:36:43.533126Z",
+      "path": "attached_assets/Pasted-AI-BUILDER-PROMPT-Remove-Look-Ahead-Bias-in-Synthetic-S_1766083728982.txt",
+      "size_bytes": 5593
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:52.232259Z",
+      "path": "attached_assets/Pasted-AI-BUILDER-PROMPT-Role-You-are-a-senior-Python-engineer_1765634831148.txt",
+      "size_bytes": 3528
+    },
+    {
+      "mtime_utc": "2025-12-14T00:02:03.668846Z",
+      "path": "attached_assets/Pasted-AI-BUILDER-PROMPT-Switch-review-latest-audit-latest-to-_1765667354594.txt",
+      "size_bytes": 3052
+    },
+    {
+      "mtime_utc": "2025-12-18T19:36:43.533352Z",
+      "path": "attached_assets/Pasted-AI-BUILDER-PROMPT-Wire-Calibration-Pricing-VolSurfaceCo_1766084696249.txt",
+      "size_bytes": 4684
+    },
+    {
+      "mtime_utc": "2025-12-18T19:36:43.534045Z",
+      "path": "attached_assets/Pasted-AI-Builder-Prompt-2-5-PR-Supervisor-Hardening-Patch-P0-_1765826612393.txt",
+      "size_bytes": 4323
+    },
+    {
+      "mtime_utc": "2025-12-18T19:36:43.534879Z",
+      "path": "attached_assets/Pasted-AI-Builder-Prompt-2-6-Supervisor-Reliability-Webhook-Au_1765827368532.txt",
+      "size_bytes": 3873
+    },
+    {
+      "mtime_utc": "2025-12-18T19:36:43.535231Z",
+      "path": "attached_assets/Pasted-AI-Builder-Prompt-2-7-Fix-Empty-Secret-Webhook-Bypass-H_1765829113089.txt",
+      "size_bytes": 4328
+    },
+    {
+      "mtime_utc": "2025-12-18T19:36:43.535602Z",
+      "path": "attached_assets/Pasted-AI-Builder-Prompt-2-Supervisor-Telegram-Timeline-Multi-_1765824525815.txt",
+      "size_bytes": 5612
+    },
+    {
+      "mtime_utc": "2025-12-18T19:36:43.535913Z",
+      "path": "attached_assets/Pasted-AI-Builder-Prompt-3-Telegram-Control-Commands-Opt-In-Au_1765832895190.txt",
+      "size_bytes": 5473
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:52.232537Z",
+      "path": "attached_assets/Pasted-AI-Builder-Prompt-Greg-Lab-UI-Logs-Timeline-Sandbox-Vie_1765502591638.txt",
+      "size_bytes": 5701
+    },
+    {
+      "mtime_utc": "2025-12-19T18:57:56.258213Z",
+      "path": "attached_assets/Pasted-AI-Builder-Prompt-Historical-realism-defaults-fallback-_1766161425714.txt",
+      "size_bytes": 2419
+    },
+    {
+      "mtime_utc": "2025-12-19T18:57:56.258563Z",
+      "path": "attached_assets/Pasted-AI-Builder-Prompt-Historical-realism-defaults-fallback-_1766163332469.txt",
+      "size_bytes": 2419
+    },
+    {
+      "mtime_utc": "2025-12-08T19:03:27Z",
+      "path": "attached_assets/Pasted-AI-Builder-Prompt-Phase-2-1-Task-Strategy-abstraction-s_1765220606990.txt",
+      "size_bytes": 8005
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:52.232997Z",
+      "path": "attached_assets/Pasted-AI-Builder-Prompt-open-greg-sandbox-positions-py-14-Gre_1765501411033.txt",
+      "size_bytes": 6251
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:52.233428Z",
+      "path": "attached_assets/Pasted-AI-Builder-Prompt-paste-to-Replit-Builder-Role-You-are-_1765653169908.txt",
+      "size_bytes": 3971
+    },
+    {
+      "mtime_utc": "2025-12-18T19:36:43.536129Z",
+      "path": "attached_assets/Pasted-AI-Builder-Update-Prompt-Web-Refactor-Stabilization-Gua_1765838390197.txt",
+      "size_bytes": 2802
+    },
+    {
+      "mtime_utc": "2025-12-05T18:23:37Z",
+      "path": "attached_assets/Pasted-Below-I-ll-define-Exact-JSON-shapes-for-GET-api-positio_1764959017214.txt",
+      "size_bytes": 9710
+    },
+    {
+      "mtime_utc": "2025-12-08T20:17:35Z",
+      "path": "attached_assets/Pasted-Builder-Prompt-Add-System-Controls-Health-Panel-to-the-_1765225055594.txt",
+      "size_bytes": 10841
+    },
+    {
+      "mtime_utc": "2025-12-08T19:33:32Z",
+      "path": "attached_assets/Pasted-Builder-Prompt-Implement-P1-C1-Position-Reconciliation-_1765222412308.txt",
+      "size_bytes": 10139
+    },
+    {
+      "mtime_utc": "2025-12-05T13:34:40Z",
+      "path": "attached_assets/Pasted-Conceptual-change-Right-now-we-ve-been-a-bit-agnostic-b_1764941677782.txt",
+      "size_bytes": 5084
+    },
+    {
+      "mtime_utc": "2025-12-18T23:39:52.889162Z",
+      "path": "attached_assets/Pasted-Context-We-already-implemented-two-backend-changes-Win-_1766091839547.txt",
+      "size_bytes": 3877
+    },
+    {
+      "mtime_utc": "2025-12-05T18:46:25Z",
+      "path": "attached_assets/Pasted-Cool-let-s-give-the-backtester-the-same-level-of-DTE-aw_1764960385254.txt",
+      "size_bytes": 6521
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:52.233958Z",
+      "path": "attached_assets/Pasted-Copy-paste-AI-BUILDER-PROMPT-to-implement-this-in-Repli_1765651697563.txt",
+      "size_bytes": 2394
+    },
+    {
+      "mtime_utc": "2025-12-14T00:02:03.669747Z",
+      "path": "attached_assets/Pasted-Fix-1-live-chain-candidates-tuple-bug-P0-AI-BUILDER-PRO_1765668983852.txt",
+      "size_bytes": 2869
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:52.234295Z",
+      "path": "attached_assets/Pasted-Goal-Add-a-regression-test-that-proves-GregBot-VRP-Harv_1765661909671.txt",
+      "size_bytes": 5714
+    },
+    {
+      "mtime_utc": "2025-12-05T23:38:04Z",
+      "path": "attached_assets/Pasted-Goal-Extend-the-existing-training-mode-so-that-when-tra_1764977884633.txt",
+      "size_bytes": 10533
+    },
+    {
+      "mtime_utc": "2025-12-18T19:36:43.536339Z",
+      "path": "attached_assets/Pasted-Goal-Fix-worktree-invalid-reference-on-PR-updates-and-m_1765913580229.txt",
+      "size_bytes": 2097
+    },
+    {
+      "mtime_utc": "2025-12-05T22:38:05Z",
+      "path": "attached_assets/Pasted-Goal-In-TRAINING-MODE-on-TESTNET-let-the-bot-open-MANY-_1764974284713.txt",
+      "size_bytes": 4237
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:52.234566Z",
+      "path": "attached_assets/Pasted-Here-s-a-README-section-you-can-drop-in-as-is-Daily-IV-_1765662335208.txt",
+      "size_bytes": 4469
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:52.234854Z",
+      "path": "attached_assets/Pasted-High-level-goal-Implement-a-minimal-AI-Steward-MVP-that_1765329225104.txt",
+      "size_bytes": 12607
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:52.235099Z",
+      "path": "attached_assets/Pasted-High-level-goal-for-this-task-Add-a-new-Strategies-sect_1765301032848.txt",
+      "size_bytes": 12530
+    },
+    {
+      "mtime_utc": "2025-12-06T16:52:10Z",
+      "path": "attached_assets/Pasted-I-ll-do-two-things-A-simple-Backtest-config-JSON-shape-_1765039930562.txt",
+      "size_bytes": 11871
+    },
+    {
+      "mtime_utc": "2025-12-04T23:49:02Z",
+      "path": "attached_assets/Pasted-I-ll-give-you-concrete-modules-an-example-script-you-ca_1764892141934.txt",
+      "size_bytes": 19734
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:52.235563Z",
+      "path": "attached_assets/Pasted-I-m-a-non-coder-operator-I-verify-everything-through-th_1765306179056.txt",
+      "size_bytes": 15787
+    },
+    {
+      "mtime_utc": "2025-12-05T22:39:21Z",
+      "path": "attached_assets/Pasted-In-the-previous-prompt-I-suggested-if-cfg-is-training-e_1764974361349.txt",
+      "size_bytes": 2434
+    },
+    {
+      "mtime_utc": "2025-12-05T23:21:48Z",
+      "path": "attached_assets/Pasted-In-training-mode-especially-on-testnet-let-the-bot-igno_1764976906347.txt",
+      "size_bytes": 9837
+    },
+    {
+      "mtime_utc": "2025-12-04T18:24:09Z",
+      "path": "attached_assets/Pasted-LLM-integration-agent-brain-llm-py-In-addition-to-every_1764872605769.txt",
+      "size_bytes": 3409
+    },
+    {
+      "mtime_utc": "2025-12-05T13:47:08Z",
+      "path": "attached_assets/Pasted-Let-s-design-it-so-Live-mode-behaves-conservative-1-slo_1764942426623.txt",
+      "size_bytes": 8771
+    },
+    {
+      "mtime_utc": "2025-12-04T23:46:54Z",
+      "path": "attached_assets/Pasted-Love-it-this-is-where-it-starts-to-feel-like-a-real-res_1764892014650.txt",
+      "size_bytes": 8172
+    },
+    {
+      "mtime_utc": "2025-12-05T17:25:13Z",
+      "path": "attached_assets/Pasted-Next-step-synthetic-pricing-mode-so-backtests-are-self-_1764955513498.txt",
+      "size_bytes": 6625
+    },
+    {
+      "mtime_utc": "2025-12-05T16:26:12Z",
+      "path": "attached_assets/Pasted-Nice-that-debug-dump-is-super-helpful-it-tells-us-exact_1764951972089.txt",
+      "size_bytes": 5411
+    },
+    {
+      "mtime_utc": "2025-12-04T23:23:58Z",
+      "path": "attached_assets/Pasted-Nice-time-to-let-the-LLM-actually-drive-the-plane-still_1764890638349.txt",
+      "size_bytes": 6434
+    },
+    {
+      "mtime_utc": "2025-12-04T18:59:47Z",
+      "path": "attached_assets/Pasted-Option-1-Keep-it-as-a-bot-no-web-UI-change-deployment-t_1764874787351.txt",
+      "size_bytes": 3909
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:52.235830Z",
+      "path": "attached_assets/Pasted-PROMPT-FOR-AI-BUILDER-Calibration-Polish-Auto-Calibrate_1765480723473.txt",
+      "size_bytes": 9709
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:52.236177Z",
+      "path": "attached_assets/Pasted-PROMPT-FOR-AI-BUILDER-Daily-Auto-Calibration-Cron-Helpe_1765578110821.txt",
+      "size_bytes": 3893
+    },
+    {
+      "mtime_utc": "2025-12-18T19:36:43.536622Z",
+      "path": "attached_assets/Pasted-PROMPT-FOR-AI-BUILDER-Greg-Backtesting-Lab-Modes-Per-St_1765838441366.txt",
+      "size_bytes": 12668
+    },
+    {
+      "mtime_utc": "2025-12-18T19:36:43.537525Z",
+      "path": "attached_assets/Pasted-PROMPT-FOR-AI-BUILDER-Strategy-aware-Backtest-Config-Gr_1765831777102.txt",
+      "size_bytes": 3934
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:52.236514Z",
+      "path": "attached_assets/Pasted-PROMPT-FOR-AI-BUILDER-UNIFY-BACKTESTING-LAB-BACKTEST-RU_1765558620796.txt",
+      "size_bytes": 5716
+    },
+    {
+      "mtime_utc": "2025-12-18T19:36:43.537846Z",
+      "path": "attached_assets/Pasted-PROMPT-FOR-AI-BUILDER-Web-Layer-Refactor-into-src-web-P_1765835630320.txt",
+      "size_bytes": 10239
+    },
+    {
+      "mtime_utc": "2025-12-05T00:02:33Z",
+      "path": "attached_assets/Pasted-PROMPT-FOR-REPLIT-AI-BUILDER-ADD-MARKET-CONTEXT-CHART-A_1764892953558.txt",
+      "size_bytes": 13480
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:52.236890Z",
+      "path": "attached_assets/Pasted-Part-2-Deribit-Intraday-Scraper-Status-Widget-We-are-ha_1765328001617.txt",
+      "size_bytes": 7332
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:52.237142Z",
+      "path": "attached_assets/Pasted-Prompt-2-Extend-Calibration-Coverage-PUTs-DTE-buckets-w_1765405444959.txt",
+      "size_bytes": 7466
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:52.237382Z",
+      "path": "attached_assets/Pasted-Prompt-Batch-3-Bots-layout-refactor-Test-Live-editable-_1765578464306.txt",
+      "size_bytes": 11395
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:52.237620Z",
+      "path": "attached_assets/Pasted-Prompt-for-AI-Builder-Add-hybrid-Deribit-driven-synthet_1765634303673.txt",
+      "size_bytes": 3140
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:52.237932Z",
+      "path": "attached_assets/Pasted-Prompt-for-AI-Builder-Batch-Sensors-Debug-Safety-UI-P2-_1765318947206.txt",
+      "size_bytes": 17743
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:52.238227Z",
+      "path": "attached_assets/Pasted-Prompt-for-AI-Builder-Dashboard-Home-Batch-2-TASK-Refac_1765577417218.txt",
+      "size_bytes": 11594
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:52.238534Z",
+      "path": "attached_assets/Pasted-Prompt-for-AI-Builder-Integrate-Greg-ENTRY-ENGINE-v8-0-_1765482167798.txt",
+      "size_bytes": 3414
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:52.238814Z",
+      "path": "attached_assets/Pasted-Prompt-for-AI-Builder-Selector-Heatmap-Single-Metric-Pa_1765327094588.txt",
+      "size_bytes": 19038
+    },
+    {
+      "mtime_utc": "2025-12-06T16:53:08Z",
+      "path": "attached_assets/Pasted-Prompt-for-AI-Builder-Strategy-Safeguards-Status-Panel-_1765039988128.txt",
+      "size_bytes": 14827
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:52.239094Z",
+      "path": "attached_assets/Pasted-Prompt-for-AI-Builder-System-Health-Improvements-Batch-_1765501154970.txt",
+      "size_bytes": 8621
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:52.239370Z",
+      "path": "attached_assets/Pasted-Prompt-for-AI-Builder-System-Health-Runtime-Guardrails-_1765555071380.txt",
+      "size_bytes": 9068
+    },
+    {
+      "mtime_utc": "2025-12-18T19:36:43.538094Z",
+      "path": "attached_assets/Pasted-Prompt-for-AI-Builder-Wire-Greg-Selector-Backtest-Resul_1765842991848.txt",
+      "size_bytes": 6669
+    },
+    {
+      "mtime_utc": "2025-12-18T23:39:52.889552Z",
+      "path": "attached_assets/Pasted-Prompt-for-Third-Win-Feature-completion-Unify-the-two-s_1766091711820.txt",
+      "size_bytes": 4587
+    },
+    {
+      "mtime_utc": "2025-12-08T19:46:32Z",
+      "path": "attached_assets/Pasted-Prompt-for-the-AI-Builder-Paste-everything-below-to-you_1765223191903.txt",
+      "size_bytes": 14786
+    },
+    {
+      "mtime_utc": "2025-12-18T19:36:43.538318Z",
+      "path": "attached_assets/Pasted-ROLE-You-are-a-senior-backend-engineer-Implement-a-PR-S_1765824065326.txt",
+      "size_bytes": 6495
+    },
+    {
+      "mtime_utc": "2025-12-05T16:37:06Z",
+      "path": "attached_assets/Pasted-Right-now-everything-you-see-in-the-screenshot-is-singl_1764952626215.txt",
+      "size_bytes": 11339
+    },
+    {
+      "mtime_utc": "2025-12-05T15:52:25Z",
+      "path": "attached_assets/Pasted-Right-now-the-backtester-isn-t-finding-zero-good-trades_1764949945162.txt",
+      "size_bytes": 8667
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:52.239611Z",
+      "path": "attached_assets/Pasted-Role-You-are-a-senior-Python-engineer-DevSecOps-reviewe_1765631951908.txt",
+      "size_bytes": 7073
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:52.239872Z",
+      "path": "attached_assets/Pasted-Role-You-are-a-senior-Python-engineer-building-an-in-ap_1765631408803.txt",
+      "size_bytes": 5192
+    },
+    {
+      "mtime_utc": "2025-12-18T19:36:43.538536Z",
+      "path": "attached_assets/Pasted-Role-You-are-a-senior-engineer-Fix-critical-high-reliab_1765835090863.txt",
+      "size_bytes": 3620
+    },
+    {
+      "mtime_utc": "2025-12-18T19:36:43.538753Z",
+      "path": "attached_assets/Pasted-Stabilization-Prompt-Stop-the-Bug-Fountain-P0-security-_1765837234689.txt",
+      "size_bytes": 4228
+    },
+    {
+      "mtime_utc": "2025-12-05T19:09:17Z",
+      "path": "attached_assets/Pasted-Step-1-Turn-on-export-In-src-config-py-we-have-save-tra_1764961757108.txt",
+      "size_bytes": 3865
+    },
+    {
+      "mtime_utc": "2025-12-18T19:36:43.538966Z",
+      "path": "attached_assets/Pasted-Stop-ship-items-must-fix-before-Prompt-3-From-the-revie_1765834134149.txt",
+      "size_bytes": 4188
+    },
+    {
+      "mtime_utc": "2025-12-06T23:39:37Z",
+      "path": "attached_assets/Pasted-TASK-Clean-up-Live-Agent-dashboard-UI-and-fix-PnL-displ_1765064377038.txt",
+      "size_bytes": 5407
+    },
+    {
+      "mtime_utc": "2025-12-06T23:31:28Z",
+      "path": "attached_assets/Pasted-TASK-Create-ROADMAP-md-from-our-current-state-Goal-Summ_1765063888517.txt",
+      "size_bytes": 3653
+    },
+    {
+      "mtime_utc": "2025-12-06T22:29:14Z",
+      "path": "attached_assets/Pasted-TASK-Fix-P0-Centralize-IVRV-calculation-safe-minimal-re_1765060153882.txt",
+      "size_bytes": 2192
+    },
+    {
+      "mtime_utc": "2025-12-06T23:16:37Z",
+      "path": "attached_assets/Pasted-TASK-Fix-P0-Centralize-candidate-scoring-safe-minimal-r_1765062997214.txt",
+      "size_bytes": 4958
+    },
+    {
+      "mtime_utc": "2025-12-06T21:40:08Z",
+      "path": "attached_assets/Pasted-TASK-Health-check-and-smoke-tests-for-LLMAgentBrain-Goa_1765057208290.txt",
+      "size_bytes": 6820
+    },
+    {
+      "mtime_utc": "2025-12-07T17:20:45Z",
+      "path": "attached_assets/Pasted-TASK-Implement-robust-position-reconciliation-with-Deri_1765128044844.txt",
+      "size_bytes": 5509
+    },
+    {
+      "mtime_utc": "2025-12-07T18:45:00Z",
+      "path": "attached_assets/Pasted-TASK-Introduce-StrategyConfig-and-pluggable-Strategy-in_1765133100478.txt",
+      "size_bytes": 7892
+    },
+    {
+      "mtime_utc": "2025-12-07T19:31:33Z",
+      "path": "attached_assets/Pasted-TASK-P1-Reduce-duplication-between-Deribit-clients-trad_1765135893257.txt",
+      "size_bytes": 4410
+    },
+    {
+      "mtime_utc": "2025-12-07T19:31:05Z",
+      "path": "attached_assets/Pasted-TASK-P1-Reduce-duplication-between-live-and-backtest-st_1765135865662.txt",
+      "size_bytes": 6365
+    },
+    {
+      "mtime_utc": "2025-12-06T23:22:41Z",
+      "path": "attached_assets/Pasted-TASK-P1-cleanup-Add-minimal-unit-tests-for-core-helpers_1765063361260.txt",
+      "size_bytes": 4074
+    },
+    {
+      "mtime_utc": "2025-12-06T23:22:10Z",
+      "path": "attached_assets/Pasted-TASK-P1-cleanup-Centralize-expiry-parsing-Goal-Make-sur_1765063330188.txt",
+      "size_bytes": 3365
+    },
+    {
+      "mtime_utc": "2025-12-07T18:43:30Z",
+      "path": "attached_assets/Pasted-TASK-Upgrade-Chat-with-Agent-into-a-state-aware-multi-t_1765133010064.txt",
+      "size_bytes": 8584
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:52.240743Z",
+      "path": "attached_assets/Pasted-Task-Add-red-green-coloring-to-Live-Market-Sensors-In-s_1765311356102.txt",
+      "size_bytes": 4785
+    },
+    {
+      "mtime_utc": "2025-12-08T19:19:12Z",
+      "path": "attached_assets/Pasted-Task-Implement-P1-LLM-co-pilot-with-shadow-mode-strong-_1765221552053.txt",
+      "size_bytes": 11707
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:52.241071Z",
+      "path": "attached_assets/Pasted-The-Bots-Expert-Bots-table-is-already-working-Each-row-_1765311329251.txt",
+      "size_bytes": 3627
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:52.241350Z",
+      "path": "attached_assets/Pasted-Use-the-existing-code-that-powers-Greg-s-sensors-vrp-30_1765392818680.txt",
+      "size_bytes": 9696
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:52.241642Z",
+      "path": "attached_assets/Pasted-We-already-have-A-Backtesting-Lab-with-synthetic-univer_1765327043232.txt",
+      "size_bytes": 13764
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:52.242037Z",
+      "path": "attached_assets/Pasted-We-already-have-A-Bots-tab-with-Live-Market-Sensors-Str_1765393261985.txt",
+      "size_bytes": 13292
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:52.242284Z",
+      "path": "attached_assets/Pasted-We-already-have-A-Greg-strategy-spec-JSON-v6-with-versi_1765407390942.txt",
+      "size_bytes": 12196
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:52.242566Z",
+      "path": "attached_assets/Pasted-We-already-have-A-live-Deribit-testnet-agent-with-risk-_1765320724249.txt",
+      "size_bytes": 19002
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:52.242844Z",
+      "path": "attached_assets/Pasted-We-already-have-A-strategy-selector-GregBot-wired-to-JS_1765487920929.txt",
+      "size_bytes": 13846
+    },
+    {
+      "mtime_utc": "2025-12-05T14:46:45Z",
+      "path": "attached_assets/Pasted-We-already-have-Backtesting-Lab-UI-with-underlying-star_1764946001918.txt",
+      "size_bytes": 6778
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:52.243143Z",
+      "path": "attached_assets/Pasted-We-already-have-Greg-s-sensors-and-selector-GregBot-on-_1765395447670.txt",
+      "size_bytes": 9962
+    },
+    {
+      "mtime_utc": "2025-12-05T17:10:51Z",
+      "path": "attached_assets/Pasted-We-already-have-a-Backtesting-Lab-that-Runs-a-backtest-_1764954650847.txt",
+      "size_bytes": 6510
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:52.243409Z",
+      "path": "attached_assets/Pasted-We-already-have-the-Bots-tab-with-Live-Market-Sensors-V_1765312103834.txt",
+      "size_bytes": 7573
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:52.243659Z",
+      "path": "attached_assets/Pasted-We-already-ran-an-audit-and-created-UI-FEATURE-GAPS-md-_1765246412488.txt",
+      "size_bytes": 8762
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:52.244384Z",
+      "path": "attached_assets/Pasted-We-are-working-on-the-Bots-GregBot-section-High-Level-G_1765310842429.txt",
+      "size_bytes": 11051
+    },
+    {
+      "mtime_utc": "2025-12-05T23:08:13Z",
+      "path": "attached_assets/Pasted-We-need-to-change-the-behavior-of-the-rb-v1-explore-pol_1764976092635.txt",
+      "size_bytes": 5945
+    },
+    {
+      "mtime_utc": "2025-12-05T13:55:41Z",
+      "path": "attached_assets/Pasted-We-now-have-A-live-Deribit-agent-with-status-and-api-ag_1764942938872.txt",
+      "size_bytes": 17456
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:52.244652Z",
+      "path": "attached_assets/Pasted-We-recently-added-Selector-Frequency-Scan-Synthetic-and_1765392340784.txt",
+      "size_bytes": 11687
+    },
+    {
+      "mtime_utc": "2025-12-06T16:55:20Z",
+      "path": "attached_assets/Pasted-Why-the-6-open-positions-don-t-show-in-Bot-Positions-In_1765040120003.txt",
+      "size_bytes": 5607
+    },
+    {
+      "mtime_utc": "2025-12-05T18:16:15Z",
+      "path": "attached_assets/Pasted-Why-the-synthetic-backtest-shows-0-candidates-Where-can_1764958574746.txt",
+      "size_bytes": 18082
+    },
+    {
+      "mtime_utc": "2025-12-04T23:06:25Z",
+      "path": "attached_assets/Pasted-You-are-a-senior-Python-backend-engineer-I-already-have_1764889585485.txt",
+      "size_bytes": 9582
+    },
+    {
+      "mtime_utc": "2025-12-04T18:24:09Z",
+      "path": "attached_assets/Pasted-You-are-a-senior-Python-backend-engineer-and-quantitati_1764872524493.txt",
+      "size_bytes": 7417
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:52.244942Z",
+      "path": "attached_assets/Pasted-You-are-an-AI-pair-programmer-working-on-my-Options-Tra_1765246950886.txt",
+      "size_bytes": 18756
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:52.245211Z",
+      "path": "attached_assets/Pasted-You-are-an-AI-pair-programmer-working-on-my-Options-Tra_1765327147457.txt",
+      "size_bytes": 15070
+    },
+    {
+      "mtime_utc": "2025-12-07T23:58:57Z",
+      "path": "attached_assets/Pasted-You-are-an-expert-Python-3-11-architect-and-quantitativ_1765151937051.txt",
+      "size_bytes": 9905
+    },
+    {
+      "mtime_utc": "2025-12-05T22:07:54Z",
+      "path": "attached_assets/Pasted-You-are-an-expert-Python-developer-working-on-my-repo-L_1764972473959.txt",
+      "size_bytes": 10526
+    },
+    {
+      "mtime_utc": "2025-12-05T22:04:06Z",
+      "path": "attached_assets/Pasted-You-are-updating-my-Python-project-that-backtests-optio_1764972246288.txt",
+      "size_bytes": 19832
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:52.245453Z",
+      "path": "attached_assets/Pasted-You-are-working-in-my-Greg-options-bot-repo-Deribit-BTC_1765499011025.txt",
+      "size_bytes": 7766
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:52.246765Z",
+      "path": "attached_assets/Pasted-You-are-working-in-my-Options-Trading-Agent-repo-There-_1765488812965.txt",
+      "size_bytes": 5803
+    },
+    {
+      "mtime_utc": "2025-12-08T20:15:02Z",
+      "path": "attached_assets/Pasted-You-are-working-in-my-existing-options-trading-agent-re_1765224901808.txt",
+      "size_bytes": 4258
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:52.247044Z",
+      "path": "attached_assets/Pasted-You-are-working-in-the-LLMAgentBrain-Options-Trading-Ag_1765642706796.txt",
+      "size_bytes": 2359
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:52.247298Z",
+      "path": "attached_assets/Pasted-You-are-working-in-the-Options-Trading-Agent-repo-FastA_1765662603134.txt",
+      "size_bytes": 5461
+    },
+    {
+      "mtime_utc": "2025-12-08T20:55:38Z",
+      "path": "attached_assets/Pasted-You-are-working-in-the-llm-brain-repo-Options-Trading-A_1765227338599.txt",
+      "size_bytes": 7450
+    },
+    {
+      "mtime_utc": "2025-12-09T02:05:58Z",
+      "path": "attached_assets/Pasted-You-are-working-in-the-llm-brain-repo-Options-Trading-A_1765245957654.txt",
+      "size_bytes": 7450
+    },
+    {
+      "mtime_utc": "2025-12-07T19:03:12Z",
+      "path": "attached_assets/Pasted-You-are-working-inside-my-LLMAgentBrain-options-bot-rep_1765134191574.txt",
+      "size_bytes": 5826
+    },
+    {
+      "mtime_utc": "2025-12-07T19:13:42Z",
+      "path": "attached_assets/Pasted-You-are-working-inside-my-LLMAgentBrain-options-bot-rep_1765134822404.txt",
+      "size_bytes": 5872
+    },
+    {
+      "mtime_utc": "2025-12-07T20:28:06Z",
+      "path": "attached_assets/Pasted-You-are-working-inside-my-LLMAgentBrain-options-bot-rep_1765139286055.txt",
+      "size_bytes": 9559
+    },
+    {
+      "mtime_utc": "2025-12-07T23:00:55Z",
+      "path": "attached_assets/Pasted-You-are-working-inside-my-LLMAgentBrain-options-bot-rep_1765148455057.txt",
+      "size_bytes": 7118
+    },
+    {
+      "mtime_utc": "2025-12-07T23:07:44Z",
+      "path": "attached_assets/Pasted-You-are-working-inside-my-LLMAgentBrain-options-bot-rep_1765148863262.txt",
+      "size_bytes": 8165
+    },
+    {
+      "mtime_utc": "2025-12-07T23:45:31Z",
+      "path": "attached_assets/Pasted-You-are-working-inside-my-LLMAgentBrain-options-bot-rep_1765151130871.txt",
+      "size_bytes": 7106
+    },
+    {
+      "mtime_utc": "2025-12-07T20:27:24Z",
+      "path": "attached_assets/Pasted-You-are-working-inside-my-LLMAgentBrain-repository-Goal_1765139243739.txt",
+      "size_bytes": 6236
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:52.247612Z",
+      "path": "attached_assets/Pasted-You-are-working-inside-my-Options-Trading-Agent-project_1765399359394.txt",
+      "size_bytes": 14014
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:52.247888Z",
+      "path": "attached_assets/Pasted-You-are-working-inside-my-Options-Trading-Agent-project_1765400931143.txt",
+      "size_bytes": 8230
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:52.248176Z",
+      "path": "attached_assets/Pasted-You-are-working-inside-my-Options-Trading-Agent-project_1765409409137.txt",
+      "size_bytes": 6915
+    },
+    {
+      "mtime_utc": "2025-12-05T21:58:13Z",
+      "path": "attached_assets/Pasted-You-are-working-inside-the-LLMAgentBrain-repo-Goal-Enha_1764971892338.txt",
+      "size_bytes": 8245
+    },
+    {
+      "mtime_utc": "2025-12-05T19:58:37Z",
+      "path": "attached_assets/Pasted-You-are-working-inside-the-LLMAgentBrain-repo-Goal-Impl_1764964717111.txt",
+      "size_bytes": 12950
+    },
+    {
+      "mtime_utc": "2025-12-06T17:26:19Z",
+      "path": "attached_assets/Pasted-You-are-working-inside-the-LLMAgentBrain-repo-Goal-Take_1765041979532.txt",
+      "size_bytes": 7560
+    },
+    {
+      "mtime_utc": "2025-12-06T17:29:05Z",
+      "path": "attached_assets/Pasted-You-are-working-inside-the-LLMAgentBrain-repo-Goal-Take_1765042145353.txt",
+      "size_bytes": 7560
+    },
+    {
+      "mtime_utc": "2025-12-05T21:28:57Z",
+      "path": "attached_assets/Pasted-You-are-working-inside-the-LLMAgentBrain-repo-Goal-Upda_1764970136490.txt",
+      "size_bytes": 8975
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:52.248415Z",
+      "path": "attached_assets/Pasted-You-are-working-on-a-Python-FastAPI-project-for-an-opti_1765488603766.txt",
+      "size_bytes": 8241
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:52.248665Z",
+      "path": "attached_assets/Pasted-You-are-working-on-my-Greg-options-bot-repo-Deribit-BTC_1765493659897.txt",
+      "size_bytes": 5129
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:52.248963Z",
+      "path": "attached_assets/Pasted-You-are-working-on-the-LLMAgentBrain-options-trading-pr_1765397105089.txt",
+      "size_bytes": 11728
+    },
+    {
+      "mtime_utc": "2025-12-05T15:51:45Z",
+      "path": "attached_assets/Pasted-You-re-right-that-0-candidates-best-score-0-with-such-a_1764949903508.txt",
+      "size_bytes": 3721
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:52.249217Z",
+      "path": "attached_assets/Pasted-You-re-working-in-my-Greg-options-bot-repo-Deribit-BTC-_1765498661195.txt",
+      "size_bytes": 8231
+    },
+    {
+      "mtime_utc": "2025-12-05T21:42:04Z",
+      "path": "attached_assets/Pasted-add-a-simple-Deribit-derived-skew-model-and-wire-it-int_1764970923512.txt",
+      "size_bytes": 13632
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:52.249503Z",
+      "path": "attached_assets/Pasted-ou-are-working-in-my-existing-LLMAgentBrain-repo-option_1765398231201.txt",
+      "size_bytes": 6077
+    },
+    {
+      "mtime_utc": "2025-12-08T20:24:18Z",
+      "path": "attached_assets/Pasted-ou-are-working-in-the-llm-brain-repo-Options-Trading-Ag_1765225457930.txt",
+      "size_bytes": 7448
+    },
+    {
+      "mtime_utc": "2025-12-05T00:08:49Z",
+      "path": "attached_assets/Pasted-staring-at-JSONL-logs-is-not-the-dream-UI-You-already-h_1764893329558.txt",
+      "size_bytes": 9920
+    },
+    {
+      "mtime_utc": "2025-12-07T20:54:07Z",
+      "path": "attached_assets/Pasted-the-hook-You-are-working-inside-my-LLMAgentBrain-option_1765140846910.txt",
+      "size_bytes": 11901
+    },
+    {
+      "mtime_utc": "2025-12-07T20:58:50Z",
+      "path": "attached_assets/Pasted-the-hook-You-are-working-inside-my-LLMAgentBrain-option_1765141129744.txt",
+      "size_bytes": 11901
+    },
+    {
+      "mtime_utc": "2025-12-04T19:06:33Z",
+      "path": "attached_assets/Screenshot_2025-12-04_at_11.06.28_AM_1764875192323.png",
+      "size_bytes": 736044
+    },
+    {
+      "mtime_utc": "2025-12-07T19:17:53Z",
+      "path": "attached_assets/Screenshot_2025-12-07_at_11.17.50_AM_1765135072432.png",
+      "size_bytes": 547399
+    },
+    {
+      "mtime_utc": "2025-12-07T23:47:53Z",
+      "path": "attached_assets/Screenshot_2025-12-07_at_3.47.47_PM_1765151271960.png",
+      "size_bytes": 506565
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:52.258086Z",
+      "path": "attached_assets/Screenshot_2025-12-09_at_11.04.28_AM_1765307070935.png",
+      "size_bytes": 717737
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:52.263789Z",
+      "path": "attached_assets/Screenshot_2025-12-10_at_2.54.37_PM_1765407279883.png",
+      "size_bytes": 650573
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:52.270403Z",
+      "path": "attached_assets/Screenshot_2025-12-10_at_3.17.12_PM_1765408634969.png",
+      "size_bytes": 510347
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:52.276726Z",
+      "path": "attached_assets/Screenshot_2025-12-10_at_3.32.40_PM_1765409562414.png",
+      "size_bytes": 564884
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:52.278879Z",
+      "path": "attached_assets/Screenshot_2025-12-11_at_11.48.58_AM_1765482544201.png",
+      "size_bytes": 352993
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:52.281011Z",
+      "path": "attached_assets/Screenshot_2025-12-11_at_12.01.48_PM_1765483312154.png",
+      "size_bytes": 356127
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:52.287001Z",
+      "path": "attached_assets/Screenshot_2025-12-11_at_4.56.32_PM_1765500998753.png",
+      "size_bytes": 534178
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:52.290253Z",
+      "path": "attached_assets/Screenshot_2025-12-12_at_9.25.04_AM_1765560307381.png",
+      "size_bytes": 569827
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:52.292954Z",
+      "path": "attached_assets/Screenshot_2025-12-13_at_8.56.49_AM_1765645011578.png",
+      "size_bytes": 464609
+    },
+    {
+      "mtime_utc": "2025-12-18T19:36:43.546619Z",
+      "path": "attached_assets/Screenshot_2025-12-15_at_3.44.03_PM_1765842246168.png",
+      "size_bytes": 543732
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:52.297313Z",
+      "path": "attached_assets/ai_studio_code_(2)_1765301030303.txt",
+      "size_bytes": 7280
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:52.303492Z",
+      "path": "attached_assets/ai_studio_code_(8)_1765482172718.txt",
+      "size_bytes": 2742
+    },
+    {
+      "mtime_utc": "2025-12-18T19:36:43.637978Z",
+      "path": "attached_assets/codex_vps_key",
+      "size_bytes": 419
+    },
+    {
+      "mtime_utc": "2025-12-18T19:36:43.638623Z",
+      "path": "attached_assets/codex_vps_key.pub",
+      "size_bytes": 106
+    },
+    {
+      "mtime_utc": "2025-12-20T02:02:42.908734Z",
+      "path": "auto_push.sh",
+      "size_bytes": 293
+    },
+    {
+      "mtime_utc": "2025-12-04T18:30:57Z",
+      "path": "backtest/__init__.py",
+      "size_bytes": 0
+    },
+    {
+      "mtime_utc": "2025-12-06T21:23:34Z",
+      "path": "backtest/env_simulator.py",
+      "size_bytes": 9859
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:52.304630Z",
+      "path": "backtest/output/env_heatmap_BTC_adx_14d_vs_chop_factor_7d.csv",
+      "size_bytes": 6687
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:52.305127Z",
+      "path": "backtest/output/env_heatmap_BTC_adx_14d_vs_iv_rank_6m.csv",
+      "size_bytes": 6302
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:52.306379Z",
+      "path": "backtest/output/env_heatmap_BTC_adx_14d_vs_price_vs_ma200.csv",
+      "size_bytes": 6912
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:52.306666Z",
+      "path": "backtest/output/env_heatmap_BTC_adx_14d_vs_rsi_14d.csv",
+      "size_bytes": 5592
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:52.306922Z",
+      "path": "backtest/output/env_heatmap_BTC_adx_14d_vs_skew_25d.csv",
+      "size_bytes": 6172
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:52.307209Z",
+      "path": "backtest/output/env_heatmap_BTC_adx_14d_vs_term_structure_spread.csv",
+      "size_bytes": 7467
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:52.307483Z",
+      "path": "backtest/output/env_heatmap_BTC_chop_factor_7d_vs_price_vs_ma200.csv",
+      "size_bytes": 7432
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:52.307781Z",
+      "path": "backtest/output/env_heatmap_BTC_chop_factor_7d_vs_rsi_14d.csv",
+      "size_bytes": 6112
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:52.308009Z",
+      "path": "backtest/output/env_heatmap_BTC_iv_rank_6m_vs_chop_factor_7d.csv",
+      "size_bytes": 6787
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:52.308288Z",
+      "path": "backtest/output/env_heatmap_BTC_iv_rank_6m_vs_price_vs_ma200.csv",
+      "size_bytes": 7037
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:52.308524Z",
+      "path": "backtest/output/env_heatmap_BTC_iv_rank_6m_vs_rsi_14d.csv",
+      "size_bytes": 5722
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:52.308812Z",
+      "path": "backtest/output/env_heatmap_BTC_iv_rank_6m_vs_skew_25d.csv",
+      "size_bytes": 6317
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:52.309035Z",
+      "path": "backtest/output/env_heatmap_BTC_iv_rank_6m_vs_term_structure_spread.csv",
+      "size_bytes": 7587
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:52.309266Z",
+      "path": "backtest/output/env_heatmap_BTC_price_vs_ma200_vs_rsi_14d.csv",
+      "size_bytes": 6332
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:52.309452Z",
+      "path": "backtest/output/env_heatmap_BTC_skew_25d_vs_chop_factor_7d.csv",
+      "size_bytes": 6687
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:52.309691Z",
+      "path": "backtest/output/env_heatmap_BTC_skew_25d_vs_price_vs_ma200.csv",
+      "size_bytes": 6927
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:52.309901Z",
+      "path": "backtest/output/env_heatmap_BTC_skew_25d_vs_rsi_14d.csv",
+      "size_bytes": 5582
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:52.310125Z",
+      "path": "backtest/output/env_heatmap_BTC_skew_25d_vs_term_structure_spread.csv",
+      "size_bytes": 7467
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:52.310318Z",
+      "path": "backtest/output/env_heatmap_BTC_term_structure_spread_vs_chop_factor_7d.csv",
+      "size_bytes": 7977
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:52.310677Z",
+      "path": "backtest/output/env_heatmap_BTC_term_structure_spread_vs_price_vs_ma200.csv",
+      "size_bytes": 8207
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:52.310959Z",
+      "path": "backtest/output/env_heatmap_BTC_term_structure_spread_vs_rsi_14d.csv",
+      "size_bytes": 6892
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:52.311212Z",
+      "path": "backtest/output/env_heatmap_BTC_vrp_30d_vs_adx_14d.csv",
+      "size_bytes": 6157
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:52.311498Z",
+      "path": "backtest/output/env_heatmap_BTC_vrp_30d_vs_chop_factor_7d.csv",
+      "size_bytes": 6607
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:52.311753Z",
+      "path": "backtest/output/env_heatmap_BTC_vrp_30d_vs_iv_rank_6m.csv",
+      "size_bytes": 6242
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:52.311950Z",
+      "path": "backtest/output/env_heatmap_BTC_vrp_30d_vs_price_vs_ma200.csv",
+      "size_bytes": 6937
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:52.312144Z",
+      "path": "backtest/output/env_heatmap_BTC_vrp_30d_vs_rsi_14d.csv",
+      "size_bytes": 5592
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:52.312340Z",
+      "path": "backtest/output/env_heatmap_BTC_vrp_30d_vs_skew_25d.csv",
+      "size_bytes": 6167
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:52.312711Z",
+      "path": "backtest/output/env_heatmap_BTC_vrp_30d_vs_term_structure_spread.csv",
+      "size_bytes": 7462
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:52.312942Z",
+      "path": "backtest/output/env_heatmap_ETH_adx_14d_vs_chop_factor_7d.csv",
+      "size_bytes": 6622
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:52.313216Z",
+      "path": "backtest/output/env_heatmap_ETH_adx_14d_vs_iv_rank_6m.csv",
+      "size_bytes": 6287
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:52.313469Z",
+      "path": "backtest/output/env_heatmap_ETH_adx_14d_vs_price_vs_ma200.csv",
+      "size_bytes": 6867
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:52.313870Z",
+      "path": "backtest/output/env_heatmap_ETH_adx_14d_vs_rsi_14d.csv",
+      "size_bytes": 5582
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:52.314148Z",
+      "path": "backtest/output/env_heatmap_ETH_adx_14d_vs_skew_25d.csv",
+      "size_bytes": 6152
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:52.314440Z",
+      "path": "backtest/output/env_heatmap_ETH_adx_14d_vs_term_structure_spread.csv",
+      "size_bytes": 7457
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:52.314717Z",
+      "path": "backtest/output/env_heatmap_ETH_chop_factor_7d_vs_price_vs_ma200.csv",
+      "size_bytes": 7322
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:52.314965Z",
+      "path": "backtest/output/env_heatmap_ETH_chop_factor_7d_vs_rsi_14d.csv",
+      "size_bytes": 6042
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:52.315217Z",
+      "path": "backtest/output/env_heatmap_ETH_iv_rank_6m_vs_chop_factor_7d.csv",
+      "size_bytes": 6732
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:52.315563Z",
+      "path": "backtest/output/env_heatmap_ETH_iv_rank_6m_vs_price_vs_ma200.csv",
+      "size_bytes": 7007
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:52.318234Z",
+      "path": "backtest/output/env_heatmap_ETH_iv_rank_6m_vs_rsi_14d.csv",
+      "size_bytes": 5727
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:52.319865Z",
+      "path": "backtest/output/env_heatmap_ETH_iv_rank_6m_vs_skew_25d.csv",
+      "size_bytes": 6317
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:52.320236Z",
+      "path": "backtest/output/env_heatmap_ETH_iv_rank_6m_vs_term_structure_spread.csv",
+      "size_bytes": 7587
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:52.320537Z",
+      "path": "backtest/output/env_heatmap_ETH_price_vs_ma200_vs_rsi_14d.csv",
+      "size_bytes": 6297
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:52.320852Z",
+      "path": "backtest/output/env_heatmap_ETH_skew_25d_vs_chop_factor_7d.csv",
+      "size_bytes": 6637
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:52.321253Z",
+      "path": "backtest/output/env_heatmap_ETH_skew_25d_vs_price_vs_ma200.csv",
+      "size_bytes": 6872
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:52.321671Z",
+      "path": "backtest/output/env_heatmap_ETH_skew_25d_vs_rsi_14d.csv",
+      "size_bytes": 5622
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:52.322467Z",
+      "path": "backtest/output/env_heatmap_ETH_skew_25d_vs_term_structure_spread.csv",
+      "size_bytes": 7487
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:52.322738Z",
+      "path": "backtest/output/env_heatmap_ETH_term_structure_spread_vs_chop_factor_7d.csv",
+      "size_bytes": 7927
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:52.323006Z",
+      "path": "backtest/output/env_heatmap_ETH_term_structure_spread_vs_price_vs_ma200.csv",
+      "size_bytes": 8152
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:52.323249Z",
+      "path": "backtest/output/env_heatmap_ETH_term_structure_spread_vs_rsi_14d.csv",
+      "size_bytes": 6892
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:52.323510Z",
+      "path": "backtest/output/env_heatmap_ETH_vrp_30d_vs_adx_14d.csv",
+      "size_bytes": 6117
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:52.323765Z",
+      "path": "backtest/output/env_heatmap_ETH_vrp_30d_vs_chop_factor_7d.csv",
+      "size_bytes": 6548
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:52.324005Z",
+      "path": "backtest/output/env_heatmap_ETH_vrp_30d_vs_iv_rank_6m.csv",
+      "size_bytes": 6197
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:52.324261Z",
+      "path": "backtest/output/env_heatmap_ETH_vrp_30d_vs_price_vs_ma200.csv",
+      "size_bytes": 6827
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:52.324491Z",
+      "path": "backtest/output/env_heatmap_ETH_vrp_30d_vs_rsi_14d.csv",
+      "size_bytes": 5562
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:52.324753Z",
+      "path": "backtest/output/env_heatmap_ETH_vrp_30d_vs_skew_25d.csv",
+      "size_bytes": 6147
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:52.325030Z",
+      "path": "backtest/output/env_heatmap_ETH_vrp_30d_vs_term_structure_spread.csv",
+      "size_bytes": 7412
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:52.326045Z",
+      "path": "backtest/output/greg_heatmap_sweetspots.json",
+      "size_bytes": 234091
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:52.327609Z",
+      "path": "backtest/output/greg_heatmap_sweetspots.md",
+      "size_bytes": 83111
+    },
+    {
+      "mtime_utc": "2025-12-18T23:39:52.890628Z",
+      "path": "cocoloco.md",
+      "size_bytes": 31
+    },
+    {
+      "mtime_utc": "2025-12-20T20:34:45.347125Z",
+      "path": "data/",
+      "size_bytes": 0
+    },
+    {
+      "mtime_utc": "2025-12-18T19:36:43.557598Z",
+      "path": "docker/.env.supervisor.example",
+      "size_bytes": 3368
+    },
+    {
+      "mtime_utc": "2025-12-18T19:36:43.557820Z",
+      "path": "docker/docker-compose.supervisor.yml",
+      "size_bytes": 689
+    },
+    {
+      "mtime_utc": "2025-12-18T19:36:43.558020Z",
+      "path": "docker/supervisor.Dockerfile",
+      "size_bytes": 529
+    },
+    {
+      "mtime_utc": "2025-12-21T16:18:22.616911Z",
+      "path": "docs/CONTEXT_PACK.md",
+      "size_bytes": 709
+    },
+    {
+      "mtime_utc": "2025-12-07T19:16:07Z",
+      "path": "docs/DATA_HARVESTER.md",
+      "size_bytes": 4487
+    },
+    {
+      "mtime_utc": "2025-12-18T19:36:43.558689Z",
+      "path": "docs/DECISIONS.md",
+      "size_bytes": 8110
+    },
+    {
+      "mtime_utc": "2025-12-22T16:55:26.730119Z",
+      "path": "docs/FIDELITY_BTC_latest.json",
+      "size_bytes": 8116
+    },
+    {
+      "mtime_utc": "2025-12-22T16:55:26.731352Z",
+      "path": "docs/FIDELITY_BTC_latest.md",
+      "size_bytes": 5216
+    },
+    {
+      "mtime_utc": "2025-12-22T17:00:22.017853Z",
+      "path": "docs/OPS_HEALTH_latest.json",
+      "size_bytes": 567
+    },
+    {
+      "mtime_utc": "2025-12-22T16:57:22.416131Z",
+      "path": "docs/RECENT_DIFF.md",
+      "size_bytes": 75052
+    },
+    {
+      "mtime_utc": "2025-12-22T16:57:20.173634Z",
+      "path": "docs/REPO_MANIFEST.json",
+      "size_bytes": 113196
+    },
+    {
+      "mtime_utc": "2025-12-22T16:55:27.548753Z",
+      "path": "docs/ROADMAP_BACKLOG_latest.md",
+      "size_bytes": 32973
+    },
+    {
+      "mtime_utc": "2025-12-19T20:46:45.792810Z",
+      "path": "docs/STRATEGY_PNL_PARITY_FIDELITY_SUITE.md",
+      "size_bytes": 7968
+    },
+    {
+      "mtime_utc": "2025-12-18T19:36:43.561594Z",
+      "path": "docs/SUPERVISOR_VPS_SETUP.md",
+      "size_bytes": 3912
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:53.710214Z",
+      "path": "docs/SYNTHETIC_UNIVERSE.md",
+      "size_bytes": 4220
+    },
+    {
+      "mtime_utc": "2025-12-22T16:54:58.755052Z",
+      "path": "docs/TEST_SUMMARY_latest.txt",
+      "size_bytes": 74
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:53.710596Z",
+      "path": "docs/greg_mandolini/GREG_POSITION_RULES_V1.json",
+      "size_bytes": 6388
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:53.710860Z",
+      "path": "docs/greg_mandolini/GREG_SELECTOR_RULES_FINAL.json",
+      "size_bytes": 7966
+    },
+    {
+      "mtime_utc": "2025-12-20T23:48:46.379981Z",
+      "path": "docs/security/leak-incident-drill.md",
+      "size_bytes": 1636
+    },
+    {
+      "mtime_utc": "2025-12-18T19:42:00.653286Z",
+      "path": "github_desktop1",
+      "size_bytes": 15
+    },
+    {
+      "mtime_utc": "2025-12-04T23:57:01Z",
+      "path": "logs/agent_decisions_20251204.jsonl",
+      "size_bytes": 113204
+    },
+    {
+      "mtime_utc": "2025-12-05T23:56:42Z",
+      "path": "logs/agent_decisions_20251205.jsonl",
+      "size_bytes": 400331
+    },
+    {
+      "mtime_utc": "2025-12-06T23:58:19Z",
+      "path": "logs/agent_decisions_20251206.jsonl",
+      "size_bytes": 189787
+    },
+    {
+      "mtime_utc": "2025-12-07T23:59:06Z",
+      "path": "logs/agent_decisions_20251207.jsonl",
+      "size_bytes": 251997
+    },
+    {
+      "mtime_utc": "2025-12-08T23:04:57Z",
+      "path": "logs/agent_decisions_20251208.jsonl",
+      "size_bytes": 132606
+    },
+    {
+      "mtime_utc": "2025-12-09T23:58:41Z",
+      "path": "logs/agent_decisions_20251209.jsonl",
+      "size_bytes": 341269
+    },
+    {
+      "mtime_utc": "2025-12-10T23:56:09Z",
+      "path": "logs/agent_decisions_20251210.jsonl",
+      "size_bytes": 235929
+    },
+    {
+      "mtime_utc": "2025-12-11T23:25:02Z",
+      "path": "logs/agent_decisions_20251211.jsonl",
+      "size_bytes": 162988
+    },
+    {
+      "mtime_utc": "2025-12-12T23:15:45Z",
+      "path": "logs/agent_decisions_20251212.jsonl",
+      "size_bytes": 233476
+    },
+    {
+      "mtime_utc": "2025-12-13T12:54:42Z",
+      "path": "logs/agent_decisions_20251213.jsonl",
+      "size_bytes": 29171
+    },
+    {
+      "mtime_utc": "2025-12-20T20:07:55.301324Z",
+      "path": "logs/agent_decisions_20251220.jsonl",
+      "size_bytes": 8732
+    },
+    {
+      "mtime_utc": "2025-12-13T12:53:24Z",
+      "path": "logs/data_harvester.log",
+      "size_bytes": 557485
+    },
+    {
+      "mtime_utc": "2025-12-19T15:44:27.300898Z",
+      "path": "logs/uvicorn_manual_check.log",
+      "size_bytes": 0
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:53.711122Z",
+      "path": "package-lock.json",
+      "size_bytes": 756
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:53.711317Z",
+      "path": "package.json",
+      "size_bytes": 387
+    },
+    {
+      "mtime_utc": "2025-12-04T18:30:22Z",
+      "path": "pyproject.toml",
+      "size_bytes": 312
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:53.712278Z",
+      "path": "pytest.ini",
+      "size_bytes": 173
+    },
+    {
+      "mtime_utc": "2025-12-18T19:36:43.561982Z",
+      "path": "replit.md",
+      "size_bytes": 10823
+    },
+    {
+      "mtime_utc": "2025-12-18T19:36:43.562697Z",
+      "path": "requirements.txt",
+      "size_bytes": 337
+    },
+    {
+      "mtime_utc": "2025-12-08T20:09:23Z",
+      "path": "scripts/agent_healthcheck.py",
+      "size_bytes": 1397
+    },
+    {
+      "mtime_utc": "2025-12-19T19:58:46.539393Z",
+      "path": "scripts/auto_calibrate_daily.py",
+      "size_bytes": 13682
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:53.713607Z",
+      "path": "scripts/auto_calibrate_iv.py",
+      "size_bytes": 8034
+    },
+    {
+      "mtime_utc": "2025-12-07T23:11:52Z",
+      "path": "scripts/build_exam_dataset_from_live_deribit.py",
+      "size_bytes": 4628
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:53.713922Z",
+      "path": "scripts/build_greg_regimes_from_harvester.py",
+      "size_bytes": 12934
+    },
+    {
+      "mtime_utc": "2025-12-06T17:33:25Z",
+      "path": "scripts/build_llm_training_from_candidates.py",
+      "size_bytes": 11055
+    },
+    {
+      "mtime_utc": "2025-12-21T20:35:32.752002Z",
+      "path": "scripts/capture_pytest_summary.sh",
+      "size_bytes": 1357
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:53.714202Z",
+      "path": "scripts/check_codex_cli.sh",
+      "size_bytes": 1142
+    },
+    {
+      "mtime_utc": "2025-12-07T23:17:21Z",
+      "path": "scripts/compare_synthetic_vs_live.py",
+      "size_bytes": 13455
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:53.714410Z",
+      "path": "scripts/cron_auto_calibrate.sh",
+      "size_bytes": 2068
+    },
+    {
+      "mtime_utc": "2025-12-19T16:40:27.191509Z",
+      "path": "scripts/cron_calibrate_via_api.py",
+      "size_bytes": 7719
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:53.714634Z",
+      "path": "scripts/daily_auto_calibrate.sh",
+      "size_bytes": 438
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:53.715005Z",
+      "path": "scripts/data_harvester.py",
+      "size_bytes": 10061
+    },
+    {
+      "mtime_utc": "2025-12-07T23:36:17Z",
+      "path": "scripts/diff_backtest_runs.py",
+      "size_bytes": 6262
+    },
+    {
+      "mtime_utc": "2025-12-20T02:02:42.908753Z",
+      "path": "scripts/enable_githooks.sh",
+      "size_bytes": 174
+    },
+    {
+      "mtime_utc": "2025-12-21T20:48:49.646589Z",
+      "path": "scripts/gen_fidelity_latest_docs.py",
+      "size_bytes": 2918
+    },
+    {
+      "mtime_utc": "2025-12-21T21:49:39.344075Z",
+      "path": "scripts/gen_ops_health_latest.py",
+      "size_bytes": 3441
+    },
+    {
+      "mtime_utc": "2025-12-21T16:18:14.917616Z",
+      "path": "scripts/gen_recent_diff.sh",
+      "size_bytes": 1856
+    },
+    {
+      "mtime_utc": "2025-12-21T16:17:53.541745Z",
+      "path": "scripts/gen_repo_manifest.py",
+      "size_bytes": 5692
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:53.715279Z",
+      "path": "scripts/greg_decision_report.py",
+      "size_bytes": 8563
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:53.715569Z",
+      "path": "scripts/harvest_volatility_history.py",
+      "size_bytes": 12069
+    },
+    {
+      "mtime_utc": "2025-12-07T23:02:45Z",
+      "path": "scripts/import_real_scraper_deribit.py",
+      "size_bytes": 14114
+    },
+    {
+      "mtime_utc": "2025-12-14T00:02:03.672213Z",
+      "path": "scripts/iv_sanity_check.py",
+      "size_bytes": 10736
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:53.715916Z",
+      "path": "scripts/open_greg_sandbox_positions.py",
+      "size_bytes": 5207
+    },
+    {
+      "mtime_utc": "2025-12-20T17:04:08.806383Z",
+      "path": "scripts/print_fidelity_summary.py",
+      "size_bytes": 3186
+    },
+    {
+      "mtime_utc": "2025-12-21T20:48:49.660083Z",
+      "path": "scripts/push_context_pack_to_drive.sh",
+      "size_bytes": 2422
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:53.716250Z",
+      "path": "scripts/realism_check.py",
+      "size_bytes": 16017
+    },
+    {
+      "mtime_utc": "2025-12-08T19:37:54Z",
+      "path": "scripts/reconcile_positions_once.py",
+      "size_bytes": 4559
+    },
+    {
+      "mtime_utc": "2025-12-21T20:35:32.743128Z",
+      "path": "scripts/roadmap_append_changelog.py",
+      "size_bytes": 4713
+    },
+    {
+      "mtime_utc": "2025-12-07T23:03:43Z",
+      "path": "scripts/run_backtest_real_scraper_example.py",
+      "size_bytes": 6703
+    },
+    {
+      "mtime_utc": "2025-12-20T17:34:02.269911Z",
+      "path": "scripts/run_fidelity_from_lab.py",
+      "size_bytes": 1843
+    },
+    {
+      "mtime_utc": "2025-12-20T17:34:02.271040Z",
+      "path": "scripts/run_fidelity_from_lab_daily.py",
+      "size_bytes": 2120
+    },
+    {
+      "mtime_utc": "2025-12-20T00:45:27.421823Z",
+      "path": "scripts/run_fidelity_suite.py",
+      "size_bytes": 1984
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:53.716509Z",
+      "path": "scripts/run_greg_environment_heatmaps.py",
+      "size_bytes": 6590
+    },
+    {
+      "mtime_utc": "2025-12-06T23:26:45Z",
+      "path": "scripts/run_tests.sh",
+      "size_bytes": 140
+    },
+    {
+      "mtime_utc": "2025-12-20T17:34:02.269963Z",
+      "path": "scripts/sabotage_fidelity_drill.py",
+      "size_bytes": 1175
+    },
+    {
+      "mtime_utc": "2025-12-20T23:48:46.380933Z",
+      "path": "scripts/secret_tripwire.py",
+      "size_bytes": 2619
+    },
+    {
+      "mtime_utc": "2025-12-20T23:48:46.381621Z",
+      "path": "scripts/security/README.md",
+      "size_bytes": 2219
+    },
+    {
+      "mtime_utc": "2025-12-20T23:48:46.382279Z",
+      "path": "scripts/security/run_security_checks.sh",
+      "size_bytes": 2345
+    },
+    {
+      "mtime_utc": "2025-12-20T23:48:46.383671Z",
+      "path": "scripts/security/scan_git_history_secrets.sh",
+      "size_bytes": 3062
+    },
+    {
+      "mtime_utc": "2025-12-20T23:48:46.384801Z",
+      "path": "scripts/security/scan_staged_secrets.sh",
+      "size_bytes": 2733
+    },
+    {
+      "mtime_utc": "2025-12-20T23:48:46.385657Z",
+      "path": "scripts/security/scan_worktree_secrets.sh",
+      "size_bytes": 2758
+    },
+    {
+      "mtime_utc": "2025-12-20T02:02:42.908605Z",
+      "path": "scripts/smoke_all.sh",
+      "size_bytes": 1618
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:53.716710Z",
+      "path": "scripts/smoke_auto_calibrate.sh",
+      "size_bytes": 241
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:53.717074Z",
+      "path": "scripts/smoke_backtest.sh",
+      "size_bytes": 3632
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:53.717331Z",
+      "path": "scripts/smoke_greg_strategies.py",
+      "size_bytes": 23470
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:53.717676Z",
+      "path": "scripts/smoke_live_agent.sh",
+      "size_bytes": 3000
+    },
+    {
+      "mtime_utc": "2025-12-06T23:52:20Z",
+      "path": "scripts/smoke_llm_dataset.sh",
+      "size_bytes": 5582
+    },
+    {
+      "mtime_utc": "2025-12-07T17:24:53Z",
+      "path": "scripts/smoke_reconciliation.sh",
+      "size_bytes": 3391
+    },
+    {
+      "mtime_utc": "2025-12-06T21:27:25Z",
+      "path": "scripts/smoke_training_export.sh",
+      "size_bytes": 3134
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:53.718127Z",
+      "path": "scripts/smoke_web_api.sh",
+      "size_bytes": 3301
+    },
+    {
+      "mtime_utc": "2025-12-07T23:48:15Z",
+      "path": "scripts/strategy_health_check.py",
+      "size_bytes": 11341
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:53.718432Z",
+      "path": "scripts/update_vol_surface_from_calibration.py",
+      "size_bytes": 12340
+    },
+    {
+      "mtime_utc": "2025-12-21T19:22:19.730989Z",
+      "path": "src/.DS_Store",
+      "size_bytes": 12292
+    },
+    {
+      "mtime_utc": "2025-12-04T18:30:51Z",
+      "path": "src/__init__.py",
+      "size_bytes": 0
+    },
+    {
+      "mtime_utc": "2025-12-08T19:20:44Z",
+      "path": "src/agent_brain_llm.py",
+      "size_bytes": 16944
+    },
+    {
+      "mtime_utc": "2025-12-05T13:39:35Z",
+      "path": "src/backtest/__init__.py",
+      "size_bytes": 1616
+    },
+    {
+      "mtime_utc": "2025-12-05T13:40:37Z",
+      "path": "src/backtest/backtest_example.py",
+      "size_bytes": 8686
+    },
+    {
+      "mtime_utc": "2025-12-20T23:48:47.685199Z",
+      "path": "src/backtest/compare.py",
+      "size_bytes": 12282
+    },
+    {
+      "mtime_utc": "2025-12-06T17:23:11Z",
+      "path": "src/backtest/config_presets.py",
+      "size_bytes": 4384
+    },
+    {
+      "mtime_utc": "2025-12-07T21:01:25Z",
+      "path": "src/backtest/config_schema.py",
+      "size_bytes": 6957
+    },
+    {
+      "mtime_utc": "2025-12-20T23:48:47.686888Z",
+      "path": "src/backtest/covered_call_simulator.py",
+      "size_bytes": 42653
+    },
+    {
+      "mtime_utc": "2025-12-04T23:57:24Z",
+      "path": "src/backtest/data_source.py",
+      "size_bytes": 1598
+    },
+    {
+      "mtime_utc": "2025-12-18T19:36:43.639673Z",
+      "path": "src/backtest/deribit_client.py",
+      "size_bytes": 6484
+    },
+    {
+      "mtime_utc": "2025-12-05T16:27:58Z",
+      "path": "src/backtest/deribit_data_source.py",
+      "size_bytes": 9116
+    },
+    {
+      "mtime_utc": "2025-12-20T23:48:47.688400Z",
+      "path": "src/backtest/diff.py",
+      "size_bytes": 6316
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:53.718774Z",
+      "path": "src/backtest/environment_heatmap.py",
+      "size_bytes": 18266
+    },
+    {
+      "mtime_utc": "2025-12-18T19:36:43.564214Z",
+      "path": "src/backtest/event_emitter.py",
+      "size_bytes": 11123
+    },
+    {
+      "mtime_utc": "2025-12-21T18:29:21.399854Z",
+      "path": "src/backtest/fidelity_store.py",
+      "size_bytes": 11359
+    },
+    {
+      "mtime_utc": "2025-12-21T18:29:21.398214Z",
+      "path": "src/backtest/fidelity_suite.py",
+      "size_bytes": 14520
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:53.719014Z",
+      "path": "src/backtest/greg_sweetspots.py",
+      "size_bytes": 3008
+    },
+    {
+      "mtime_utc": "2025-12-20T23:48:47.690007Z",
+      "path": "src/backtest/live_deribit_data_source.py",
+      "size_bytes": 12033
+    },
+    {
+      "mtime_utc": "2025-12-20T23:48:47.690813Z",
+      "path": "src/backtest/manager.py",
+      "size_bytes": 57911
+    },
+    {
+      "mtime_utc": "2025-12-05T13:39:51Z",
+      "path": "src/backtest/market_context_backtest.py",
+      "size_bytes": 3764
+    },
+    {
+      "mtime_utc": "2025-12-20T23:48:47.691664Z",
+      "path": "src/backtest/pricing.py",
+      "size_bytes": 22511
+    },
+    {
+      "mtime_utc": "2025-12-07T23:06:02Z",
+      "path": "src/backtest/real_scraper_data_source.py",
+      "size_bytes": 8755
+    },
+    {
+      "mtime_utc": "2025-12-07T23:03:12Z",
+      "path": "src/backtest/real_scraper_loader.py",
+      "size_bytes": 4942
+    },
+    {
+      "mtime_utc": "2025-12-19T18:57:56.262319Z",
+      "path": "src/backtest/run_store.py",
+      "size_bytes": 13227
+    },
+    {
+      "mtime_utc": "2025-12-18T19:36:43.565797Z",
+      "path": "src/backtest/selector_scan.py",
+      "size_bytes": 12984
+    },
+    {
+      "mtime_utc": "2025-12-20T23:48:47.694413Z",
+      "path": "src/backtest/state_builder.py",
+      "size_bytes": 28822
+    },
+    {
+      "mtime_utc": "2025-12-18T19:36:43.566818Z",
+      "path": "src/backtest/strategy_caps.py",
+      "size_bytes": 8327
+    },
+    {
+      "mtime_utc": "2025-12-05T23:12:19Z",
+      "path": "src/backtest/training_dataset.py",
+      "size_bytes": 11015
+    },
+    {
+      "mtime_utc": "2025-12-19T15:33:46.649185Z",
+      "path": "src/backtest/types.py",
+      "size_bytes": 10520
+    },
+    {
+      "mtime_utc": "2025-12-20T19:03:15.098647Z",
+      "path": "src/backtest/units.py",
+      "size_bytes": 1805
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:53.722239Z",
+      "path": "src/bots/__init__.py",
+      "size_bytes": 180
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:53.722472Z",
+      "path": "src/bots/gregbot.py",
+      "size_bytes": 16512
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:53.722724Z",
+      "path": "src/bots/overrides.py",
+      "size_bytes": 14267
+    },
+    {
+      "mtime_utc": "2025-12-18T19:36:43.640798Z",
+      "path": "src/bots/sensors.py",
+      "size_bytes": 32267
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:53.723335Z",
+      "path": "src/bots/types.py",
+      "size_bytes": 1830
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:53.723772Z",
+      "path": "src/calibration.py",
+      "size_bytes": 16916
+    },
+    {
+      "mtime_utc": "2025-12-20T23:48:47.695423Z",
+      "path": "src/calibration_config.py",
+      "size_bytes": 11583
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:53.724638Z",
+      "path": "src/calibration_core.py",
+      "size_bytes": 6030
+    },
+    {
+      "mtime_utc": "2025-12-20T23:48:47.696641Z",
+      "path": "src/calibration_extended.py",
+      "size_bytes": 45389
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:53.725394Z",
+      "path": "src/calibration_store.py",
+      "size_bytes": 7449
+    },
+    {
+      "mtime_utc": "2025-12-20T23:48:47.697280Z",
+      "path": "src/calibration_update_policy.py",
+      "size_bytes": 22671
+    },
+    {
+      "mtime_utc": "2025-12-07T18:44:22Z",
+      "path": "src/chat_store.py",
+      "size_bytes": 1173
+    },
+    {
+      "mtime_utc": "2025-12-07T19:23:48Z",
+      "path": "src/chat_with_agent.py",
+      "size_bytes": 14029
+    },
+    {
+      "mtime_utc": "2025-12-20T23:48:47.698296Z",
+      "path": "src/config.py",
+      "size_bytes": 17166
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:53.726204Z",
+      "path": "src/data_status.py",
+      "size_bytes": 6614
+    },
+    {
+      "mtime_utc": "2025-12-20T23:48:47.701292Z",
+      "path": "src/db/__init__.py",
+      "size_bytes": 2092
+    },
+    {
+      "mtime_utc": "2025-12-07T21:02:06Z",
+      "path": "src/db/backtest_service.py",
+      "size_bytes": 7823
+    },
+    {
+      "mtime_utc": "2025-12-20T01:30:08.686798Z",
+      "path": "src/db/models_backtest.py",
+      "size_bytes": 9989
+    },
+    {
+      "mtime_utc": "2025-12-20T01:30:08.687997Z",
+      "path": "src/db/models_calibration.py",
+      "size_bytes": 8467
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:53.727303Z",
+      "path": "src/db/models_greg_decision.py",
+      "size_bytes": 10294
+    },
+    {
+      "mtime_utc": "2025-12-20T18:02:50.572818Z",
+      "path": "src/db/models_telegram.py",
+      "size_bytes": 753
+    },
+    {
+      "mtime_utc": "2025-12-05T00:09:24Z",
+      "path": "src/decisions_store.py",
+      "size_bytes": 1583
+    },
+    {
+      "mtime_utc": "2025-12-07T19:39:20Z",
+      "path": "src/deribit/__init__.py",
+      "size_bytes": 260
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:53.728110Z",
+      "path": "src/deribit/base_client.py",
+      "size_bytes": 9388
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:53.728448Z",
+      "path": "src/deribit_client.py",
+      "size_bytes": 8334
+    },
+    {
+      "mtime_utc": "2025-12-05T23:32:27Z",
+      "path": "src/execution.py",
+      "size_bytes": 13883
+    },
+    {
+      "mtime_utc": "2025-12-19T20:46:45.794308Z",
+      "path": "src/fidelity/__init__.py",
+      "size_bytes": 311
+    },
+    {
+      "mtime_utc": "2025-12-20T23:48:47.702273Z",
+      "path": "src/fidelity/canonical_strategies.py",
+      "size_bytes": 18670
+    },
+    {
+      "mtime_utc": "2025-12-20T23:48:46.492347Z",
+      "path": "src/fidelity/fidelity_store.py",
+      "size_bytes": 10171
+    },
+    {
+      "mtime_utc": "2025-12-20T23:48:47.703448Z",
+      "path": "src/fidelity/gating.py",
+      "size_bytes": 1796
+    },
+    {
+      "mtime_utc": "2025-12-20T23:48:47.704582Z",
+      "path": "src/fidelity/market_replay.py",
+      "size_bytes": 22929
+    },
+    {
+      "mtime_utc": "2025-12-20T00:08:36.190278Z",
+      "path": "src/fidelity/metrics.py",
+      "size_bytes": 4273
+    },
+    {
+      "mtime_utc": "2025-12-21T20:35:32.743158Z",
+      "path": "src/fidelity/ops_runner.py",
+      "size_bytes": 10381
+    },
+    {
+      "mtime_utc": "2025-12-20T02:19:31.183937Z",
+      "path": "src/fidelity/parity_runner.py",
+      "size_bytes": 1965
+    },
+    {
+      "mtime_utc": "2025-12-20T23:48:47.705673Z",
+      "path": "src/fidelity/reporting.py",
+      "size_bytes": 4623
+    },
+    {
+      "mtime_utc": "2025-12-21T19:48:42.551385Z",
+      "path": "src/fidelity/run_suite.py",
+      "size_bytes": 21849
+    },
+    {
+      "mtime_utc": "2025-12-21T19:48:42.551412Z",
+      "path": "src/fidelity/scoring.py",
+      "size_bytes": 6790
+    },
+    {
+      "mtime_utc": "2025-12-20T00:21:28.850811Z",
+      "path": "src/fidelity/spec.py",
+      "size_bytes": 1435
+    },
+    {
+      "mtime_utc": "2025-12-20T02:19:31.184005Z",
+      "path": "src/fidelity/strategies_canonical.py",
+      "size_bytes": 340
+    },
+    {
+      "mtime_utc": "2025-12-20T02:11:19.706731Z",
+      "path": "src/fidelity/types.py",
+      "size_bytes": 1027
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:53.728739Z",
+      "path": "src/greg_position_manager.py",
+      "size_bytes": 21502
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:53.729067Z",
+      "path": "src/greg_sandbox_entry.py",
+      "size_bytes": 8296
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:53.729284Z",
+      "path": "src/greg_trading_store.py",
+      "size_bytes": 10028
+    },
+    {
+      "mtime_utc": "2025-12-20T21:38:20.782348Z",
+      "path": "src/harvest_status.py",
+      "size_bytes": 8188
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:53.729670Z",
+      "path": "src/harvester/__init__.py",
+      "size_bytes": 532
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:53.730039Z",
+      "path": "src/harvester/health.py",
+      "size_bytes": 9672
+    },
+    {
+      "mtime_utc": "2025-12-21T23:33:33.108282Z",
+      "path": "src/healthcheck.py",
+      "size_bytes": 46275
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:53.731634Z",
+      "path": "src/hedging/__init__.py",
+      "size_bytes": 398
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:53.732336Z",
+      "path": "src/hedging/hedge_engine.py",
+      "size_bytes": 13776
+    },
+    {
+      "mtime_utc": "2025-12-08T19:47:35Z",
+      "path": "src/logging_utils.py",
+      "size_bytes": 7000
+    },
+    {
+      "mtime_utc": "2025-12-05T00:04:44Z",
+      "path": "src/market_context.py",
+      "size_bytes": 4267
+    },
+    {
+      "mtime_utc": "2025-12-06T22:29:37Z",
+      "path": "src/metrics/__init__.py",
+      "size_bytes": 123
+    },
+    {
+      "mtime_utc": "2025-12-06T22:29:44Z",
+      "path": "src/metrics/volatility.py",
+      "size_bytes": 1375
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:53.733242Z",
+      "path": "src/models.py",
+      "size_bytes": 9365
+    },
+    {
+      "mtime_utc": "2025-12-20T21:38:20.782187Z",
+      "path": "src/ops/calibration_status.py",
+      "size_bytes": 3091
+    },
+    {
+      "mtime_utc": "2025-12-20T21:38:20.782120Z",
+      "path": "src/ops/facts_resolver.py",
+      "size_bytes": 2874
+    },
+    {
+      "mtime_utc": "2025-12-21T18:29:21.399794Z",
+      "path": "src/ops/fidelity_status.py",
+      "size_bytes": 2040
+    },
+    {
+      "mtime_utc": "2025-12-20T21:38:20.782211Z",
+      "path": "src/ops/gate_factories.py",
+      "size_bytes": 14757
+    },
+    {
+      "mtime_utc": "2025-12-20T21:38:20.782153Z",
+      "path": "src/ops/gates.py",
+      "size_bytes": 3472
+    },
+    {
+      "mtime_utc": "2025-12-06T23:18:55Z",
+      "path": "src/policy_rule_based.py",
+      "size_bytes": 14147
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:53.733891Z",
+      "path": "src/position_tracker.py",
+      "size_bytes": 26227
+    },
+    {
+      "mtime_utc": "2025-12-05T22:11:24Z",
+      "path": "src/psychology_metrics.py",
+      "size_bytes": 8076
+    },
+    {
+      "mtime_utc": "2025-12-08T19:35:40Z",
+      "path": "src/reconciliation.py",
+      "size_bytes": 12810
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:53.734313Z",
+      "path": "src/risk_engine.py",
+      "size_bytes": 12140
+    },
+    {
+      "mtime_utc": "2025-12-05T22:11:50Z",
+      "path": "src/risk_manager.py",
+      "size_bytes": 6503
+    },
+    {
+      "mtime_utc": "2025-12-06T17:18:26Z",
+      "path": "src/rules_summary.py",
+      "size_bytes": 8111
+    },
+    {
+      "mtime_utc": "2025-12-06T23:17:06Z",
+      "path": "src/scoring/__init__.py",
+      "size_bytes": 243
+    },
+    {
+      "mtime_utc": "2025-12-06T23:17:48Z",
+      "path": "src/scoring/candidates.py",
+      "size_bytes": 7003
+    },
+    {
+      "mtime_utc": "2025-12-07T19:33:41Z",
+      "path": "src/state_builder.py",
+      "size_bytes": 10663
+    },
+    {
+      "mtime_utc": "2025-12-07T19:32:51Z",
+      "path": "src/state_core.py",
+      "size_bytes": 9634
+    },
+    {
+      "mtime_utc": "2025-12-04T23:06:59Z",
+      "path": "src/status_store.py",
+      "size_bytes": 1089
+    },
+    {
+      "mtime_utc": "2025-12-08T19:05:45Z",
+      "path": "src/strategies/__init__.py",
+      "size_bytes": 834
+    },
+    {
+      "mtime_utc": "2025-12-08T19:05:30Z",
+      "path": "src/strategies/covered_call.py",
+      "size_bytes": 5771
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:53.734798Z",
+      "path": "src/strategies/greg_selector.py",
+      "size_bytes": 16007
+    },
+    {
+      "mtime_utc": "2025-12-07T18:58:05Z",
+      "path": "src/strategies/registry.py",
+      "size_bytes": 2697
+    },
+    {
+      "mtime_utc": "2025-12-08T19:05:01Z",
+      "path": "src/strategies/types.py",
+      "size_bytes": 7108
+    },
+    {
+      "mtime_utc": "2025-12-05T22:12:19Z",
+      "path": "src/strategy_approval.py",
+      "size_bytes": 7468
+    },
+    {
+      "mtime_utc": "2025-12-08T19:55:31Z",
+      "path": "src/strategy_status.py",
+      "size_bytes": 9515
+    },
+    {
+      "mtime_utc": "2025-12-18T19:36:43.571214Z",
+      "path": "src/supervisor/__init__.py",
+      "size_bytes": 93
+    },
+    {
+      "mtime_utc": "2025-12-18T19:36:43.571415Z",
+      "path": "src/supervisor/__main__.py",
+      "size_bytes": 1073
+    },
+    {
+      "mtime_utc": "2025-12-18T19:36:43.571734Z",
+      "path": "src/supervisor/app.py",
+      "size_bytes": 28892
+    },
+    {
+      "mtime_utc": "2025-12-18T19:36:43.571962Z",
+      "path": "src/supervisor/codex_fixer.py",
+      "size_bytes": 3544
+    },
+    {
+      "mtime_utc": "2025-12-18T19:36:43.572206Z",
+      "path": "src/supervisor/commands.py",
+      "size_bytes": 9176
+    },
+    {
+      "mtime_utc": "2025-12-18T19:36:43.572453Z",
+      "path": "src/supervisor/config.py",
+      "size_bytes": 4957
+    },
+    {
+      "mtime_utc": "2025-12-18T19:36:43.572701Z",
+      "path": "src/supervisor/debate.py",
+      "size_bytes": 9850
+    },
+    {
+      "mtime_utc": "2025-12-18T19:36:43.572969Z",
+      "path": "src/supervisor/github.py",
+      "size_bytes": 9910
+    },
+    {
+      "mtime_utc": "2025-12-18T19:36:43.573266Z",
+      "path": "src/supervisor/llm/__init__.py",
+      "size_bytes": 197
+    },
+    {
+      "mtime_utc": "2025-12-18T19:36:43.573469Z",
+      "path": "src/supervisor/llm/base.py",
+      "size_bytes": 1301
+    },
+    {
+      "mtime_utc": "2025-12-18T19:36:43.573674Z",
+      "path": "src/supervisor/llm/gemini_provider.py",
+      "size_bytes": 3793
+    },
+    {
+      "mtime_utc": "2025-12-18T19:36:43.573914Z",
+      "path": "src/supervisor/llm/openai_provider.py",
+      "size_bytes": 2211
+    },
+    {
+      "mtime_utc": "2025-12-18T19:36:43.574144Z",
+      "path": "src/supervisor/llm/router.py",
+      "size_bytes": 1936
+    },
+    {
+      "mtime_utc": "2025-12-18T19:36:43.574364Z",
+      "path": "src/supervisor/models.py",
+      "size_bytes": 3161
+    },
+    {
+      "mtime_utc": "2025-12-18T19:36:43.574694Z",
+      "path": "src/supervisor/policy.py",
+      "size_bytes": 3841
+    },
+    {
+      "mtime_utc": "2025-12-18T19:36:43.574989Z",
+      "path": "src/supervisor/redact.py",
+      "size_bytes": 4431
+    },
+    {
+      "mtime_utc": "2025-12-18T19:36:43.577240Z",
+      "path": "src/supervisor/retry.py",
+      "size_bytes": 3181
+    },
+    {
+      "mtime_utc": "2025-12-18T19:36:43.577582Z",
+      "path": "src/supervisor/runner.py",
+      "size_bytes": 6687
+    },
+    {
+      "mtime_utc": "2025-12-18T19:36:43.577825Z",
+      "path": "src/supervisor/store.py",
+      "size_bytes": 12468
+    },
+    {
+      "mtime_utc": "2025-12-18T19:36:43.578082Z",
+      "path": "src/supervisor/telegram_notify.py",
+      "size_bytes": 20736
+    },
+    {
+      "mtime_utc": "2025-12-18T19:36:43.578364Z",
+      "path": "src/supervisor/workspace.py",
+      "size_bytes": 11322
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:53.734962Z",
+      "path": "src/synthetic/__init__.py",
+      "size_bytes": 0
+    },
+    {
+      "mtime_utc": "2025-12-18T23:39:52.894922Z",
+      "path": "src/synthetic/engine.py",
+      "size_bytes": 13276
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:53.735223Z",
+      "path": "src/synthetic/regimes.py",
+      "size_bytes": 22923
+    },
+    {
+      "mtime_utc": "2025-12-19T18:57:56.264268Z",
+      "path": "src/synthetic/vol_surface.py",
+      "size_bytes": 9051
+    },
+    {
+      "mtime_utc": "2025-12-18T19:36:43.578750Z",
+      "path": "src/synthetic_skew.py",
+      "size_bytes": 16271
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:53.735946Z",
+      "path": "src/system_steward.py",
+      "size_bytes": 6227
+    },
+    {
+      "mtime_utc": "2025-12-20T18:05:46.417230Z",
+      "path": "src/telegram/__init__.py",
+      "size_bytes": 36
+    },
+    {
+      "mtime_utc": "2025-12-20T18:05:40.741312Z",
+      "path": "src/telegram/store.py",
+      "size_bytes": 3759
+    },
+    {
+      "mtime_utc": "2025-12-05T23:42:51Z",
+      "path": "src/training_policy.py",
+      "size_bytes": 12335
+    },
+    {
+      "mtime_utc": "2025-12-06T23:18:32Z",
+      "path": "src/training_profiles.py",
+      "size_bytes": 8020
+    },
+    {
+      "mtime_utc": "2025-12-06T23:22:41Z",
+      "path": "src/utils/__init__.py",
+      "size_bytes": 125
+    },
+    {
+      "mtime_utc": "2025-12-06T23:22:59Z",
+      "path": "src/utils/expiry.py",
+      "size_bytes": 3034
+    },
+    {
+      "mtime_utc": "2025-12-18T19:36:43.579051Z",
+      "path": "src/web/__init__.py",
+      "size_bytes": 1169
+    },
+    {
+      "mtime_utc": "2025-12-20T19:34:51.813429Z",
+      "path": "src/web/api_errors.py",
+      "size_bytes": 1036
+    },
+    {
+      "mtime_utc": "2025-12-21T19:10:57.053030Z",
+      "path": "src/web/dashboard.py",
+      "size_bytes": 389236
+    },
+    {
+      "mtime_utc": "2025-12-20T23:48:47.710145Z",
+      "path": "src/web/routes_backtest.py",
+      "size_bytes": 53452
+    },
+    {
+      "mtime_utc": "2025-12-18T19:36:43.581232Z",
+      "path": "src/web/routes_bots.py",
+      "size_bytes": 46592
+    },
+    {
+      "mtime_utc": "2025-12-18T23:39:52.898613Z",
+      "path": "src/web/routes_deploy.py",
+      "size_bytes": 3625
+    },
+    {
+      "mtime_utc": "2025-12-20T17:34:02.266266Z",
+      "path": "src/web/routes_fidelity.py",
+      "size_bytes": 1260
+    },
+    {
+      "mtime_utc": "2025-12-20T23:48:47.710748Z",
+      "path": "src/web/routes_health.py",
+      "size_bytes": 27176
+    },
+    {
+      "mtime_utc": "2025-12-19T21:06:15.393602Z",
+      "path": "src/web/routes_main.py",
+      "size_bytes": 5936
+    },
+    {
+      "mtime_utc": "2025-12-20T23:48:47.712059Z",
+      "path": "src/web/routes_positions.py",
+      "size_bytes": 41575
+    },
+    {
+      "mtime_utc": "2025-12-20T18:08:08.563694Z",
+      "path": "src/web/routes_telegram.py",
+      "size_bytes": 7856
+    },
+    {
+      "mtime_utc": "2025-12-20T23:48:47.713136Z",
+      "path": "src/web_app.py",
+      "size_bytes": 4384
+    },
+    {
+      "mtime_utc": "2025-12-18T19:36:43.583203Z",
+      "path": "test1/test2.txt",
+      "size_bytes": 6
+    },
+    {
+      "mtime_utc": "2025-12-20T18:54:44.465442Z",
+      "path": "tests/.DS_Store",
+      "size_bytes": 6148
+    },
+    {
+      "mtime_utc": "2025-12-06T23:26:00Z",
+      "path": "tests/__init__.py",
+      "size_bytes": 57
+    },
+    {
+      "mtime_utc": "2025-12-18T19:36:43.583504Z",
+      "path": "tests/backtest/test_event_emitter.py",
+      "size_bytes": 8366
+    },
+    {
+      "mtime_utc": "2025-12-18T19:36:43.583704Z",
+      "path": "tests/backtest/test_strategy_caps.py",
+      "size_bytes": 6150
+    },
+    {
+      "mtime_utc": "2025-12-19T18:57:56.267620Z",
+      "path": "tests/conftest.py",
+      "size_bytes": 1666
+    },
+    {
+      "mtime_utc": "2025-12-20T00:08:36.613497Z",
+      "path": "tests/fixtures/fidelity/live_snapshots.jsonl",
+      "size_bytes": 6713
+    },
+    {
+      "mtime_utc": "2025-12-20T23:48:46.389779Z",
+      "path": "tests/security/test_redact_minimal.py",
+      "size_bytes": 1858
+    },
+    {
+      "mtime_utc": "2025-12-20T23:48:46.390897Z",
+      "path": "tests/security/test_secret_tripwire.py",
+      "size_bytes": 750
+    },
+    {
+      "mtime_utc": "2025-12-18T19:36:43.583947Z",
+      "path": "tests/supervisor/__init__.py",
+      "size_bytes": 0
+    },
+    {
+      "mtime_utc": "2025-12-18T19:36:43.585818Z",
+      "path": "tests/supervisor/test_api_truncation.py",
+      "size_bytes": 5955
+    },
+    {
+      "mtime_utc": "2025-12-18T19:36:43.586060Z",
+      "path": "tests/supervisor/test_commands.py",
+      "size_bytes": 5877
+    },
+    {
+      "mtime_utc": "2025-12-18T19:36:43.586256Z",
+      "path": "tests/supervisor/test_job_queue.py",
+      "size_bytes": 4442
+    },
+    {
+      "mtime_utc": "2025-12-18T19:36:43.586530Z",
+      "path": "tests/supervisor/test_jobs_api_truncation.py",
+      "size_bytes": 6778
+    },
+    {
+      "mtime_utc": "2025-12-18T19:36:43.586760Z",
+      "path": "tests/supervisor/test_policy.py",
+      "size_bytes": 8931
+    },
+    {
+      "mtime_utc": "2025-12-20T23:48:46.392536Z",
+      "path": "tests/supervisor/test_redact.py",
+      "size_bytes": 6285
+    },
+    {
+      "mtime_utc": "2025-12-18T19:36:43.587196Z",
+      "path": "tests/supervisor/test_retry.py",
+      "size_bytes": 6786
+    },
+    {
+      "mtime_utc": "2025-12-18T19:36:43.587994Z",
+      "path": "tests/supervisor/test_safety.py",
+      "size_bytes": 15976
+    },
+    {
+      "mtime_utc": "2025-12-18T19:36:43.588237Z",
+      "path": "tests/supervisor/test_telegram_safety.py",
+      "size_bytes": 6663
+    },
+    {
+      "mtime_utc": "2025-12-18T19:36:43.588457Z",
+      "path": "tests/supervisor/test_webhook.py",
+      "size_bytes": 4276
+    },
+    {
+      "mtime_utc": "2025-12-18T19:36:43.588725Z",
+      "path": "tests/supervisor/test_webhook_route.py",
+      "size_bytes": 8246
+    },
+    {
+      "mtime_utc": "2025-12-20T19:03:15.113662Z",
+      "path": "tests/test_api_calibration_run_with_policy.py",
+      "size_bytes": 1816
+    },
+    {
+      "mtime_utc": "2025-12-20T17:34:02.268716Z",
+      "path": "tests/test_api_fidelity_endpoints.py",
+      "size_bytes": 2123
+    },
+    {
+      "mtime_utc": "2025-12-20T23:48:47.714510Z",
+      "path": "tests/test_backtest_greg_modes.py",
+      "size_bytes": 13082
+    },
+    {
+      "mtime_utc": "2025-12-19T19:20:41.453887Z",
+      "path": "tests/test_backtest_hold_to_expiry_caps_end.py",
+      "size_bytes": 2387
+    },
+    {
+      "mtime_utc": "2025-12-20T21:38:20.807981Z",
+      "path": "tests/test_backtest_preflight.py",
+      "size_bytes": 6383
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:53.739504Z",
+      "path": "tests/test_backtest_selector.py",
+      "size_bytes": 2767
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:53.739986Z",
+      "path": "tests/test_bots_endpoints.py",
+      "size_bytes": 12528
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:53.740364Z",
+      "path": "tests/test_calibration_history.py",
+      "size_bytes": 4185
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:53.740849Z",
+      "path": "tests/test_calibration_option_types.py",
+      "size_bytes": 5926
+    },
+    {
+      "mtime_utc": "2025-12-20T23:48:47.715433Z",
+      "path": "tests/test_calibration_update_policy.py",
+      "size_bytes": 9980
+    },
+    {
+      "mtime_utc": "2025-12-21T20:35:32.758056Z",
+      "path": "tests/test_context_pack.py",
+      "size_bytes": 2169
+    },
+    {
+      "mtime_utc": "2025-12-19T18:57:56.268456Z",
+      "path": "tests/test_default_term_structure.py",
+      "size_bytes": 6131
+    },
+    {
+      "mtime_utc": "2025-12-19T19:42:53.387597Z",
+      "path": "tests/test_deribit_live_chain_historical_block.py",
+      "size_bytes": 2247
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:53.741513Z",
+      "path": "tests/test_environment_heatmap_endpoint.py",
+      "size_bytes": 2722
+    },
+    {
+      "mtime_utc": "2025-12-06T23:26:44Z",
+      "path": "tests/test_expiry.py",
+      "size_bytes": 3790
+    },
+    {
+      "mtime_utc": "2025-12-19T20:46:45.804858Z",
+      "path": "tests/test_fidelity_api.py",
+      "size_bytes": 2722
+    },
+    {
+      "mtime_utc": "2025-12-21T19:48:42.551490Z",
+      "path": "tests/test_fidelity_canonical_store.py",
+      "size_bytes": 4331
+    },
+    {
+      "mtime_utc": "2025-12-20T01:58:29.934121Z",
+      "path": "tests/test_fidelity_endpoints.py",
+      "size_bytes": 5242
+    },
+    {
+      "mtime_utc": "2025-12-21T18:48:34.622223Z",
+      "path": "tests/test_fidelity_gate_integration.py",
+      "size_bytes": 3119
+    },
+    {
+      "mtime_utc": "2025-12-20T17:34:02.269938Z",
+      "path": "tests/test_fidelity_lab_scoring.py",
+      "size_bytes": 1008
+    },
+    {
+      "mtime_utc": "2025-12-21T20:48:49.677821Z",
+      "path": "tests/test_fidelity_latest_docs_generator.py",
+      "size_bytes": 1796
+    },
+    {
+      "mtime_utc": "2025-12-21T18:31:27.953296Z",
+      "path": "tests/test_fidelity_latest_resolution.py",
+      "size_bytes": 2873
+    },
+    {
+      "mtime_utc": "2025-12-21T19:48:42.551434Z",
+      "path": "tests/test_fidelity_missing_close.py",
+      "size_bytes": 4190
+    },
+    {
+      "mtime_utc": "2025-12-20T16:53:15.866559Z",
+      "path": "tests/test_fidelity_moneyness_fallback_and_diagnostics.py",
+      "size_bytes": 2168
+    },
+    {
+      "mtime_utc": "2025-12-21T21:49:39.351225Z",
+      "path": "tests/test_gen_ops_health_latest.py",
+      "size_bytes": 2024
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:53.741822Z",
+      "path": "tests/test_greg_decision_logging.py",
+      "size_bytes": 12127
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:53.742090Z",
+      "path": "tests/test_greg_position_management.py",
+      "size_bytes": 16163
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:53.742326Z",
+      "path": "tests/test_greg_selector.py",
+      "size_bytes": 11181
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:53.742563Z",
+      "path": "tests/test_greg_selector_invariants.py",
+      "size_bytes": 8294
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:53.742803Z",
+      "path": "tests/test_greg_selector_scenarios.py",
+      "size_bytes": 13053
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:53.743038Z",
+      "path": "tests/test_harvester_health.py",
+      "size_bytes": 9796
+    },
+    {
+      "mtime_utc": "2025-12-20T23:48:47.717142Z",
+      "path": "tests/test_health_and_calibration_automation.py",
+      "size_bytes": 11281
+    },
+    {
+      "mtime_utc": "2025-12-21T20:36:47.103320Z",
+      "path": "tests/test_healthcheck_basic.py",
+      "size_bytes": 16792
+    },
+    {
+      "mtime_utc": "2025-12-20T23:48:47.719652Z",
+      "path": "tests/test_healthcheck_config.py",
+      "size_bytes": 10318
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:53.744010Z",
+      "path": "tests/test_hedge_engine.py",
+      "size_bytes": 14067
+    },
+    {
+      "mtime_utc": "2025-12-19T18:57:56.268897Z",
+      "path": "tests/test_historical_defaults.py",
+      "size_bytes": 12172
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:53.744924Z",
+      "path": "tests/test_hybrid_decision.py",
+      "size_bytes": 9954
+    },
+    {
+      "mtime_utc": "2025-12-18T19:36:43.589782Z",
+      "path": "tests/test_imports_smoke.py",
+      "size_bytes": 2964
+    },
+    {
+      "mtime_utc": "2025-12-14T00:02:03.680651Z",
+      "path": "tests/test_iv_sanity_check.py",
+      "size_bytes": 8657
+    },
+    {
+      "mtime_utc": "2025-12-20T19:03:15.098738Z",
+      "path": "tests/test_live_deribit_units.py",
+      "size_bytes": 1667
+    },
+    {
+      "mtime_utc": "2025-12-08T19:25:01Z",
+      "path": "tests/test_llm_validation.py",
+      "size_bytes": 9974
+    },
+    {
+      "mtime_utc": "2025-12-21T20:35:32.760031Z",
+      "path": "tests/test_ops_fidelity_clamping_and_schema.py",
+      "size_bytes": 3415
+    },
+    {
+      "mtime_utc": "2025-12-21T19:48:42.553216Z",
+      "path": "tests/test_ops_fidelity_coverage_penalty.py",
+      "size_bytes": 1144
+    },
+    {
+      "mtime_utc": "2025-12-21T20:47:52.906267Z",
+      "path": "tests/test_ops_health_artifact.py",
+      "size_bytes": 976
+    },
+    {
+      "mtime_utc": "2025-12-21T23:34:02.492942Z",
+      "path": "tests/test_ops_health_endpoints.py",
+      "size_bytes": 26046
+    },
+    {
+      "mtime_utc": "2025-12-08T19:43:04Z",
+      "path": "tests/test_reconciliation.py",
+      "size_bytes": 12926
+    },
+    {
+      "mtime_utc": "2025-12-19T19:11:25.992570Z",
+      "path": "tests/test_regime_state_plumbing.py",
+      "size_bytes": 1427
+    },
+    {
+      "mtime_utc": "2025-12-08T19:56:02Z",
+      "path": "tests/test_risk_engine.py",
+      "size_bytes": 13230
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:53.745282Z",
+      "path": "tests/test_risk_engine_boundaries.py",
+      "size_bytes": 16680
+    },
+    {
+      "mtime_utc": "2025-12-19T18:57:56.269277Z",
+      "path": "tests/test_run_store_isolation.py",
+      "size_bytes": 2812
+    },
+    {
+      "mtime_utc": "2025-12-06T23:26:27Z",
+      "path": "tests/test_scoring.py",
+      "size_bytes": 3672
+    },
+    {
+      "mtime_utc": "2025-12-18T19:36:43.590003Z",
+      "path": "tests/test_skew_no_lookahead.py",
+      "size_bytes": 10221
+    },
+    {
+      "mtime_utc": "2025-12-19T18:57:56.269675Z",
+      "path": "tests/test_smooth_skew.py",
+      "size_bytes": 7825
+    },
+    {
+      "mtime_utc": "2025-12-08T19:11:39Z",
+      "path": "tests/test_state_core.py",
+      "size_bytes": 11537
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:53.745532Z",
+      "path": "tests/test_steward_api.py",
+      "size_bytes": 785
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:53.746033Z",
+      "path": "tests/test_strategy_tuning_endpoints.py",
+      "size_bytes": 9231
+    },
+    {
+      "mtime_utc": "2025-12-18T19:36:43.590329Z",
+      "path": "tests/test_supervisor.py",
+      "size_bytes": 18660
+    },
+    {
+      "mtime_utc": "2025-12-13T22:22:53.746419Z",
+      "path": "tests/test_synthetic_modes.py",
+      "size_bytes": 17080
+    },
+    {
+      "mtime_utc": "2025-12-18T23:39:52.900212Z",
+      "path": "tests/test_synthetic_vol_engine.py",
+      "size_bytes": 10588
+    },
+    {
+      "mtime_utc": "2025-12-18T19:36:43.590611Z",
+      "path": "tests/test_vol_surface_wiring.py",
+      "size_bytes": 12996
+    },
+    {
+      "mtime_utc": "2025-12-06T23:26:11Z",
+      "path": "tests/test_volatility.py",
+      "size_bytes": 2091
+    },
+    {
+      "mtime_utc": "2025-12-18T19:36:43.590887Z",
+      "path": "tests/web/__init__.py",
+      "size_bytes": 18
+    },
+    {
+      "mtime_utc": "2025-12-20T23:48:47.720558Z",
+      "path": "tests/web/expected_routes.json",
+      "size_bytes": 12863
+    },
+    {
+      "mtime_utc": "2025-12-18T19:36:43.591272Z",
+      "path": "tests/web/test_core_endpoints.py",
+      "size_bytes": 2115
+    },
+    {
+      "mtime_utc": "2025-12-18T19:36:43.591499Z",
+      "path": "tests/web/test_no_router_imports_app.py",
+      "size_bytes": 2723
+    },
+    {
+      "mtime_utc": "2025-12-18T19:36:43.591705Z",
+      "path": "tests/web/test_routes_parity.py",
+      "size_bytes": 3805
+    },
+    {
+      "mtime_utc": "2025-12-20T18:07:45.265645Z",
+      "path": "tests/web/test_telegram_webhook.py",
+      "size_bytes": 4828
+    },
+    {
+      "mtime_utc": "2025-12-04T18:30:22Z",
+      "path": "uv.lock",
+      "size_bytes": 107389
+    },
+    {
+      "mtime_utc": "2025-12-18T19:36:43.591981Z",
+      "path": "workflows/pytest.yml",
+      "size_bytes": 687
+    },
+    {
+      "mtime_utc": "2025-12-18T19:36:43.592089Z",
+      "path": "workplace",
+      "size_bytes": 0
+    }
+  ]
+}

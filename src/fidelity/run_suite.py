@@ -17,7 +17,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from .canonical_strategies import canonical_strategies, run_strategy
+from .canonical_strategies import canonical_strategies, run_strategy_with_diagnostics
 from .market_replay import (
     detect_live_dataset,
     load_fixture_snapshots_jsonl,
@@ -132,25 +132,92 @@ def run_fidelity_suite(
 
     if live_data_status == "missing":
         live_snaps = load_fixture_snapshots_jsonl(str(fixture_path), underlying=u, start_ts=start_ts, end_ts=end_ts)
-        synth_snaps = make_synthetic_replay(
-            live_snaps,
-            underlying=u,
-            seed=seed,
-        )
+        synth_market = make_synthetic_replay(live_snaps, underlying=u, seed=seed)
+        synth_snaps = list(synth_market.iter_snapshots(start_ts=start_ts, end_ts=end_ts))
         live_meta = {"type": "fixture", **detected}
         synth_meta = {"type": "fixture_synth", "seed": seed}
     else:
         live_market = make_live_replay(underlying=u, detected=detected)
-        synth_market = make_synthetic_replay(live_market, underlying=u, seed=seed)
         live_snaps = list(live_market.iter_snapshots(start_ts=start_ts, end_ts=end_ts))
-        synth_snaps = list(synth_market.iter_snapshots(start_ts=start_ts, end_ts=end_ts))
-        live_meta = getattr(live_market, "meta", lambda: {"type": "live"})()
-        synth_meta = getattr(synth_market, "meta", lambda: {"type": "synthetic"})()
+        # If harvested data exists for the underlying but none is available in the requested
+        # time window, fall back to fixtures to keep the suite runnable and informative.
+        if not live_snaps:
+            live_data_status = "missing_window"
+            live_snaps = load_fixture_snapshots_jsonl(
+                str(fixture_path),
+                underlying=u,
+                start_ts=start_ts,
+                end_ts=end_ts,
+            )
+            synth_market = make_synthetic_replay(live_snaps, underlying=u, seed=seed)
+            synth_snaps = list(synth_market.iter_snapshots(start_ts=start_ts, end_ts=end_ts))
+            live_meta = {"type": "fixture", **detected, "note": "no harvested snapshots in requested window"}
+            synth_meta = {"type": "fixture_synth", "seed": seed}
+        else:
+            # Critical: generate synthetic snapshots from the *same* instrument universe as live.
+            # This makes parity measurable even when synthetic_grid candidate sets differ.
+            synth_market = make_synthetic_replay(live_snaps, underlying=u, seed=seed)
+            synth_snaps = list(synth_market.iter_snapshots(start_ts=start_ts, end_ts=end_ts))
+            live_meta = getattr(live_market, "meta", lambda: {"type": "live"})()
+            synth_meta = getattr(synth_market, "meta", lambda: {"type": "synthetic"})()
 
     # Ensure alignment.
     n = min(len(live_snaps), len(synth_snaps))
     live_snaps = live_snaps[:n]
     synth_snaps = synth_snaps[:n]
+
+    def _replay_diag(snaps: List[Any]) -> Dict[str, Any]:
+        if not snaps:
+            return {
+                "snapshots_count": 0,
+                "options_count_min": 0,
+                "options_count_avg": 0.0,
+                "options_count_max": 0,
+                "first_snapshot": None,
+            }
+        counts = [len(getattr(s, "options", []) or []) for s in snaps]
+        first = snaps[0]
+        opts = list(getattr(first, "options", []) or [])
+        sample = []
+        for q in opts[:3]:
+            sample.append(
+                {
+                    "instrument_name": getattr(q, "instrument_name", None),
+                    "expiry_ts": getattr(q, "expiry_ts", None),
+                    "strike": getattr(q, "strike", None),
+                    "option_type": getattr(q, "option_type", None),
+                    "mark_price": getattr(q, "mark_price", None),
+                    "mark_iv": getattr(q, "mark_iv", None),
+                    "delta": getattr(q, "delta", None),
+                }
+            )
+        first_fields = {
+            "instrument_name": any(getattr(q, "instrument_name", None) for q in opts),
+            "expiry_ts": any(getattr(q, "expiry_ts", None) for q in opts),
+            "strike": any((getattr(q, "strike", None) or 0) for q in opts),
+            "option_type": any(getattr(q, "option_type", None) for q in opts),
+            "mark_price": any((getattr(q, "mark_price", None) or 0) for q in opts),
+            "mark_iv": any(getattr(q, "mark_iv", None) is not None for q in opts),
+            "delta": any(getattr(q, "delta", None) is not None for q in opts),
+        }
+        return {
+            "snapshots_count": int(len(snaps)),
+            "options_count_min": int(min(counts) if counts else 0),
+            "options_count_avg": float(sum(counts) / len(counts) if counts else 0.0),
+            "options_count_max": int(max(counts) if counts else 0),
+            "first_snapshot": {
+                "ts": getattr(first, "ts", None),
+                "spot": getattr(first, "spot", None),
+                "options_count": int(len(opts)),
+                "fields_present": first_fields,
+                "sample_options": sample,
+            },
+        }
+
+    replay_diagnostics = {
+        "live": _replay_diag(live_snaps),
+        "synthetic": _replay_diag(synth_snaps),
+    }
 
     # ===== Underlying path fidelity (spot returns) =====
     live_spots = [float(s.spot or 0.0) for s in live_snaps if (s.spot or 0.0) > 0]
@@ -299,9 +366,25 @@ def run_fidelity_suite(
             coverage_synth_invalid_missing += invalid_missing
 
     strategies = canonical_strategies()
+    strategy_diagnostics: Dict[str, Any] = {}
     for spec in strategies:
-        live_trades = run_strategy(spec=spec, snapshots=live_snaps, slippage_bps=slippage_bps, use_mid=True)
-        synth_trades = run_strategy(spec=spec, snapshots=synth_snaps, slippage_bps=slippage_bps, use_mid=True)
+        live_trades, live_diag = run_strategy_with_diagnostics(
+            spec=spec,
+            snapshots=live_snaps,
+            slippage_bps=slippage_bps,
+            use_mid=True,
+        )
+        synth_trades, synth_diag = run_strategy_with_diagnostics(
+            spec=spec,
+            snapshots=synth_snaps,
+            slippage_bps=slippage_bps,
+            use_mid=True,
+        )
+
+        strategy_diagnostics[spec.name] = {
+            "live": live_diag,
+            "synthetic": synth_diag,
+        }
 
         _accum_cov(live_trades, side="live")
         _accum_cov(synth_trades, side="synth")
@@ -361,16 +444,13 @@ def run_fidelity_suite(
         scored,
         coverage_ratio=penalty_cov,
         invalid_trades_missing_quote=invalid_missing_total,
+        invalid_trades_missing_close=0,
         component_name="strategy_pnl_parity",
     )
 
     overall = float(scored["overall_score"])
-    strategy_parity_score = float(scored["component_scores"].get("strategy_pnl_parity", 0.0))
-    tail_parity_score = float(scored["component_scores"].get("underlying_returns", 0.0))
     gate = gate_label(
         overall_score=overall,
-        strategy_parity_score=strategy_parity_score,
-        tail_parity_score=tail_parity_score,
         coverage_ratio=penalty_cov,
         invalid_trades_missing_quote=invalid_missing_total,
     )
@@ -396,6 +476,8 @@ def run_fidelity_suite(
         live_data_status=live_data_status,
         market_live_meta=live_meta,
         market_synth_meta=synth_meta,
+        replay_diagnostics=replay_diagnostics,
+        strategy_diagnostics=strategy_diagnostics,
         coverage={
             "total_trades_opened": int(coverage_live_total + coverage_synth_total),
             "valid_trades_closed": int(coverage_live_valid + coverage_synth_valid),

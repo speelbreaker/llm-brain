@@ -8,39 +8,49 @@ from .metrics import exp_score
 
 @dataclass(frozen=True)
 class FidelityGates:
-    trusted_overall: float = 80.0
-    trusted_strategy_parity: float = 75.0
-    trusted_tail_parity: float = 70.0
+    """Stable gate thresholds for ops.
 
-    warning_floor: float = 65.0
+    Mapping (explicit and stable):
+    - TRUSTED: score >= trusted_threshold AND coverage OK
+    - WARNING: score >= warn_threshold AND coverage OK
+    - UNTRUSTED: score < warn_threshold OR coverage insufficient
+    """
+
+    trusted_threshold: float = 80.0
+    warn_threshold: float = 65.0
+
+    # Coverage is part of the Trust contract.
+    min_coverage_ratio: float = 0.85
+
+
+def gates_to_dict(gates: FidelityGates) -> Dict[str, float]:
+    return {
+        "trusted_threshold": float(gates.trusted_threshold),
+        "warn_threshold": float(gates.warn_threshold),
+        "min_coverage_ratio": float(gates.min_coverage_ratio),
+    }
 
 
 def gate_label(
     *,
     overall_score: float,
-    strategy_parity_score: float,
-    tail_parity_score: float,
     coverage_ratio: Optional[float] = None,
     invalid_trades_missing_quote: int = 0,
+    invalid_trades_missing_close: int = 0,
     gates: Optional[FidelityGates] = None,
 ) -> str:
     g = gates or FidelityGates()
 
-    # Synthetic fidelity is constrained by data quality: if coverage is materially incomplete,
-    # force UNTRUSTED so the system cannot "false pass" on missing quotes.
+    # Coverage enforcement: if we materially lack data quality/coverage, never pass.
     if coverage_ratio is not None:
         cr = float(coverage_ratio)
-        if cr < 0.85 or int(invalid_trades_missing_quote) >= 2:
+        if cr < float(g.min_coverage_ratio) or int(invalid_trades_missing_quote) > 0 or int(invalid_trades_missing_close) > 0:
             return "UNTRUSTED"
 
-    if (
-        overall_score >= g.trusted_overall
-        and strategy_parity_score >= g.trusted_strategy_parity
-        and tail_parity_score >= g.trusted_tail_parity
-    ):
+    if float(overall_score) >= float(g.trusted_threshold):
         return "TRUSTED"
 
-    if overall_score >= g.warning_floor:
+    if float(overall_score) >= float(g.warn_threshold):
         return "WARNING"
 
     return "UNTRUSTED"
@@ -158,6 +168,7 @@ def apply_coverage_penalty(
     *,
     coverage_ratio: float,
     invalid_trades_missing_quote: int,
+    invalid_trades_missing_close: int = 0,
     component_name: str = "strategy_pnl_parity",
 ) -> Dict[str, Any]:
     """Apply a material penalty to strategy parity when trade coverage is incomplete.
@@ -168,7 +179,7 @@ def apply_coverage_penalty(
     - Recompute overall_score using redistributed_weights when available.
     """
     ratio = float(max(0.0, min(1.0, coverage_ratio)))
-    needs_penalty = (ratio < 0.95) or (int(invalid_trades_missing_quote) > 0)
+    needs_penalty = (ratio < 0.95) or (int(invalid_trades_missing_quote) > 0) or (int(invalid_trades_missing_close) > 0)
     if not needs_penalty:
         return scored
 
@@ -188,6 +199,7 @@ def apply_coverage_penalty(
     out["coverage_penalty"] = {
         "coverage_ratio": ratio,
         "invalid_trades_missing_quote": int(invalid_trades_missing_quote),
+        "invalid_trades_missing_close": int(invalid_trades_missing_close),
         "applied": True,
     }
     return out

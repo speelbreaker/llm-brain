@@ -1,11 +1,12 @@
-"""
-Reusable diff logic for comparing backtest runs.
+"""Reusable diff logic for comparing backtest runs.
+
+This module is intentionally DB-free and reads backtest metrics from
+src/backtest/run_store.py, matching the Backtest Lab's file-based storage.
 """
 
-from typing import Dict, Any, Optional, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
-from src.db import get_db_session
-from src.db.models_backtest import BacktestRun, BacktestMetric
+from src.backtest.run_store import load_result
 
 
 METRICS_FIELDS: List[Tuple[str, str]] = [
@@ -23,27 +24,15 @@ METRICS_FIELDS: List[Tuple[str, str]] = [
 ]
 
 
-def fetch_run(db, run_id: str) -> Optional[BacktestRun]:
-    """Fetch a backtest run by its run_id string."""
-    return db.query(BacktestRun).filter(BacktestRun.run_id == run_id).first()
-
-
-def fetch_metrics(db, run_numeric_id: int, exit_style: str) -> Optional[BacktestMetric]:
-    """Fetch metrics for a run by numeric ID and exit style."""
-    return db.query(BacktestMetric).filter(
-        BacktestMetric.run_id == run_numeric_id,
-        BacktestMetric.exit_style == exit_style,
-    ).first()
-
-
-def get_metric_value(metrics: BacktestMetric, field: str) -> float:
-    """Extract a metric value, returning 0.0 if not found."""
-    if hasattr(metrics, field):
-        val = getattr(metrics, field)
-        return float(val) if val is not None else 0.0
-    if hasattr(metrics, 'metrics_json') and metrics.metrics_json:
-        return float(metrics.metrics_json.get(field, 0.0))
-    return 0.0
+def get_metric_value(metrics: Dict[str, Any], field: str) -> float:
+    """Extract a metric value from a run_store metrics dict."""
+    try:
+        val = metrics.get(field)
+        if val is None:
+            return 0.0
+        return float(val)
+    except Exception:
+        return 0.0
 
 
 def format_value(val: float, fmt_type: str) -> str:
@@ -99,80 +88,60 @@ def compute_diff_for_runs(
     Raises:
         ValueError if runs or metrics not found
     """
-    with get_db_session() as db:
-        run_a = fetch_run(db, run_id_a)
-        if not run_a:
-            raise ValueError(f"Run A not found: {run_id_a}")
-        
-        run_b = fetch_run(db, run_id_b)
-        if not run_b:
-            raise ValueError(f"Run B not found: {run_id_b}")
-        
-        if exit_style:
-            effective_exit_style = exit_style
-        else:
-            exit_style_a = run_a.primary_exit_style
-            exit_style_b = run_b.primary_exit_style
-            
-            if exit_style_a != exit_style_b:
-                raise ValueError(
-                    f"Runs have different primary exit styles "
-                    f"(A={exit_style_a}, B={exit_style_b}). "
-                    f"Please specify exit_style explicitly."
-                )
-            effective_exit_style = exit_style_a
-        
-        metrics_a = fetch_metrics(db, run_a.id, effective_exit_style)
-        if not metrics_a:
-            raise ValueError(
-                f"Metrics not found for run A ({run_id_a}) "
-                f"with exit_style={effective_exit_style}"
-            )
-        
-        metrics_b = fetch_metrics(db, run_b.id, effective_exit_style)
-        if not metrics_b:
-            raise ValueError(
-                f"Metrics not found for run B ({run_id_b}) "
-                f"with exit_style={effective_exit_style}"
-            )
-        
-        run_a_metadata = {
-            "run_id": run_a.run_id,
-            "underlying": run_a.underlying,
-            "data_source": run_a.data_source,
-            "start_ts": run_a.start_ts.isoformat() if run_a.start_ts else None,
-            "end_ts": run_a.end_ts.isoformat() if run_a.end_ts else None,
-            "decision_interval_minutes": run_a.decision_interval_minutes,
-        }
-        
-        run_b_metadata = {
-            "run_id": run_b.run_id,
-            "underlying": run_b.underlying,
-            "data_source": run_b.data_source,
-            "start_ts": run_b.start_ts.isoformat() if run_b.start_ts else None,
-            "end_ts": run_b.end_ts.isoformat() if run_b.end_ts else None,
-            "decision_interval_minutes": run_b.decision_interval_minutes,
-        }
-        
-        metrics_dict = {}
-        for field, fmt_type in METRICS_FIELDS:
-            val_a = get_metric_value(metrics_a, field)
-            val_b = get_metric_value(metrics_b, field)
-            diff = val_b - val_a
-            
-            metrics_dict[field] = {
-                "a": val_a,
-                "b": val_b,
-                "diff": diff,
-                "fmt_type": fmt_type,
-            }
-        
-        return {
-            "run_a": run_a_metadata,
-            "run_b": run_b_metadata,
-            "exit_style": effective_exit_style,
-            "metrics": metrics_dict,
-        }
+    run_a = load_result(run_id_a)
+    if not run_a:
+        raise ValueError(f"Run A not found: {run_id_a}")
+
+    run_b = load_result(run_id_b)
+    if not run_b:
+        raise ValueError(f"Run B not found: {run_id_b}")
+
+    if exit_style:
+        effective_exit_style = exit_style
+    else:
+        effective_exit_style = run_a.config.get("exit_style") or run_b.config.get("exit_style")
+        if not effective_exit_style:
+            raise ValueError("exit_style not provided and not present in run configs")
+
+    metrics_a = (run_a.metrics or {}).get(effective_exit_style)
+    if not metrics_a:
+        raise ValueError(f"Metrics not found for run A ({run_id_a}) with exit_style={effective_exit_style}")
+
+    metrics_b = (run_b.metrics or {}).get(effective_exit_style)
+    if not metrics_b:
+        raise ValueError(f"Metrics not found for run B ({run_id_b}) with exit_style={effective_exit_style}")
+
+    run_a_metadata = {
+        "run_id": run_a.run_id,
+        "underlying": run_a.config.get("underlying"),
+        "data_source": run_a.config.get("data_source"),
+        "start_ts": run_a.config.get("start_date") or run_a.config.get("start"),
+        "end_ts": run_a.config.get("end_date") or run_a.config.get("end"),
+        "decision_interval_minutes": run_a.config.get("decision_interval_minutes"),
+    }
+
+    run_b_metadata = {
+        "run_id": run_b.run_id,
+        "underlying": run_b.config.get("underlying"),
+        "data_source": run_b.config.get("data_source"),
+        "start_ts": run_b.config.get("start_date") or run_b.config.get("start"),
+        "end_ts": run_b.config.get("end_date") or run_b.config.get("end"),
+        "decision_interval_minutes": run_b.config.get("decision_interval_minutes"),
+    }
+
+    metrics_dict: Dict[str, Any] = {}
+    for field, fmt_type in METRICS_FIELDS:
+        val_a = get_metric_value(metrics_a, field)
+        val_b = get_metric_value(metrics_b, field)
+        d = val_b - val_a
+        metrics_dict[field] = {"a": val_a, "b": val_b, "diff": d, "fmt_type": fmt_type}
+
+    return {
+        "run_a": run_a_metadata,
+        "run_b": run_b_metadata,
+        "exit_style": effective_exit_style,
+        "metrics": metrics_dict,
+    }
 
 
 def print_diff_report_from_data(diff_data: Dict[str, Any]) -> None:

@@ -1,0 +1,10 @@
+{
+  "error": {
+    "message": "No module named 'src'",
+    "type": "ModuleNotFoundError"
+  },
+  "generated_at_utc": "2025-12-22T17:02Z",
+  "head_sha": "f6e339582a45a38469c24cc6b14a910fdfc49bdd",
+  "overall_status": "FAIL",
+  "summary": "OPS_HEALTH_GENERATION_ERROR"
+}

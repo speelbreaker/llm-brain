@@ -36,6 +36,7 @@ from src.healthcheck import (
     run_and_cache_healthcheck,
     set_agent_paused_due_to_health,
     is_agent_paused_due_to_health,
+    get_cached_health_status,
 )
 from src.deribit.base_client import HealthSeverity
 
@@ -43,6 +44,18 @@ StatusCallback = Callable[[Dict[str, Any]], None]
 
 shutdown_requested = False
 last_health_recheck_time: float = 0
+
+
+def _health_trading_allowed() -> tuple[bool, str]:
+    """Return (allowed, reason) for trading based on cached health."""
+    cached = get_cached_health_status()
+    if cached is None:
+        return False, "missing_cached_health"
+    if cached.can_trade is False:
+        severity = cached.worst_severity or "unknown"
+        reason = cached.summary or "can_trade=False"
+        return False, f"blocked_by_health can_trade=False severity={severity}: {reason}"
+    return True, ""
 
 
 def signal_handler(signum: int, frame: object) -> None:
@@ -302,6 +315,14 @@ def run_agent_loop_forever(
             print(f"Iteration {iteration} - {datetime.utcnow().isoformat()}")
             print(f"{'='*60}")
             
+            health_allowed, health_reason = _health_trading_allowed()
+            if not health_allowed:
+                if not is_agent_paused_due_to_health():
+                    set_agent_paused_due_to_health(True)
+                print(f"\n[HEALTH GUARD] blocked_by_health ({health_reason}). Skipping trading.")
+                time.sleep(settings.loop_interval_sec)
+                continue
+
             if is_agent_paused_due_to_health():
                 print("\n[HEALTH GUARD] Agent paused due to health failure. Skipping trading.")
                 print("[HEALTH GUARD] Will re-check health on next interval.")

@@ -25,6 +25,21 @@ from pydantic import BaseModel, Field
 CALIBRATION_RUNS_DIR = Path("data/calibration_runs")
 
 
+def get_calibration_runs_dir(base_dir: str | Path | None = None) -> Path:
+    """Resolve the calibration history directory.
+
+    - Preferred: base_dir argument
+    - Else: env CALIBRATION_DIR
+    - Else: default CALIBRATION_RUNS_DIR
+    """
+    if base_dir is not None:
+        return Path(base_dir)
+    override = os.environ.get("CALIBRATION_DIR")
+    if override:
+        return Path(override)
+    return CALIBRATION_RUNS_DIR
+
+
 @dataclass
 class CalibrationUpdatePolicy:
     """Policy configuration for calibration updates."""
@@ -33,6 +48,8 @@ class CalibrationUpdatePolicy:
     min_delta_band: float = 0.03
     min_sample_size: int = 50
     min_vega_sum: float = 100.0
+    max_mae_pct: float = 60.0
+    max_vega_weighted_mae_pct: float = 60.0
     smoothing_window_days: int = 14
     ewma_alpha: float = 0.3
     
@@ -42,6 +59,8 @@ class CalibrationUpdatePolicy:
             "min_delta_band": self.min_delta_band,
             "min_sample_size": self.min_sample_size,
             "min_vega_sum": self.min_vega_sum,
+            "max_mae_pct": self.max_mae_pct,
+            "max_vega_weighted_mae_pct": self.max_vega_weighted_mae_pct,
             "smoothing_window_days": self.smoothing_window_days,
             "ewma_alpha": self.ewma_alpha,
         }
@@ -90,10 +109,11 @@ class CurrentAppliedMultipliers(BaseModel):
     last_updated: Optional[datetime] = None
 
 
-def _ensure_runs_dir() -> Path:
+def _ensure_runs_dir(base_dir: str | Path | None = None) -> Path:
     """Ensure the calibration runs directory exists."""
-    CALIBRATION_RUNS_DIR.mkdir(parents=True, exist_ok=True)
-    return CALIBRATION_RUNS_DIR
+    runs_dir = get_calibration_runs_dir(base_dir)
+    runs_dir.mkdir(parents=True, exist_ok=True)
+    return runs_dir
 
 
 def _run_filename(timestamp: datetime, underlying: str, source: str) -> str:
@@ -116,13 +136,14 @@ def record_calibration_result(
     smoothed_bands: Optional[List[BandMultiplier]] = None,
     applied: bool = False,
     applied_reason: str = "",
+    base_dir: str | Path | None = None,
 ) -> CalibrationRunRecord:
     """
     Save a calibration run to history.
     
     Returns the created record.
     """
-    _ensure_runs_dir()
+    runs_dir = _ensure_runs_dir(base_dir)
     
     now = datetime.now(timezone.utc)
     
@@ -144,7 +165,7 @@ def record_calibration_result(
     )
     
     filename = _run_filename(now, underlying, source)
-    filepath = CALIBRATION_RUNS_DIR / filename
+    filepath = runs_dir / filename
     
     with open(filepath, "w") as f:
         json.dump(record.model_dump(mode="json"), f, indent=2, default=str)
@@ -156,6 +177,7 @@ def load_recent_calibration_history(
     underlying: str,
     limit: int = 50,
     source_filter: Optional[str] = None,
+    base_dir: str | Path | None = None,
 ) -> List[CalibrationRunRecord]:
     """
     Load recent calibration runs for an underlying.
@@ -168,11 +190,11 @@ def load_recent_calibration_history(
     Returns:
         List of CalibrationRunRecord sorted by timestamp descending
     """
-    _ensure_runs_dir()
+    runs_dir = _ensure_runs_dir(base_dir)
     
     records: List[Tuple[datetime, CalibrationRunRecord]] = []
     
-    for filepath in CALIBRATION_RUNS_DIR.glob("*.json"):
+    for filepath in runs_dir.glob("*.json"):
         try:
             with open(filepath) as f:
                 data = json.load(f)
@@ -290,6 +312,8 @@ def should_apply_update(
     policy: CalibrationUpdatePolicy,
     sample_size: int,
     vega_sum: float,
+    fit_mae_pct: Optional[float] = None,
+    fit_vega_weighted_mae_pct: Optional[float] = None,
 ) -> UpdateDecision:
     """
     Decide whether to apply a calibration update.
@@ -302,6 +326,25 @@ def should_apply_update(
     Returns:
         UpdateDecision with should_apply flag and reason
     """
+    if fit_mae_pct is not None and fit_mae_pct > policy.max_mae_pct:
+        return UpdateDecision(
+            should_apply=False,
+            reason=f"Fit quality too poor (mae_pct {fit_mae_pct:.2f} > {policy.max_mae_pct})",
+            details={"mae_pct": fit_mae_pct, "max_mae_pct": policy.max_mae_pct},
+        )
+
+    if fit_vega_weighted_mae_pct is not None and fit_vega_weighted_mae_pct > policy.max_vega_weighted_mae_pct:
+        return UpdateDecision(
+            should_apply=False,
+            reason=(
+                f"Fit quality too poor (vega_weighted_mae_pct {fit_vega_weighted_mae_pct:.2f} > {policy.max_vega_weighted_mae_pct})"
+            ),
+            details={
+                "vega_weighted_mae_pct": fit_vega_weighted_mae_pct,
+                "max_vega_weighted_mae_pct": policy.max_vega_weighted_mae_pct,
+            },
+        )
+
     if sample_size < policy.min_sample_size:
         return UpdateDecision(
             should_apply=False,
@@ -525,10 +568,17 @@ def run_calibration_with_policy(
     
     sample_size = result.count
     vega_sum = 0.0
-    if result.global_metrics and hasattr(result.global_metrics, 'vega_weighted_mae_pct'):
-        vega_sum = sample_size * 10.0
-    else:
-        vega_sum = sample_size * 10.0
+    fit_mae_pct: Optional[float] = None
+    fit_vega_weighted_mae_pct: Optional[float] = None
+    if result.global_metrics is not None:
+        fit_mae_pct = float(result.global_metrics.mae_pct) if result.global_metrics.mae_pct is not None else None
+        fit_vega_weighted_mae_pct = (
+            float(result.global_metrics.vega_weighted_mae_pct)
+            if result.global_metrics.vega_weighted_mae_pct is not None
+            else None
+        )
+        if getattr(result.global_metrics, "vega_sum", None) is not None:
+            vega_sum = float(result.global_metrics.vega_sum or 0.0)
     
     history = load_recent_calibration_history(underlying, limit=50)
     
@@ -546,8 +596,14 @@ def run_calibration_with_policy(
         )
     else:
         decision = should_apply_update(
-            current_applied, smoothed_global, smoothed_bands, 
-            policy, sample_size, vega_sum
+            current_applied,
+            smoothed_global,
+            smoothed_bands,
+            policy,
+            sample_size,
+            vega_sum,
+            fit_mae_pct=fit_mae_pct,
+            fit_vega_weighted_mae_pct=fit_vega_weighted_mae_pct,
         )
     
     if decision.should_apply:

@@ -48,6 +48,8 @@ class TestCalibrationUpdatePolicy:
         assert policy.min_delta_band == 0.03
         assert policy.min_sample_size == 50
         assert policy.min_vega_sum == 100.0
+        assert policy.max_mae_pct == 60.0
+        assert policy.max_vega_weighted_mae_pct == 60.0
         assert policy.smoothing_window_days == 14
         assert policy.ewma_alpha == 0.3
     

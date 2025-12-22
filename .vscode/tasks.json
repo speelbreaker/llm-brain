@@ -101,7 +101,7 @@
 			"command": "/bin/zsh",
 			"args": [
 				"-lc",
-				"${workspaceFolder}/.venv/bin/python -m pytest -q > /tmp/pytest_out.txt 2>&1; echo \"EXIT:$?\"; tail -n 200 /tmp/pytest_out.txt"
+				"cd \"${workspaceFolder}\" && .venv/bin/python -m pytest -q > /tmp/pytest_out.txt 2>&1; echo \"EXIT:$?\"; tail -n 200 /tmp/pytest_out.txt"
 			],
 			"isBackground": false,
 			"group": "test"
