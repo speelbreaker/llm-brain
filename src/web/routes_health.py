@@ -63,6 +63,7 @@ class RuntimeConfigUpdate(BaseModel):
     decision_mode: Optional[str] = None
     dry_run: Optional[bool] = None
     position_reconcile_action: Optional[str] = None
+    trade_mode: Optional[str] = None
 
 
 SUPERVISOR_API_URL = os.environ.get("SUPERVISOR_API_URL", "")
@@ -610,6 +611,7 @@ def get_runtime_config() -> JSONResponse:
         "decision_mode": settings.decision_mode,
         "dry_run": settings.dry_run,
         "position_reconcile_action": settings.position_reconcile_action,
+        "trade_mode": settings.trade_mode.value if hasattr(settings.trade_mode, 'value') else settings.trade_mode,
     })
 
 
@@ -650,6 +652,15 @@ def update_runtime_config(update: RuntimeConfigUpdate) -> JSONResponse:
             settings.position_reconcile_action = update.position_reconcile_action  # type: ignore
             updated["position_reconcile_action"] = update.position_reconcile_action
     
+    if update.trade_mode is not None:
+        from src.config import TradingMode
+        valid_trade_modes = ["normal", "close_only", "halt"]
+        if update.trade_mode not in valid_trade_modes:
+            errors.append(f"trade_mode must be one of: {', '.join(valid_trade_modes)}")
+        else:
+            settings.trade_mode = TradingMode(update.trade_mode)
+            updated["trade_mode"] = update.trade_mode
+    
     if errors:
         return JSONResponse(
             status_code=400,
@@ -668,6 +679,7 @@ def update_runtime_config(update: RuntimeConfigUpdate) -> JSONResponse:
             "decision_mode": settings.decision_mode,
             "dry_run": settings.dry_run,
             "position_reconcile_action": settings.position_reconcile_action,
+            "trade_mode": settings.trade_mode.value if hasattr(settings.trade_mode, 'value') else settings.trade_mode,
         }
     })
 

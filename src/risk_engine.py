@@ -119,8 +119,26 @@ def check_action_allowed(
             reasons.append(f"Invalid action type: {action_str}")
             return False, reasons
     
-    if cfg.kill_switch_enabled and action_type != ActionType.DO_NOTHING:
-        reasons.append("Global kill-switch enabled: blocking all trading actions.")
+    # ──────────────────────────────────────────────
+    # Trade permission check (kill switch + trade_mode + can_trade)
+    # This is defense-in-depth: also enforced in agent_loop.py
+    # ──────────────────────────────────────────────
+    from src.ops.trade_permission import compute_trade_permission, PermissionCode
+    
+    # Get can_trade from health if available (for defense-in-depth)
+    can_trade_from_health = None
+    try:
+        from src.healthcheck import get_cached_health_status
+        cached_health = get_cached_health_status()
+        if cached_health is not None:
+            can_trade_from_health = cached_health.can_trade
+    except Exception:
+        pass  # Health module may not be available in all contexts
+    
+    permission = compute_trade_permission(cfg, can_trade_from_health)
+    
+    if not permission.is_action_allowed(action_type):
+        reasons.append(f"{permission.code.value}: {permission.reason}")
         return False, reasons
     
     if cfg.is_training_on_testnet:

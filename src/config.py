@@ -23,6 +23,19 @@ class EnvironmentMode(str, Enum):
     LIVE = "live"
 
 
+class TradingMode(str, Enum):
+    """Trading mode for the agent's live trading path.
+    
+    Controls what actions are permitted at the trade permission layer:
+    - NORMAL: All actions allowed (subject to risk rules)
+    - CLOSE_ONLY: Only CLOSE + DO_NOTHING allowed (reduce risk mode)
+    - HALT: Only DO_NOTHING allowed (full stop)
+    """
+    NORMAL = "normal"
+    CLOSE_ONLY = "close_only"
+    HALT = "halt"
+
+
 class Settings(BaseSettings):
     """
     Main configuration for the options trading agent.
@@ -110,6 +123,15 @@ class Settings(BaseSettings):
         description=(
             "Global kill switch for trading. When True, all non-DO_NOTHING "
             "actions are blocked at the risk layer."
+        ),
+    )
+    trade_mode: TradingMode = Field(
+        default=TradingMode.NORMAL,
+        description=(
+            "Trading mode for the live agent: "
+            "'normal' = all actions allowed (subject to risk rules); "
+            "'close_only' = only CLOSE + DO_NOTHING allowed (reduce risk mode); "
+            "'halt' = only DO_NOTHING allowed (full stop, stronger than close_only)."
         ),
     )
 

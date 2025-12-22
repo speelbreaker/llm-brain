@@ -2726,6 +2726,21 @@ def render_dashboard_html() -> str:
             <div id="kill-switch-feedback" style="font-size: 0.8rem; min-height: 1.5rem; margin-top: 0.75rem;"></div>
           </div>
           
+          <!-- Trade Mode -->
+          <div style="background: #e3f2fd; padding: 1.25rem; border-radius: 8px; border-left: 4px solid #1565c0;">
+            <h3 style="margin: 0 0 0.75rem 0; color: #1565c0; font-size: 1rem;">Trade Mode</h3>
+            <p style="font-size: 0.8rem; color: #666; margin-bottom: 1rem;">Controls permitted trading actions.</p>
+            <div style="display: flex; align-items: center; gap: 1rem;">
+              <select id="trade-mode-select" onchange="updateTradeMode(this.value)" style="padding: 0.5rem; border: 1px solid #1565c0; border-radius: 4px; background: white; font-size: 0.9rem; min-width: 140px;">
+                <option value="normal">Normal</option>
+                <option value="close_only">Close Only</option>
+                <option value="halt">Halt</option>
+              </select>
+              <span id="trade-mode-desc" style="font-size: 0.75rem; color: #555;">All actions allowed</span>
+            </div>
+            <div id="trade-mode-feedback" style="font-size: 0.8rem; min-height: 1.5rem; margin-top: 0.75rem;"></div>
+          </div>
+          
           <!-- Daily Drawdown Limit -->
           <div style="background: #fce4ec; padding: 1.25rem; border-radius: 8px; border-left: 4px solid #c62828;">
             <h3 style="margin: 0 0 0.75rem 0; color: #c62828; font-size: 1rem;">Daily Drawdown Limit %</h3>
@@ -5000,6 +5015,14 @@ def render_dashboard_html() -> str:
           const drawdownInput = document.getElementById('drawdown-limit-input');
           if (drawdownInput) {{
             drawdownInput.value = data.daily_drawdown_limit_pct || 0;
+          }}
+          
+          // Trade mode
+          const tradeModeSelect = document.getElementById('trade-mode-select');
+          const tradeModeDesc = document.getElementById('trade-mode-desc');
+          if (tradeModeSelect) {{
+            tradeModeSelect.value = data.trade_mode || 'normal';
+            updateTradeModeDescription(data.trade_mode || 'normal');
           }}
           
           // Decision mode
