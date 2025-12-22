@@ -40,10 +40,17 @@ MAX_TRUNCATE_CHARS = 5000
 
 def _ensure_event_loop() -> None:
     """Ensure a default event loop exists for sync test contexts."""
+    policy = asyncio.get_event_loop_policy()
     try:
-        asyncio.get_event_loop()
+        loop = policy.get_event_loop()
     except RuntimeError:
-        asyncio.set_event_loop(asyncio.new_event_loop())
+        loop = policy.new_event_loop()
+        policy.set_event_loop(loop)
+        return
+
+    if loop.is_closed():
+        loop = policy.new_event_loop()
+    policy.set_event_loop(loop)
 
 
 _ensure_event_loop()
