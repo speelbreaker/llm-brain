@@ -62,10 +62,20 @@ def test_coverage_penalty_forces_untrusted_gate() -> None:
 
     gate = gate_label(
         overall_score=float(out["overall_score"]),
-        strategy_parity_score=float(out["component_scores"]["strategy_pnl_parity"]),
-        tail_parity_score=float(out["component_scores"]["underlying_returns"]),
         coverage_ratio=0.5,
         invalid_trades_missing_quote=1,
+    )
+    assert gate == "UNTRUSTED"
+
+
+def test_missing_close_forces_untrusted_gate_even_if_score_high() -> None:
+    from src.fidelity.scoring import gate_label
+
+    gate = gate_label(
+        overall_score=99.0,
+        coverage_ratio=1.0,
+        invalid_trades_missing_quote=0,
+        invalid_trades_missing_close=1,
     )
     assert gate == "UNTRUSTED"
 

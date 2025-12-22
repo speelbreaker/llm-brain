@@ -17,9 +17,10 @@ This is the ops-grade health model used by automation and dashboards. It is desi
 
 - **Liveness**: Core pipeline checks (config validity, Deribit connectivity, state builder).
 - **Truth → Trust → Trade**:
-  - **Truth (facts)**: raw observations from the filesystem/stores (harvest presence + age, calibration last run, fidelity last run).
-  - **Trust (gates)**: normalized gate results with explicit `mode` (`off|warn|block`) and `status` (`PASS|WARN|FAIL`).
-  - **Trade (policy)**: aggregated `gate_overall` (`status|severity|can_trade`) used by dashboards and automation.
+- **Truth (facts)**: raw observations from the filesystem/stores (harvest presence + age, calibration last run, fidelity last run).
+- **Trust (gates)**: normalized gate results with explicit `mode` (`off|warn|block`) and `status` (`PASS|WARN|FAIL`).
+- **Trade (policy)**: aggregated `gate_overall` (`status|severity|can_trade`) used by dashboards and automation.
+- **Decisions**: `overall_status`/`summary` are derived from `gate_overall` whenever gates are available; `checks_overall`/`checks_summary` are kept purely for diagnostics.
 
 ### Thresholds & Policies
 
@@ -36,6 +37,38 @@ This is the ops-grade health model used by automation and dashboards. It is desi
   - WARNING: WARN (degraded)
   - UNTRUSTED: WARN by default; `HEALTH_STRICT_SYNTHETIC_GATE=1` escalates to FATAL + `can_trade=False`
   - Missing: WARN in research mode; FAIL in strict mode
+
+### Fidelity Report Store (Canonical)
+
+Ops-grade Synthetic Fidelity is persisted in a single canonical, file-based store:
+
+- Base dir: `data/fidelity_runs/` (override via `FIDELITY_DIR` or `FIDELITY_RUNS_DIR`)
+- Per-run report: `data/fidelity_runs/<run_id>.json`
+- Latest (full report): `data/fidelity_runs/latest.json`
+- Latest per underlying (full report): `data/fidelity_runs/BTC/latest.json`, `data/fidelity_runs/ETH/latest.json`
+
+The latest *summary* for the dashboard endpoints is maintained separately:
+
+- `data/fidelity_runs/latest_summary.json`
+- `data/fidelity_runs/index.jsonl`
+
+**Schema highlights** (fields health/gates rely on):
+
+- `run_id`, `created_at`, `underlying`
+- `component_scores`: `underlying_returns`, `iv_surface_level`, `spot_iv_coupling`, `strategy_pnl_parity`
+- `overall_score` (weighted combination), `gate_label` (`TRUSTED|WARNING|UNTRUSTED`)
+- `thresholds`: `trusted_threshold`, `warn_threshold`, `min_coverage_ratio`
+- `coverage.strategy_pnl_parity`: `valid_cases`, `total_cases`, `coverage_ratio_cases`, `min_trades_per_case`
+
+### Running the Ops-Grade Fidelity Suite
+
+This produces a canonical report in `data/fidelity_runs/` that is consumed by ops health and the unified gates.
+
+```bash
+python -c "from src.fidelity.ops_runner import run_ops_fidelity_suite; run_ops_fidelity_suite(underlying='BTC', start_ts=1735689600, end_ts=1736121600)"
+```
+
+> Strategy PnL parity uses Backtest Lab paired runs (`compare.run_synthetic_vs_live_pair`) and diffs (`diff.compute_diff_for_runs`).
 
 ### Manual Ops Commands
 

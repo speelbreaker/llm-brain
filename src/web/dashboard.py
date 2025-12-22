@@ -4868,6 +4868,7 @@ def render_dashboard_html() -> str:
       const globalGate = gateOverall.global || gateOverall || {{}};
       const overall = globalGate.status || data.overall_status || 'UNKNOWN';
       const worst = globalGate.severity || data.worst_severity || 'OK';
+      const checksOverall = data.checks_overall || 'UNKNOWN';
       const canTradeRaw = (globalGate.can_trade !== undefined) ? globalGate.can_trade : data.can_trade;
       const canTrade = canTradeRaw === true ? 'YES' : (canTradeRaw === false ? 'NO' : 'UNKNOWN');
 
@@ -4878,7 +4879,7 @@ def render_dashboard_html() -> str:
         return `${{u}}: ${{g.status || 'UNKNOWN'}} / ${{g.severity || 'UNKNOWN'}} / ${{ct}}`;
       }});
       const suffix = perLines.length ? ` | ${{perLines.join(' | ')}}` : '';
-      statusEl.textContent = `Status: ${{overall}} | Severity: ${{worst}} | Can trade: ${{canTrade}}${{suffix}}`;
+      statusEl.textContent = `Status: ${{overall}} | Severity: ${{worst}} | Checks: ${{checksOverall}} | Can trade: ${{canTrade}}${{suffix}}`;
       summaryEl.innerHTML = data.summary ? data.summary : 'No summary available.';
 
       const esc = (s) => String(s ?? '')

@@ -102,15 +102,22 @@ def run_and_cache_healthcheck(cfg: Settings | None = None) -> CachedHealthStatus
     global _cached_health_status
     
     result = run_agent_healthcheck(cfg)
-    worst_severity, can_trade = _compute_worst_severity(result)
-    result.setdefault("worst_severity", worst_severity)
-    result.setdefault("can_trade", can_trade)
+    worst_severity = result.get("worst_severity")
+    can_trade = result.get("can_trade")
+    if worst_severity is None or can_trade is None:
+        worst_severity_fallback, can_trade_fallback = _compute_worst_severity(result)
+        if worst_severity is None:
+            worst_severity = worst_severity_fallback
+        if can_trade is None:
+            can_trade = can_trade_fallback
+        result.setdefault("worst_severity", worst_severity)
+        result.setdefault("can_trade", can_trade)
     result.setdefault("checked_at", datetime.now(timezone.utc).isoformat())
     
     status = CachedHealthStatus(
         overall_status=result["overall_status"],
-        worst_severity=worst_severity,
-        can_trade=can_trade,
+        worst_severity=worst_severity or "OK",
+        can_trade=bool(can_trade),
         last_run_at=datetime.now(timezone.utc),
         summary=result["summary"],
         details=result,
@@ -157,6 +164,7 @@ def get_health_status_for_api() -> dict:
     - checked_at: ISO timestamp or null
     - cache_age_seconds: seconds since last check or null
     - overall_status: OK/WARN/FAIL or null
+    - checks_overall: OK/WARN/FAIL or null
     - worst_severity: OK/DEGRADED/FATAL or null
     - can_trade: bool or null
     - summary: short description
@@ -171,6 +179,8 @@ def get_health_status_for_api() -> dict:
             "cache_age_seconds": None,
             "last_run_at": None,
             "overall_status": None,
+            "checks_overall": None,
+            "checks_summary": None,
             "worst_severity": None,
             "can_trade": None,
             "summary": "Healthcheck not run yet",
@@ -188,12 +198,21 @@ def get_health_status_for_api() -> dict:
     gates = details.get("gates") or []
     gate_overall = details.get("gate_overall")
     can_trade_by_underlying = details.get("can_trade_by_underlying")
+    ops_facts = details.get("ops_facts")
+
+    checks_summary = details.get("checks_summary")
+    if not isinstance(checks_summary, str):
+        checks_summary = ", ".join(
+            f"{c.get('name')}:{c.get('status')}" for c in checks if isinstance(c, dict)
+        )
 
     return {
         "checked_at": cached.last_run_at.isoformat(),
         "cache_age_seconds": age_seconds,
         "last_run_at": cached.last_run_at.isoformat(),
         "overall_status": cached.overall_status,
+        "checks_overall": details.get("checks_overall"),
+        "checks_summary": checks_summary,
         "worst_severity": cached.worst_severity,
         "can_trade": cached.can_trade,
         "summary": cached.summary,
@@ -201,6 +220,7 @@ def get_health_status_for_api() -> dict:
         "gates": gates,
         "gate_overall": gate_overall,
         "can_trade_by_underlying": can_trade_by_underlying,
+        "ops_facts": ops_facts,
         "agent_paused_due_to_health": cached.agent_paused_due_to_health,
     }
 
@@ -277,6 +297,13 @@ def _env_flag(name: str) -> bool:
 
 def _is_live_mode(cfg: Settings) -> bool:
     return cfg.mode == "production"
+
+
+def _resolve_fidelity_gate_mode() -> str:
+    mode = (os.getenv("FIDELITY_GATE_MODE") or "off").strip().lower()
+    if mode not in ("off", "warn", "block"):
+        mode = "off"
+    return mode
 
 
 def check_config(cfg: Settings) -> HealthCheckResult:
@@ -481,7 +508,7 @@ def check_harvest_freshness(
         overall_status = CheckStatus.FAIL
         error_code = "HARVEST_STALE"
         severity = "FATAL"
-        can_trade = False
+        can_trade = True
     elif "WARN" in statuses:
         overall_status = CheckStatus.WARN
         error_code = "HARVEST_LAG"
@@ -551,12 +578,12 @@ def check_calibration_freshness(cfg: Settings, base_dir: str | Path | None = Non
         overall_status = CheckStatus.FAIL
         error_code = "CALIBRATION_FAILED"
         severity = "FATAL"
-        can_trade = False
+        can_trade = True
     elif flags["stale"]:
         overall_status = CheckStatus.FAIL
         error_code = "CALIBRATION_STALE"
         severity = "FATAL"
-        can_trade = False
+        can_trade = True
     elif flags["blocked"]:
         overall_status = CheckStatus.WARN
         error_code = "CALIBRATION_BLOCKED"
@@ -588,7 +615,7 @@ def check_calibration_freshness(cfg: Settings, base_dir: str | Path | None = Non
 
 def check_fidelity_gate(cfg: Settings, base_dir: str | Path | None = None) -> HealthCheckResult:
     """Check latest Synthetic Fidelity gate status."""
-    strict_gate = _env_flag("HEALTH_STRICT_SYNTHETIC_GATE")
+    gate_mode = _resolve_fidelity_gate_mode()
     from src.ops.fidelity_status import get_fidelity_facts
 
     per_underlying: dict[str, dict[str, Any]] = {}
@@ -641,44 +668,24 @@ def check_fidelity_gate(cfg: Settings, base_dir: str | Path | None = None) -> He
     }
 
     if worst_label == "MISSING":
-        if strict_gate:
-            return HealthCheckResult(
-                name="fidelity_gate",
-                status=CheckStatus.FAIL,
-                detail=detail,
-                error_code="FIDELITY_MISSING",
-                severity="FATAL",
-                can_trade=False,
-                meta=meta,
-            )
         return HealthCheckResult(
             name="fidelity_gate",
-            status=CheckStatus.WARN,
+            status=CheckStatus.FAIL if gate_mode == "block" else CheckStatus.WARN,
             detail=detail,
             error_code="FIDELITY_MISSING",
-            severity="DEGRADED",
+            severity="FATAL" if gate_mode == "block" else "DEGRADED",
             can_trade=True,
             meta=meta,
         )
 
     if worst_label == "UNTRUSTED":
-        if strict_gate:
-            return HealthCheckResult(
-                name="fidelity_gate",
-                status=CheckStatus.FAIL,
-                detail=detail,
-                error_code="FIDELITY_UNTRUSTED",
-                severity="FATAL",
-                can_trade=False,
-                meta=meta,
-            )
         return HealthCheckResult(
             name="fidelity_gate",
-            status=CheckStatus.WARN,
+            status=CheckStatus.FAIL if gate_mode == "block" else CheckStatus.WARN,
             detail=detail,
             error_code="FIDELITY_UNTRUSTED",
-            severity="DEGRADED",
-            can_trade=not cfg.is_research,
+            severity="FATAL" if gate_mode == "block" else "DEGRADED",
+            can_trade=True,
             meta=meta,
         )
 
@@ -807,6 +814,15 @@ def check_deribit_private(client: DeribitClient, cfg: Settings) -> HealthCheckRe
     """Check private Deribit API connectivity (requires credentials)."""
     has_creds = bool(getattr(cfg, "deribit_client_id", "")) and bool(getattr(cfg, "deribit_client_secret", ""))
     if not has_creds:
+        if _is_live_mode(cfg):
+            return HealthCheckResult(
+                name="deribit_private",
+                status=CheckStatus.FAIL,
+                detail="missing private API credentials in production mode",
+                error_code="DERIBIT_PRIVATE_MISSING_CREDS",
+                severity="FATAL",
+                can_trade=False,
+            )
         return HealthCheckResult(
             name="deribit_private",
             status=CheckStatus.SKIPPED,
@@ -816,9 +832,10 @@ def check_deribit_private(client: DeribitClient, cfg: Settings) -> HealthCheckRe
         )
 
     try:
-        summary = client.get_account_summary("BTC")
+        settlement_ccy = str(getattr(cfg, "option_settlement_ccy", "") or "USDC").upper()
+        summary = client.get_account_summary(settlement_ccy)
         equity = summary.get("equity")
-        detail = f"private API OK, equity=${float(equity):,.0f}" if equity is not None else "private API OK"
+        detail = f"private API OK, equity=${float(equity):,.2f}" if equity is not None else "private API OK"
         return HealthCheckResult(
             name="deribit_private",
             status=CheckStatus.OK,
@@ -884,6 +901,77 @@ def check_state_builder(client: DeribitClient, cfg: Settings) -> HealthCheckResu
         )
 
 
+def _severity_from_gate_status(status: str | None) -> str:
+    if not status:
+        return "OK"
+    value = status.upper()
+    if value == "FAIL":
+        return "FATAL"
+    if value == "WARN":
+        return "DEGRADED"
+    return "OK"
+
+
+def _derive_gate_can_trade(gate_overall: dict[str, Any] | None, gates: list[dict[str, Any]] | None) -> bool | None:
+    """Return can_trade derived from gates only, or None if unavailable."""
+    if isinstance(gate_overall, dict):
+        global_gate = gate_overall.get("global") if isinstance(gate_overall.get("global"), dict) else gate_overall
+        if isinstance(global_gate, dict) and "can_trade" in global_gate:
+            return bool(global_gate.get("can_trade"))
+
+    if isinstance(gates, list) and gates:
+        # Conservative: any gate explicitly forbidding trade blocks trade.
+        return not any((g or {}).get("can_trade") is False for g in gates if isinstance(g, dict))
+
+    return None
+
+
+def _derive_gate_worst_severity(
+    gate_overall: dict[str, Any] | None,
+    gates: list[dict[str, Any]] | None,
+) -> str | None:
+    """Return worst severity derived from gates only, or None if unavailable."""
+    if isinstance(gate_overall, dict):
+        global_gate = gate_overall.get("global") if isinstance(gate_overall.get("global"), dict) else gate_overall
+        if isinstance(global_gate, dict):
+            sev = global_gate.get("severity")
+            if isinstance(sev, str) and sev.strip():
+                return sev.strip().upper()
+            status = global_gate.get("status")
+            if isinstance(status, str) and status.strip():
+                # GateRunner uses PASS/WARN/FAIL.
+                s = status.strip().upper()
+                if s == "FAIL":
+                    return "FATAL"
+                if s == "WARN":
+                    return "DEGRADED"
+                if s == "PASS":
+                    return "OK"
+
+    if isinstance(gates, list) and gates:
+        worst = "OK"
+        for g in gates:
+            if not isinstance(g, dict):
+                continue
+            sev = (g.get("severity") or "").upper()
+            status = (g.get("status") or "").upper()
+            # If severity is missing, infer from status.
+            if not sev:
+                if status == "FAIL":
+                    sev = "FATAL"
+                elif status == "WARN":
+                    sev = "DEGRADED"
+                else:
+                    sev = "OK"
+            if sev == "FATAL":
+                return "FATAL"
+            if sev == "DEGRADED" and worst != "FATAL":
+                worst = "DEGRADED"
+        return worst
+
+    return None
+
+
 def _result_to_dict(result: HealthCheckResult) -> dict[str, Any]:
     status_value = result.status.value if isinstance(result.status, CheckStatus) else str(result.status)
     payload = {
@@ -898,6 +986,64 @@ def _result_to_dict(result: HealthCheckResult) -> dict[str, Any]:
     if meta:
         payload["meta"] = meta
     return payload
+
+
+def _normalize_gate_status(status: str | None, severity: str | None) -> str | None:
+    if isinstance(status, str):
+        value = status.upper()
+        if value == "PASS":
+            return "OK"
+        if value == "WARN":
+            return "WARN"
+        if value == "FAIL":
+            return "FAIL"
+    if isinstance(severity, str):
+        value = severity.upper()
+        if value == "FATAL":
+            return "FAIL"
+        if value == "DEGRADED":
+            return "WARN"
+    return None
+
+
+def _extract_gate_overall_info(payload: dict[str, Any] | None) -> dict[str, str] | None:
+    if not isinstance(payload, dict):
+        return None
+    global_gate = payload.get("global") if isinstance(payload.get("global"), dict) else payload
+    gate_status = (global_gate or {}).get("status")
+    gate_severity = (global_gate or {}).get("severity")
+    summary_status = _normalize_gate_status(gate_status, gate_severity)
+    if summary_status is None:
+        return None
+    info: dict[str, str] = {"status": summary_status}
+    if isinstance(gate_severity, str):
+        info["severity"] = gate_severity
+    message = (global_gate or {}).get("message")
+    if isinstance(message, str) and message.strip():
+        info["message"] = message.strip()
+    code = (global_gate or {}).get("code") or (global_gate or {}).get("error_code")
+    if isinstance(code, str) and code.strip():
+        info["code"] = code.strip()
+    return info
+
+
+def _format_gate_summary(info: dict[str, str]) -> str:
+    parts = [f"gates {info.get('status', 'UNKNOWN')}"]
+    if severity := info.get("severity"):
+        parts.append(f"({severity})")
+    if code := info.get("code"):
+        parts.append(f"code={code}")
+    if message := info.get("message"):
+        parts.append(message)
+    return " ".join(parts)
+
+
+def _format_check_summary(result: HealthCheckResult) -> str:
+    status = result.status.value if isinstance(result.status, CheckStatus) else str(result.status)
+    detail = result.detail or ""
+    if detail:
+        return f"{result.name} {status}: {detail}"
+    return f"{result.name} {status}"
 
 
 def run_agent_healthcheck(cfg: Settings | None = None) -> dict[str, Any]:
@@ -967,7 +1113,8 @@ def run_agent_healthcheck(cfg: Settings | None = None) -> dict[str, Any]:
     # Unified data-readiness gates (Truth -> Trust -> Trade)
     gates: list[dict[str, Any]] = []
     gate_overall: dict[str, Any] | None = None
-    can_trade_by_underlying: dict[str, bool] | None = None
+    can_trade_by_underlying: dict[str, Any] | None = None
+    gates_check_added = False
     try:
         import os
 
@@ -975,8 +1122,9 @@ def run_agent_healthcheck(cfg: Settings | None = None) -> dict[str, Any]:
         from src.ops.gate_factories import build_underlying_gate_fns
 
         harvest_mode = GateMode.WARN
-        fidelity_mode = GateMode((os.getenv("FIDELITY_GATE_MODE") or "off").strip().lower())
-        calibration_mode = GateMode((os.getenv("CALIBRATION_GATE_MODE") or "warn").strip().lower())
+        fidelity_mode = GateMode(_resolve_fidelity_gate_mode())
+        calibration_mode = GateMode((os.getenv("CALIBRATION_GATE_MODE") or "off").strip().lower())
+        harvest_required = fidelity_mode != GateMode.OFF or calibration_mode != GateMode.OFF
 
         require_usdc = bool(getattr(cfg, "option_margin_type", "linear") == "linear") or (
             str(getattr(cfg, "option_settlement_ccy", "USDC") or "").upper() == "USDC"
@@ -995,7 +1143,7 @@ def run_agent_healthcheck(cfg: Settings | None = None) -> dict[str, Any]:
                 build_underlying_gate_fns(
                     underlying=u,
                     harvest_mode=harvest_mode,
-                    harvest_required=False,
+                    harvest_required=harvest_required,
                     harvest_facts=harvest_facts,
                     require_harvest_dir=required_dir,
                     fidelity_mode=fidelity_mode,
@@ -1010,48 +1158,140 @@ def run_agent_healthcheck(cfg: Settings | None = None) -> dict[str, Any]:
         gate_overall = out.get("gate_overall") or None
         by_u = (gate_overall or {}).get("by_underlying") if isinstance(gate_overall, dict) else None
         if isinstance(by_u, dict):
-            can_trade_by_underlying = {k: bool(v.get("can_trade")) for (k, v) in by_u.items()}
-    except Exception:
+            # Preserve the by_underlying payload shape (dicts with status/severity/can_trade)
+            # so consumers can use more than just the boolean.
+            can_trade_by_underlying = dict(by_u)
+    except Exception as e:
+        detail = f"gates eval error: {type(e).__name__}: {e}"
+        results.append(
+            HealthCheckResult(
+                name="gates_runner",
+                status=CheckStatus.FAIL,
+                detail=detail,
+                error_code="GATES_EVAL_ERROR",
+                severity="FATAL",
+                can_trade=False,
+            )
+        )
+        gates_check_added = True
         gates = []
-        gate_overall = None
+        gate_overall = {
+            "status": "FAIL",
+            "severity": "FATAL",
+            "can_trade": False,
+            "message": "gates_eval_error",
+        }
         can_trade_by_underlying = None
 
-    has_fail = any(r.status == CheckStatus.FAIL for r in results)
-    has_warn = any(r.status == CheckStatus.WARN for r in results)
-
-    if has_fail:
-        overall_status = "FAIL"
-    elif has_warn:
-        overall_status = "WARN"
+    fail_check = next((r for r in results if r.status == CheckStatus.FAIL), None)
+    warn_check = next((r for r in results if r.status == CheckStatus.WARN), None)
+    if fail_check:
+        checks_overall_status = "FAIL"
+    elif warn_check:
+        checks_overall_status = "WARN"
     else:
-        overall_status = "OK"
+        checks_overall_status = "OK"
 
-    summary_parts = []
-    for r in results:
-        if r.status == CheckStatus.FAIL:
-            summary_parts.append(f"{r.name} FAIL")
-        elif r.status == CheckStatus.WARN:
-            summary_parts.append(f"{r.name} WARN")
+    gate_info = _extract_gate_overall_info(gate_overall)
 
-    if not summary_parts:
+    def _worst_status(a: str, b: str) -> str:
+        order = {"OK": 0, "WARN": 1, "FAIL": 2}
+        return a if order.get(a, 0) >= order.get(b, 0) else b
+
+    gates_present = bool(gates) or gate_overall is not None
+    gate_status = (gate_info or {}).get("status") if isinstance(gate_info, dict) else None
+    if not gate_status:
+        gate_status = "WARN" if gates_present else "OK"
+
+    overall_status = _worst_status(checks_overall_status, gate_status)
+
+    if overall_status == "FAIL":
+        if checks_overall_status == "FAIL" and fail_check is not None:
+            summary = _format_check_summary(fail_check)
+        elif gate_status == "FAIL" and gate_info:
+            summary = _format_gate_summary(gate_info)
+        else:
+            summary = "FAIL"
+    elif overall_status == "WARN":
+        if checks_overall_status == "WARN" and warn_check is not None:
+            summary = _format_check_summary(warn_check)
+        elif gate_status == "WARN" and gate_info:
+            summary = _format_gate_summary(gate_info)
+        else:
+            summary = "WARN"
+    else:
         summary = "All checks passed"
-    else:
-        summary = ", ".join(summary_parts)
+
+    if can_trade_by_underlying is None and not gates_check_added:
+        results.append(
+            HealthCheckResult(
+                name="gates_runner",
+                status=CheckStatus.WARN,
+                detail="gates unavailable",
+                error_code="GATES_UNAVAILABLE",
+                severity="DEGRADED",
+                can_trade=True,
+            )
+        )
+        gates_check_added = True
 
     checks = [_result_to_dict(r) for r in results]
-    worst_severity, can_trade = _compute_worst_severity({"checks": checks})
+    global_can_trade_from_checks = all(check.get("can_trade") is not False for check in checks)
+
+    can_trade_by_underlying_final: dict[str, bool] | None = None
+    if isinstance(can_trade_by_underlying, dict):
+        can_trade_by_underlying_final = {}
+        for k, v in can_trade_by_underlying.items():
+            if isinstance(v, dict):
+                can_trade_by_underlying_final[str(k).upper()] = bool(v.get("can_trade"))
+            else:
+                can_trade_by_underlying_final[str(k).upper()] = bool(v)
+    elif gates_check_added:
+        derived_gate_can_trade = _derive_gate_can_trade(gate_overall if isinstance(gate_overall, dict) else None, gates)
+        default_can_trade = bool(derived_gate_can_trade) if derived_gate_can_trade is not None else False
+        can_trade_by_underlying_final = {
+            str(u).upper(): default_can_trade for u in (cfg.underlyings or [])
+        }
+
+    # Combine global "can_trade" from checks with per-underlying gate decisions.
+    if isinstance(can_trade_by_underlying_final, dict) and not global_can_trade_from_checks:
+        for key in list(can_trade_by_underlying_final.keys()):
+            can_trade_by_underlying_final[key] = False
+
+    if isinstance(can_trade_by_underlying_final, dict):
+        can_trade = bool(global_can_trade_from_checks) and any(can_trade_by_underlying_final.values())
+    else:
+        can_trade = bool(global_can_trade_from_checks)
+
+    def _worst_severity_value(a: str | None, b: str | None) -> str:
+        order = {"OK": 0, "DEGRADED": 1, "FATAL": 2}
+        aa = (a or "OK").upper()
+        bb = (b or "OK").upper()
+        return aa if order.get(aa, 0) >= order.get(bb, 0) else bb
+
+    checks_worst_severity, _checks_can_trade_unused = _compute_worst_severity({"checks": checks})
+    gates_worst_severity = (
+        _derive_gate_worst_severity(gate_overall if isinstance(gate_overall, dict) else None, gates)
+        if gates_present
+        else None
+    )
+    worst_severity = _worst_severity_value(checks_worst_severity, gates_worst_severity)
+
+    checks_summary = ", ".join(f"{r.name}:{r.status.value}" for r in results)
 
     return {
         "overall_status": overall_status,
         "summary": summary,
         "checked_at": checked_at,
+        "checks_summary": checks_summary,
+        "checks_overall": checks_overall_status,
         "worst_severity": worst_severity,
         "can_trade": can_trade,
         "checks": checks,
         "results": checks,
         "gates": gates,
         "gate_overall": gate_overall,
-        "can_trade_by_underlying": can_trade_by_underlying,
+        "can_trade_by_underlying": can_trade_by_underlying_final,
         "ops_facts": ops_facts,
     }
 

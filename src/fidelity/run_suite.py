@@ -444,16 +444,13 @@ def run_fidelity_suite(
         scored,
         coverage_ratio=penalty_cov,
         invalid_trades_missing_quote=invalid_missing_total,
+        invalid_trades_missing_close=0,
         component_name="strategy_pnl_parity",
     )
 
     overall = float(scored["overall_score"])
-    strategy_parity_score = float(scored["component_scores"].get("strategy_pnl_parity", 0.0))
-    tail_parity_score = float(scored["component_scores"].get("underlying_returns", 0.0))
     gate = gate_label(
         overall_score=overall,
-        strategy_parity_score=strategy_parity_score,
-        tail_parity_score=tail_parity_score,
         coverage_ratio=penalty_cov,
         invalid_trades_missing_quote=invalid_missing_total,
     )
