@@ -3121,7 +3121,7 @@ def render_dashboard_html() -> str:
           
           const started = new Date(job.created_at).toLocaleString();
           const updated = new Date(job.updated_at).toLocaleString();
-          const loops = job.fix_attempts ? job.fix_attempts.length : 0;
+          const loops = job.fix_attempt_history ? job.fix_attempt_history.length : 0;
           const status = job.status || 'pending';
           
           return `
@@ -3185,11 +3185,11 @@ def render_dashboard_html() -> str:
         }}
         
         let fixHtml = '';
-        if (job.fix_attempts && job.fix_attempts.length > 0) {{
+        if (job.fix_attempt_history && job.fix_attempt_history.length > 0) {{
           fixHtml = `
-            <h4>Fix Attempts (${{job.fix_attempts.length}})</h4>
+            <h4>Fix Attempts (${{job.fix_attempt_history.length}})</h4>
             <ul>
-              ${{job.fix_attempts.map(f => `
+              ${{job.fix_attempt_history.map(f => `
                 <li>Loop ${{f.loop_number}}: ${{f.committed ? '✅ Committed' : '❌ Not committed'}}
                   ${{f.diff_stats ? ` (${{f.diff_stats.files_changed}} files, +${{f.diff_stats.lines_added}}/-${{f.diff_stats.lines_removed}})` : ''}}
                 </li>

@@ -1,0 +1,9 @@
+{
+  "max_files_touched": 10,
+  "max_loc_changed": 300,
+  "denylist_paths": [
+    "infra/",
+    "scripts/"
+  ],
+  "push_label": "autofix-ok"
+}

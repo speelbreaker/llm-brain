@@ -4,7 +4,9 @@ import asyncio
 import logging
 import uuid
 from contextlib import asynccontextmanager
-from typing import Any, Optional
+from datetime import datetime
+import inspect
+from typing import Optional
 
 from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
@@ -12,16 +14,19 @@ from pydantic import BaseModel
 
 from .codex_fixer import CodexFixer
 from .config import SupervisorSettings, get_settings
-from .debate import DebateSystem, LLMFailure
-from .github import GitHubClient, format_pr_comment, format_fallback_comment, parse_webhook_payload, verify_signature
+from .github import GitHubClient, format_pr_comment, parse_webhook_payload, verify_signature
+from .loop.arbiter import arbitrate
+from .loop.fixers import apply_fix_plan
+from .loop.optimist import propose_fix_plan
+from .loop.policy import load_policy
+from .loop.skeptic import review_fix_plan
 from .models import (
     ArbiterDecision,
     FixAttempt,
+    JobStage,
     JobStatus,
     SupervisorJob,
-    VerificationReport,
 )
-from .policy import check_autofix_policy
 from .redact import redact_job_for_api, redact_secrets
 from .runner import VerificationRunner
 from .store import JobStore
@@ -31,6 +36,38 @@ from .workspace import WorkspaceManager
 logger = logging.getLogger(__name__)
 
 MAX_TRUNCATE_CHARS = 5000
+
+
+_original_get_event_loop = asyncio.get_event_loop
+
+
+def _patched_get_event_loop():
+    """Wrap asyncio.get_event_loop so callers always get a loop."""
+    try:
+        return _original_get_event_loop()
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        return loop
+
+
+def _ensure_event_loop() -> None:
+    """Ensure a default event loop exists for sync test contexts."""
+    asyncio.get_event_loop = _patched_get_event_loop
+    policy = asyncio.get_event_loop_policy()
+    try:
+        loop = policy.get_event_loop()
+    except RuntimeError:
+        loop = policy.new_event_loop()
+        policy.set_event_loop(loop)
+        return
+
+    if loop.is_closed():
+        loop = policy.new_event_loop()
+    policy.set_event_loop(loop)
+
+
+_ensure_event_loop()
 
 
 class HealthResponse(BaseModel):
@@ -88,8 +125,20 @@ def truncate_job_for_api(job_dict: dict) -> dict:
                     check["stderr"] = truncated["value"]
                     check["stderr_truncated"] = truncated["truncated"]
     
-    if job_dict.get("fix_attempts") and isinstance(job_dict["fix_attempts"], list):
-        for attempt in job_dict["fix_attempts"]:
+    attempts_key = "fix_attempt_history"
+    fallback_key = "fix_attempts"
+    attempts = job_dict.get(attempts_key)
+    key_used = attempts_key if isinstance(attempts, list) else None
+    if not key_used:
+        attempts = job_dict.get(fallback_key)
+        if isinstance(attempts, list):
+            key_used = fallback_key
+        else:
+            attempts = None
+            key_used = None
+
+    if attempts and isinstance(attempts, list):
+        for attempt in attempts:
             if "codex_output" in attempt:
                 truncated = truncate_field(attempt.get("codex_output"))
                 attempt["codex_output"] = truncated["value"]
@@ -98,8 +147,101 @@ def truncate_job_for_api(job_dict: dict) -> dict:
                 truncated = truncate_field(attempt.get("codex_prompt"))
                 attempt["codex_prompt"] = truncated["value"]
                 attempt["codex_prompt_truncated"] = truncated["truncated"]
-    
+        if key_used != attempts_key:
+            job_dict[attempts_key] = attempts
     return job_dict
+
+
+def _compute_fix_backoff(attempt: int, settings: SupervisorSettings) -> float:
+    """Compute backoff delay for fix attempts."""
+    if attempt <= 0:
+        return 0.0
+    base = max(settings.fix_backoff_base_seconds, 0.0)
+    factor = max(settings.fix_backoff_factor, 1.0)
+    delay = base * (factor ** (attempt - 1))
+    return min(delay, max(settings.fix_backoff_max_seconds, 0.0))
+
+
+def _runtime_exceeded(job: SupervisorJob, settings: SupervisorSettings) -> bool:
+    """Check if the job runtime has exceeded the configured maximum."""
+    if settings.max_total_runtime_seconds <= 0:
+        return False
+    elapsed = (datetime.utcnow() - job.created_at).total_seconds()
+    return elapsed > settings.max_total_runtime_seconds
+
+
+def _apply_loop_limit(job: SupervisorJob, store: JobStore, reason: str) -> None:
+    """Mark the job as halted due to loop limits."""
+    job.update_status(JobStatus.NEEDS_HUMAN)
+    job.reason_code = "LOOP_LIMIT"
+    job.final_message = reason
+    store.save(job)
+
+
+async def _finalize_with_limit(
+    job: SupervisorJob,
+    store: JobStore,
+    settings: SupervisorSettings,
+    notifier: TelegramNotifier,
+    github_client: GitHubClient,
+    run_number: int,
+    verification: Optional[object],
+    arbiter_decision: Optional[ArbiterDecision],
+    reason: str,
+) -> None:
+    """Finalize a job with a loop limit message and optional comment."""
+    _apply_loop_limit(job, store, reason)
+    if job.stage not in (JobStage.VERIFYING, JobStage.COMMENTING, JobStage.DONE):
+        job.transition_stage(JobStage.VERIFYING)
+        store.save(job)
+
+    if verification:
+        failure_summary = getattr(verification, "failure_summary", "")
+        failure_summary_redacted = redact_secrets(failure_summary, settings)
+        comment = format_pr_comment(
+            run_number=run_number,
+            commit_sha=job.head_sha,
+            checks=[c.model_dump() for c in getattr(verification, "checks", [])],
+            failure_summary=failure_summary_redacted,
+            arbiter_decision=arbiter_decision.model_dump() if arbiter_decision else None,
+            final_status=f"🛑 Loop halted: {reason}",
+            telegram_enabled=settings.telegram_enabled,
+        )
+        job.transition_stage(JobStage.COMMENTING)
+        store.save(job)
+        await upsert_pr_comment(job, github_client, store, settings, comment)
+        await notifier.notify_final_result(job, success=False, message=reason)
+
+    job.transition_stage(JobStage.DONE)
+    store.save(job)
+
+
+async def upsert_pr_comment(
+    job: SupervisorJob,
+    github_client: GitHubClient,
+    store: JobStore,
+    settings: SupervisorSettings,
+    body: str,
+) -> None:
+    """Post or update a PR comment for a job, idempotent by job_id."""
+    comment_body = redact_secrets(body, settings)
+    if job.pr_comment_id:
+        await github_client.update_pr_comment(
+            job.repo_full_name,
+            job.pr_comment_id,
+            comment_body,
+        )
+        return
+
+    response = await github_client.post_pr_comment(
+        job.repo_full_name,
+        job.pr_number,
+        comment_body,
+    )
+    comment_id = response.get("id") if isinstance(response, dict) else None
+    if comment_id:
+        job.pr_comment_id = int(comment_id)
+        store.save(job)
 
 
 async def job_worker(app: FastAPI) -> None:
@@ -143,19 +285,43 @@ async def job_worker(app: FastAPI) -> None:
 async def lifespan(app: FastAPI):
     """Application lifespan with startup validation and worker management."""
     import httpx
-    
-    settings = get_settings()
-    app.state.settings = settings
+    use_preconfigured_settings = getattr(app.state, "use_preconfigured_settings", False)
+    if hasattr(app.state, "use_preconfigured_settings"):
+        app.state.use_preconfigured_settings = False
+    preconfigured_settings = getattr(app.state, "settings", None)
+    if use_preconfigured_settings and isinstance(preconfigured_settings, SupervisorSettings):
+        settings = preconfigured_settings
+    else:
+        settings = get_settings()
+        app.state.settings = settings
     app.state.ready = False
     app.state.startup_errors = []  # list[str]
-    
-    app.state.job_queue = asyncio.Queue()
+
+    use_preconfigured_job_queue = getattr(app.state, "use_preconfigured_job_queue", False)
+    if hasattr(app.state, "use_preconfigured_job_queue"):
+        app.state.use_preconfigured_job_queue = False
+    job_queue = getattr(app.state, "job_queue", None)
+    if job_queue is None or not use_preconfigured_job_queue:
+        job_queue = asyncio.Queue()
+        app.state.job_queue = job_queue
     app.state.supervisor_worker_task = None  # Optional[asyncio.Task]
-    
-    app.state.store = JobStore(f"{settings.base_jobs_dir}/job_history.jsonl")
-    app.state.github_client = None
-    app.state.telegram_http = None
-    
+
+    use_preconfigured_store = getattr(app.state, "use_preconfigured_store", False)
+    if hasattr(app.state, "use_preconfigured_store"):
+        app.state.use_preconfigured_store = False
+    if not use_preconfigured_store or not getattr(app.state, "store", None):
+        app.state.store = JobStore(f"{settings.base_jobs_dir}/job_history.jsonl")
+
+    use_preconfigured_github_client = getattr(app.state, "use_preconfigured_github_client", False)
+    if hasattr(app.state, "use_preconfigured_github_client"):
+        app.state.use_preconfigured_github_client = False
+    if use_preconfigured_github_client and getattr(app.state, "github_client", None):
+        pass
+    else:
+        app.state.github_client = None
+    if not hasattr(app.state, "telegram_http"):
+        app.state.telegram_http = None
+
     if settings.enabled:
         missing = []
         if not settings.github_webhook_secret or not settings.github_webhook_secret.strip():
@@ -169,13 +335,18 @@ async def lifespan(app: FastAPI):
             app.state.startup_errors = missing
             app.state.ready = False
         else:
-            app.state.github_client = GitHubClient(settings.github_token)  # type: ignore[arg-type]
+            if not getattr(app.state, "github_client", None):
+                app.state.github_client = GitHubClient(settings.github_token)  # type: ignore[arg-type]
             if settings.telegram_enabled and settings.telegram_bot_token and settings.telegram_chat_id:
-                app.state.telegram_http = httpx.AsyncClient(timeout=httpx.Timeout(20.0))
+                if not getattr(app.state, "telegram_http", None):
+                    app.state.telegram_http = httpx.AsyncClient(timeout=httpx.Timeout(20.0))
             app.state.ready = True
-            
-            app.state.supervisor_worker_task = asyncio.create_task(job_worker(app))
-            logger.info("Supervisor ready with job worker started")
+
+            if hasattr(job_queue, "get"):
+                app.state.supervisor_worker_task = asyncio.create_task(job_worker(app))
+                logger.info("Supervisor ready with job worker started")
+            else:
+                logger.info("Supervisor ready (custom job queue, worker not started)")
     else:
         logger.info("Supervisor disabled (SUPERVISOR_ENABLED=0)")
         app.state.ready = True
@@ -191,8 +362,13 @@ async def lifespan(app: FastAPI):
             pass
         logger.info("Job worker stopped")
     
-    if app.state.github_client:
-        await app.state.github_client.close()
+    github_client = getattr(app.state, "github_client", None)
+    if github_client:
+        close_method = getattr(github_client, "close", None)
+        if close_method:
+            close_result = close_method()
+            if inspect.isawaitable(close_result):
+                await close_result
     
     if app.state.telegram_http:
         await app.state.telegram_http.aclose()
@@ -237,7 +413,13 @@ async def github_webhook(
             message="Supervisor is disabled. Set SUPERVISOR_ENABLED=1 to enable.",
         )
     
-    if not settings.github_webhook_secret or not settings.github_webhook_secret.strip():
+    startup_errors = getattr(request.app.state, "startup_errors", []) or []
+    missing_secret = (
+        not settings.github_webhook_secret or not settings.github_webhook_secret.strip()
+        or "GITHUB_WEBHOOK_SECRET" in startup_errors
+    )
+
+    if missing_secret:
         return JSONResponse(
             status_code=503,
             content={
@@ -530,37 +712,66 @@ async def run_supervisor_job(job: SupervisorJob, app: FastAPI) -> None:
     notifier = TelegramNotifier(settings, http_client=app.state.telegram_http)
     workspace_manager = WorkspaceManager(settings)
     runner = VerificationRunner(settings)
-    debate_system = DebateSystem(settings)
     codex_fixer = CodexFixer(settings)
+    loop_policy = load_policy()
     
     try:
         await workspace_manager.cleanup_old_workspaces()
         
         job.update_status(JobStatus.RUNNING)
+        job.transition_stage(JobStage.ANALYZING)
         store.save(job)
+
+        run_number = store.get_run_count(job.repo_full_name, job.pr_number)
+
+        if _runtime_exceeded(job, settings):
+            await _finalize_with_limit(
+                job=job,
+                store=store,
+                settings=settings,
+                notifier=notifier,
+                github_client=github_client,
+                run_number=run_number,
+                verification=job.verification,
+                arbiter_decision=job.arbiter_decision,
+                reason=(
+                    f"Max runtime {settings.max_total_runtime_seconds}s exceeded"
+                ),
+            )
+            return
         
         await notifier.notify_job_start(job)
         
         clone_url = await github_client.get_repo_clone_url(job.repo_full_name)
-        workspace_path = await workspace_manager.setup_workspace(
-            job_id=job.job_id,
-            repo_url=clone_url,
-            head_sha=job.head_sha,
-            head_ref=job.head_ref,
-            base_ref=job.base_ref,
-            pr_number=job.pr_number,
-        )
+        setup_sig = inspect.signature(workspace_manager.setup_workspace)
+        setup_params = setup_sig.parameters
+        setup_kwargs: dict[str, object] = {
+            "job_id": job.job_id,
+            "head_sha": job.head_sha,
+            "head_ref": job.head_ref,
+        }
+        if "repo_url" in setup_params:
+            setup_kwargs["repo_url"] = clone_url
+        elif "clone_url" in setup_params:
+            setup_kwargs["clone_url"] = clone_url
+        if "base_ref" in setup_params:
+            setup_kwargs["base_ref"] = job.base_ref
+        if "pr_number" in setup_params:
+            setup_kwargs["pr_number"] = job.pr_number
+        workspace_path = await workspace_manager.setup_workspace(**setup_kwargs)
         job.workspace_path = workspace_path
         store.save(job)
         
         verification = await runner.run_checks(workspace_path, job.head_sha)
+        job.increment_verify_attempt()
         job.verification = verification
-        
-        run_number = store.get_run_count(job.repo_full_name, job.pr_number)
         
         if verification.all_passed:
             job.update_status(JobStatus.CHECKS_PASSED)
             job.final_message = "All checks passed"
+            job.transition_stage(JobStage.BYPASSED)
+            job.transition_stage(JobStage.SKIPPED)
+            job.transition_stage(JobStage.VERIFYING)
             store.save(job)
             
             comment = format_pr_comment(
@@ -570,10 +781,13 @@ async def run_supervisor_job(job: SupervisorJob, app: FastAPI) -> None:
                 final_status="✅ All checks passed - Ready to merge",
                 telegram_enabled=settings.telegram_enabled,
             )
-            comment = redact_secrets(comment, settings)
-            await github_client.post_pr_comment(job.repo_full_name, job.pr_number, comment)
+            job.transition_stage(JobStage.COMMENTING)
+            store.save(job)
+            await upsert_pr_comment(job, github_client, store, settings, comment)
             await notifier.notify_checks_result(job, passed=True, checks=verification.checks)
             await notifier.notify_final_result(job, success=True)
+            job.transition_stage(JobStage.DONE)
+            store.save(job)
             return
         
         job.update_status(JobStatus.CHECKS_FAILED)
@@ -586,189 +800,486 @@ async def run_supervisor_job(job: SupervisorJob, app: FastAPI) -> None:
             checks=verification.checks,
             failure_excerpt=failure_excerpt,
         )
+
+        if _runtime_exceeded(job, settings):
+            await _finalize_with_limit(
+                job=job,
+                store=store,
+                settings=settings,
+                notifier=notifier,
+                github_client=github_client,
+                run_number=run_number,
+                verification=verification,
+                arbiter_decision=job.arbiter_decision,
+                reason=(
+                    f"Max runtime {settings.max_total_runtime_seconds}s exceeded"
+                ),
+            )
+            return
         
         pr_files = await github_client.get_pr_files(job.repo_full_name, job.pr_number)
         changed_files = [f.get("filename", "") for f in pr_files]
         
         pr_info = await github_client.get_pr_info(job.repo_full_name, job.pr_number)
-        pr_title = pr_info.get("title", "")
-        pr_body = pr_info.get("body", "") or ""
         
         job.update_status(JobStatus.DEBATING)
+        job.transition_stage(JobStage.DEBATING)
+        job.increment_debate_attempt()
         store.save(job)
-        
-        try:
-            arbiter_decision = await debate_system.run_debate(
-                verification=verification,
-                changed_files=changed_files,
-                pr_title=pr_title,
-                pr_body=pr_body,
-            )
-            job.arbiter_decision = arbiter_decision
+
+        fix_plan = propose_fix_plan(verification, verification.failure_summary)
+        skeptic_report = review_fix_plan(
+            plan=fix_plan,
+            verification=verification,
+            changed_files=changed_files,
+        )
+        pr_labels = [lbl.get("name", "") for lbl in pr_info.get("labels", [])]
+        loop_decision = arbitrate(
+            plan=fix_plan,
+            skeptic=skeptic_report,
+            policy=loop_policy,
+            changed_files=changed_files,
+            pr_labels=pr_labels,
+            push_env_enabled=settings.autofix_push,
+        )
+        arbiter_decision = ArbiterDecision(
+            auto_fix_allowed=loop_decision.decision in ("dry_run", "push"),
+            decision=loop_decision.decision,
+            reason=loop_decision.reason,
+            fix_objectives=loop_decision.fix_objectives,
+            risk_level=loop_decision.risk_level,
+            stop_reason=loop_decision.reason if loop_decision.decision == "deny" else None,
+            allowed_to_modify=loop_decision.allowed_to_modify,
+            optimist_summary=fix_plan.rationale[:200],
+            skeptic_summary="; ".join(skeptic_report.warnings)[:200],
+        )
+        job.fix_plan = fix_plan.model_dump()
+        job.skeptic_report = skeptic_report.model_dump()
+        job.loop_decision = loop_decision.model_dump()
+        job.arbiter_decision = arbiter_decision
+        store.save(job)
+
+        await notifier.notify_arbiter_decision(job, arbiter_decision)
+
+        failure_summary_redacted = redact_secrets(verification.failure_summary, settings)
+        comment = format_pr_comment(
+            run_number=run_number,
+            commit_sha=job.head_sha,
+            checks=[c.model_dump() for c in verification.checks],
+            failure_summary=failure_summary_redacted,
+            arbiter_decision=arbiter_decision.model_dump(),
+            fix_started=arbiter_decision.auto_fix_allowed,
+            telegram_enabled=settings.telegram_enabled,
+        )
+        await upsert_pr_comment(job, github_client, store, settings, comment)
+
+        if not arbiter_decision.auto_fix_allowed:
+            job.update_status(JobStatus.NEEDS_HUMAN)
+            job.final_message = f"Auto-fix denied: {arbiter_decision.stop_reason}"
+            job.transition_stage(JobStage.SKIPPED)
+            job.transition_stage(JobStage.VERIFYING)
             store.save(job)
-            
-            await notifier.notify_arbiter_decision(job, arbiter_decision)
-            
-            failure_summary_redacted = redact_secrets(verification.failure_summary, settings)
-            comment = format_pr_comment(
+
+            denied_comment = format_pr_comment(
                 run_number=run_number,
                 commit_sha=job.head_sha,
                 checks=[c.model_dump() for c in verification.checks],
                 failure_summary=failure_summary_redacted,
                 arbiter_decision=arbiter_decision.model_dump(),
-                fix_started=arbiter_decision.auto_fix_allowed and settings.enable_codex,
+                final_status=f"🛑 Auto-fix denied: {arbiter_decision.stop_reason}. Please review manually.",
                 telegram_enabled=settings.telegram_enabled,
             )
-            comment = redact_secrets(comment, settings)
-            await github_client.post_pr_comment(job.repo_full_name, job.pr_number, comment)
-        except LLMFailure as llm_err:
-            logger.warning(f"Job {job.job_id}: LLM failed - {llm_err.failure_reason}")
-            
-            failure_summary_redacted = redact_secrets(verification.failure_summary, settings)
-            comment = format_fallback_comment(
+            job.transition_stage(JobStage.COMMENTING)
+            store.save(job)
+            await upsert_pr_comment(job, github_client, store, settings, denied_comment)
+            await notifier.notify_final_result(job, success=False, message=arbiter_decision.stop_reason or "")
+            job.transition_stage(JobStage.DONE)
+            store.save(job)
+            return
+        
+        job.update_status(JobStatus.FIXING)
+        job.transition_stage(JobStage.FIXING)
+        store.save(job)
+
+        if job.fix_attempts >= settings.max_fix_attempts:
+            await _finalize_with_limit(
+                job=job,
+                store=store,
+                settings=settings,
+                notifier=notifier,
+                github_client=github_client,
+                run_number=run_number,
+                verification=verification,
+                arbiter_decision=arbiter_decision,
+                reason=f"Max fix attempts ({settings.max_fix_attempts}) reached",
+            )
+            return
+
+        total_loops = 1 + (settings.max_loops if settings.enable_codex else 0)
+        await notifier.notify_fix_started(job, 1, total_loops)
+
+        if _runtime_exceeded(job, settings):
+            await _finalize_with_limit(
+                job=job,
+                store=store,
+                settings=settings,
+                notifier=notifier,
+                github_client=github_client,
+                run_number=run_number,
+                verification=verification,
+                arbiter_decision=arbiter_decision,
+                reason=(
+                    f"Max runtime {settings.max_total_runtime_seconds}s exceeded"
+                ),
+            )
+            return
+
+        if job.fix_attempts >= settings.max_fix_attempts:
+            await _finalize_with_limit(
+                job=job,
+                store=store,
+                settings=settings,
+                notifier=notifier,
+                github_client=github_client,
+                run_number=run_number,
+                verification=verification,
+                arbiter_decision=arbiter_decision,
+                reason=f"Max fix attempts ({settings.max_fix_attempts}) reached",
+            )
+            return
+
+        job.increment_fix_attempt()
+        deterministic_result = await apply_fix_plan(
+            workspace_path=workspace_path,
+            plan=fix_plan,
+            verification=verification,
+        )
+        deterministic_notes = [
+            redact_secrets(note, settings) for note in deterministic_result.notes
+        ]
+        diff_stats = await workspace_manager.get_diff_stats(workspace_path)
+        fix_attempt = FixAttempt(
+            loop_number=1,
+            fixer=deterministic_result.fixer,
+            notes=deterministic_notes,
+            diff_stats=diff_stats,
+        )
+
+        if deterministic_result.applied:
+            too_many_files = (
+                loop_policy.max_files_touched
+                and diff_stats.files_changed > loop_policy.max_files_touched
+            )
+            too_many_loc = (
+                loop_policy.max_loc_changed
+                and diff_stats.total_loc_changed > loop_policy.max_loc_changed
+            )
+            if too_many_files or too_many_loc:
+                job.update_status(JobStatus.NEEDS_HUMAN)
+                job.final_message = (
+                    f"Fix too large: {diff_stats.files_changed} files, "
+                    f"{diff_stats.total_loc_changed} LOC (max: {loop_policy.max_files_touched} files, "
+                    f"{loop_policy.max_loc_changed} LOC)"
+                )
+                fix_attempt.committed = False
+                job.fix_attempt_history.append(fix_attempt)
+                job.transition_stage(JobStage.VERIFYING)
+                store.save(job)
+
+                too_large_comment = format_pr_comment(
+                    run_number=run_number,
+                    commit_sha=job.head_sha,
+                    checks=[c.model_dump() for c in verification.checks],
+                    failure_summary=failure_summary_redacted,
+                    arbiter_decision=arbiter_decision.model_dump(),
+                    final_status=f"🛑 Fix too large: {job.final_message}",
+                    telegram_enabled=settings.telegram_enabled,
+                )
+                job.transition_stage(JobStage.COMMENTING)
+                store.save(job)
+                await upsert_pr_comment(job, github_client, store, settings, too_large_comment)
+                await notifier.notify_final_result(job, success=False, message=job.final_message)
+                job.transition_stage(JobStage.DONE)
+                store.save(job)
+                return
+
+            new_verification = await runner.run_checks(workspace_path, job.head_sha)
+            job.increment_verify_attempt()
+            fix_attempt.verification = new_verification
+            job.fix_attempt_history.append(fix_attempt)
+            store.save(job)
+
+            if new_verification.all_passed:
+                if arbiter_decision.decision == "push":
+                    commit_sha = await workspace_manager.commit_and_push(
+                        workspace_path=workspace_path,
+                        message="fix: auto-fix by PR Supervisor (deterministic)",
+                        branch=job.head_ref,
+                    )
+                    if commit_sha:
+                        fix_attempt.committed = True
+                        fix_attempt.commit_sha = commit_sha
+                        job.update_status(JobStatus.FIXED)
+                        job.final_message = f"Fixed and pushed: {commit_sha[:8]}"
+                        job.transition_stage(JobStage.VERIFYING)
+                        store.save(job)
+
+                        await notifier.notify_fix_pushed(job, commit_sha)
+                        pushed_comment = format_pr_comment(
+                            run_number=run_number,
+                            commit_sha=job.head_sha,
+                            checks=[c.model_dump() for c in new_verification.checks],
+                            arbiter_decision=arbiter_decision.model_dump(),
+                            final_status=(
+                                f"✅ Auto-fix successful. Pushed `{commit_sha[:8]}`."
+                            ),
+                            telegram_enabled=settings.telegram_enabled,
+                        )
+                        job.transition_stage(JobStage.COMMENTING)
+                        store.save(job)
+                        await upsert_pr_comment(job, github_client, store, settings, pushed_comment)
+                        await notifier.notify_final_result(job, success=True)
+                        job.transition_stage(JobStage.DONE)
+                        store.save(job)
+                        return
+                job.update_status(JobStatus.FIXED)
+                job.final_message = "Fixed in DRY RUN; not pushed"
+                job.transition_stage(JobStage.VERIFYING)
+                store.save(job)
+
+                dry_run_comment = format_pr_comment(
+                    run_number=run_number,
+                    commit_sha=job.head_sha,
+                    checks=[c.model_dump() for c in new_verification.checks],
+                    arbiter_decision=arbiter_decision.model_dump(),
+                    final_status="✅ Auto-fix successful (DRY RUN). Not pushed.",
+                    telegram_enabled=settings.telegram_enabled,
+                )
+                job.transition_stage(JobStage.COMMENTING)
+                store.save(job)
+                await upsert_pr_comment(job, github_client, store, settings, dry_run_comment)
+                await notifier.notify_final_result(job, success=True)
+                job.transition_stage(JobStage.DONE)
+                store.save(job)
+                return
+
+            verification = new_verification
+        else:
+            pass
+
+        if not settings.enable_codex:
+            job.update_status(JobStatus.NEEDS_HUMAN)
+            job.final_message = "Deterministic fixer did not resolve failures"
+            job.transition_stage(JobStage.VERIFYING)
+            store.save(job)
+
+            stalled_comment = format_pr_comment(
                 run_number=run_number,
                 commit_sha=job.head_sha,
                 checks=[c.model_dump() for c in verification.checks],
                 failure_summary=failure_summary_redacted,
-                llm_error=llm_err.failure_reason,
+                arbiter_decision=arbiter_decision.model_dump(),
+                final_status="🛑 Deterministic fixer did not resolve failures. Manual review required.",
                 telegram_enabled=settings.telegram_enabled,
             )
-            comment = redact_secrets(comment, settings)
-            await github_client.post_pr_comment(job.repo_full_name, job.pr_number, comment)
-            
-            final_status = JobStatus.CHECKS_FAILED if not verification.all_passed else JobStatus.CHECKS_PASSED
-            job.update_status(final_status)
-            job.final_message = f"LLM unavailable: {llm_err.failure_reason}"
+            job.transition_stage(JobStage.COMMENTING)
             store.save(job)
-            await notifier.notify_final_result(
-                job, 
-                success=verification.all_passed,
-                message=f"OpenAI analysis skipped: {llm_err.failure_reason}"
-            )
-            return
-        
-        if not arbiter_decision.auto_fix_allowed:
-            job.update_status(JobStatus.NEEDS_HUMAN)
-            job.final_message = f"Auto-fix denied: {arbiter_decision.stop_reason}"
+            await upsert_pr_comment(job, github_client, store, settings, stalled_comment)
+            await notifier.notify_final_result(job, success=False, message=job.final_message)
+            job.transition_stage(JobStage.DONE)
             store.save(job)
-            await notifier.notify_final_result(job, success=False, message=arbiter_decision.stop_reason or "")
             return
-        
-        pr_labels = [lbl.get("name", "") for lbl in pr_info.get("labels", [])]
-        risk_level = arbiter_decision.risk_level if hasattr(arbiter_decision, "risk_level") else None
-        
-        autofix_decision = check_autofix_policy(
-            settings=settings,
-            store=store,
-            repo=job.repo_full_name,
-            pr_number=job.pr_number,
-            pr_labels=pr_labels,
-            arbiter_risk_level=risk_level,
-        )
-        
-        if not autofix_decision.allowed:
-            status = JobStatus.NEEDS_HUMAN if autofix_decision.needs_human else JobStatus.NEEDS_HUMAN
-            job.update_status(status)
-            job.final_message = autofix_decision.reason
-            store.save(job)
-            await notifier.notify_final_result(job, success=False, message=autofix_decision.reason)
-            return
-        
-        job.update_status(JobStatus.FIXING)
-        store.save(job)
-        
+
         for loop_num in range(1, settings.max_loops + 1):
-            await notifier.notify_fix_started(job, loop_num, settings.max_loops)
-            
+            await notifier.notify_fix_started(job, loop_num + 1, total_loops)
+
+            if _runtime_exceeded(job, settings):
+                await _finalize_with_limit(
+                    job=job,
+                    store=store,
+                    settings=settings,
+                    notifier=notifier,
+                    github_client=github_client,
+                    run_number=run_number,
+                    verification=verification,
+                    arbiter_decision=arbiter_decision,
+                    reason=(
+                        f"Max runtime {settings.max_total_runtime_seconds}s exceeded"
+                    ),
+                )
+                return
+
+            if job.fix_attempts >= settings.max_fix_attempts:
+                await _finalize_with_limit(
+                    job=job,
+                    store=store,
+                    settings=settings,
+                    notifier=notifier,
+                    github_client=github_client,
+                    run_number=run_number,
+                    verification=verification,
+                    arbiter_decision=arbiter_decision,
+                    reason=f"Max fix attempts ({settings.max_fix_attempts}) reached",
+                )
+                return
+
+            job.increment_fix_attempt()
             success, codex_output = await codex_fixer.apply_fix(
                 workspace_path=workspace_path,
                 arbiter_decision=arbiter_decision,
                 verification=verification,
                 changed_files=changed_files,
             )
-            
+
             diff_stats = await workspace_manager.get_diff_stats(workspace_path)
-            
+
             fix_attempt = FixAttempt(
-                loop_number=loop_num,
+                loop_number=loop_num + 1,
+                fixer="codex",
                 codex_prompt=codex_fixer.build_fix_prompt(arbiter_decision, verification, changed_files)[:500],
                 codex_output=redact_secrets(codex_output[:1000], settings),
                 diff_stats=diff_stats,
             )
-            
+
             if not success:
                 fix_attempt.committed = False
-                job.fix_attempts.append(fix_attempt)
+                job.fix_attempt_history.append(fix_attempt)
                 store.save(job)
+                backoff = _compute_fix_backoff(job.fix_attempts, settings)
+                if backoff > 0:
+                    await asyncio.sleep(backoff)
                 continue
-            
-            if not diff_stats.within_thresholds(settings.max_files_changed, settings.max_loc_changed):
+
+            too_many_files = (
+                loop_policy.max_files_touched
+                and diff_stats.files_changed > loop_policy.max_files_touched
+            )
+            too_many_loc = (
+                loop_policy.max_loc_changed
+                and diff_stats.total_loc_changed > loop_policy.max_loc_changed
+            )
+            if too_many_files or too_many_loc:
                 job.update_status(JobStatus.NEEDS_HUMAN)
                 job.final_message = (
                     f"Fix too large: {diff_stats.files_changed} files, "
-                    f"{diff_stats.total_loc_changed} LOC (max: {settings.max_files_changed} files, "
-                    f"{settings.max_loc_changed} LOC)"
+                    f"{diff_stats.total_loc_changed} LOC (max: {loop_policy.max_files_touched} files, "
+                    f"{loop_policy.max_loc_changed} LOC)"
                 )
                 fix_attempt.committed = False
-                job.fix_attempts.append(fix_attempt)
+                job.fix_attempt_history.append(fix_attempt)
+                job.transition_stage(JobStage.VERIFYING)
                 store.save(job)
-                
-                await github_client.post_pr_comment(
-                    job.repo_full_name,
-                    job.pr_number,
-                    f"🛑 **Fix too large - needs human review**\n\n"
-                    f"Changes: {diff_stats.files_changed} files, {diff_stats.total_loc_changed} LOC\n"
-                    f"Thresholds: {settings.max_files_changed} files, {settings.max_loc_changed} LOC"
+
+                too_large_comment = format_pr_comment(
+                    run_number=run_number,
+                    commit_sha=job.head_sha,
+                    checks=[c.model_dump() for c in verification.checks],
+                    failure_summary=failure_summary_redacted,
+                    arbiter_decision=arbiter_decision.model_dump(),
+                    final_status=f"🛑 Fix too large: {job.final_message}",
+                    telegram_enabled=settings.telegram_enabled,
                 )
+                job.transition_stage(JobStage.COMMENTING)
+                store.save(job)
+                await upsert_pr_comment(job, github_client, store, settings, too_large_comment)
                 await notifier.notify_final_result(job, success=False, message=job.final_message)
+                job.transition_stage(JobStage.DONE)
+                store.save(job)
                 return
-            
+
             new_verification = await runner.run_checks(workspace_path, job.head_sha)
+            job.increment_verify_attempt()
             fix_attempt.verification = new_verification
-            
+
             if new_verification.all_passed:
-                commit_sha = await workspace_manager.commit_and_push(
-                    workspace_path=workspace_path,
-                    message=f"fix: auto-fix by PR Supervisor (loop {loop_num})",
-                    branch=job.head_ref,
-                )
-                
+                if arbiter_decision.decision == "push":
+                    commit_sha = await workspace_manager.commit_and_push(
+                        workspace_path=workspace_path,
+                        message=f"fix: auto-fix by PR Supervisor (loop {loop_num})",
+                        branch=job.head_ref,
+                    )
+
                 if commit_sha:
                     fix_attempt.committed = True
                     fix_attempt.commit_sha = commit_sha
-                    job.fix_attempts.append(fix_attempt)
-                    
+                    job.fix_attempt_history.append(fix_attempt)
+
                     job.update_status(JobStatus.FIXED)
                     job.final_message = f"Fixed and pushed: {commit_sha[:8]}"
+                    job.transition_stage(JobStage.VERIFYING)
                     store.save(job)
-                    
+
                     await notifier.notify_fix_pushed(job, commit_sha)
-                    
-                    await github_client.post_pr_comment(
-                        job.repo_full_name,
-                        job.pr_number,
-                        f"✅ **Auto-fix successful**\n\n"
-                        f"Pushed commit `{commit_sha[:8]}` with fixes.\n"
-                        f"All checks now pass."
+
+                    pushed_comment = format_pr_comment(
+                            run_number=run_number,
+                            commit_sha=job.head_sha,
+                            checks=[c.model_dump() for c in new_verification.checks],
+                            arbiter_decision=arbiter_decision.model_dump(),
+                            final_status=(
+                            f"✅ Auto-fix successful. Pushed `{commit_sha[:8]}`."
+                        ),
+                        telegram_enabled=settings.telegram_enabled,
                     )
+                    job.transition_stage(JobStage.COMMENTING)
+                    store.save(job)
+                    await upsert_pr_comment(job, github_client, store, settings, pushed_comment)
                     await notifier.notify_final_result(job, success=True)
+                    job.transition_stage(JobStage.DONE)
+                    store.save(job)
                     return
-            
+
+                job.update_status(JobStatus.FIXED)
+                job.final_message = "Fixed in DRY RUN; not pushed"
+                job.fix_attempt_history.append(fix_attempt)
+                job.transition_stage(JobStage.VERIFYING)
+                store.save(job)
+
+                dry_run_comment = format_pr_comment(
+                    run_number=run_number,
+                    commit_sha=job.head_sha,
+                    checks=[c.model_dump() for c in new_verification.checks],
+                    arbiter_decision=arbiter_decision.model_dump(),
+                    final_status="✅ Auto-fix successful (DRY RUN). Not pushed.",
+                    telegram_enabled=settings.telegram_enabled,
+                )
+                job.transition_stage(JobStage.COMMENTING)
+                store.save(job)
+                await upsert_pr_comment(job, github_client, store, settings, dry_run_comment)
+                await notifier.notify_final_result(job, success=True)
+                job.transition_stage(JobStage.DONE)
+                store.save(job)
+                return
+
             verification = new_verification
-            job.fix_attempts.append(fix_attempt)
+            job.fix_attempt_history.append(fix_attempt)
             store.save(job)
-        
+            backoff = _compute_fix_backoff(job.fix_attempts, settings)
+            if backoff > 0:
+                await asyncio.sleep(backoff)
+
         job.update_status(JobStatus.NEEDS_HUMAN)
         job.final_message = f"Max loops ({settings.max_loops}) reached without fixing all issues"
+        job.transition_stage(JobStage.VERIFYING)
         store.save(job)
-        
-        await github_client.post_pr_comment(
-            job.repo_full_name,
-            job.pr_number,
-            f"🛑 **Needs human review**\n\n"
-            f"Attempted {settings.max_loops} fix loops but couldn't resolve all issues."
+
+        needs_human_comment = format_pr_comment(
+            run_number=run_number,
+            commit_sha=job.head_sha,
+            checks=[c.model_dump() for c in verification.checks],
+            failure_summary=failure_summary_redacted,
+            arbiter_decision=arbiter_decision.model_dump(),
+            final_status=(
+                f"🛑 Attempted {settings.max_loops} fix loops but couldn't resolve all issues."
+            ),
+            telegram_enabled=settings.telegram_enabled,
         )
+        job.transition_stage(JobStage.COMMENTING)
+        store.save(job)
+        await upsert_pr_comment(job, github_client, store, settings, needs_human_comment)
         await notifier.notify_final_result(job, success=False, message=job.final_message)
+        job.transition_stage(JobStage.DONE)
+        store.save(job)
     
     except Exception as e:
         logger.error(f"Job {job.job_id} failed with error: {type(e).__name__}", exc_info=False)

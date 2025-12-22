@@ -3,7 +3,7 @@
 from datetime import datetime
 from enum import Enum
 from typing import Optional
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class JobStatus(str, Enum):
@@ -18,6 +18,26 @@ class JobStatus(str, Enum):
     NEEDS_HUMAN = "needs_human"
     ERROR = "error"
     SKIPPED = "skipped"
+
+
+class JobStage(str, Enum):
+    """Lifecycle stage of a supervisor job."""
+    RECEIVED = "received"
+    ANALYZING = "analyzing"
+    DEBATING = "debating"
+    BYPASSED = "bypassed"
+    FIXING = "fixing"
+    SKIPPED = "skipped"
+    VERIFYING = "verifying"
+    COMMENTING = "commenting"
+    DONE = "done"
+
+
+class JobStageEntry(BaseModel):
+    """Recorded stage transition with timestamps."""
+    stage: JobStage
+    entered_at: datetime = Field(default_factory=datetime.utcnow)
+    exited_at: Optional[datetime] = None
 
 
 class CheckResult(BaseModel):
@@ -43,9 +63,12 @@ class VerificationReport(BaseModel):
 class ArbiterDecision(BaseModel):
     """Decision from the Arbiter agent."""
     auto_fix_allowed: bool
+    decision: str = "deny"
+    reason: str = ""
     fix_objectives: list[str] = Field(default_factory=list)
     risk_level: str = "unknown"
     stop_reason: Optional[str] = None
+    allowed_to_modify: list[str] = Field(default_factory=list)
     optimist_summary: str = ""
     skeptic_summary: str = ""
     arbiter_reasoning: str = ""
@@ -68,6 +91,8 @@ class FixAttempt(BaseModel):
     loop_number: int
     codex_prompt: str = ""
     codex_output: str = ""
+    fixer: str = ""
+    notes: list[str] = Field(default_factory=list)
     diff_stats: Optional[DiffStats] = None
     verification: Optional[VerificationReport] = None
     committed: bool = False
@@ -88,19 +113,68 @@ class SupervisorJob(BaseModel):
     status: JobStatus = JobStatus.PENDING
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
+
+    stage: JobStage = JobStage.RECEIVED
+    stage_entered_at: datetime = Field(default_factory=datetime.utcnow)
+    stage_history: list[JobStageEntry] = Field(default_factory=list)
+
+    debate_attempts: int = 0
+    fix_attempts: int = 0
+    verify_attempts: int = 0
     
     workspace_path: Optional[str] = None
     verification: Optional[VerificationReport] = None
     arbiter_decision: Optional[ArbiterDecision] = None
-    fix_attempts: list[FixAttempt] = Field(default_factory=list)
+    fix_plan: Optional[dict] = None
+    skeptic_report: Optional[dict] = None
+    loop_decision: Optional[dict] = None
+    fix_attempt_history: list[FixAttempt] = Field(default_factory=list)
+    pr_comment_id: Optional[int] = None
     
     final_message: str = ""
     error_message: Optional[str] = None
+    reason_code: Optional[str] = None
     
     def update_status(self, status: JobStatus) -> None:
         """Update job status and timestamp."""
         self.status = status
         self.updated_at = datetime.utcnow()
+
+    def transition_stage(self, stage: JobStage) -> None:
+        """Move job to a new stage and record the transition."""
+        if self.stage == stage:
+            return
+        now = datetime.utcnow()
+        if self.stage_history:
+            self.stage_history[-1].exited_at = now
+        self.stage = stage
+        self.stage_entered_at = now
+        self.stage_history.append(JobStageEntry(stage=stage, entered_at=now))
+        self.updated_at = now
+
+    def increment_debate_attempt(self) -> None:
+        """Increment the debate attempt counter."""
+        self.debate_attempts += 1
+        self.updated_at = datetime.utcnow()
+
+    def increment_fix_attempt(self) -> None:
+        """Increment the fix attempt counter."""
+        self.fix_attempts += 1
+        self.updated_at = datetime.utcnow()
+
+    def increment_verify_attempt(self) -> None:
+        """Increment the verify attempt counter."""
+        self.verify_attempts += 1
+        self.updated_at = datetime.utcnow()
+
+    @model_validator(mode="after")
+    def _ensure_stage_history(self) -> "SupervisorJob":
+        """Ensure stage history is initialized for new jobs."""
+        if not self.stage_history:
+            self.stage_history.append(
+                JobStageEntry(stage=self.stage, entered_at=self.stage_entered_at)
+            )
+        return self
 
 
 class WebhookPayload(BaseModel):
