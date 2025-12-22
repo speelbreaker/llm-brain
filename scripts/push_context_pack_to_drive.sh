@@ -1,83 +1,52 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Push context-pack "latest" artifacts to Google Drive via rclone.
-#
-# Requirements/assumptions:
-# - `rclone` is installed and configured with a remote named `gdrive:`.
-# - Target folder path is `gdrive:llm-brain_context_pack` by default.
-#
-# This script intentionally does not require the web server.
+EXPECTED_REPO_ROOT="${EXPECTED_REPO_ROOT:-/opt/llm-brain/llm-brain}"
 
-repo_root="$(git rev-parse --show-toplevel 2>/dev/null || true)"
-if [[ -z "${repo_root}" ]]; then
-  echo "ERROR: not a git repo (cannot determine repo root)" >&2
-  exit 2
-fi
-cd "${repo_root}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(git -C "${SCRIPT_DIR}/.." rev-parse --show-toplevel)"
 
-if [[ ! -f "pyproject.toml" ]]; then
-  echo "ERROR: refusing to run outside repo root (missing pyproject.toml)" >&2
+if [[ "${REPO_ROOT}" != "${EXPECTED_REPO_ROOT}" ]]; then
+  echo "[FATAL] Wrong repo root: ${REPO_ROOT} (expected ${EXPECTED_REPO_ROOT}). Refusing to publish."
   exit 2
 fi
 
-remote="${CONTEXT_PACK_DRIVE_REMOTE:-gdrive:llm-brain_context_pack}"
-
-if ! command -v rclone >/dev/null 2>&1; then
-  echo "ERROR: rclone not found in PATH" >&2
-  exit 2
+if [[ -d "/root/llm-brain-fix" ]]; then
+  WARN_MARKER="/tmp/llmbrain_context_pack_warned"
+  if [[ ! -f "${WARN_MARKER}" ]]; then
+    echo "[WARN] /root/llm-brain-fix exists. Disable any old timers pointing there."
+    touch "${WARN_MARKER}"
+  fi
 fi
 
-# Generate artifacts first (safe to run repeatedly).
-make context-pack-push
+cd "${REPO_ROOT}"
 
-mkdir -p docs
+if [[ "${CONTEXT_PACK_PUSH_DIRECT:-}" != "1" ]]; then
+  make context-pack-push
+  exit $?
+fi
 
-# Compatibility: some generators output non-"latest" names.
-# We create deterministic *_latest copies for Drive.
+REMOTE="${RCLONE_REMOTE:-gdrive}"
+FOLDER="${DRIVE_FOLDER:-llm-brain_context_pack}"
+
+# Ensure stable "latest" names exist
 cp -f docs/REPO_MANIFEST.json docs/REPO_MANIFEST_latest.json
 cp -f docs/RECENT_DIFF.md docs/RECENT_DIFF_latest.md
 
-# If a markdown conversion exists externally, do not overwrite; otherwise provide a stub.
-if [[ ! -f docs/REPO_MANIFEST_latest.md ]]; then
-  printf "# Repo Manifest\n\nSee REPO_MANIFEST_latest.json\n" > docs/REPO_MANIFEST_latest.md
-fi
+# Timestamped history snapshots
+TS="$(date -u +"%Y%m%d_%H%M%S")"
+mkdir -p docs/_context_pack_out
+cp -f docs/REPO_MANIFEST.json "docs/_context_pack_out/REPO_MANIFEST_${TS}.json"
+cp -f docs/RECENT_DIFF.md    "docs/_context_pack_out/RECENT_DIFF_${TS}.md"
 
-# Upload the stable set.
-files_to_upload=(
-  "docs/REPO_MANIFEST_latest.json"
-  "docs/REPO_MANIFEST_latest.md"
-  "docs/RECENT_DIFF_latest.md"
-  "docs/ROADMAP_BACKLOG_latest.md"
-  "docs/TEST_SUMMARY_latest.txt"
-  "docs/OPS_HEALTH_latest.json"
-)
+# Upload latest
+rclone copyto "docs/REPO_MANIFEST_latest.json" "${REMOTE}:${FOLDER}/REPO_MANIFEST_latest.json"
+rclone copyto "docs/REPO_MANIFEST_latest.md"   "${REMOTE}:${FOLDER}/REPO_MANIFEST_latest.md"
+rclone copyto "docs/RECENT_DIFF_latest.md"     "${REMOTE}:${FOLDER}/RECENT_DIFF_latest.md"
+rclone copyto "docs/ROADMAP_BACKLOG_latest.md" "${REMOTE}:${FOLDER}/ROADMAP_BACKLOG_latest.md"
+rclone copyto "docs/TEST_SUMMARY_latest.txt"   "${REMOTE}:${FOLDER}/TEST_SUMMARY_latest.txt"
 
-# Add any fidelity latest artifacts if they exist.
-shopt -s nullglob
-for f in docs/FIDELITY_*_latest.*; do
-  files_to_upload+=("$f")
-done
-shopt -u nullglob
+# Upload history (optional but useful)
+rclone copy "docs/_context_pack_out" "${REMOTE}:${FOLDER}/history" --include "*.json" --include "*.md"
 
-for f in "${files_to_upload[@]}"; do
-  if [[ -f "$f" ]]; then
-    echo "Uploading $f -> ${remote}/$(basename "$f")"
-    rclone copyto "$f" "${remote}/$(basename "$f")"
-  else
-    echo "WARN: missing expected artifact: $f" >&2
-  fi
-done
-
-# Optional: upload a timestamped snapshot under history/<timestamp>/
-if [[ "${CONTEXT_PACK_UPLOAD_HISTORY:-0}" == "1" ]]; then
-  ts="$(date -u +%Y-%m-%dT%H%M%SZ)"
-  echo "Uploading history snapshot: ${remote}/history/${ts}/"
-  for f in "${files_to_upload[@]}"; do
-    if [[ -f "$f" ]]; then
-      rclone copyto "$f" "${remote}/history/${ts}/$(basename "$f")"
-    fi
-  done
-fi
-
-echo "Done."
+echo "Uploaded context pack to Drive folder: ${FOLDER}"

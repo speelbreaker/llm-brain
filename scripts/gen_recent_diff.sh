@@ -1,77 +1,60 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-repo_root="$(git rev-parse --show-toplevel)"
-cd "$repo_root"
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+DOCS_DIR="${REPO_ROOT}/docs"
+OUT="${DOCS_DIR}/RECENT_DIFF.md"
+mkdir -p "${DOCS_DIR}"
 
-output_path="docs/RECENT_DIFF.md"
-mkdir -p "docs"
-
-generated_at_utc="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
-branch="$(git rev-parse --abbrev-ref HEAD)"
-head_sha="$(git rev-parse HEAD)"
-
+# Choose a base ref
 if git show-ref --verify --quiet refs/remotes/origin/main; then
-  base="origin/main"
+  BASE="origin/main"
+elif git rev-parse --verify -q HEAD~10 >/dev/null; then
+  BASE="HEAD~10"
 else
-  base="HEAD~10"
+  BASE="$(git rev-list --max-parents=0 HEAD | tail -n 1)"
 fi
 
-if ! git rev-parse --verify --quiet "$base" >/dev/null; then
-  base="$(git rev-list --max-parents=0 HEAD | tail -n 1)"
-fi
-
-tmp_file="$(mktemp)"
-redacted_file="$(mktemp)"
-trap 'rm -f "$tmp_file" "$redacted_file"' EXIT
+NOW="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+BRANCH="$(git rev-parse --abbrev-ref HEAD)"
+HEAD_SHA="$(git rev-parse HEAD)"
 
 {
-  echo "# Recent Diff"
-  echo
-  echo "generated_at_utc: $generated_at_utc"
-  echo "branch: $branch"
-  echo "head_sha: $head_sha"
-  echo "base: $base"
-  echo
-  echo "## git log --oneline -n 25"
-  git log --oneline -n 25
-  echo
-  echo "## git diff --stat $base..HEAD"
-  git diff --stat "$base..HEAD"
-  echo
-  echo "## git diff $base..HEAD"
-  git diff "$base..HEAD"
-} >"$tmp_file"
+  echo "# RECENT_DIFF"
+  echo ""
+  echo "- generated_at_utc: ${NOW}"
+  echo "- branch: ${BRANCH}"
+  echo "- head: ${HEAD_SHA}"
+  echo "- base: ${BASE}"
+  echo ""
+  echo "## Last 25 commits"
+  git log --oneline -n 25 || true
+  echo ""
+  echo "## Diff stat (${BASE}..HEAD)"
+  git diff --stat "${BASE}..HEAD" || true
+  echo ""
+  echo "## Patch (${BASE}..HEAD)"
+  git diff "${BASE}..HEAD" || true
+} > "${OUT}"
 
-python3 - "$tmp_file" "$redacted_file" <<'PY'
-import re
-import sys
+# Redact obvious secrets if they show up in diffs
+python3 - <<'PY'
+import re, pathlib
+p = pathlib.Path("docs/RECENT_DIFF.md")
+txt = p.read_text(encoding="utf-8", errors="ignore")
 
-pattern = re.compile(
-    r"(OPENAI_API_KEY|DERIBIT_SECRET|DERIBIT_API_KEY|DERIBIT_API_SECRET|"
-    r"ANTHROPIC_API_KEY|GEMINI_API_KEY|AWS_SECRET_ACCESS_KEY|AWS_ACCESS_KEY_ID|"
-    r"GITHUB_TOKEN|SLACK_TOKEN|PRIVATE_KEY)"
-)
+patterns = [
+  re.compile(r'(OPENAI_API_KEY|DERIBIT_SECRET|DERIBIT_CLIENT_SECRET|API_KEY|SECRET|PASSWORD)\s*[:=]\s*.*', re.I),
+  re.compile(r'("access_token"\s*:\s*")[^"]+(")', re.I),
+  re.compile(r'("refresh_token"\s*:\s*")[^"]+(")', re.I),
+]
+for pat in patterns:
+  txt = pat.sub(r'\1: [REDACTED]', txt)
 
-input_path, output_path = sys.argv[1], sys.argv[2]
-with open(input_path, encoding="utf-8", errors="ignore") as handle, open(
-    output_path, "w", encoding="utf-8"
-) as output:
-    for line in handle:
-        if pattern.search(line):
-            output.write("[REDACTED SECRET]\n")
-        else:
-            output.write(line)
+lines = txt.splitlines()
+MAX = 2000
+if len(lines) > MAX:
+  lines = lines[:MAX] + ["", "## TRUNCATED", f"Original lines: {len(txt.splitlines())}"]
+p.write_text("\n".join(lines) + "\n", encoding="utf-8")
+print(f"Wrote {p}")
 PY
-
-line_count="$(wc -l <"$redacted_file" | tr -d " ")"
-if [ "$line_count" -gt 2000 ]; then
-  {
-    head -n 2000 "$redacted_file"
-    echo
-    echo "TRUNCATED"
-  } >"$output_path"
-else
-  mv "$redacted_file" "$output_path"
-  redacted_file=""
-fi

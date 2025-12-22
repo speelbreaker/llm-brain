@@ -1,14 +1,15 @@
+.PHONY: context-pack context-pack-extras context-pack-all context-pack-push
+
 context-pack:
-	python3 scripts/gen_repo_manifest.py
-	bash scripts/gen_recent_diff.sh
-	python3 scripts/gen_fidelity_latest_docs.py
+	./scripts/gen_repo_manifest.py
+	./scripts/gen_repo_manifest_md.py
+	./scripts/gen_recent_diff.sh
 
-extras:
-	python3 scripts/gen_ops_health_latest.py
+context-pack-extras:
+	./scripts/gen_roadmap_latest.sh
+	./scripts/gen_test_summary_latest.sh
 
-context-pack-push: context-pack extras
-	@if [ ! -f docs/TEST_SUMMARY_latest.txt ]; then \
-		printf "%s\n%s\n" "$$(date -u +%Y-%m-%dT%H:%MZ)" "pytest summary unavailable" > docs/TEST_SUMMARY_latest.txt; \
-	fi
-	cp ROADMAP_BACKLOG.md docs/ROADMAP_BACKLOG_latest.md
-	@echo "Updated docs/ROADMAP_BACKLOG_latest.md (upload handled externally)"
+context-pack-all: context-pack context-pack-extras
+
+context-pack-push: context-pack-all
+	CONTEXT_PACK_PUSH_DIRECT=1 ./scripts/push_context_pack_to_drive.sh
