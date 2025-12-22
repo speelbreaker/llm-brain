@@ -3,6 +3,7 @@
 from datetime import datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
+import sys
 
 import pytest
 from fastapi import FastAPI
@@ -83,6 +84,7 @@ async def test_loop_halts_at_max_fix_attempts(tmp_path, monkeypatch):
     settings.fix_backoff_base_seconds = 0
     settings.fix_backoff_factor = 1
     settings.fix_backoff_max_seconds = 0
+    settings.codex_bin = sys.executable
 
     verification = VerificationReport(
         commit_sha="deadbeef",
