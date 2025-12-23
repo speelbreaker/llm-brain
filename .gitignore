@@ -102,5 +102,4 @@ attached_assets/codex_vps_key.pub
 
 # VS Code local workspace state (never commit)
 .vscode/
-!.vscode/
 !.vscode/tasks.json

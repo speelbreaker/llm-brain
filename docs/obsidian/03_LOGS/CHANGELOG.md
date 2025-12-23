@@ -1,6 +1,12 @@
 # CHANGELOG (newest first)
 
 - Date: 2025-12-23
+  - What changed: Added the Phase 3 P0 proof—new trade-permission, one-tick, fidelity contract tests, Stage 0 preflight + CLI mode, and `/ops` endpoints plus registration—and moved the P0-004 prompt through the queue to DONE before archiving it.
+  - Why: Make the system’s truth/trust/trade guarantees testable, expose the gating surface to ops, and keep the vault workflow in sync.
+  - Tests run + results: `python3 -m pytest tests/test_trade_permission.py tests/test_agent_loop_one_tick.py tests/test_fidelity_suite_contract.py tests/test_ops_endpoints.py` (pass).
+  - Links to PR/commit: n/a
+
+- Date: 2025-12-23
   - What changed: Completed the Step 2 repo skills and validator work, added the new skills in `.codex/skills/` and the validator script/tests, and moved the queue prompt to DONE.
   - Why: Guard the obsidian workflow with automation so future agents have explicit skills and validators.
   - Tests run + results: `python3 -m pytest tests/test_validate_vault_workflow.py` (pass).

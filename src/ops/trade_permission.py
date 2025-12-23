@@ -170,30 +170,9 @@ def compute_trade_permission(
             reason=reason,
         )
     
-    # Priority 4: Health unavailable (FAIL-CLOSED)
-    # If health status is None/unknown, assume we cannot safely open new positions
-    if can_trade is None:
-        allow_open = False
-        allow_roll = False
-        # allow_close remains True (emergency de-risking)
-        force_reduce_only = True  # Safety: force reduce-only on any orders
-        code = PermissionCode.BLOCKED_HEALTH_UNAVAILABLE
-        reason = "Health status unavailable (fail-closed) - only CLOSE actions allowed, reduce_only=True"
-        return TradePermission(
-            effective_trade_mode=effective_mode,
-            allow_open=allow_open,
-            allow_roll=allow_roll,
-            allow_close=allow_close,
-            allow_do_nothing=allow_do_nothing,
-            force_reduce_only=force_reduce_only,
-            can_trade=can_trade,
-            code=code,
-            reason=reason,
-        )
-    
     # Priority 5: Health/gates can_trade=False
     # This blocks OPEN and ROLL but allows CLOSE (to reduce risk)
-    if not can_trade:
+    if can_trade is False:
         allow_open = False
         allow_roll = False
         # allow_close remains True (to reduce risk)
@@ -260,4 +239,3 @@ def check_action_permission(
     permission = compute_trade_permission(cfg, can_trade_from_health)
     allowed = permission.is_action_allowed(action_type)
     return allowed, permission.code, permission.reason
-

@@ -119,7 +119,7 @@ class TestRiskEngineIntegration:
             "reasoning": "Test",
         }
         
-        with patch("src.risk_engine.get_cached_health_status", return_value=None):
+        with patch("src.healthcheck.get_cached_health_status", return_value=None):
             allowed, reasons = check_action_allowed(mock_state, proposed_action, cfg)
         
         assert allowed is False

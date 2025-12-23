@@ -68,9 +68,10 @@ def get_ops_gates():
             except Exception:
                 fidelity_status[u] = {"error": "parse_failed"}
 
+    can_trade_value = perm.can_trade if perm.can_trade is not None else perm.allow_open
     return JSONResponse(
         content={
-            "can_trade": perm.can_trade,
+            "can_trade": can_trade_value,
             "effective_trade_mode": perm.effective_trade_mode.value,
             "permission_code": perm.code.value,
             "reason": perm.reason,

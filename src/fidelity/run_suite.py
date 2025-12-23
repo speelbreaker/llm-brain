@@ -616,9 +616,9 @@ def run_fidelity_suite_from_cli(
     start: str,
     end: str,
     underlying: str,
-    seed: int,
+    seed: int = 123,
     out_dir: Optional[str],
-    slippage_bps: float,
+    slippage_bps: float = 0.0,
     mode: str = "quick",
 ) -> Dict[str, Any]:
     """
