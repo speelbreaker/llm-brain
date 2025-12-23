@@ -1,10 +1,15 @@
 # QUEUE (authoritative)
 
-## Ready (next)
-1) [WORKFLOW] Create review template and prove agent writes review here.
+## READY
+1) None at this moment. New prompts must be created here before work begins.
 
-## In Progress
+## IN_PROGRESS
 (none)
 
-## Done
-1) [WORKFLOW] Create first prompt file and prove agent writes it here. — Done 2025-12-23T15:04:18Z
+## IN_REVIEW
+(none)
+
+## DONE
+1) [P0] 2025-12-23__P0__close-only-mode.md — Close-only mode spec, done 2025-12-23T16:23:34Z.
+2) [P0] 2025-12-23__P0__enforce-can-trade-live-path.md — Live trading permission enforcement, done 2025-12-23T16:23:34Z.
+3) [P1] 2025-12-23__P1__one-tick-integration-test.md — One-tick integration test spec, done 2025-12-23T16:23:34Z.
