@@ -21,6 +21,41 @@
       "command": "git push",
       "options": { "cwd": "${workspaceFolder}" },
       "problemMatcher": []
+    },
+    {
+      "label": "Smoke: smoke.sh",
+      "type": "shell",
+      "command": "${workspaceFolder}/scripts/smoke.sh",
+      "options": { "cwd": "${workspaceFolder}" },
+      "problemMatcher": []
+    },
+    {
+      "label": "Format: format.sh",
+      "type": "shell",
+      "command": "${workspaceFolder}/scripts/format.sh",
+      "options": { "cwd": "${workspaceFolder}" },
+      "problemMatcher": []
+    },
+    {
+      "label": "Lint: lint.sh",
+      "type": "shell",
+      "command": "${workspaceFolder}/scripts/lint.sh",
+      "options": { "cwd": "${workspaceFolder}" },
+      "problemMatcher": []
+    },
+    {
+      "label": "CI: ci_local.sh",
+      "type": "shell",
+      "command": "${workspaceFolder}/scripts/ci_local.sh",
+      "options": { "cwd": "${workspaceFolder}" },
+      "problemMatcher": []
+    },
+    {
+      "label": "Auto: Commit+Push (smoke first)",
+      "type": "shell",
+      "command": "${workspaceFolder}/auto_push.sh",
+      "options": { "cwd": "${workspaceFolder}" },
+      "problemMatcher": []
     }
   ]
 }
