@@ -134,6 +134,54 @@ class Settings(BaseSettings):
             "'halt' = only DO_NOTHING allowed (full stop, stronger than close_only)."
         ),
     )
+    
+    # ──────────────────────────────────────────────
+    # Heartbeat Monitor
+    # ──────────────────────────────────────────────
+    heartbeat_timeout_sec: int = Field(
+        default=300,
+        description=(
+            "Maximum seconds between agent loop heartbeats before considered stalled. "
+            "0 disables heartbeat monitoring."
+        ),
+    )
+    
+    # ──────────────────────────────────────────────
+    # Rate Limiting
+    # ──────────────────────────────────────────────
+    max_orders_per_minute: int = Field(
+        default=10,
+        description=(
+            "Maximum orders that can be placed per minute. "
+            "0 disables rate limiting."
+        ),
+    )
+    rate_limit_window_seconds: int = Field(
+        default=60,
+        description="Time window in seconds for rate limiting.",
+    )
+    
+    # ──────────────────────────────────────────────
+    # Rolling Drawdown
+    # ──────────────────────────────────────────────
+    rolling_drawdown_window_days: int = Field(
+        default=0,
+        description=(
+            "Number of days for rolling drawdown calculation. "
+            "0 disables rolling drawdown monitoring."
+        ),
+    )
+    rolling_drawdown_limit_pct: float = Field(
+        default=10.0,
+        description="Maximum rolling drawdown percentage before triggering close-only mode.",
+    )
+    auto_close_only_on_drawdown: bool = Field(
+        default=True,
+        description=(
+            "When True, automatically switch to close_only mode when "
+            "rolling drawdown limit is breached."
+        ),
+    )
 
     ivrv_min: float = Field(
         default=1.2,

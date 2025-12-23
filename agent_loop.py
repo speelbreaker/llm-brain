@@ -9,6 +9,7 @@ import signal
 import sys
 import time
 import traceback
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Callable, Dict, Optional
 
@@ -44,6 +45,12 @@ from src.ops.trade_permission import (
     compute_trade_permission,
     TradePermission,
     PermissionCode,
+)
+from src.ops.heartbeat import record_heartbeat, get_heartbeat_status
+from src.ops.rolling_drawdown import (
+    record_equity,
+    check_drawdown_breach,
+    get_rolling_drawdown_status,
 )
 
 StatusCallback = Callable[[Dict[str, Any]], None]
@@ -317,6 +324,9 @@ def run_agent_loop_forever(
             iteration += 1
             loop_start = time.time()
             
+            # Record heartbeat at start of each iteration
+            record_heartbeat()
+            
             print(f"\n{'='*60}")
             print(f"Iteration {iteration} - {datetime.utcnow().isoformat()}")
             print(f"{'='*60}")
@@ -408,6 +418,22 @@ def run_agent_loop_forever(
                       f"{agent_state.portfolio.margin_used_pct:.1f}% margin used")
                 print(f"Positions: {len(agent_state.portfolio.option_positions)}")
                 print(f"Candidates: {len(agent_state.candidate_options)}")
+                
+                # Record equity for rolling drawdown tracking
+                if agent_state.portfolio.equity_usd > 0:
+                    record_equity(agent_state.portfolio.equity_usd)
+                    
+                    # Check rolling drawdown breach (may auto-trigger close_only)
+                    if settings.rolling_drawdown_window_days > 0:
+                        dd_status = check_drawdown_breach(
+                            window_days=settings.rolling_drawdown_window_days,
+                            limit_pct=settings.rolling_drawdown_limit_pct,
+                            auto_close_only=settings.auto_close_only_on_drawdown,
+                        )
+                        if dd_status.is_breached:
+                            print(f"[ROLLING DRAWDOWN] {dd_status.message}")
+                        elif dd_status.state.value == "warning":
+                            print(f"[ROLLING DRAWDOWN] {dd_status.message}")
                 
                 if agent_state.candidate_options:
                     print("\nTop Candidates:")
@@ -856,6 +882,129 @@ def run_agent_loop_forever(
 def run_agent_loop() -> None:
     """Backward-compatible wrapper for the agent loop."""
     run_agent_loop_forever(status_callback=None)
+
+
+@dataclass
+class TickResult:
+    """Result of a single agent loop tick for testing."""
+    agent_state: Optional[Any]
+    proposed_action: Dict[str, Any]
+    final_action: Dict[str, Any]
+    risk_allowed: bool
+    risk_reasons: list
+    execution_result: Dict[str, Any]
+    permission: Optional[TradePermission]
+    error: Optional[str]
+
+
+def run_single_tick(
+    client: DeribitClient,
+    config: Settings,
+    strategy_registry: Optional[StrategyRegistry] = None,
+) -> TickResult:
+    """
+    Run a single agent loop tick for testing.
+    
+    This extracts one iteration of the loop logic for testability.
+    
+    Args:
+        client: Deribit client (can be mocked)
+        config: Settings configuration
+        strategy_registry: Optional strategy registry
+    
+    Returns:
+        TickResult with all relevant outputs
+    """
+    from src.ops.heartbeat import record_heartbeat
+    
+    # Record heartbeat
+    record_heartbeat()
+    
+    agent_state = None
+    proposed_action = {
+        "action": ActionType.DO_NOTHING.value,
+        "params": {},
+        "reasoning": "Initializing",
+    }
+    final_action = proposed_action.copy()
+    allowed = False
+    reasons: list = []
+    execution_result: Dict[str, Any] = {"status": "pending"}
+    permission: Optional[TradePermission] = None
+    error_msg: Optional[str] = None
+    
+    try:
+        # Build state
+        agent_state = build_agent_state(client, config)
+        
+        # Record equity for rolling drawdown
+        if agent_state and agent_state.portfolio.equity_usd > 0:
+            record_equity(agent_state.portfolio.equity_usd)
+        
+        # Get trade permission
+        permission = get_current_trade_permission(config)
+        
+        # Decide action (simplified: use rule-based only for testing)
+        if agent_state and agent_state.candidate_options:
+            proposed_action = rule_decide_action(agent_state, config)
+        
+        final_action = proposed_action.copy()
+        
+        # Check trade permission and downgrade if needed
+        action_type_str = final_action.get("action", "DO_NOTHING")
+        if action_type_str not in ("DO_NOTHING", ActionType.DO_NOTHING.value):
+            if permission and permission.code != PermissionCode.ALLOWED:
+                # Check if action type is allowed
+                try:
+                    action_type = ActionType(action_type_str)
+                except ValueError:
+                    action_type = ActionType.DO_NOTHING
+                
+                action_allowed = True
+                if action_type in (ActionType.OPEN_COVERED_CALL,):
+                    action_allowed = permission.allow_open
+                elif action_type == ActionType.ROLL_COVERED_CALL:
+                    action_allowed = permission.allow_roll
+                elif action_type == ActionType.CLOSE_COVERED_CALL:
+                    action_allowed = permission.allow_close
+                
+                if not action_allowed:
+                    final_action = {
+                        "action": ActionType.DO_NOTHING.value,
+                        "params": {},
+                        "reasoning": f"Permission denied: {permission.reason}",
+                    }
+        
+        # Risk check
+        allowed, reasons = check_action_allowed(agent_state, final_action, config)
+        
+        if not allowed:
+            final_action = {
+                "action": ActionType.DO_NOTHING.value,
+                "params": {},
+                "reasoning": f"Risk blocked: {'; '.join(reasons)}",
+            }
+        
+        # Execute
+        if final_action.get("action") != ActionType.DO_NOTHING.value:
+            execution_result = execute_action(client, final_action, config)
+        else:
+            execution_result = {"status": "skipped", "message": "DO_NOTHING action"}
+    
+    except Exception as e:
+        error_msg = str(e)
+        execution_result = {"status": "error", "message": error_msg}
+    
+    return TickResult(
+        agent_state=agent_state,
+        proposed_action=proposed_action,
+        final_action=final_action,
+        risk_allowed=allowed,
+        risk_reasons=reasons,
+        execution_result=execution_result,
+        permission=permission,
+        error=error_msg,
+    )
 
 
 def main() -> None:

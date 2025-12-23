@@ -874,6 +874,20 @@ The system supports three levels of automation, rolled out incrementally:
   - Endpoints: /api/ops/health/run, /api/ops/health/status
   - Context-pack: uploaded (yes)
 
+- 2025-12-22T12:00Z [COPILOT] Safety Features Suite - sha=pending
+  - Summary: Implemented 5 safety features with full UI integration:
+    1. **Heartbeat Monitor**: Tracks agent loop liveness, detects stalls (timeout configurable via UI)
+    2. **Rate Limiter**: Prevents order spam with configurable max orders/minute; blocks orders when exceeded
+    3. **Rolling Drawdown + Auto Close-Only**: Tracks N-day rolling DD; auto-triggers close_only mode on breach
+    4. **Daily Drawdown Persistence**: State survives restarts via file-backed storage (atomic writes)
+    5. **E2E Agent Loop Test**: `run_single_tick()` helper + 6 integration tests with FakeDeribitClient
+  - New Modules: src/ops/heartbeat.py, src/ops/rate_limiter.py, src/ops/rolling_drawdown.py, src/ops/drawdown_store.py
+  - New Config Fields: heartbeat_timeout_sec, max_orders_per_minute, rate_limit_window_seconds, rolling_drawdown_window_days, rolling_drawdown_limit_pct, auto_close_only_on_drawdown
+  - Tests: 42 passed (7 heartbeat + 9 rate_limiter + 11 rolling_drawdown + 9 drawdown_store + 6 e2e)
+  - Endpoints: /api/system/runtime-config (GET/POST extended), /api/system/reset-rolling-drawdown, /api/system/daily-drawdown-state, /api/system/reset-daily-drawdown
+  - UI: Dashboard now shows heartbeat indicator, rate limit gauge, rolling drawdown controls, daily drawdown state with reset buttons
+  - Context-pack: uploaded (no)
+
 - 2025-12-21T19:10Z [COPILOT] sha=3bc7e86
   - Summary: Add roadmap changelog automation helper; Add pytest summary capture script (+ optional changelog append); Add context-pack-push target to refresh ROADMAP_BACKLOG_latest
   - Tests: 6 passed, 4 warnings in 1.50s

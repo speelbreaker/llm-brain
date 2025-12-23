@@ -64,6 +64,11 @@ class RuntimeConfigUpdate(BaseModel):
     dry_run: Optional[bool] = None
     position_reconcile_action: Optional[str] = None
     trade_mode: Optional[str] = None
+    heartbeat_timeout_sec: Optional[int] = None
+    max_orders_per_minute: Optional[int] = None
+    rolling_drawdown_limit_pct: Optional[float] = None
+    rolling_drawdown_window_days: Optional[int] = None
+    auto_close_only_on_drawdown: Optional[bool] = None
 
 
 SUPERVISOR_API_URL = os.environ.get("SUPERVISOR_API_URL", "")
@@ -604,6 +609,17 @@ def run_greg_sweetspots() -> JSONResponse:
 @router.get("/api/system/runtime-config")
 def get_runtime_config() -> JSONResponse:
     """Fetch current runtime configuration settings."""
+    from src.ops.heartbeat import get_heartbeat_status
+    from src.ops.rate_limiter import get_rate_limit_status
+    from src.ops.rolling_drawdown import get_rolling_drawdown_status
+    
+    heartbeat = get_heartbeat_status(settings.heartbeat_timeout_sec)
+    rate_limit = get_rate_limit_status(settings.max_orders_per_minute)
+    rolling_dd = get_rolling_drawdown_status(
+        settings.rolling_drawdown_window_days,
+        settings.rolling_drawdown_limit_pct,
+    )
+    
     return JSONResponse(content={
         "ok": True,
         "kill_switch_enabled": settings.kill_switch_enabled,
@@ -612,6 +628,14 @@ def get_runtime_config() -> JSONResponse:
         "dry_run": settings.dry_run,
         "position_reconcile_action": settings.position_reconcile_action,
         "trade_mode": settings.trade_mode.value if hasattr(settings.trade_mode, 'value') else settings.trade_mode,
+        "heartbeat_timeout_sec": settings.heartbeat_timeout_sec,
+        "heartbeat_status": heartbeat.to_dict(),
+        "max_orders_per_minute": settings.max_orders_per_minute,
+        "rate_limit_status": rate_limit.to_dict(),
+        "rolling_drawdown_limit_pct": settings.rolling_drawdown_limit_pct,
+        "rolling_drawdown_window_days": settings.rolling_drawdown_window_days,
+        "rolling_drawdown_status": rolling_dd.to_dict(),
+        "auto_close_only_on_drawdown": settings.auto_close_only_on_drawdown,
     })
 
 
@@ -661,6 +685,38 @@ def update_runtime_config(update: RuntimeConfigUpdate) -> JSONResponse:
             settings.trade_mode = TradingMode(update.trade_mode)
             updated["trade_mode"] = update.trade_mode
     
+    if update.heartbeat_timeout_sec is not None:
+        if update.heartbeat_timeout_sec < 0:
+            errors.append("heartbeat_timeout_sec must be >= 0")
+        else:
+            settings.heartbeat_timeout_sec = update.heartbeat_timeout_sec
+            updated["heartbeat_timeout_sec"] = update.heartbeat_timeout_sec
+    
+    if update.max_orders_per_minute is not None:
+        if update.max_orders_per_minute < 0:
+            errors.append("max_orders_per_minute must be >= 0")
+        else:
+            settings.max_orders_per_minute = update.max_orders_per_minute
+            updated["max_orders_per_minute"] = update.max_orders_per_minute
+    
+    if update.rolling_drawdown_limit_pct is not None:
+        if update.rolling_drawdown_limit_pct < 0:
+            errors.append("rolling_drawdown_limit_pct must be >= 0")
+        else:
+            settings.rolling_drawdown_limit_pct = update.rolling_drawdown_limit_pct
+            updated["rolling_drawdown_limit_pct"] = update.rolling_drawdown_limit_pct
+    
+    if update.auto_close_only_on_drawdown is not None:
+        settings.auto_close_only_on_drawdown = update.auto_close_only_on_drawdown
+        updated["auto_close_only_on_drawdown"] = update.auto_close_only_on_drawdown
+    
+    if update.rolling_drawdown_window_days is not None:
+        if update.rolling_drawdown_window_days < 0:
+            errors.append("rolling_drawdown_window_days must be >= 0")
+        else:
+            settings.rolling_drawdown_window_days = update.rolling_drawdown_window_days
+            updated["rolling_drawdown_window_days"] = update.rolling_drawdown_window_days
+    
     if errors:
         return JSONResponse(
             status_code=400,
@@ -680,6 +736,10 @@ def update_runtime_config(update: RuntimeConfigUpdate) -> JSONResponse:
             "dry_run": settings.dry_run,
             "position_reconcile_action": settings.position_reconcile_action,
             "trade_mode": settings.trade_mode.value if hasattr(settings.trade_mode, 'value') else settings.trade_mode,
+            "heartbeat_timeout_sec": settings.heartbeat_timeout_sec,
+            "max_orders_per_minute": settings.max_orders_per_minute,
+            "rolling_drawdown_limit_pct": settings.rolling_drawdown_limit_pct,
+            "auto_close_only_on_drawdown": settings.auto_close_only_on_drawdown,
         }
     })
 
@@ -725,4 +785,58 @@ async def get_supervisor_job(job_id: str):
         return JSONResponse(
             status_code=500,
             content={"error": str(e)}
+        )
+
+
+@router.post("/api/system/reset-rolling-drawdown")
+def reset_rolling_drawdown_endpoint() -> JSONResponse:
+    """Reset rolling drawdown tracker and close-only trigger."""
+    from src.ops.rolling_drawdown import reset_rolling_drawdown
+    
+    try:
+        reset_rolling_drawdown(clear_close_only_trigger=True)
+        return JSONResponse(content={
+            "ok": True,
+            "message": "Rolling drawdown tracker reset successfully",
+        })
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={"ok": False, "error": str(e)}
+        )
+
+
+@router.get("/api/system/daily-drawdown-state")
+def get_daily_drawdown_state() -> JSONResponse:
+    """Get current daily drawdown state."""
+    from src.ops.drawdown_store import get_daily_drawdown_status
+    
+    try:
+        status = get_daily_drawdown_status()
+        return JSONResponse(content={
+            "ok": True,
+            **status,
+        })
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={"ok": False, "error": str(e)}
+        )
+
+
+@router.post("/api/system/reset-daily-drawdown")
+def reset_daily_drawdown_endpoint() -> JSONResponse:
+    """Reset daily drawdown state."""
+    from src.risk_engine import reset_daily_drawdown_state
+    
+    try:
+        reset_daily_drawdown_state()
+        return JSONResponse(content={
+            "ok": True,
+            "message": "Daily drawdown state reset successfully",
+        })
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={"ok": False, "error": str(e)}
         )

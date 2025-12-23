@@ -2790,6 +2790,68 @@ def render_dashboard_html() -> str:
             <div id="reconcile-action-feedback" style="font-size: 0.8rem; min-height: 1.5rem; margin-top: 0.75rem;"></div>
           </div>
           
+          <!-- Heartbeat Monitor -->
+          <div style="background: #e0f2f1; padding: 1.25rem; border-radius: 8px; border-left: 4px solid #00796b;">
+            <h3 style="margin: 0 0 0.75rem 0; color: #00796b; font-size: 1rem;">Heartbeat Monitor</h3>
+            <p style="font-size: 0.8rem; color: #666; margin-bottom: 1rem;">Detects if agent loop stalls.</p>
+            <div style="display: flex; align-items: center; gap: 1rem; margin-bottom: 0.75rem;">
+              <div id="heartbeat-indicator" style="width: 12px; height: 12px; border-radius: 50%; background: #9e9e9e;"></div>
+              <span id="heartbeat-status-text" style="font-size: 0.85rem;">Loading...</span>
+            </div>
+            <div style="display: flex; align-items: center; gap: 0.5rem;">
+              <label style="font-size: 0.8rem;">Timeout (sec):</label>
+              <input type="number" id="heartbeat-timeout-input" min="0" max="3600" step="30" style="width: 80px; padding: 0.4rem; border: 1px solid #ccc; border-radius: 4px;">
+              <button onclick="updateHeartbeatTimeout()" style="padding: 0.4rem 0.75rem; font-size: 0.85rem;">Save</button>
+            </div>
+            <div id="heartbeat-feedback" style="font-size: 0.8rem; min-height: 1.5rem; margin-top: 0.5rem;"></div>
+          </div>
+          
+          <!-- Rate Limiter -->
+          <div style="background: #fff8e1; padding: 1.25rem; border-radius: 8px; border-left: 4px solid #f9a825;">
+            <h3 style="margin: 0 0 0.75rem 0; color: #f57f17; font-size: 1rem;">Rate Limiter</h3>
+            <p style="font-size: 0.8rem; color: #666; margin-bottom: 1rem;">Prevents order spam.</p>
+            <div style="display: flex; align-items: center; gap: 1rem; margin-bottom: 0.75rem;">
+              <span id="rate-limit-status-text" style="font-size: 0.85rem;">Orders: 0 / 10 per min</span>
+              <div id="rate-limit-bar" style="flex: 1; height: 8px; background: #e0e0e0; border-radius: 4px; overflow: hidden;">
+                <div id="rate-limit-fill" style="height: 100%; width: 0%; background: #4caf50; transition: width 0.3s;"></div>
+              </div>
+            </div>
+            <div style="display: flex; align-items: center; gap: 0.5rem;">
+              <label style="font-size: 0.8rem;">Max orders/min:</label>
+              <input type="number" id="rate-limit-input" min="0" max="100" step="1" style="width: 60px; padding: 0.4rem; border: 1px solid #ccc; border-radius: 4px;">
+              <button onclick="updateRateLimit()" style="padding: 0.4rem 0.75rem; font-size: 0.85rem;">Save</button>
+            </div>
+            <div id="rate-limit-feedback" style="font-size: 0.8rem; min-height: 1.5rem; margin-top: 0.5rem;"></div>
+          </div>
+          
+          <!-- Rolling Drawdown -->
+          <div style="background: #ffebee; padding: 1.25rem; border-radius: 8px; border-left: 4px solid #d32f2f;">
+            <h3 style="margin: 0 0 0.75rem 0; color: #c62828; font-size: 1rem;">Rolling Drawdown</h3>
+            <p style="font-size: 0.8rem; color: #666; margin-bottom: 1rem;">Track N-day drawdown, auto close-only on breach.</p>
+            <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.75rem;">
+              <label style="font-size: 0.8rem;">Limit %:</label>
+              <input type="number" id="rolling-dd-limit-input" min="0" max="100" step="0.5" style="width: 70px; padding: 0.4rem; border: 1px solid #ccc; border-radius: 4px;">
+              <button onclick="updateRollingDrawdownLimit()" style="padding: 0.4rem 0.75rem; font-size: 0.85rem;">Save</button>
+            </div>
+            <div style="display: flex; align-items: center; gap: 0.75rem;">
+              <label class="switch" style="transform: scale(0.8);">
+                <input type="checkbox" id="auto-close-only-toggle" onchange="updateAutoCloseOnly(this.checked)">
+                <span class="slider round"></span>
+              </label>
+              <span style="font-size: 0.85rem;">Auto close-only on breach</span>
+            </div>
+            <div id="rolling-dd-feedback" style="font-size: 0.8rem; min-height: 1.5rem; margin-top: 0.5rem;"></div>
+          </div>
+          
+          <!-- Daily Drawdown State -->
+          <div style="background: #e8eaf6; padding: 1.25rem; border-radius: 8px; border-left: 4px solid #3f51b5;">
+            <h3 style="margin: 0 0 0.75rem 0; color: #3f51b5; font-size: 1rem;">Daily Drawdown State</h3>
+            <p style="font-size: 0.8rem; color: #666; margin-bottom: 1rem;">Persisted daily peak equity tracking.</p>
+            <div id="daily-dd-status" style="font-size: 0.85rem; margin-bottom: 0.75rem;">Loading...</div>
+            <button onclick="resetDailyDrawdown()" style="padding: 0.4rem 0.75rem; font-size: 0.85rem; background: #f44336; color: white; border: none; border-radius: 4px; cursor: pointer;">Reset Daily State</button>
+            <div id="daily-dd-feedback" style="font-size: 0.8rem; min-height: 1.5rem; margin-top: 0.5rem;"></div>
+          </div>
+          
         </div>
       </div>
       
@@ -4844,6 +4906,9 @@ def render_dashboard_html() -> str:
       // Load runtime config for controls
       await loadRuntimeConfig();
       
+      // Load daily drawdown state
+      await loadDailyDrawdownState();
+      
       // Load LLM & Strategy tuning config
       await loadLLMStrategyConfig();
 
@@ -5045,6 +5110,34 @@ def render_dashboard_html() -> str:
           if (reconcileActionSelect) {{
             reconcileActionSelect.value = data.position_reconcile_action;
           }}
+          
+          // Heartbeat monitor
+          const heartbeatInput = document.getElementById('heartbeat-timeout-input');
+          if (heartbeatInput) {{
+            heartbeatInput.value = data.heartbeat_timeout_sec || 300;
+          }}
+          if (data.heartbeat_status) {{
+            updateHeartbeatIndicator(data.heartbeat_status);
+          }}
+          
+          // Rate limiter
+          const rateLimitInput = document.getElementById('rate-limit-input');
+          if (rateLimitInput) {{
+            rateLimitInput.value = data.max_orders_per_minute || 10;
+          }}
+          if (data.rate_limit_status) {{
+            updateRateLimitIndicator(data.rate_limit_status);
+          }}
+          
+          // Rolling drawdown
+          const rollingDDInput = document.getElementById('rolling-dd-limit-input');
+          if (rollingDDInput) {{
+            rollingDDInput.value = data.rolling_drawdown_limit_pct || 10;
+          }}
+          const autoCloseOnlyToggle = document.getElementById('auto-close-only-toggle');
+          if (autoCloseOnlyToggle) {{
+            autoCloseOnlyToggle.checked = data.auto_close_only_on_drawdown !== false;
+          }}
         }}
       }} catch (e) {{
         console.error('Error loading runtime config:', e);
@@ -5112,6 +5205,179 @@ def render_dashboard_html() -> str:
       }} catch (e) {{
         feedbackEl.innerHTML = `<span style="color: #c62828;">✗ Error: ${{e.message}}</span>`;
         loadRuntimeConfig();
+      }}
+    }}
+    
+    function updateHeartbeatIndicator(status) {{
+      const indicator = document.getElementById('heartbeat-indicator');
+      const textEl = document.getElementById('heartbeat-status-text');
+      if (!indicator || !textEl) return;
+      
+      if (status.state === 'healthy') {{
+        indicator.style.background = '#4caf50';
+        indicator.style.animation = 'pulse 2s infinite';
+      }} else if (status.state === 'stalled') {{
+        indicator.style.background = '#f44336';
+        indicator.style.animation = 'none';
+      }} else if (status.state === 'never_started') {{
+        indicator.style.background = '#ff9800';
+        indicator.style.animation = 'none';
+      }} else {{
+        indicator.style.background = '#9e9e9e';
+        indicator.style.animation = 'none';
+      }}
+      textEl.textContent = status.message || status.state;
+    }}
+    
+    async function updateHeartbeatTimeout() {{
+      const inputEl = document.getElementById('heartbeat-timeout-input');
+      const feedbackEl = document.getElementById('heartbeat-feedback');
+      const value = parseInt(inputEl.value) || 0;
+      feedbackEl.innerHTML = '<span style="color: #666;">Updating...</span>';
+      try {{
+        const res = await fetch('/api/system/runtime-config', {{
+          method: 'POST',
+          headers: {{'Content-Type': 'application/json'}},
+          body: JSON.stringify({{heartbeat_timeout_sec: value}})
+        }});
+        const data = await res.json();
+        if (data.ok) {{
+          feedbackEl.innerHTML = `<span style="color: #2e7d32;">✓ Timeout set to ${{value}}s</span>`;
+          setTimeout(() => {{ feedbackEl.innerHTML = ''; }}, 3000);
+        }} else {{
+          feedbackEl.innerHTML = `<span style="color: #c62828;">✗ ${{data.errors?.join(', ') || 'Failed'}}</span>`;
+        }}
+      }} catch (e) {{
+        feedbackEl.innerHTML = `<span style="color: #c62828;">✗ Error: ${{e.message}}</span>`;
+      }}
+    }}
+    
+    function updateRateLimitIndicator(status) {{
+      const textEl = document.getElementById('rate-limit-status-text');
+      const fillEl = document.getElementById('rate-limit-fill');
+      if (textEl) {{
+        textEl.textContent = `Orders: ${{status.orders_in_window}} / ${{status.limit}} per min`;
+      }}
+      if (fillEl) {{
+        fillEl.style.width = `${{Math.min(status.usage_pct, 100)}}%`;
+        if (status.state === 'blocked') {{
+          fillEl.style.background = '#f44336';
+        }} else if (status.state === 'warning') {{
+          fillEl.style.background = '#ff9800';
+        }} else {{
+          fillEl.style.background = '#4caf50';
+        }}
+      }}
+    }}
+    
+    async function updateRateLimit() {{
+      const inputEl = document.getElementById('rate-limit-input');
+      const feedbackEl = document.getElementById('rate-limit-feedback');
+      const value = parseInt(inputEl.value) || 0;
+      feedbackEl.innerHTML = '<span style="color: #666;">Updating...</span>';
+      try {{
+        const res = await fetch('/api/system/runtime-config', {{
+          method: 'POST',
+          headers: {{'Content-Type': 'application/json'}},
+          body: JSON.stringify({{max_orders_per_minute: value}})
+        }});
+        const data = await res.json();
+        if (data.ok) {{
+          feedbackEl.innerHTML = `<span style="color: #2e7d32;">✓ Limit set to ${{value}}/min</span>`;
+          setTimeout(() => {{ feedbackEl.innerHTML = ''; }}, 3000);
+        }} else {{
+          feedbackEl.innerHTML = `<span style="color: #c62828;">✗ ${{data.errors?.join(', ') || 'Failed'}}</span>`;
+        }}
+      }} catch (e) {{
+        feedbackEl.innerHTML = `<span style="color: #c62828;">✗ Error: ${{e.message}}</span>`;
+      }}
+    }}
+    
+    async function updateRollingDrawdownLimit() {{
+      const inputEl = document.getElementById('rolling-dd-limit-input');
+      const feedbackEl = document.getElementById('rolling-dd-feedback');
+      const value = parseFloat(inputEl.value) || 0;
+      feedbackEl.innerHTML = '<span style="color: #666;">Updating...</span>';
+      try {{
+        const res = await fetch('/api/system/runtime-config', {{
+          method: 'POST',
+          headers: {{'Content-Type': 'application/json'}},
+          body: JSON.stringify({{rolling_drawdown_limit_pct: value}})
+        }});
+        const data = await res.json();
+        if (data.ok) {{
+          feedbackEl.innerHTML = `<span style="color: #2e7d32;">✓ Limit set to ${{value}}%</span>`;
+          setTimeout(() => {{ feedbackEl.innerHTML = ''; }}, 3000);
+        }} else {{
+          feedbackEl.innerHTML = `<span style="color: #c62828;">✗ ${{data.errors?.join(', ') || 'Failed'}}</span>`;
+        }}
+      }} catch (e) {{
+        feedbackEl.innerHTML = `<span style="color: #c62828;">✗ Error: ${{e.message}}</span>`;
+      }}
+    }}
+    
+    async function updateAutoCloseOnly(enabled) {{
+      const feedbackEl = document.getElementById('rolling-dd-feedback');
+      feedbackEl.innerHTML = '<span style="color: #666;">Updating...</span>';
+      try {{
+        const res = await fetch('/api/system/runtime-config', {{
+          method: 'POST',
+          headers: {{'Content-Type': 'application/json'}},
+          body: JSON.stringify({{auto_close_only_on_drawdown: enabled}})
+        }});
+        const data = await res.json();
+        if (data.ok) {{
+          feedbackEl.innerHTML = `<span style="color: #2e7d32;">✓ Auto close-only ${{enabled ? 'enabled' : 'disabled'}}</span>`;
+          setTimeout(() => {{ feedbackEl.innerHTML = ''; }}, 3000);
+        }} else {{
+          feedbackEl.innerHTML = `<span style="color: #c62828;">✗ ${{data.errors?.join(', ') || 'Failed'}}</span>`;
+          document.getElementById('auto-close-only-toggle').checked = !enabled;
+        }}
+      }} catch (e) {{
+        feedbackEl.innerHTML = `<span style="color: #c62828;">✗ Error: ${{e.message}}</span>`;
+        document.getElementById('auto-close-only-toggle').checked = !enabled;
+      }}
+    }}
+    
+    async function loadDailyDrawdownState() {{
+      const statusEl = document.getElementById('daily-dd-status');
+      if (!statusEl) return;
+      
+      try {{
+        const res = await fetch('/api/system/daily-drawdown-state');
+        const data = await res.json();
+        if (data.ok) {{
+          if (data.has_state) {{
+            const current = data.is_current_day ? '(today)' : '(past day)';
+            statusEl.innerHTML = `Date: ${{data.date}} ${{current}}<br>Peak Equity: $${{data.max_equity_usd?.toLocaleString() || 'N/A'}}`;
+          }} else {{
+            statusEl.innerHTML = 'No state recorded yet';
+          }}
+        }} else {{
+          statusEl.innerHTML = '<span style="color: #c62828;">Error loading state</span>';
+        }}
+      }} catch (e) {{
+        statusEl.innerHTML = `<span style="color: #c62828;">Error: ${{e.message}}</span>`;
+      }}
+    }}
+    
+    async function resetDailyDrawdown() {{
+      if (!confirm('Reset daily drawdown state? This will clear today\\'s peak equity tracking.')) return;
+      
+      const feedbackEl = document.getElementById('daily-dd-feedback');
+      feedbackEl.innerHTML = '<span style="color: #666;">Resetting...</span>';
+      try {{
+        const res = await fetch('/api/system/reset-daily-drawdown', {{ method: 'POST' }});
+        const data = await res.json();
+        if (data.ok) {{
+          feedbackEl.innerHTML = `<span style="color: #2e7d32;">✓ ${{data.message}}</span>`;
+          setTimeout(() => {{ feedbackEl.innerHTML = ''; }}, 3000);
+          loadDailyDrawdownState();
+        }} else {{
+          feedbackEl.innerHTML = `<span style="color: #c62828;">✗ ${{data.error || 'Failed'}}</span>`;
+        }}
+      }} catch (e) {{
+        feedbackEl.innerHTML = `<span style="color: #c62828;">✗ Error: ${{e.message}}</span>`;
       }}
     }}
     

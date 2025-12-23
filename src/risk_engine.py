@@ -9,10 +9,17 @@ from typing import Any
 
 from src.config import Settings, settings
 from src.models import ActionType, AgentState, OptionType, Side
+from src.ops.drawdown_store import (
+    load_daily_drawdown_state,
+    save_daily_drawdown_state,
+    DailyDrawdownState,
+)
 
+# In-memory cache of daily drawdown state (synced with file)
 _daily_drawdown_state: dict[str, Any] = {
     "date": None,
     "max_equity_usd": 0.0,
+    "_loaded": False,  # Track if we've loaded from file
 }
 
 
@@ -39,6 +46,31 @@ def _check_liquidity_limits(settings: Settings, candidate) -> list[str]:
     return reasons
 
 
+def _load_daily_drawdown_state_from_file() -> None:
+    """Load daily drawdown state from file on first use."""
+    if _daily_drawdown_state.get("_loaded"):
+        return
+    
+    persisted = load_daily_drawdown_state()
+    if persisted:
+        _daily_drawdown_state["date"] = persisted.date
+        _daily_drawdown_state["max_equity_usd"] = persisted.max_equity_usd
+        print(f"[RISK ENGINE] Loaded daily drawdown state from file: "
+              f"date={persisted.date}, max_equity=${persisted.max_equity_usd:,.2f}")
+    
+    _daily_drawdown_state["_loaded"] = True
+
+
+def _save_daily_drawdown_state_to_file() -> None:
+    """Save daily drawdown state to file."""
+    state_date = _daily_drawdown_state.get("date")
+    max_equity = _daily_drawdown_state.get("max_equity_usd", 0.0)
+    
+    if state_date and max_equity > 0:
+        state = DailyDrawdownState(date=state_date, max_equity_usd=max_equity)
+        save_daily_drawdown_state(state)
+
+
 def _check_daily_drawdown_limit(
     portfolio: Any,
     cfg: Settings,
@@ -47,7 +79,7 @@ def _check_daily_drawdown_limit(
     """
     Update and enforce a simple daily peak-to-trough drawdown limit.
 
-    - Tracks max equity per UTC day in-process.
+    - Tracks max equity per UTC day, persisted to file.
     - Returns True if trading is allowed.
     - Returns False and appends a reason if the limit is breached.
     """
@@ -58,18 +90,30 @@ def _check_daily_drawdown_limit(
     if equity <= 0:
         return True
 
+    # Load from file on first call
+    _load_daily_drawdown_state_from_file()
+
     today = datetime.now(timezone.utc).date()
     state_date = _daily_drawdown_state.get("date")
     max_equity = float(_daily_drawdown_state.get("max_equity_usd", 0.0) or 0.0)
 
+    # Reset for new day
     if state_date != today or max_equity <= 0.0:
         _daily_drawdown_state["date"] = today
         _daily_drawdown_state["max_equity_usd"] = equity
+        _save_daily_drawdown_state_to_file()
         return True
 
+    # Update max equity if current is higher
+    state_changed = False
     if equity > max_equity:
         max_equity = equity
         _daily_drawdown_state["max_equity_usd"] = max_equity
+        state_changed = True
+
+    # Persist changes
+    if state_changed:
+        _save_daily_drawdown_state_to_file()
 
     if max_equity <= 0.0:
         return True
@@ -87,6 +131,20 @@ def _check_daily_drawdown_limit(
         return False
 
     return True
+
+
+def reset_daily_drawdown_state() -> None:
+    """
+    Reset the in-memory and file-persisted daily drawdown state.
+    Call this to manually reset after a drawdown event.
+    """
+    from src.ops.drawdown_store import reset_daily_drawdown_state as reset_file
+    
+    _daily_drawdown_state["date"] = None
+    _daily_drawdown_state["max_equity_usd"] = 0.0
+    _daily_drawdown_state["_loaded"] = False
+    reset_file()
+    print("[RISK ENGINE] Daily drawdown state reset")
 
 
 def check_action_allowed(

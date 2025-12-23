@@ -15,6 +15,7 @@ from src.config import Settings, settings
 from src.deribit_client import DeribitClient, DeribitAPIError
 from src.models import ActionType
 from src.position_tracker import position_tracker
+from src.ops.rate_limiter import record_order as _record_order_for_rate_limit
 
 logger = logging.getLogger(__name__)
 
@@ -120,6 +121,27 @@ def execute_action(
             f"[EXECUTION] Forcing reduce_only=True on all orders: "
             f"{permission.code.value} - {permission.reason}"
         )
+    
+    # ──────────────────────────────────────────────
+    # Rate limit check (before placing real orders)
+    # ──────────────────────────────────────────────
+    from src.ops.rate_limiter import check_rate_limit
+    
+    if not cfg.dry_run and cfg.max_orders_per_minute > 0:
+        allowed, rate_status = check_rate_limit(
+            max_orders=cfg.max_orders_per_minute,
+            window_seconds=cfg.rate_limit_window_seconds,
+        )
+        if not allowed:
+            logger.warning(
+                f"[EXECUTION] Rate limit exceeded: {rate_status.message}"
+            )
+            return {
+                "status": "rate_limited",
+                "message": rate_status.message,
+                "orders_in_window": rate_status.orders_in_window,
+                "limit": rate_status.limit,
+            }
     
     # Extract underlying from action_dict or infer from symbol
     underlying = action_dict.get("underlying") or _extract_underlying(params.get("symbol", ""))
@@ -275,6 +297,7 @@ def _execute_real(
                 "order_id": order_result.get("order", {}).get("order_id"),
                 "order_state": order_result.get("order", {}).get("order_state"),
             })
+            _record_order_for_rate_limit()  # Track for rate limiting
             reduce_only_note = " [reduce_only]" if force_reduce_only else ""
             result["message"] = f"Sold {size} {symbol} at {mid_price:.6f}{reduce_only_note}"
             print(f"[EXECUTED] {result['message']}")
@@ -313,6 +336,7 @@ def _execute_real(
                 "order_id": order_result.get("order", {}).get("order_id"),
                 "order_state": order_result.get("order", {}).get("order_state"),
             })
+            _record_order_for_rate_limit()  # Track for rate limiting
             result["message"] = f"Bought {size} {symbol} at {mid_price:.6f} [reduce_only]"
             print(f"[EXECUTED] {result['message']}")
             
@@ -359,6 +383,7 @@ def _execute_real(
                 "order_state": close_result.get("order", {}).get("order_state"),
                 "leg": "close",
             })
+            _record_order_for_rate_limit()  # Track for rate limiting
             
         except DeribitAPIError as e:
             result["status"] = "partial_error"
@@ -390,6 +415,7 @@ def _execute_real(
                 "order_state": open_result.get("order", {}).get("order_state"),
                 "leg": "open",
             })
+            _record_order_for_rate_limit()  # Track for rate limiting
             
             reduce_only_note = " [reduce_only on open leg]" if force_reduce_only else ""
             result["message"] = (
