@@ -18,3 +18,9 @@ aborted: you must first push the current branch to a remote, or use the --head f
 git status:
  M docs/obsidian/04_OPS/Incident_Log.md
 
+
+### 2025-12-23 21:23:06 UTC - Dirty Worktree
+
+git status:
+?? docs/obsidian/03_LOGS/supervisor_runs.md
+
