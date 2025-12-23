@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import re
+import shlex
 from pathlib import Path
 from typing import Iterable
 
@@ -44,13 +46,104 @@ async def _git_changed_files(workspace_path: str) -> list[str]:
     return [line.strip() for line in output.splitlines() if line.strip()]
 
 
-async def _fix_lint_only(workspace_path: str) -> FixResult:
+def _normalize_candidate(candidate: str) -> str | None:
+    if not candidate:
+        return None
+    candidate = candidate.strip().replace("\\", "/")
+    if candidate.startswith("./"):
+        candidate = candidate[2:]
+    if candidate.startswith("../") or candidate.startswith("/"):
+        return None
+    if not candidate.lower().endswith(".py"):
+        return None
+    if os.path.isabs(candidate):
+        return None
+    return candidate
+
+
+def _filter_existing_python_targets(workspace_path: str, candidates: Iterable[str]) -> list[str]:
+    workspace = Path(workspace_path)
+    result: list[str] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        normalized = _normalize_candidate(candidate)
+        if not normalized or normalized in seen:
+            continue
+        target_path = workspace / normalized
+        if not target_path.exists() or not target_path.is_file():
+            continue
+        seen.add(normalized)
+        result.append(normalized)
+    return result
+
+
+def _extract_targets_from_checks(workspace_path: str, verification: VerificationReport) -> list[str]:
+    failures: list[str] = []
+    path_pattern = re.compile(r"-->\s*(?P<path>[^:\s]+\.py):")
+    for check in verification.checks:
+        for text in (check.stdout, check.stderr):
+            if not text:
+                continue
+            failures.extend(path_pattern.findall(text))
+    if verification.failure_summary:
+        failures.extend(path_pattern.findall(verification.failure_summary))
+    return _filter_existing_python_targets(workspace_path, failures)
+
+
+def _extract_targets_from_commands(workspace_path: str, verification: VerificationReport) -> list[str]:
+    candidates: list[str] = []
+    for check in verification.checks:
+        tokens = shlex.split(check.command)
+        collecting = False
+        for token in tokens:
+            if not collecting:
+                if token == "check":
+                    collecting = True
+                continue
+            if token.startswith("-"):
+                break
+            candidates.append(token)
+    return _filter_existing_python_targets(workspace_path, candidates)
+
+
+def _determine_lint_targets(
+    workspace_path: str,
+    changed_files: list[str] | None,
+    verification: VerificationReport,
+) -> list[str]:
+    candidates: list[str] = []
+    if changed_files:
+        candidates.extend(_filter_existing_python_targets(workspace_path, changed_files))
+    if not candidates:
+        candidates.extend(_extract_targets_from_checks(workspace_path, verification))
+    if not candidates:
+        candidates.extend(_extract_targets_from_commands(workspace_path, verification))
+    sightings: list[str] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        if candidate not in seen:
+            seen.add(candidate)
+            sightings.append(candidate)
+    return sightings
+
+
+async def _fix_lint_only(
+    workspace_path: str,
+    changed_files: list[str] | None,
+    verification: VerificationReport,
+) -> FixResult:
     notes: list[str] = []
-    code, _ = await _run_command("python -m ruff check . --fix", workspace_path)
+    targets = _determine_lint_targets(workspace_path, changed_files, verification)
+    if not targets:
+        return FixResult(False, "ruff_fix", [], ["No lint-only targets determined"])
+    quoted_targets = " ".join(shlex.quote(target) for target in targets)
+    fix_cmd = f"python -m ruff check {quoted_targets} --fix"
+    code, _ = await _run_command(fix_cmd, workspace_path)
     if code != 0:
         return FixResult(False, "ruff_fix", [], ["ruff --fix failed"])
 
-    code, _ = await _run_command("python -m ruff check .", workspace_path)
+    check_cmd = f"python -m ruff check {quoted_targets}"
+    code, _ = await _run_command(check_cmd, workspace_path)
     if code == 0:
         notes.append("ruff clean after --fix")
     else:
@@ -100,10 +193,11 @@ async def apply_fix_plan(
     workspace_path: str,
     plan: FixPlan,
     verification: VerificationReport,
+    changed_files: list[str] | None = None,
 ) -> FixResult:
     """Apply the deterministic fixer for the given plan."""
     if plan.category == "lint_only":
-        return await _fix_lint_only(workspace_path)
+        return await _fix_lint_only(workspace_path, changed_files, verification)
 
     if plan.category == "single_test_env_leak":
         return await _fix_single_test_env_leak(workspace_path, verification)

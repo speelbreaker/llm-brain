@@ -844,8 +844,18 @@ async def run_supervisor_job(job: SupervisorJob, app: FastAPI) -> None:
             )
             return
         
-        pr_files = await github_client.get_pr_files(job.repo_full_name, job.pr_number)
-        changed_files = [f.get("filename", "") for f in pr_files]
+        changed_files: list[str] = []
+        try:
+            pr_files = await github_client.get_pr_files(job.repo_full_name, job.pr_number)
+            for entry in pr_files:
+                filename = entry.get("filename")
+                status = entry.get("status", "").lower()
+                if not filename or status == "removed":
+                    continue
+                if filename.endswith(".py"):
+                    changed_files.append(filename)
+        except Exception as exc:  # pragma: no cover - best-effort, not core to tests
+            logger.warning("Failed to fetch PR files for lint targeting", exc_info=exc)
         
         pr_info = await github_client.get_pr_info(job.repo_full_name, job.pr_number)
         
@@ -861,6 +871,7 @@ async def run_supervisor_job(job: SupervisorJob, app: FastAPI) -> None:
             changed_files=changed_files,
         )
         pr_labels = [lbl.get("name", "") for lbl in pr_info.get("labels", [])]
+        requested_mode = "push" if settings.autofix_push else "dry_run"
         loop_decision = arbitrate(
             plan=fix_plan,
             skeptic=skeptic_report,
@@ -868,6 +879,7 @@ async def run_supervisor_job(job: SupervisorJob, app: FastAPI) -> None:
             changed_files=changed_files,
             pr_labels=pr_labels,
             push_env_enabled=settings.autofix_push,
+            requested_mode=requested_mode,
         )
         arbiter_decision = ArbiterDecision(
             auto_fix_allowed=loop_decision.decision in ("dry_run", "push"),
@@ -980,6 +992,7 @@ async def run_supervisor_job(job: SupervisorJob, app: FastAPI) -> None:
             workspace_path=workspace_path,
             plan=fix_plan,
             verification=verification,
+            changed_files=changed_files,
         )
         deterministic_notes = [
             redact_secrets(note, settings) for note in deterministic_result.notes
