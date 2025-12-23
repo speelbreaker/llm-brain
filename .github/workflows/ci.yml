@@ -1,0 +1,36 @@
+name: ci
+
+on:
+  push:
+    branches:
+      - main
+  pull_request: {}
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: 3.11
+
+      - name: Install dependencies
+        run: |
+          set -euo pipefail
+          if [ -f requirements.txt ]; then
+            python -m pip install -r requirements.txt
+          elif [ -f pyproject.toml ]; then
+            python -m pip install -e .
+          else
+            python -m pip install pytest ruff
+          fi
+
+      - name: Endpoint test guard
+        run: bash scripts/check_endpoint_tests.sh
+
+      - name: Run CI suite
+        run: bash scripts/ci_local.sh
