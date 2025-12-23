@@ -12,8 +12,13 @@ class JobStatus(str, Enum):
     RUNNING = "running"
     CHECKS_PASSED = "checks_passed"
     CHECKS_FAILED = "checks_failed"
-    DEBATING = "debating"
-    FIXING = "fixing"
+    DEBATE = "debate"
+    FIX_LINT = "fix_lint"
+    FIX_FORMAT = "fix_format"
+    FIX_IMPORT = "fix_import"
+    FIX_TESTS = "fix_tests"
+    VERIFY = "verify"
+    FIXING = "fixing"  # Legacy/Generic
     FIXED = "fixed"
     NEEDS_HUMAN = "needs_human"
     ERROR = "error"
@@ -99,6 +104,13 @@ class FixAttempt(BaseModel):
     commit_sha: Optional[str] = None
 
 
+class StageHistory(BaseModel):
+    """Record of a stage transition."""
+    stage: str
+    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    payload: Optional[dict] = None
+
+
 class SupervisorJob(BaseModel):
     """A supervisor job for a PR."""
     job_id: str
@@ -111,6 +123,10 @@ class SupervisorJob(BaseModel):
     is_fork: bool = False
     
     status: JobStatus = JobStatus.PENDING
+    reason_code: Optional[str] = None
+    stage_history: list[StageHistory] = Field(default_factory=list)
+    attempt_counters: dict[str, int] = Field(default_factory=dict)
+    
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
 
@@ -139,6 +155,7 @@ class SupervisorJob(BaseModel):
         """Update job status and timestamp."""
         self.status = status
         self.updated_at = datetime.utcnow()
+        self.stage_history.append(StageHistory(stage=status))
 
     def transition_stage(self, stage: JobStage) -> None:
         """Move job to a new stage and record the transition."""
