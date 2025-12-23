@@ -98,3 +98,10 @@ attached_assets/codex_vps_key.pub
 
 # mypy
 .mypy_cache/
+
+# Obsidian local workspace state (never commit)
+.obsidian/
+**/.obsidian/
+
+# VS Code local workspace state (never commit)
+.vscode/
