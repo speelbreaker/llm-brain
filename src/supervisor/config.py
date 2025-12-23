@@ -1,6 +1,8 @@
 """Configuration settings for PR Supervisor."""
 
-from typing import Literal, Optional
+import os
+import shutil
+from typing import Optional
 from pydantic import Field
 from pydantic_settings import BaseSettings
 
@@ -103,6 +105,24 @@ class SupervisorSettings(BaseSettings):
         if self.store_path:
             return self.store_path
         return f"{self.base_jobs_dir}/job_history.jsonl"
+
+    def _resolved_codex_bin(self) -> str:
+        """Return a normalized codex binary path."""
+        codex_bin = (self.codex_bin or "").strip()
+        if not codex_bin:
+            return ""
+        return os.path.expandvars(os.path.expanduser(codex_bin))
+
+    def is_codex_available(self) -> bool:
+        """Determine whether the configured codex binary exists and is executable."""
+        if not self.enable_codex:
+            return False
+        codex_bin = self._resolved_codex_bin()
+        if not codex_bin:
+            return False
+        if os.path.isabs(codex_bin) and os.access(codex_bin, os.X_OK):
+            return True
+        return shutil.which(codex_bin) is not None
 
 
 def get_settings() -> SupervisorSettings:

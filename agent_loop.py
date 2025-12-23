@@ -39,6 +39,12 @@ from src.healthcheck import (
     get_cached_health_status,
 )
 from src.deribit.base_client import HealthSeverity
+from src.ops.trade_permission import (
+    get_current_trade_permission,
+    compute_trade_permission,
+    TradePermission,
+    PermissionCode,
+)
 
 StatusCallback = Callable[[Dict[str, Any]], None]
 
@@ -636,30 +642,63 @@ def run_agent_loop_forever(
                 training_actions = []
                 decision_source = "error_fallback"
             
-            try:
-                allowed, reasons = check_action_allowed(agent_state, proposed_action, settings)
+            # ──────────────────────────────────────────────
+            # TRADE PERMISSION CHECK - Single source of truth
+            # This is the unified "final permission" decision
+            # ──────────────────────────────────────────────
+            trade_permission = get_current_trade_permission(settings)
+            
+            # Parse action type from proposed action
+            action_str = proposed_action.get("action", "DO_NOTHING")
+            if isinstance(action_str, ActionType):
+                proposed_action_type = action_str
+            else:
+                try:
+                    proposed_action_type = ActionType(action_str)
+                except ValueError:
+                    proposed_action_type = ActionType.DO_NOTHING
+            
+            # Check if action is permitted at the trade permission layer
+            if not trade_permission.is_action_allowed(proposed_action_type):
+                print(f"\n[TRADE PERMISSION] {trade_permission.code.value}: {trade_permission.reason}")
+                print(f"  Effective mode: {trade_permission.effective_trade_mode.value}")
+                print(f"  Proposed action {proposed_action_type.value} -> DO_NOTHING")
                 
-                if not allowed:
-                    print(f"Risk blocked: {', '.join(reasons)}")
-                    final_action = {
-                        "action": ActionType.DO_NOTHING.value,
-                        "params": {},
-                        "reasoning": f"Blocked by risk engine: {reasons}",
-                    }
-                else:
-                    final_action = proposed_action
-                
-            except Exception as e:
-                error_msg = f"Risk check error: {e}"
-                print(f"ERROR: {error_msg}")
-                log_error("risk_check_error", error_msg)
                 allowed = False
-                reasons = [f"Risk check failed: {e}"]
+                reasons = [f"{trade_permission.code.value}: {trade_permission.reason}"]
                 final_action = {
                     "action": ActionType.DO_NOTHING.value,
                     "params": {},
-                    "reasoning": f"Risk check error: {e}",
+                    "reasoning": f"Blocked by trade permission: {trade_permission.reason}",
+                    "permission_code": trade_permission.code.value,
+                    "effective_trade_mode": trade_permission.effective_trade_mode.value,
                 }
+            else:
+                # Trade permission allows this action, proceed to risk check
+                try:
+                    allowed, reasons = check_action_allowed(agent_state, proposed_action, settings)
+                    
+                    if not allowed:
+                        print(f"Risk blocked: {', '.join(reasons)}")
+                        final_action = {
+                            "action": ActionType.DO_NOTHING.value,
+                            "params": {},
+                            "reasoning": f"Blocked by risk engine: {reasons}",
+                        }
+                    else:
+                        final_action = proposed_action
+                    
+                except Exception as e:
+                    error_msg = f"Risk check error: {e}"
+                    print(f"ERROR: {error_msg}")
+                    log_error("risk_check_error", error_msg)
+                    allowed = False
+                    reasons = [f"Risk check failed: {e}"]
+                    final_action = {
+                        "action": ActionType.DO_NOTHING.value,
+                        "params": {},
+                        "reasoning": f"Risk check error: {e}",
+                    }
             
             try:
                 if is_training and training_actions:
@@ -704,6 +743,15 @@ def run_agent_loop_forever(
                 llm_action=llm_action,
             )
             snapshot["reconciliation"] = reconciliation_stats
+            snapshot["trade_permission"] = {
+                "effective_trade_mode": trade_permission.effective_trade_mode.value,
+                "allow_open": trade_permission.allow_open,
+                "allow_roll": trade_permission.allow_roll,
+                "allow_close": trade_permission.allow_close,
+                "can_trade": trade_permission.can_trade,
+                "code": trade_permission.code.value,
+                "reason": trade_permission.reason,
+            }
             
             if is_training and training_actions:
                 for ta in training_actions:

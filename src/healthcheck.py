@@ -253,6 +253,7 @@ def get_health_status_for_api() -> dict:
         "last_run_at": cached.last_run_at.isoformat(),
         "overall_status": overall_status,
         "checks_overall": details.get("checks_overall"),
+        "checks_overall_status": details.get("checks_overall"),
         "checks_summary": checks_summary,
         "worst_severity": worst_severity,
         "can_trade": can_trade,
@@ -1156,15 +1157,18 @@ def run_agent_healthcheck(cfg: Settings | None = None) -> dict[str, Any]:
     gate_overall: dict[str, Any] | None = None
     can_trade_by_underlying: dict[str, Any] | None = None
     gates_check_added = False
-    try:
-        import os
 
+    # Gate modes determine whether gate evaluation errors must fail closed.
+    fidelity_mode_env = _resolve_fidelity_gate_mode()
+    calibration_mode_env = (os.getenv("CALIBRATION_GATE_MODE") or "off").strip().lower()
+    gates_required = fidelity_mode_env != "off" or calibration_mode_env != "off"
+    try:
         from src.ops.gates import GateMode, GateRunner
         from src.ops.gate_factories import build_underlying_gate_fns
 
         harvest_mode = GateMode.WARN
-        fidelity_mode = GateMode(_resolve_fidelity_gate_mode())
-        calibration_mode = GateMode((os.getenv("CALIBRATION_GATE_MODE") or "off").strip().lower())
+        fidelity_mode = GateMode(fidelity_mode_env)
+        calibration_mode = GateMode(calibration_mode_env)
         harvest_required = fidelity_mode != GateMode.OFF or calibration_mode != GateMode.OFF
 
         require_usdc = bool(getattr(cfg, "option_margin_type", "linear") == "linear") or (
@@ -1207,21 +1211,26 @@ def run_agent_healthcheck(cfg: Settings | None = None) -> dict[str, Any]:
         results.append(
             HealthCheckResult(
                 name="gates_runner",
-                status=CheckStatus.FAIL,
+                status=CheckStatus.FAIL if gates_required else CheckStatus.WARN,
                 detail=detail,
                 error_code="GATES_EVAL_ERROR",
-                severity="FATAL",
-                can_trade=False,
+                severity="FATAL" if gates_required else "DEGRADED",
+                can_trade=False if gates_required else True,
             )
         )
         gates_check_added = True
         gates = []
-        gate_overall = {
-            "status": "FAIL",
-            "severity": "FATAL",
-            "can_trade": False,
-            "message": "gates_eval_error",
-        }
+        gate_overall = (
+            {
+                "status": "FAIL",
+                "severity": "FATAL",
+                "can_trade": False,
+                "message": "gates_eval_error",
+                "code": "GATES_EVAL_ERROR",
+            }
+            if gates_required
+            else None
+        )
         can_trade_by_underlying = None
 
     fail_check = next((r for r in results if r.status == CheckStatus.FAIL), None)
@@ -1244,24 +1253,27 @@ def run_agent_healthcheck(cfg: Settings | None = None) -> dict[str, Any]:
     if not gate_status:
         gate_status = "WARN" if gates_present else "OK"
 
-    overall_status = _worst_status(checks_overall_status, gate_status)
+    # Core trading blockers (can_trade=False) must always dominate.
+    blocking_check = next(
+        (r for r in results if r.status in (CheckStatus.FAIL, CheckStatus.WARN) and r.can_trade is False),
+        None,
+    )
 
-    if overall_status == "FAIL":
-        if checks_overall_status == "FAIL" and fail_check is not None:
-            summary = _format_check_summary(fail_check)
-        elif gate_status == "FAIL" and gate_info:
-            summary = _format_gate_summary(gate_info)
-        else:
-            summary = "FAIL"
-    elif overall_status == "WARN":
-        if checks_overall_status == "WARN" and warn_check is not None:
-            summary = _format_check_summary(warn_check)
-        elif gate_status == "WARN" and gate_info:
-            summary = _format_gate_summary(gate_info)
-        else:
-            summary = "WARN"
+    if blocking_check is not None:
+        overall_status = "FAIL"
+        summary = _format_check_summary(blocking_check)
+    elif gates_present:
+        # Single truth: when gates are present, overall status/summary is gate-authoritative.
+        overall_status = gate_status
+        summary = _format_gate_summary(gate_info) if gate_info else f"gates {gate_status}"
     else:
-        summary = "All checks passed"
+        overall_status = checks_overall_status
+        if overall_status == "FAIL" and fail_check is not None:
+            summary = _format_check_summary(fail_check)
+        elif overall_status == "WARN" and warn_check is not None:
+            summary = _format_check_summary(warn_check)
+        else:
+            summary = "All checks passed"
 
     if can_trade_by_underlying is None and not gates_check_added:
         results.append(

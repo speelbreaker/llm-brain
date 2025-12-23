@@ -1,14 +1,12 @@
 # Synthetic Fidelity Report
 
-- Run ID: 20251220_002927
-- Timestamp (UTC): 2025-12-20T00:29:27.380772+00:00
-- Gate: **UNTRUSTED**
+- Run ID: 20251219_234717
+- Timestamp (UTC): 2025-12-19T23:47:17.593360+00:00
+- Gate: **TRUSTED**
 
 ## Scores
 
-- Overall: **0.0**
-- iv_surface_level: 100.0
-- spot_iv_coupling: 100.0
+- Overall: **100.0**
 - strategy_pnl_parity: 100.0
 - underlying_returns: 100.0
 
@@ -34,219 +32,116 @@
 }
 ```
 
-## Strategy Parity
+## Strategy Parity (P0 placeholder)
 
 ```json
 {
-  "Calendar": {
-    "live_metrics": {
-      "avg_trade_return": 0.0,
-      "es_1pct": 0.0,
-      "max_drawdown": 0.0,
-      "median_trade_return": 0.0,
-      "profit_factor": 0.0,
-      "var_1pct": 0.0,
-      "win_rate": 0.0,
-      "worst_trade_return": 0.0
-    },
-    "parity_metrics": {
-      "ks": 0.0,
-      "n_live": 0,
-      "n_synth": 0,
-      "quantile_diffs": {
-        "q05": 0.0,
-        "q25": 0.0,
-        "q50": 0.0,
-        "q75": 0.0,
-        "q95": 0.0,
-        "q99": 0.0
+  "decision_times": [
+    "2025-12-07T00:00:00+00:00",
+    "2025-12-08T00:00:00+00:00",
+    "2025-12-09T00:00:00+00:00",
+    "2025-12-10T00:00:00+00:00",
+    "2025-12-11T00:00:00+00:00",
+    "2025-12-12T00:00:00+00:00",
+    "2025-12-13T00:00:00+00:00",
+    "2025-12-14T00:00:00+00:00",
+    "2025-12-15T00:00:00+00:00",
+    "2025-12-16T00:00:00+00:00",
+    "2025-12-17T00:00:00+00:00",
+    "2025-12-18T00:00:00+00:00",
+    "2025-12-19T00:00:00+00:00"
+  ],
+  "strategies": [
+    {
+      "live": {
+        "notes": "P0 placeholder (execution not implemented)",
+        "num_trades": 0,
+        "spot_first": 0.0,
+        "spot_last": 0.0
+      },
+      "name": "covered_call",
+      "synthetic": {
+        "notes": "P0 placeholder (execution not implemented)",
+        "num_trades": 0,
+        "spot_first": 0.0,
+        "spot_last": 85758.41
       }
     },
-    "synthetic_metrics": {
-      "avg_trade_return": 0.0,
-      "es_1pct": 0.0,
-      "max_drawdown": 0.0,
-      "median_trade_return": 0.0,
-      "profit_factor": 0.0,
-      "var_1pct": 0.0,
-      "win_rate": 0.0,
-      "worst_trade_return": 0.0
-    }
-  },
-  "CallDebitSpread": {
-    "live_metrics": {
-      "avg_trade_return": 0.0,
-      "es_1pct": 0.0,
-      "max_drawdown": 0.0,
-      "median_trade_return": 0.0,
-      "profit_factor": 0.0,
-      "var_1pct": 0.0,
-      "win_rate": 0.0,
-      "worst_trade_return": 0.0
-    },
-    "parity_metrics": {
-      "ks": 0.0,
-      "n_live": 0,
-      "n_synth": 0,
-      "quantile_diffs": {
-        "q05": 0.0,
-        "q25": 0.0,
-        "q50": 0.0,
-        "q75": 0.0,
-        "q95": 0.0,
-        "q99": 0.0
+    {
+      "live": {
+        "notes": "P0 placeholder (execution not implemented)",
+        "num_trades": 0,
+        "spot_first": 0.0,
+        "spot_last": 0.0
+      },
+      "name": "cash_secured_put",
+      "synthetic": {
+        "notes": "P0 placeholder (execution not implemented)",
+        "num_trades": 0,
+        "spot_first": 0.0,
+        "spot_last": 85758.41
       }
     },
-    "synthetic_metrics": {
-      "avg_trade_return": 0.0,
-      "es_1pct": 0.0,
-      "max_drawdown": 0.0,
-      "median_trade_return": 0.0,
-      "profit_factor": 0.0,
-      "var_1pct": 0.0,
-      "win_rate": 0.0,
-      "worst_trade_return": 0.0
-    }
-  },
-  "CashSecuredPut": {
-    "live_metrics": {
-      "avg_trade_return": 0.0,
-      "es_1pct": 0.0,
-      "max_drawdown": 0.0,
-      "median_trade_return": 0.0,
-      "profit_factor": 0.0,
-      "var_1pct": 0.0,
-      "win_rate": 0.0,
-      "worst_trade_return": 0.0
-    },
-    "parity_metrics": {
-      "ks": 0.0,
-      "n_live": 0,
-      "n_synth": 0,
-      "quantile_diffs": {
-        "q05": 0.0,
-        "q25": 0.0,
-        "q50": 0.0,
-        "q75": 0.0,
-        "q95": 0.0,
-        "q99": 0.0
+    {
+      "live": {
+        "notes": "P0 placeholder (execution not implemented)",
+        "num_trades": 0,
+        "spot_first": 0.0,
+        "spot_last": 0.0
+      },
+      "name": "short_strangle",
+      "synthetic": {
+        "notes": "P0 placeholder (execution not implemented)",
+        "num_trades": 0,
+        "spot_first": 0.0,
+        "spot_last": 85758.41
       }
     },
-    "synthetic_metrics": {
-      "avg_trade_return": 0.0,
-      "es_1pct": 0.0,
-      "max_drawdown": 0.0,
-      "median_trade_return": 0.0,
-      "profit_factor": 0.0,
-      "var_1pct": 0.0,
-      "win_rate": 0.0,
-      "worst_trade_return": 0.0
-    }
-  },
-  "CoveredCall": {
-    "live_metrics": {
-      "avg_trade_return": 0.0,
-      "es_1pct": 0.0,
-      "max_drawdown": 0.0,
-      "median_trade_return": 0.0,
-      "profit_factor": 0.0,
-      "var_1pct": 0.0,
-      "win_rate": 0.0,
-      "worst_trade_return": 0.0
-    },
-    "parity_metrics": {
-      "ks": 0.0,
-      "n_live": 0,
-      "n_synth": 0,
-      "quantile_diffs": {
-        "q05": 0.0,
-        "q25": 0.0,
-        "q50": 0.0,
-        "q75": 0.0,
-        "q95": 0.0,
-        "q99": 0.0
+    {
+      "live": {
+        "notes": "P0 placeholder (execution not implemented)",
+        "num_trades": 0,
+        "spot_first": 0.0,
+        "spot_last": 0.0
+      },
+      "name": "put_spread_credit",
+      "synthetic": {
+        "notes": "P0 placeholder (execution not implemented)",
+        "num_trades": 0,
+        "spot_first": 0.0,
+        "spot_last": 85758.41
       }
     },
-    "synthetic_metrics": {
-      "avg_trade_return": 0.0,
-      "es_1pct": 0.0,
-      "max_drawdown": 0.0,
-      "median_trade_return": 0.0,
-      "profit_factor": 0.0,
-      "var_1pct": 0.0,
-      "win_rate": 0.0,
-      "worst_trade_return": 0.0
-    }
-  },
-  "PutCreditSpread": {
-    "live_metrics": {
-      "avg_trade_return": 0.0,
-      "es_1pct": 0.0,
-      "max_drawdown": 0.0,
-      "median_trade_return": 0.0,
-      "profit_factor": 0.0,
-      "var_1pct": 0.0,
-      "win_rate": 0.0,
-      "worst_trade_return": 0.0
-    },
-    "parity_metrics": {
-      "ks": 0.0,
-      "n_live": 0,
-      "n_synth": 0,
-      "quantile_diffs": {
-        "q05": 0.0,
-        "q25": 0.0,
-        "q50": 0.0,
-        "q75": 0.0,
-        "q95": 0.0,
-        "q99": 0.0
+    {
+      "live": {
+        "notes": "P0 placeholder (execution not implemented)",
+        "num_trades": 0,
+        "spot_first": 0.0,
+        "spot_last": 0.0
+      },
+      "name": "call_spread_debit",
+      "synthetic": {
+        "notes": "P0 placeholder (execution not implemented)",
+        "num_trades": 0,
+        "spot_first": 0.0,
+        "spot_last": 85758.41
       }
     },
-    "synthetic_metrics": {
-      "avg_trade_return": 0.0,
-      "es_1pct": 0.0,
-      "max_drawdown": 0.0,
-      "median_trade_return": 0.0,
-      "profit_factor": 0.0,
-      "var_1pct": 0.0,
-      "win_rate": 0.0,
-      "worst_trade_return": 0.0
-    }
-  },
-  "ShortStrangle": {
-    "live_metrics": {
-      "avg_trade_return": 0.0,
-      "es_1pct": 0.0,
-      "max_drawdown": 0.0,
-      "median_trade_return": 0.0,
-      "profit_factor": 0.0,
-      "var_1pct": 0.0,
-      "win_rate": 0.0,
-      "worst_trade_return": 0.0
-    },
-    "parity_metrics": {
-      "ks": 0.0,
-      "n_live": 0,
-      "n_synth": 0,
-      "quantile_diffs": {
-        "q05": 0.0,
-        "q25": 0.0,
-        "q50": 0.0,
-        "q75": 0.0,
-        "q95": 0.0,
-        "q99": 0.0
+    {
+      "live": {
+        "notes": "P0 placeholder (execution not implemented)",
+        "num_trades": 0,
+        "spot_first": 0.0,
+        "spot_last": 0.0
+      },
+      "name": "calendar",
+      "synthetic": {
+        "notes": "P0 placeholder (execution not implemented)",
+        "num_trades": 0,
+        "spot_first": 0.0,
+        "spot_last": 85758.41
       }
-    },
-    "synthetic_metrics": {
-      "avg_trade_return": 0.0,
-      "es_1pct": 0.0,
-      "max_drawdown": 0.0,
-      "median_trade_return": 0.0,
-      "profit_factor": 0.0,
-      "var_1pct": 0.0,
-      "win_rate": 0.0,
-      "worst_trade_return": 0.0
     }
-  }
+  ]
 }
 ```

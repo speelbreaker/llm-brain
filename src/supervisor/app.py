@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import os
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime
@@ -12,6 +13,7 @@ from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
+from src.healthcheck import get_health_status_for_api
 from .codex_fixer import CodexFixer
 from .config import SupervisorSettings, get_settings
 from .github import GitHubClient, format_pr_comment, parse_webhook_payload, verify_signature
@@ -397,6 +399,30 @@ async def health(request: Request):
     )
 
 
+@app.get("/api/diag")
+async def diag(request: Request):
+    """Runtime diagnostics for the supervisor."""
+    settings: SupervisorSettings = request.app.state.settings
+    worker_task = getattr(request.app.state, "supervisor_worker_task", None)
+    worker_alive = bool(worker_task and not worker_task.done())
+    build_id = os.getenv("BUILD_ID") or os.getenv("BUILD_NUMBER") or None
+    provider_health = get_health_status_for_api()
+    ok = bool(settings.enabled and request.app.state.ready and not request.app.state.startup_errors)
+
+    return {
+        "ok": ok,
+        "enabled": settings.enabled,
+        "ready": request.app.state.ready,
+        "build_id": build_id,
+        "worker_alive": worker_alive,
+        "debug_enabled": settings.debug,
+        "push_enabled": settings.autofix_push,
+        "dry_run": settings.autofix_dry_run,
+        "codex_available": settings.is_codex_available(),
+        "provider_health": provider_health,
+    }
+
+
 @app.post("/github/webhook")
 async def github_webhook(
     request: Request,
@@ -699,6 +725,7 @@ async def get_job(request: Request, job_id: str):
 async def run_supervisor_job(job: SupervisorJob, app: FastAPI) -> None:
     """Main supervisor job orchestrator."""
     settings: SupervisorSettings = app.state.settings
+    codex_available: bool = settings.is_codex_available()
     store: JobStore = app.state.store
     github_client: GitHubClient = app.state.github_client
     
@@ -1063,28 +1090,28 @@ async def run_supervisor_job(job: SupervisorJob, app: FastAPI) -> None:
                 store.save(job)
                 return
 
-            verification = new_verification
-        else:
-            pass
-
-        if not settings.enable_codex:
+        if not codex_available:
             job.update_status(JobStatus.NEEDS_HUMAN)
-            job.final_message = "Deterministic fixer did not resolve failures"
+            job.reason_code = "CODEX_UNAVAILABLE"
+            job.final_message = (
+                "Codex auto-fixes require the configured binary, but it is unavailable. "
+                "Install Codex or disable SUPERVISOR_ENABLE_CODEX."
+            )
             job.transition_stage(JobStage.VERIFYING)
             store.save(job)
 
-            stalled_comment = format_pr_comment(
+            codex_missing_comment = format_pr_comment(
                 run_number=run_number,
                 commit_sha=job.head_sha,
                 checks=[c.model_dump() for c in verification.checks],
                 failure_summary=failure_summary_redacted,
                 arbiter_decision=arbiter_decision.model_dump(),
-                final_status="🛑 Deterministic fixer did not resolve failures. Manual review required.",
+                final_status="🛑 Auto-fix aborted: Codex unavailable. Manual review required.",
                 telegram_enabled=settings.telegram_enabled,
             )
             job.transition_stage(JobStage.COMMENTING)
             store.save(job)
-            await upsert_pr_comment(job, github_client, store, settings, stalled_comment)
+            await upsert_pr_comment(job, github_client, store, settings, codex_missing_comment)
             await notifier.notify_final_result(job, success=False, message=job.final_message)
             job.transition_stage(JobStage.DONE)
             store.save(job)
@@ -1191,72 +1218,73 @@ async def run_supervisor_job(job: SupervisorJob, app: FastAPI) -> None:
             job.increment_verify_attempt()
             fix_attempt.verification = new_verification
 
-            if new_verification.all_passed:
-                if arbiter_decision.decision == "push":
-                    commit_sha = await workspace_manager.commit_and_push(
-                        workspace_path=workspace_path,
-                        message=f"fix: auto-fix by PR Supervisor (loop {loop_num})",
-                        branch=job.head_ref,
-                    )
+        if new_verification.all_passed:
+            commit_sha: Optional[str] = None
+            if arbiter_decision.decision == "push":
+                commit_sha = await workspace_manager.commit_and_push(
+                    workspace_path=workspace_path,
+                    message=f"fix: auto-fix by PR Supervisor (loop {loop_num})",
+                    branch=job.head_ref,
+                )
 
-                if commit_sha:
-                    fix_attempt.committed = True
-                    fix_attempt.commit_sha = commit_sha
-                    job.fix_attempt_history.append(fix_attempt)
-
-                    job.update_status(JobStatus.FIXED)
-                    job.final_message = f"Fixed and pushed: {commit_sha[:8]}"
-                    job.transition_stage(JobStage.VERIFYING)
-                    store.save(job)
-
-                    await notifier.notify_fix_pushed(job, commit_sha)
-
-                    pushed_comment = format_pr_comment(
-                            run_number=run_number,
-                            commit_sha=job.head_sha,
-                            checks=[c.model_dump() for c in new_verification.checks],
-                            arbiter_decision=arbiter_decision.model_dump(),
-                            final_status=(
-                            f"✅ Auto-fix successful. Pushed `{commit_sha[:8]}`."
-                        ),
-                        telegram_enabled=settings.telegram_enabled,
-                    )
-                    job.transition_stage(JobStage.COMMENTING)
-                    store.save(job)
-                    await upsert_pr_comment(job, github_client, store, settings, pushed_comment)
-                    await notifier.notify_final_result(job, success=True)
-                    job.transition_stage(JobStage.DONE)
-                    store.save(job)
-                    return
+            if commit_sha:
+                fix_attempt.committed = True
+                fix_attempt.commit_sha = commit_sha
+                job.fix_attempt_history.append(fix_attempt)
 
                 job.update_status(JobStatus.FIXED)
-                job.final_message = "Fixed in DRY RUN; not pushed"
-                job.fix_attempt_history.append(fix_attempt)
+                job.final_message = f"Fixed and pushed: {commit_sha[:8]}"
                 job.transition_stage(JobStage.VERIFYING)
                 store.save(job)
 
-                dry_run_comment = format_pr_comment(
+                await notifier.notify_fix_pushed(job, commit_sha)
+
+                pushed_comment = format_pr_comment(
                     run_number=run_number,
                     commit_sha=job.head_sha,
                     checks=[c.model_dump() for c in new_verification.checks],
                     arbiter_decision=arbiter_decision.model_dump(),
-                    final_status="✅ Auto-fix successful (DRY RUN). Not pushed.",
+                    final_status=(
+                        f"✅ Auto-fix successful. Pushed `{commit_sha[:8]}`."
+                    ),
                     telegram_enabled=settings.telegram_enabled,
                 )
                 job.transition_stage(JobStage.COMMENTING)
                 store.save(job)
-                await upsert_pr_comment(job, github_client, store, settings, dry_run_comment)
+                await upsert_pr_comment(job, github_client, store, settings, pushed_comment)
                 await notifier.notify_final_result(job, success=True)
                 job.transition_stage(JobStage.DONE)
                 store.save(job)
                 return
 
-            verification = new_verification
+            job.update_status(JobStatus.FIXED)
+            job.final_message = "Fixed in DRY RUN; not pushed"
             job.fix_attempt_history.append(fix_attempt)
+            job.transition_stage(JobStage.VERIFYING)
             store.save(job)
-            backoff = _compute_fix_backoff(job.fix_attempts, settings)
-            if backoff > 0:
-                await asyncio.sleep(backoff)
+
+            dry_run_comment = format_pr_comment(
+                run_number=run_number,
+                commit_sha=job.head_sha,
+                checks=[c.model_dump() for c in new_verification.checks],
+                arbiter_decision=arbiter_decision.model_dump(),
+                final_status="✅ Auto-fix successful (DRY RUN). Not pushed.",
+                telegram_enabled=settings.telegram_enabled,
+            )
+            job.transition_stage(JobStage.COMMENTING)
+            store.save(job)
+            await upsert_pr_comment(job, github_client, store, settings, dry_run_comment)
+            await notifier.notify_final_result(job, success=True)
+            job.transition_stage(JobStage.DONE)
+            store.save(job)
+            return
+
+        verification = new_verification
+        job.fix_attempt_history.append(fix_attempt)
+        store.save(job)
+        backoff = _compute_fix_backoff(job.fix_attempts, settings)
+        if backoff > 0:
+            await asyncio.sleep(backoff)
 
         job.update_status(JobStatus.NEEDS_HUMAN)
         job.final_message = f"Max loops ({settings.max_loops}) reached without fixing all issues"
