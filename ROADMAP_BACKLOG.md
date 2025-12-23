@@ -893,3 +893,16 @@ The system supports three levels of automation, rolled out incrementally:
   - Tests: 6 passed, 4 warnings in 1.50s
   - Endpoints: none
   - Context-pack: uploaded (no)
+
+- 2025-12-23T14:00Z [COPILOT] Position Reconciliation + Risk Boundary Tests + Dashboard Cleanup - sha=7419253
+  - Summary: Implemented 3 features from roadmap:
+    1. **Position Reconciliation Enhancement (C1)**: Reconciliation state tracking module, startup/loop enforcement with trading block on divergence, API endpoints for status/trigger/clear, dashboard card with mismatches display
+    2. **Risk Engine Boundary Tests (H2)**: 18 comprehensive tests for exact boundary behavior - margin (79%/80%/81%, 90% threshold), net delta (4.9/5.0/5.1), per-expiry exposure, daily drawdown, DO_NOTHING always allowed, zero/negative equity blocking
+    3. **Dashboard Cleanup (G1)**: Agent Status Bar with real-time indicators (heartbeat pulse, trade mode badge, rate limit gauge, reconciliation status, kill switch), section headers for logical grouping (Safety Controls, Risk & Drawdown, Operational), auto-refresh every 10s
+  - New Modules: src/ops/reconciliation_state.py
+  - New Test Files: tests/test_reconciliation.py (13 tests), tests/test_risk_engine_boundaries.py (18 tests)
+  - Tests: 31 new tests passing
+  - Endpoints: GET /api/system/reconciliation-status, POST /api/system/reconcile-now, POST /api/system/clear-reconciliation-block, GET /api/system/heartbeat-status, GET /api/system/rate-limit-status
+  - UI: Dashboard reorganized with Agent Status Bar, section headers, reconciliation card with Reconcile Now / Clear Block buttons
+  - Roadmap Items Addressed: C1 (Position reconciliation vs exchange), H2 (Risk engine boundary tests), G1 (Dashboard cleanup & clarity)
+  - Context-pack: uploaded (no)
