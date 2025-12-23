@@ -160,33 +160,39 @@ def get_health_status_for_api() -> dict:
     """
     Get health status formatted for API response.
     
-    Returns dict with:
+    CONTRACT (always enforced):
+    - overall_status: one of {"OK", "WARN", "FAIL"} - NEVER null
+    - can_trade: boolean ALWAYS (False on any error/missing data)
+    - worst_severity: non-null ALWAYS ("CRITICAL" on error, "OK" otherwise)
+    - summary: non-empty string ALWAYS
+    - checks: list ALWAYS (empty list OK)
+    - gates: list ALWAYS (empty list OK)
+    - gate_overall: dict ALWAYS ({"status": "OFF"} if no gates active)
+    
+    Additional fields:
     - checked_at: ISO timestamp or null
     - cache_age_seconds: seconds since last check or null
-    - overall_status: OK/WARN/FAIL or null
     - checks_overall: OK/WARN/FAIL or null
-    - worst_severity: OK/DEGRADED/FATAL or null
-    - can_trade: bool or null
-    - summary: short description
-    - checks: list of HealthCheckResult payloads
+    - can_trade_by_underlying: dict or null
     - agent_paused_due_to_health: bool
     """
     cached = get_cached_health_status()
     
+    # Fail-closed defaults when healthcheck hasn't run
     if cached is None:
         return {
             "checked_at": None,
             "cache_age_seconds": None,
             "last_run_at": None,
-            "overall_status": None,
-            "checks_overall": None,
-            "checks_summary": None,
-            "worst_severity": None,
-            "can_trade": None,
-            "summary": "Healthcheck not run yet",
+            "overall_status": "FAIL",
+            "checks_overall": "FAIL",
+            "checks_summary": "",
+            "worst_severity": "CRITICAL",
+            "can_trade": False,
+            "summary": "HEALTHCHECK_NOT_RUN: Healthcheck has not been executed yet",
             "checks": [],
             "gates": [],
-            "gate_overall": None,
+            "gate_overall": {"status": "FAIL", "message": "healthcheck not run"},
             "can_trade_by_underlying": None,
             "agent_paused_due_to_health": _agent_paused_due_to_health,
         }
@@ -196,7 +202,7 @@ def get_health_status_for_api() -> dict:
     details = cached.details or {}
     checks = details.get("checks") or details.get("results") or []
     gates = details.get("gates") or []
-    gate_overall = details.get("gate_overall")
+    gate_overall_raw = details.get("gate_overall")
     can_trade_by_underlying = details.get("can_trade_by_underlying")
     ops_facts = details.get("ops_facts")
 
@@ -206,17 +212,52 @@ def get_health_status_for_api() -> dict:
             f"{c.get('name')}:{c.get('status')}" for c in checks if isinstance(c, dict)
         )
 
+    # Enforce non-null overall_status
+    overall_status = cached.overall_status
+    if overall_status not in ("OK", "WARN", "FAIL"):
+        overall_status = "FAIL"
+
+    # Enforce non-null worst_severity
+    worst_severity = cached.worst_severity
+    if not worst_severity or not isinstance(worst_severity, str):
+        worst_severity = "CRITICAL" if overall_status == "FAIL" else "OK"
+
+    # Enforce boolean can_trade
+    can_trade = cached.can_trade
+    if not isinstance(can_trade, bool):
+        can_trade = False
+
+    # SINGLE SOURCE OF TRUTH: overall_status=FAIL must imply can_trade=False
+    # This ensures consistency - if the system is in FAIL state, trading is blocked.
+    if overall_status == "FAIL":
+        can_trade = False
+
+    # Enforce non-empty summary
+    summary = cached.summary
+    if not summary or not isinstance(summary, str):
+        summary = f"STATUS_{overall_status}"
+
+    # Enforce gate_overall is always a dict
+    if isinstance(gate_overall_raw, dict):
+        gate_overall = gate_overall_raw
+    elif gates:
+        # Gates exist but no gate_overall - derive status
+        gate_overall = {"status": "UNKNOWN", "message": "gate_overall missing"}
+    else:
+        # No gates active
+        gate_overall = {"status": "OFF", "message": "no gates configured"}
+
     return {
         "checked_at": cached.last_run_at.isoformat(),
         "cache_age_seconds": age_seconds,
         "last_run_at": cached.last_run_at.isoformat(),
-        "overall_status": cached.overall_status,
+        "overall_status": overall_status,
         "checks_overall": details.get("checks_overall"),
         "checks_overall_status": details.get("checks_overall"),
         "checks_summary": checks_summary,
-        "worst_severity": cached.worst_severity,
-        "can_trade": cached.can_trade,
-        "summary": cached.summary,
+        "worst_severity": worst_severity,
+        "can_trade": can_trade,
+        "summary": summary,
         "checks": checks,
         "gates": gates,
         "gate_overall": gate_overall,
