@@ -1,4 +1,4 @@
-.PHONY: extras context-pack context-pack-extras context-pack-all context-pack-push
+.PHONY: extras context-pack context-pack-extras context-pack-all context-pack-push codex
 
 context-pack-extras:
 	python3 scripts/gen_ops_health_latest.py
@@ -22,3 +22,6 @@ context-pack-all: context-pack
 
 # Generation-only target used by uploader scripts.
 context-pack-push: context-pack-all
+
+codex:
+	@scripts/codexw.sh "$$TASK"

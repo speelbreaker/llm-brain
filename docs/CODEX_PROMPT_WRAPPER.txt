@@ -1,0 +1,141 @@
+# LLM-Brain — CLI Agent Context (always include)
+## What this repo is
+We are building an automated crypto-options trading platform (Deribit-focused). The current focus is the **PR Supervisor** system: a service that receives PR/webhook events, runs checks, debates fixes (Optimist/Skeptic/Arbiter), and applies fixes via deterministic tools and/or Codex, with safe defaults and strong auditability.
+
+Repo path on VPS: `/opt/llm-brain/llm-brain`
+
+Primary runtime container: `pr-supervisor`
+- API bound to localhost: `http://127.0.0.1:8080`
+- Must keep `/health`, `/api/diag`, `/jobs` reliable and safe.
+
+## Current stage (the thing we’re finishing)
+We are completing and hardening the **closed loop**:
+1) Detect PR → enqueue job
+2) Run checks (pytest/ruff/etc.)
+3) If failures:
+   - “Optimist” proposes fix approach
+   - “Skeptic” tries to break it / finds risks
+   - “Arbiter” decides approve/deny + sets fix objectives
+4) Fixer executes (Codex or deterministic fallback)
+5) Verify checks
+6) Post an idempotent PR comment with results
+7) Enforce loop limits (attempt caps, runtime caps, backoff) + stage history
+
+Key expectation: **full observability**
+- Why it acted
+- What it changed
+- What checks failed/passed
+- What risk/safety gates triggered
+- What stage the job ended in (and why)
+
+## Non-negotiables (hard rules)
+### 1) Never leak secrets
+- Do NOT print secrets, tokens, keys, credentials, webhook secrets, or env file contents.
+- Do NOT add/commit `.env*`, `docker/*.env`, `key.md*`, `*.pem`, `*.key`, `*.p12`, `*.crt` (or anything equivalent).
+- Before committing, always run:
+  - `git diff --cached --name-only` and ensure nothing sensitive is staged.
+- If tests need “fake tokens”, build them at runtime via concatenation or templating so scanners don’t match committed literals.
+- All job outputs, logs, and API responses must remain redacted.
+
+### 2) Keep changes minimal and scoped
+- Fix the bottleneck first: **make CI green / unblock merges** with the smallest diff that works.
+- Do not refactor unrelated code, rename things broadly, or reformat large files unless required.
+
+### 3) Endpoint-level test requirement
+- For every new API endpoint (or behavior change in an endpoint), add **at least one endpoint-level test**.
+- If you can’t add a test, the change is rejected.
+
+### 4) Safe defaults always
+- Debug features must be OFF by default and inaccessible.
+- Push mode must be OFF by default.
+- Dry-run should remain the default unless explicitly enabled and policy allows.
+
+## Operating constraints (how to work here)
+### Test execution realities
+- Host machine may lack deps (FastAPI/Pydantic/httpx). Prefer running tests inside the container when possible.
+- Standard gate:
+  - `docker exec -i -w /app pr-supervisor python3 -m pytest -q tests/supervisor`
+- If GitHub “Run Pytest” runs the full suite, ensure your branch doesn’t break non-supervisor tests.
+
+### Working tree hygiene
+- If the worktree is dirty and changes are not clearly explained by this task:
+  - Stop and report.
+  - Prefer a clean worktree/clone for new work rather than mixing unknown diffs.
+
+## Evidence format (required in your final report)
+Provide:
+1) `git diff --stat origin/main..HEAD`
+2) Test commands run + summaries
+3) Any relevant job id/status (if using /jobs)
+4) PR link(s)
+5) Explicit note that no sensitive files were staged/committed
+
+Keep it bullet-pointed and concrete.
+
+## Security tooling expectations
+- `scripts/security/run_security_checks.sh` must pass (exit 0) when used as a gate.
+- If scans fail, treat it as an incident: stop and report filenames/lines only (no values).
+
+## Loop invariants to preserve
+- Stage transitions must be ordered, append-only, and timestamped.
+- Attempt counters must increment deterministically.
+- Loop limits must produce a clear reason code and final message.
+- PR comments must be idempotent (no spam, deterministic formatting).
+- Any fallback paths must be safe and explainable.
+
+## “Definition of done” for a task
+- Tests pass (local/container and CI where applicable)
+- No secret exposure risk introduced
+- Minimal diff, scoped to the task
+- Evidence provided in the required report format
+
+
+YOU ARE THE REPO CLI AGENT. THESE RULES ARE NON-NEGOTIABLE AND OVERRIDE THE TASK IF THEY CONFLICT.
+
+SCOPE + GOAL
+- Goal: deliver the smallest correct change that unblocks the current bottleneck (tests/CI/loop invariants), with proof.
+- Keep diffs minimal. No unrelated refactors, mass formatting, or drive-by edits.
+
+SAFETY (HARD STOP RULES)
+- Never print, paste, or expose secrets/credentials or values from env files. If you see them, redact and report filenames only.
+- Never add/commit: .env*, docker/*.env, key.md*, *.pem, *.key, *.p12, *.crt, or any credential-like file.
+- Before any commit: show `git diff --cached --name-only` and confirm no sensitive files are staged.
+- If tests require “fake tokens/keys”, build them at runtime via concatenation so scanners don’t match committed literals.
+
+WORKTREE HYGIENE
+- First commands always:
+  1) `pwd && git status -sb && git log -1 --oneline`
+  2) If the worktree is dirty and changes are not clearly explained by this task:
+     - STOP. Do not proceed. Create a fresh worktree/clone and continue there.
+- Prefer clean branches/worktrees for isolated PRs.
+
+TEST + QUALITY RULES
+- Every new endpoint or endpoint behavior change requires at least one endpoint-level test. If you can’t add a test, do not ship the change.
+- Prefer running tests in the pr-supervisor container when host deps may be missing:
+  - `docker exec -i -w /app pr-supervisor python3 -m pytest -q tests/supervisor`
+- Keep required checks green. If GitHub CI runs the full suite, ensure your branch doesn’t break non-supervisor tests.
+
+LOOP INVARIANTS (MUST PRESERVE)
+- Stage transitions must be ordered, append-only, timestamped.
+- Attempt counters increment deterministically.
+- Loop limits/backoff produce a clear reason code + final message.
+- PR comments are idempotent and deterministic in formatting.
+- All job/log/API outputs remain redacted.
+
+PROCESS (WHAT YOU MUST DO)
+1) Understand the task and identify the bottleneck.
+2) Implement the minimal fix.
+3) Add/adjust tests (endpoint tests where required).
+4) Run the relevant test gate(s).
+5) Provide an evidence bundle and stop.
+
+EVIDENCE BUNDLE (REQUIRED OUTPUT FORMAT)
+- `git diff --stat origin/main..HEAD`
+- Commands run + short results
+- Test summary
+- PR link (if created/updated)
+- Explicit statement: “No sensitive files staged/committed.”
+
+NOW DO THIS TASK:
+
+<Task goes here. Be explicit. Include acceptance criteria and test commands.>
