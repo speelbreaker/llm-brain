@@ -2,59 +2,69 @@
   "version": "2.0.0",
   "tasks": [
     {
-      "label": "App: Pull (rebase)",
-      "type": "shell",
-      "command": "git pull --rebase",
-      "options": { "cwd": "${workspaceFolder}" },
-      "problemMatcher": []
-    },
-    {
-      "label": "App: Status",
+      "label": "App: Git Status",
       "type": "shell",
       "command": "git status",
       "options": { "cwd": "${workspaceFolder}" },
       "problemMatcher": []
     },
     {
-      "label": "App: Push",
+      "label": "App: Git Pull (rebase)",
+      "type": "shell",
+      "command": "git pull --rebase",
+      "options": { "cwd": "${workspaceFolder}" },
+      "problemMatcher": []
+    },
+    {
+      "label": "App: Git Push",
       "type": "shell",
       "command": "git push",
       "options": { "cwd": "${workspaceFolder}" },
       "problemMatcher": []
     },
     {
-      "label": "Smoke: smoke.sh",
+      "label": "App: Smoke - Pytest (fast)",
       "type": "shell",
-      "command": "${workspaceFolder}/scripts/smoke.sh",
+      "command": "python -m pytest -q",
       "options": { "cwd": "${workspaceFolder}" },
       "problemMatcher": []
     },
     {
-      "label": "Format: format.sh",
+      "label": "App: Tests - Pytest (full suite)",
       "type": "shell",
-      "command": "${workspaceFolder}/scripts/format.sh",
+      "command": "python -m pytest",
       "options": { "cwd": "${workspaceFolder}" },
       "problemMatcher": []
     },
     {
-      "label": "Lint: lint.sh",
+      "label": "App: Lint - Ruff (check)",
       "type": "shell",
-      "command": "${workspaceFolder}/scripts/lint.sh",
+      "command": "python -m ruff check .",
       "options": { "cwd": "${workspaceFolder}" },
       "problemMatcher": []
     },
     {
-      "label": "CI: ci_local.sh",
+      "label": "App: Format - Ruff (format)",
       "type": "shell",
-      "command": "${workspaceFolder}/scripts/ci_local.sh",
+      "command": "python -m ruff format .",
       "options": { "cwd": "${workspaceFolder}" },
       "problemMatcher": []
     },
     {
-      "label": "Auto: Commit+Push (smoke first)",
+      "label": "App: Commit (prompt message)",
       "type": "shell",
-      "command": "${workspaceFolder}/auto_push.sh",
+      "command": "bash -lc 'read -p \"Commit message: \" msg; git add -A && git commit -m \"$msg\"'",
       "options": { "cwd": "${workspaceFolder}" },
+      "problemMatcher": []
+    },
+    {
+      "label": "App: Auto - Commit+Push (smoke first)",
+      "dependsOrder": "sequence",
+      "dependsOn": [
+        "App: Smoke - Pytest (fast)",
+        "App: Commit (prompt message)",
+        "App: Git Push"
+      ],
       "problemMatcher": []
     }
   ]
