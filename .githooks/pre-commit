@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# ============================================================================
+# pre-commit hook
+# ============================================================================
+# Runs before each commit. Blocks commits to main on production VPS.
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+
+# --- VPS Deploy-Only Guard ---
+# Block direct commits to main on VPS
+if [[ -x "$REPO_ROOT/scripts/ensure_not_on_vps_main.sh" ]]; then
+    "$REPO_ROOT/scripts/ensure_not_on_vps_main.sh" || exit 1
+fi
+
+# --- Secret Detection (if available) ---
+if [[ -x "$REPO_ROOT/scripts/security/scan_staged_secrets.sh" ]]; then
+    "$REPO_ROOT/scripts/security/scan_staged_secrets.sh" || exit 1
+fi
+
+echo "[pre-commit] All checks passed."
+
