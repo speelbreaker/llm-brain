@@ -11,6 +11,8 @@ class SupervisorSettings(BaseSettings):
     """Environment-based configuration for the PR Supervisor."""
     
     enabled: bool = Field(default=False, alias="SUPERVISOR_ENABLED")
+    dry_run: bool = Field(default=False, alias="SUPERVISOR_DRY_RUN")
+    push_enabled: bool = Field(default=True, alias="SUPERVISOR_PUSH_ENABLED")
     debug: bool = Field(default=False, alias="SUPERVISOR_DEBUG")
     debug_token: Optional[str] = Field(default=None, alias="SUPERVISOR_DEBUG_TOKEN")
     
