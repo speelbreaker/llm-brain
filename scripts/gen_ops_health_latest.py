@@ -12,10 +12,17 @@ Constraints:
 Environment:
 - CONTEXT_PACK_FAKE_OPS_HEALTH=1: write a deterministic stub payload.
 
-Output root keys:
-- generated_at_utc
-- head_sha
-- (plus health payload keys such as overall_status / gates / gate_overall)
+CONTRACT (always enforced, even on errors):
+- overall_status: one of {"OK", "WARN", "FAIL"} - NEVER null
+- can_trade: boolean ALWAYS (False on any error)
+- worst_severity: non-null ALWAYS ("CRITICAL" on error)
+- summary: non-empty string ALWAYS (includes code + short message on error)
+- checks: list ALWAYS (empty list OK)
+- gates: list ALWAYS (empty list OK)
+- gate_overall: dict ALWAYS ({"status": "FAIL"} on error)
+
+On generation errors, also includes:
+- error: {"code": "...", "exception": "...", "traceback": "..."}
 """
 
 from __future__ import annotations
@@ -25,6 +32,7 @@ import json
 import os
 import subprocess
 import sys
+import traceback
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict
@@ -54,21 +62,25 @@ def _head_sha(repo_root: Path) -> str | None:
 
 
 def _fake_payload(repo_root: Path) -> Dict[str, Any]:
+    """Generate a deterministic stub payload that conforms to the contract."""
     return {
+        # Envelope fields
         "generated_at_utc": "2000-01-01T00:00Z",
         "head_sha": "0000000000000000000000000000000000000000",
+        # Contract-required fields (all non-null)
+        "overall_status": "OK",
+        "can_trade": True,
+        "worst_severity": "OK",
+        "summary": "FAKE_OPS_HEALTH: Deterministic stub for testing",
+        "checks": [],
+        "gates": [],
+        "gate_overall": {"status": "OFF", "message": "fake payload"},
+        # Additional context fields
         "checked_at": "2000-01-01T00:00:00+00:00",
         "cache_age_seconds": 0.0,
         "last_run_at": "2000-01-01T00:00:00+00:00",
-        "overall_status": "OK",
         "checks_overall": "OK",
         "checks_summary": "",
-        "worst_severity": "OK",
-        "can_trade": True,
-        "summary": "FAKE_OPS_HEALTH",
-        "checks": [],
-        "gates": [],
-        "gate_overall": None,
         "can_trade_by_underlying": None,
         "ops_facts": {},
         "_note": "Deterministic stub written because CONTEXT_PACK_FAKE_OPS_HEALTH=1",
@@ -93,29 +105,56 @@ def _real_payload(repo_root: Path) -> Dict[str, Any]:
     return out
 
 
-def _error_payload(repo_root: Path, exc: Exception) -> Dict[str, Any]:
-    # Always emit the keys the API would normally include, so downstream consumers
-    # (and tests) can rely on schema presence.
+def _truncate_traceback(tb_str: str, max_lines: int = 50) -> str:
+    """Truncate traceback to max_lines for readable JSON."""
+    lines = tb_str.splitlines()
+    if len(lines) <= max_lines:
+        return tb_str
+    # Keep first half and last half with truncation marker
+    half = max_lines // 2
+    return "\n".join(
+        lines[:half] + [f"... ({len(lines) - max_lines} lines truncated) ..."] + lines[-half:]
+    )
+
+
+def _make_error_payload(repo_root: Path, e: Exception) -> Dict[str, Any]:
+    """Create a fail-closed payload that conforms to the contract.
+    
+    Includes full error details while enforcing all required fields.
+    """
+    exc_type = type(e).__name__
+    exc_msg = str(e)
+    tb_str = _truncate_traceback(traceback.format_exc(), max_lines=50)
+    
     return {
+        # Envelope fields
         "generated_at_utc": _now_utc(),
         "head_sha": _head_sha(repo_root),
+        # Contract-required fields (fail-closed)
+        "overall_status": "FAIL",
+        "can_trade": False,
+        "worst_severity": "CRITICAL",
+        "summary": f"OPS_HEALTH_GENERATION_ERROR: {exc_type}: {exc_msg}",
+        "checks": [],
+        "gates": [],
+        "gate_overall": {
+            "status": "FAIL",
+            "message": "generation error",
+            "code": "OPS_HEALTH_GENERATION_ERROR",
+        },
+        # Additional context fields
         "checked_at": None,
         "cache_age_seconds": None,
         "last_run_at": None,
-        "overall_status": "FAIL",
         "checks_overall": "FAIL",
-        "checks_summary": None,
-        "worst_severity": "FATAL",
-        "can_trade": False,
-        "summary": "OPS_HEALTH_GENERATION_ERROR",
-        "error_code": "OPS_HEALTH_GENERATION_ERROR",
-        "error_message": str(exc),
-        "checks": [],
-        "gates": [],
-        "gate_overall": None,
+        "checks_summary": "",
         "can_trade_by_underlying": None,
-        "agent_paused_due_to_health": None,
-        "error": {"type": type(exc).__name__, "message": str(exc)},
+        # Error details
+        "error": {
+            "code": "OPS_HEALTH_GENERATION_ERROR",
+            "exception": f"{exc_type}: {exc_msg}",
+            "traceback": tb_str,
+        },
     }
 
 
@@ -149,7 +188,8 @@ def main(argv: list[str]) -> int:
         try:
             payload = _real_payload(repo_root)
         except Exception as e:
-            payload = _error_payload(repo_root, e)
+            # Always write a JSON artifact with full error details and fail-closed fields.
+            payload = _make_error_payload(repo_root, e)
 
     out_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     print(f"Wrote {out_path}")

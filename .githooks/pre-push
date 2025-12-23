@@ -1,5 +1,19 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# ============================================================================
+# pre-push hook
+# ============================================================================
+# Runs before each push. Blocks pushes to main from production VPS.
+
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+
+# --- VPS Deploy-Only Guard ---
+# Block direct pushes to main on VPS (hotfix branches are allowed)
+if [[ -x "$REPO_ROOT/scripts/ensure_not_on_vps_main.sh" ]]; then
+    "$REPO_ROOT/scripts/ensure_not_on_vps_main.sh" || exit 1
+fi
+
+# --- Smoke Tests ---
 echo "[pre-push] Running smoke tests..."
 bash scripts/smoke_all.sh --unit
