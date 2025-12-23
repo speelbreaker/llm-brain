@@ -2708,9 +2708,51 @@ def render_dashboard_html() -> str:
       <!-- Runtime Controls Section -->
       <div style="margin-top: 2rem;">
         <h2 style="margin-bottom: 0.5rem;">Runtime Controls</h2>
-        <p style="color: #666; margin-bottom: 1.5rem;">Adjust safety and operational settings. Changes apply immediately but do not persist across restarts.</p>
+        <p style="color: #666; margin-bottom: 1rem;">Adjust safety and operational settings. Changes apply immediately but do not persist across restarts.</p>
         
-        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 1.5rem;">
+        <!-- Agent Status Bar - Quick visibility of key indicators -->
+        <div id="agent-status-bar" style="display: flex; flex-wrap: wrap; gap: 1rem; padding: 1rem; background: linear-gradient(135deg, #1a237e 0%, #283593 100%); border-radius: 8px; margin-bottom: 1.5rem; color: white;">
+          
+          <!-- Heartbeat Indicator -->
+          <div style="display: flex; align-items: center; gap: 0.5rem; padding: 0.5rem 1rem; background: rgba(255,255,255,0.1); border-radius: 6px;">
+            <div id="status-heartbeat-dot" style="width: 10px; height: 10px; border-radius: 50%; background: #9e9e9e; animation: pulse 2s infinite;"></div>
+            <span style="font-size: 0.8rem; opacity: 0.9;">Heartbeat</span>
+            <span id="status-heartbeat-text" style="font-size: 0.85rem; font-weight: 600;">--</span>
+          </div>
+          
+          <!-- Trade Mode Badge -->
+          <div style="display: flex; align-items: center; gap: 0.5rem; padding: 0.5rem 1rem; background: rgba(255,255,255,0.1); border-radius: 6px;">
+            <span style="font-size: 0.8rem; opacity: 0.9;">Mode:</span>
+            <span id="status-trade-mode" style="font-size: 0.85rem; font-weight: 600; padding: 0.2rem 0.5rem; background: #4caf50; border-radius: 4px;">NORMAL</span>
+          </div>
+          
+          <!-- Rate Limit Gauge -->
+          <div style="display: flex; align-items: center; gap: 0.5rem; padding: 0.5rem 1rem; background: rgba(255,255,255,0.1); border-radius: 6px; min-width: 140px;">
+            <span style="font-size: 0.8rem; opacity: 0.9;">Orders:</span>
+            <div style="flex: 1; height: 6px; background: rgba(255,255,255,0.3); border-radius: 3px; overflow: hidden;">
+              <div id="status-rate-bar" style="height: 100%; width: 0%; background: #4caf50; transition: width 0.3s, background 0.3s;"></div>
+            </div>
+            <span id="status-rate-text" style="font-size: 0.8rem; font-weight: 600;">0/10</span>
+          </div>
+          
+          <!-- Reconciliation Status -->
+          <div style="display: flex; align-items: center; gap: 0.5rem; padding: 0.5rem 1rem; background: rgba(255,255,255,0.1); border-radius: 6px;">
+            <span style="font-size: 0.8rem; opacity: 0.9;">Positions:</span>
+            <span id="status-reconciliation" style="font-size: 0.85rem; font-weight: 600;">--</span>
+          </div>
+          
+          <!-- Kill Switch Status -->
+          <div style="display: flex; align-items: center; gap: 0.5rem; padding: 0.5rem 1rem; background: rgba(255,255,255,0.1); border-radius: 6px;">
+            <span style="font-size: 0.8rem; opacity: 0.9;">Kill Switch:</span>
+            <span id="status-kill-switch" style="font-size: 0.85rem; font-weight: 600;">OFF</span>
+          </div>
+          
+        </div>
+        
+        <!-- Safety Controls Section -->
+        <h3 style="margin: 1.5rem 0 1rem 0; padding-bottom: 0.5rem; border-bottom: 2px solid #e65100; color: #e65100;">Safety Controls</h3>
+        
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 1.5rem; margin-bottom: 2rem;">
           
           <!-- Kill Switch Toggle -->
           <div style="background: #fff3e0; padding: 1.25rem; border-radius: 8px; border-left: 4px solid #e65100;">
@@ -2824,6 +2866,13 @@ def render_dashboard_html() -> str:
             <div id="rate-limit-feedback" style="font-size: 0.8rem; min-height: 1.5rem; margin-top: 0.5rem;"></div>
           </div>
           
+        </div>
+        
+        <!-- Risk & Drawdown Section -->
+        <h3 style="margin: 1.5rem 0 1rem 0; padding-bottom: 0.5rem; border-bottom: 2px solid #c62828; color: #c62828;">Risk & Drawdown Limits</h3>
+        
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 1.5rem; margin-bottom: 2rem;">
+          
           <!-- Rolling Drawdown -->
           <div style="background: #ffebee; padding: 1.25rem; border-radius: 8px; border-left: 4px solid #d32f2f;">
             <h3 style="margin: 0 0 0.75rem 0; color: #c62828; font-size: 1rem;">Rolling Drawdown</h3>
@@ -2852,7 +2901,27 @@ def render_dashboard_html() -> str:
             <div id="daily-dd-feedback" style="font-size: 0.8rem; min-height: 1.5rem; margin-top: 0.5rem;"></div>
           </div>
           
+          <!-- Position Reconciliation -->
+          <div style="background: #fce4ec; padding: 1.25rem; border-radius: 8px; border-left: 4px solid #ad1457;">
+            <h3 style="margin: 0 0 0.75rem 0; color: #ad1457; font-size: 1rem;">Position Reconciliation</h3>
+            <p style="font-size: 0.8rem; color: #666; margin-bottom: 1rem;">Compare local tracker vs exchange positions.</p>
+            <div id="reconciliation-status" style="font-size: 0.85rem; margin-bottom: 0.75rem;">Loading...</div>
+            <div id="reconciliation-mismatches" style="font-size: 0.8rem; color: #666; margin-bottom: 0.75rem; max-height: 100px; overflow-y: auto;"></div>
+            <div style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
+              <button onclick="triggerReconciliation()" style="padding: 0.4rem 0.75rem; font-size: 0.85rem; background: #1976d2; color: white; border: none; border-radius: 4px; cursor: pointer;">Reconcile Now</button>
+              <button onclick="clearReconciliationBlock()" id="clear-recon-block-btn" style="padding: 0.4rem 0.75rem; font-size: 0.85rem; background: #ff9800; color: white; border: none; border-radius: 4px; cursor: pointer; display: none;">Clear Block</button>
+            </div>
+            <div id="reconciliation-feedback" style="font-size: 0.8rem; min-height: 1.5rem; margin-top: 0.5rem;"></div>
+          </div>
+          
         </div>
+        
+        <!-- Operations Section -->
+        <h3 style="margin: 1.5rem 0 1rem 0; padding-bottom: 0.5rem; border-bottom: 2px solid #1565c0; color: #1565c0;">Operational Settings</h3>
+        
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 1.5rem;">
+        </div>
+        
       </div>
       
       <!-- LLM & Strategy Tuning Section -->
@@ -4909,6 +4978,15 @@ def render_dashboard_html() -> str:
       // Load daily drawdown state
       await loadDailyDrawdownState();
       
+      // Load reconciliation status
+      await loadReconciliationStatus();
+      
+      // Update agent status bar
+      updateAgentStatusBar();
+      
+      // Auto-refresh status bar every 10 seconds
+      setInterval(updateAgentStatusBar, 10000);
+      
       // Load LLM & Strategy tuning config
       await loadLLMStrategyConfig();
 
@@ -5373,6 +5451,210 @@ def render_dashboard_html() -> str:
           feedbackEl.innerHTML = `<span style="color: #2e7d32;">✓ ${{data.message}}</span>`;
           setTimeout(() => {{ feedbackEl.innerHTML = ''; }}, 3000);
           loadDailyDrawdownState();
+        }} else {{
+          feedbackEl.innerHTML = `<span style="color: #c62828;">✗ ${{data.error || 'Failed'}}</span>`;
+        }}
+      }} catch (e) {{
+        feedbackEl.innerHTML = `<span style="color: #c62828;">✗ Error: ${{e.message}}</span>`;
+      }}
+    }}
+    
+    async function updateAgentStatusBar() {{
+      // Fetch all status endpoints in parallel
+      try {{
+        const [configRes, heartbeatRes, rateLimitRes, reconcileRes] = await Promise.all([
+          fetch('/api/system/runtime-config'),
+          fetch('/api/system/heartbeat-status').catch(() => null),
+          fetch('/api/system/rate-limit-status').catch(() => null),
+          fetch('/api/system/reconciliation-status').catch(() => null),
+        ]);
+        
+        // Trade Mode & Kill Switch
+        if (configRes.ok) {{
+          const config = await configRes.json();
+          
+          // Trade Mode
+          const tradeModeEl = document.getElementById('status-trade-mode');
+          if (tradeModeEl && config.trade_mode) {{
+            const mode = config.trade_mode.toUpperCase();
+            tradeModeEl.textContent = mode;
+            tradeModeEl.style.background = mode === 'NORMAL' ? '#4caf50' : mode === 'CLOSE_ONLY' ? '#ff9800' : '#f44336';
+          }}
+          
+          // Kill Switch
+          const killSwitchEl = document.getElementById('status-kill-switch');
+          if (killSwitchEl) {{
+            killSwitchEl.textContent = config.kill_switch_enabled ? 'ON' : 'OFF';
+            killSwitchEl.style.color = config.kill_switch_enabled ? '#ff5252' : '#4caf50';
+          }}
+        }}
+        
+        // Heartbeat
+        if (heartbeatRes && heartbeatRes.ok) {{
+          const hb = await heartbeatRes.json();
+          const dotEl = document.getElementById('status-heartbeat-dot');
+          const textEl = document.getElementById('status-heartbeat-text');
+          if (dotEl && textEl && hb.ok) {{
+            if (hb.status === 'healthy') {{
+              dotEl.style.background = '#4caf50';
+              textEl.textContent = 'OK';
+            }} else if (hb.status === 'stalled') {{
+              dotEl.style.background = '#f44336';
+              textEl.textContent = 'STALLED';
+            }} else if (hb.status === 'disabled') {{
+              dotEl.style.background = '#9e9e9e';
+              textEl.textContent = 'OFF';
+            }} else {{
+              dotEl.style.background = '#ff9800';
+              textEl.textContent = hb.status || '?';
+            }}
+          }}
+        }}
+        
+        // Rate Limit
+        if (rateLimitRes && rateLimitRes.ok) {{
+          const rl = await rateLimitRes.json();
+          const barEl = document.getElementById('status-rate-bar');
+          const textEl = document.getElementById('status-rate-text');
+          if (barEl && textEl && rl.ok) {{
+            const pct = rl.limit > 0 ? (rl.current / rl.limit * 100) : 0;
+            barEl.style.width = pct + '%';
+            barEl.style.background = pct >= 90 ? '#f44336' : pct >= 70 ? '#ff9800' : '#4caf50';
+            textEl.textContent = `${{rl.current}}/${{rl.limit}}`;
+          }}
+        }}
+        
+        // Reconciliation
+        if (reconcileRes && reconcileRes.ok) {{
+          const rec = await reconcileRes.json();
+          const recEl = document.getElementById('status-reconciliation');
+          if (recEl && rec.ok) {{
+            if (rec.result === 'clean') {{
+              recEl.textContent = 'IN SYNC';
+              recEl.style.color = '#4caf50';
+            }} else if (rec.result === 'divergent') {{
+              recEl.textContent = rec.trading_blocked ? 'BLOCKED' : 'MISMATCH';
+              recEl.style.color = '#f44336';
+            }} else if (rec.result === 'pending') {{
+              recEl.textContent = 'PENDING';
+              recEl.style.color = '#9e9e9e';
+            }} else {{
+              recEl.textContent = rec.result?.toUpperCase() || '?';
+              recEl.style.color = '#ff9800';
+            }}
+          }}
+        }}
+        
+      }} catch (e) {{
+        console.error('Error updating status bar:', e);
+      }}
+    }}
+    
+    async function loadReconciliationStatus() {{
+      const statusEl = document.getElementById('reconciliation-status');
+      const mismatchesEl = document.getElementById('reconciliation-mismatches');
+      const clearBlockBtn = document.getElementById('clear-recon-block-btn');
+      if (!statusEl) return;
+      
+      try {{
+        const res = await fetch('/api/system/reconciliation-status');
+        const data = await res.json();
+        if (data.ok) {{
+          let statusHtml = '';
+          let statusColor = '#4caf50';
+          
+          if (data.result === 'clean') {{
+            statusHtml = `<span style="color: #4caf50;">✓ IN SYNC</span>`;
+            if (data.last_run_time) {{
+              statusHtml += ` <span style="color: #666;">(Exchange: ${{data.exchange_count}}, Local: ${{data.local_count}})</span>`;
+            }}
+          }} else if (data.result === 'divergent') {{
+            statusColor = '#f44336';
+            statusHtml = `<span style="color: #f44336;">✗ DIVERGENT</span> <span style="color: #666;">(${{data.mismatch_count}} mismatches)</span>`;
+            if (data.trading_blocked) {{
+              statusHtml += `<br><span style="color: #f44336; font-weight: 600;">⚠️ TRADING BLOCKED</span>`;
+            }}
+          }} else if (data.result === 'error') {{
+            statusColor = '#ff9800';
+            statusHtml = `<span style="color: #ff9800;">⚠ ERROR: ${{data.error_message || 'Unknown error'}}</span>`;
+          }} else {{
+            statusHtml = `<span style="color: #666;">Not yet run</span>`;
+          }}
+          
+          if (data.last_run_time) {{
+            const dt = new Date(data.last_run_time);
+            statusHtml += `<br><span style="color: #999; font-size: 0.75rem;">Last: ${{dt.toLocaleString()}}</span>`;
+          }}
+          
+          statusEl.innerHTML = statusHtml;
+          
+          // Show/hide clear block button
+          if (clearBlockBtn) {{
+            clearBlockBtn.style.display = data.trading_blocked ? 'inline-block' : 'none';
+          }}
+          
+          // Show mismatches if any
+          if (mismatchesEl && data.mismatches && data.mismatches.length > 0) {{
+            let mismatchHtml = '<strong>Mismatches:</strong><ul style="margin: 0.25rem 0; padding-left: 1.25rem;">';
+            data.mismatches.slice(0, 5).forEach(m => {{
+              if (m.mismatch_type === 'size_mismatch') {{
+                mismatchHtml += `<li>${{m.symbol}}: local=${{m.local_size?.toFixed(4) || '?'}}, exchange=${{m.exchange_size?.toFixed(4) || '?'}}</li>`;
+              }} else {{
+                mismatchHtml += `<li>${{m.symbol}}: ${{m.mismatch_type.replace(/_/g, ' ')}}</li>`;
+              }}
+            }});
+            if (data.mismatches.length > 5) {{
+              mismatchHtml += `<li>...and ${{data.mismatches.length - 5}} more</li>`;
+            }}
+            mismatchHtml += '</ul>';
+            mismatchesEl.innerHTML = mismatchHtml;
+          }} else if (mismatchesEl) {{
+            mismatchesEl.innerHTML = '';
+          }}
+        }} else {{
+          statusEl.innerHTML = '<span style="color: #c62828;">Error loading status</span>';
+        }}
+      }} catch (e) {{
+        statusEl.innerHTML = `<span style="color: #c62828;">Error: ${{e.message}}</span>`;
+      }}
+    }}
+    
+    async function triggerReconciliation() {{
+      const feedbackEl = document.getElementById('reconciliation-feedback');
+      feedbackEl.innerHTML = '<span style="color: #666;">Reconciling...</span>';
+      try {{
+        const res = await fetch('/api/system/reconcile-now', {{ method: 'POST' }});
+        const data = await res.json();
+        if (data.ok) {{
+          if (data.result === 'clean') {{
+            feedbackEl.innerHTML = `<span style="color: #2e7d32;">✓ ${{data.message}}</span>`;
+          }} else if (data.result === 'healed') {{
+            feedbackEl.innerHTML = `<span style="color: #2e7d32;">✓ ${{data.message}}</span>`;
+          }} else {{
+            feedbackEl.innerHTML = `<span style="color: #ff9800;">⚠ ${{data.message}}</span>`;
+          }}
+          setTimeout(() => {{ feedbackEl.innerHTML = ''; }}, 5000);
+          loadReconciliationStatus();
+        }} else {{
+          feedbackEl.innerHTML = `<span style="color: #c62828;">✗ ${{data.error || 'Failed'}}</span>`;
+        }}
+      }} catch (e) {{
+        feedbackEl.innerHTML = `<span style="color: #c62828;">✗ Error: ${{e.message}}</span>`;
+      }}
+    }}
+    
+    async function clearReconciliationBlock() {{
+      if (!confirm('Clear trading block due to position mismatch?\\n\\nOnly do this after manually verifying positions are correct.')) return;
+      
+      const feedbackEl = document.getElementById('reconciliation-feedback');
+      feedbackEl.innerHTML = '<span style="color: #666;">Clearing block...</span>';
+      try {{
+        const res = await fetch('/api/system/clear-reconciliation-block', {{ method: 'POST' }});
+        const data = await res.json();
+        if (data.ok) {{
+          feedbackEl.innerHTML = `<span style="color: #2e7d32;">✓ ${{data.message}}</span>`;
+          setTimeout(() => {{ feedbackEl.innerHTML = ''; }}, 3000);
+          loadReconciliationStatus();
         }} else {{
           feedbackEl.innerHTML = `<span style="color: #c62828;">✗ ${{data.error || 'Failed'}}</span>`;
         }}

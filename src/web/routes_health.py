@@ -788,6 +788,42 @@ async def get_supervisor_job(job_id: str):
         )
 
 
+@router.get("/api/system/heartbeat-status")
+def get_heartbeat_status_endpoint() -> JSONResponse:
+    """Get current heartbeat monitor status."""
+    from src.ops.heartbeat import get_heartbeat_status
+    
+    try:
+        status = get_heartbeat_status()
+        return JSONResponse(content={
+            "ok": True,
+            **status,
+        })
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={"ok": False, "error": str(e)}
+        )
+
+
+@router.get("/api/system/rate-limit-status")
+def get_rate_limit_status_endpoint() -> JSONResponse:
+    """Get current rate limiter status."""
+    from src.ops.rate_limiter import get_rate_limit_status
+    
+    try:
+        status = get_rate_limit_status()
+        return JSONResponse(content={
+            "ok": True,
+            **status,
+        })
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={"ok": False, "error": str(e)}
+        )
+
+
 @router.post("/api/system/reset-rolling-drawdown")
 def reset_rolling_drawdown_endpoint() -> JSONResponse:
     """Reset rolling drawdown tracker and close-only trigger."""
@@ -834,6 +870,167 @@ def reset_daily_drawdown_endpoint() -> JSONResponse:
         return JSONResponse(content={
             "ok": True,
             "message": "Daily drawdown state reset successfully",
+        })
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={"ok": False, "error": str(e)}
+        )
+
+
+@router.get("/api/system/reconciliation-status")
+def get_reconciliation_status_endpoint() -> JSONResponse:
+    """Get current position reconciliation status."""
+    from src.ops.reconciliation_state import get_reconciliation_status
+    
+    try:
+        status = get_reconciliation_status()
+        return JSONResponse(content={
+            "ok": True,
+            **status.to_dict(),
+        })
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={"ok": False, "error": str(e)}
+        )
+
+
+@router.post("/api/system/reconcile-now")
+def reconcile_now_endpoint() -> JSONResponse:
+    """
+    Trigger manual position reconciliation.
+    
+    This will:
+    1. Fetch current positions from Deribit
+    2. Compare with local tracker
+    3. If divergent and action=auto_heal, rebuild local state
+    4. Update reconciliation status
+    5. Clear trading block if positions now match
+    """
+    from src.deribit_client import DeribitClient
+    from src.position_tracker import position_tracker
+    from src.reconciliation import run_reconciliation_once
+    from src.ops.reconciliation_state import (
+        set_reconciliation_status,
+        build_mismatches_from_diff,
+        clear_reconciliation_block,
+        ReconciliationResult,
+    )
+    
+    try:
+        client = DeribitClient()
+        
+        try:
+            diff = run_reconciliation_once(
+                deribit_client=client,
+                position_tracker=position_tracker,
+                settings=settings,
+            )
+            diff_dict = diff.to_dict()
+            mismatches = build_mismatches_from_diff({
+                "missing_in_local": diff_dict.get("untracked_on_exchange", []),
+                "missing_in_exchange": diff_dict.get("missing_on_exchange", []),
+                "size_mismatches": diff_dict.get("size_mismatches", []),
+            })
+            
+            if diff.is_clean:
+                set_reconciliation_status(
+                    result=ReconciliationResult.CLEAN,
+                    is_clean=True,
+                    mismatches=[],
+                    exchange_count=diff.exchange_count,
+                    local_count=diff.local_count,
+                    action_taken="none",
+                    trading_blocked=False,
+                )
+                clear_reconciliation_block()
+                
+                return JSONResponse(content={
+                    "ok": True,
+                    "result": "clean",
+                    "message": f"Positions IN SYNC (exchange={diff.exchange_count}, local={diff.local_count})",
+                    "exchange_count": diff.exchange_count,
+                    "local_count": diff.local_count,
+                    "trading_blocked": False,
+                })
+            else:
+                # Divergent - check action
+                if settings.position_reconcile_action == "auto_heal":
+                    # Fetch all positions and rebuild
+                    all_positions = (
+                        client.get_positions(currency="BTC", kind="option")
+                        + client.get_positions(currency="ETH", kind="option")
+                    )
+                    rebuilt_count = position_tracker.rebuild_from_exchange(all_positions)
+                    
+                    set_reconciliation_status(
+                        result=ReconciliationResult.CLEAN,
+                        is_clean=True,
+                        mismatches=[],
+                        exchange_count=diff.exchange_count,
+                        local_count=rebuilt_count,
+                        action_taken="auto_heal",
+                        trading_blocked=False,
+                    )
+                    clear_reconciliation_block()
+                    
+                    return JSONResponse(content={
+                        "ok": True,
+                        "result": "healed",
+                        "message": f"Auto-healed: rebuilt {rebuilt_count} positions from exchange",
+                        "exchange_count": diff.exchange_count,
+                        "local_count": rebuilt_count,
+                        "mismatches_before": [m.to_dict() for m in mismatches],
+                        "trading_blocked": False,
+                    })
+                else:
+                    # Halt mode - report but don't auto-heal
+                    set_reconciliation_status(
+                        result=ReconciliationResult.DIVERGENT,
+                        is_clean=False,
+                        mismatches=mismatches,
+                        exchange_count=diff.exchange_count,
+                        local_count=diff.local_count,
+                        action_taken="halt",
+                        trading_blocked=True,
+                    )
+                    
+                    return JSONResponse(content={
+                        "ok": True,
+                        "result": "divergent",
+                        "message": "Position mismatch detected. Trading blocked until resolved.",
+                        "exchange_count": diff.exchange_count,
+                        "local_count": diff.local_count,
+                        "mismatches": [m.to_dict() for m in mismatches],
+                        "trading_blocked": True,
+                        "hint": "Change position_reconcile_action to 'auto_heal' or manually reconcile positions.",
+                    })
+        finally:
+            client.close()
+            
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={"ok": False, "error": str(e)}
+        )
+
+
+@router.post("/api/system/clear-reconciliation-block")
+def clear_reconciliation_block_endpoint() -> JSONResponse:
+    """
+    Clear the trading block caused by position reconciliation divergence.
+    Use with caution - only after manually verifying positions are correct.
+    """
+    from src.ops.reconciliation_state import clear_reconciliation_block, get_reconciliation_status
+    
+    try:
+        clear_reconciliation_block()
+        status = get_reconciliation_status()
+        return JSONResponse(content={
+            "ok": True,
+            "message": "Reconciliation block cleared. Trading can resume.",
+            "current_status": status.to_dict(),
         })
     except Exception as e:
         return JSONResponse(
