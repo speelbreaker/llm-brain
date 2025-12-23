@@ -25,6 +25,7 @@ from src.web.routes_positions import router as positions_router
 from src.web.routes_fidelity import router as fidelity_router
 from src.web.routes_bots import router as bots_router
 from src.web.routes_health import router as health_router
+from src.web.routes_ops import router as ops_router
 from src.web.routes_deploy import router as deploy_router
 from src.web.routes_telegram import router as telegram_router
 
@@ -42,6 +43,7 @@ app.include_router(positions_router)
 app.include_router(fidelity_router)
 app.include_router(bots_router)
 app.include_router(health_router)
+app.include_router(ops_router)
 app.include_router(telegram_router)
 if os.environ.get("DEPLOY_WEBHOOK_SECRET"):
     app.include_router(deploy_router)
@@ -118,6 +120,11 @@ def start_background_agent() -> None:
     healthcheck_thread = threading.Thread(target=_healthcheck_scheduler_target, daemon=True)
     healthcheck_thread.start()
     print("Healthcheck scheduler started in background thread")
+
+
+def create_app() -> FastAPI:
+    """Return the FastAPI application for tests and deployments."""
+    return app
 
 
 @app.get("/", response_class=HTMLResponse)

@@ -105,6 +105,99 @@ def _bucket_iv_errors(
     return {"mae": mae, "mae_by_bucket": mae_by_bucket, "coverage": coverage}
 
 
+def _check_data_available(underlying: str, base_dir: Path) -> Dict[str, Any]:
+    """Stage 0: Check required market data exists."""
+    u = underlying.upper()
+    live_dir = base_dir / "data" / "live_deribit" / u
+    harvest_exists = False
+    if live_dir.exists():
+        try:
+            harvest_exists = any(live_dir.iterdir())
+        except Exception:
+            harvest_exists = False
+
+    return {
+        "name": "data_available",
+        "stage": 0,
+        "status": "OK" if harvest_exists else "FAIL",
+        "details": f"live_deribit/{u}: {'found' if harvest_exists else 'missing'}",
+    }
+
+
+def _check_calibration_present(underlying: str, base_dir: Path) -> Dict[str, Any]:
+    """Stage 0: Check calibration artifacts exist."""
+    u = underlying.upper()
+    cal_dir = base_dir / "data" / "calibration_runs" / u / "latest"
+    cal_exists = cal_dir.exists()
+
+    return {
+        "name": "calibration_present",
+        "stage": 0,
+        "status": "OK" if cal_exists else "WARN",
+        "details": f"calibration_runs/{u}/latest: {'found' if cal_exists else 'missing'}",
+    }
+
+
+def _check_ops_health_contract(base_dir: Path) -> Dict[str, Any]:
+    """Stage 0: Validate ops health artifact has required fields."""
+    import json
+
+    ops_path = base_dir / "docs" / "OPS_HEALTH_latest.json"
+    if not ops_path.exists():
+        return {
+            "name": "ops_health_contract",
+            "stage": 0,
+            "status": "WARN",
+            "details": "OPS_HEALTH_latest.json not found",
+        }
+
+    try:
+        payload = json.loads(ops_path.read_text())
+    except Exception as exc:  # pragma: no cover - defensive
+        return {
+            "name": "ops_health_contract",
+            "stage": 0,
+            "status": "FAIL",
+            "details": f"Parse error: {exc}",
+        }
+
+    required = {"overall_status", "can_trade", "summary"}
+    missing = required - set(payload.keys())
+    if missing:
+        return {
+            "name": "ops_health_contract",
+            "stage": 0,
+            "status": "FAIL",
+            "details": f"Missing keys: {missing}",
+        }
+
+    return {
+        "name": "ops_health_contract",
+        "stage": 0,
+        "status": "OK",
+        "details": f"Contract valid, status={payload.get('overall_status')}",
+    }
+
+
+def run_preflight_checks(underlying: str, base_dir: Path) -> List[Dict[str, Any]]:
+    """Run Stage 0 preflight checks before the full suite."""
+    return [
+        _check_data_available(underlying, base_dir),
+        _check_calibration_present(underlying, base_dir),
+        _check_ops_health_contract(base_dir),
+    ]
+
+
+def _compute_overall_status(checks: List[Dict[str, Any]]) -> str:
+    """Compute worst status from a list of checks."""
+    statuses = [entry.get("status") for entry in checks if entry.get("status")]
+    if "FAIL" in statuses:
+        return "FAIL"
+    if "WARN" in statuses:
+        return "WARN"
+    return "OK"
+
+
 def run_fidelity_suite(
     *,
     start_ts: int,
@@ -526,8 +619,38 @@ def run_fidelity_suite_from_cli(
     seed: int,
     out_dir: Optional[str],
     slippage_bps: float,
-) -> FidelityReport:
-    return run_fidelity_suite(
+    mode: str = "quick",
+) -> Dict[str, Any]:
+    """
+    Run the fidelity suite with an explicit mode.
+
+    Modes:
+        preflight: Stage 0 only (fast, offline checks)
+        quick: Stage 0 + fast suite checks
+        full: Stage 0 + comprehensive backtests
+    """
+    base_dir = Path(out_dir) if out_dir else Path.cwd()
+    preflight_checks = run_preflight_checks(underlying, base_dir)
+    preflight_status = _compute_overall_status(preflight_checks)
+    preflight_failed = preflight_status == "FAIL"
+
+    if mode == "preflight" or preflight_failed:
+        run_id = f"preflight_{underlying.upper()}_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}"
+        summary = f"Preflight: {preflight_status}"
+        if preflight_failed:
+            summary += " - suite skipped"
+        return {
+            "run_id": run_id,
+            "timestamp_utc": datetime.utcnow().isoformat(),
+            "underlying": underlying.upper(),
+            "mode": "preflight",
+            "overall_status": preflight_status,
+            "can_trade": preflight_status != "FAIL",
+            "checks": preflight_checks,
+            "summary": summary,
+        }
+
+    report = run_fidelity_suite(
         start_ts=_parse_iso_or_ts(start),
         end_ts=_parse_iso_or_ts(end),
         underlying=underlying,
@@ -535,3 +658,31 @@ def run_fidelity_suite_from_cli(
         out_dir=out_dir,
         slippage_bps=float(slippage_bps),
     )
+
+    gate_label = (report.gate_label or report.gate or "").upper()
+    gate_to_status = {"TRUSTED": "OK", "WARNING": "WARN", "UNTRUSTED": "FAIL"}
+    gate_status = gate_to_status.get(gate_label, "FAIL")
+    combined_checks = list(preflight_checks)
+    combined_checks.append(
+        {
+            "name": "gate_label",
+            "stage": 1,
+            "status": gate_status,
+            "details": f"Gate label {report.gate_label}",
+        }
+    )
+    overall_status = _compute_overall_status(combined_checks)
+    summary = (
+        f"Fidelity {mode} run gate {report.gate_label or gate_label} "
+        f"score {report.overall_score:.1f}"
+    )
+    return {
+        "run_id": report.run_id,
+        "timestamp_utc": report.timestamp,
+        "underlying": report.underlying,
+        "mode": mode,
+        "overall_status": overall_status,
+        "can_trade": overall_status != "FAIL",
+        "checks": preflight_checks,
+        "summary": summary,
+    }

@@ -34,6 +34,12 @@ def main() -> None:
     )
     p.add_argument("--seed", type=int, default=123, help="Deterministic seed")
     p.add_argument("--slippage-bps", type=float, default=0.0, help="Slippage bps used for fills")
+    p.add_argument(
+        "--mode",
+        default="quick",
+        choices=["preflight", "quick", "full"],
+        help="preflight=checks only, quick=fast suite, full=comprehensive",
+    )
 
     args = p.parse_args()
 
@@ -44,12 +50,19 @@ def main() -> None:
         seed=int(args.seed),
         out_dir=args.out_dir,
         slippage_bps=float(args.slippage_bps),
+        mode=args.mode,
     )
 
-    base_dir = Path(args.out_dir) if args.out_dir else Path(os.getenv("FIDELITY_RUNS_DIR", "data/fidelity_runs"))
-    run_dir = base_dir / str(report.run_id)
+    if report.get("mode") == "preflight":
+        print(f"Preflight {report['run_id']} overall_status={report['overall_status']} -> {report['summary']}")
+        for check in report.get("checks", []):
+            print(f"  - {check.get('name')}: {check.get('status')} ({check.get('details')})")
+        return
 
-    print(f"Wrote fidelity run {report.run_id}")
+    base_dir = Path(args.out_dir) if args.out_dir else Path(os.getenv("FIDELITY_RUNS_DIR", "data/fidelity_runs"))
+    run_dir = base_dir / str(report["run_id"])
+
+    print(f"Wrote fidelity run {report['run_id']}")
     print(f"Wrote {run_dir / 'fidelity_report.json'}")
     print(f"Wrote {run_dir / 'fidelity_report.md'}")
     print(f"Wrote {base_dir / 'latest.json'}")

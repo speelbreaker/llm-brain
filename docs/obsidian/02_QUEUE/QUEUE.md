@@ -4,7 +4,7 @@
 (none)
 
 ## IN_PROGRESS
-(none)
+1) [P0] 2025-12-23__P0-004__phase-3-suite.md — Phase 3 fidelity + ops enforcement work, currently in progress.
 
 ## IN_REVIEW
 (none)

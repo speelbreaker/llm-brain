@@ -18,6 +18,12 @@ When an agent starts work, it must add:
 - Start time: 2025-12-23T17:59:51Z
 - Intended completion: Draft the Step 1 prompt for merging PR #17, lock queue/changelog, and signal that the task is now in progress.
 
+## Lock entry — 2025-12-23T19:50:00Z
+- File(s): docs/obsidian/02_QUEUE/QUEUE.md, docs/obsidian/02_QUEUE/LOCKS.md, docs/obsidian/03_LOGS/CHANGELOG.md, docs/obsidian/06_PROMPTS/2025-12-23__P0-004__phase-3-suite.md, docs/obsidian/99_ARCHIVE/2025-12-23__P0-004__phase-3-suite.md
+- Agent name: Codex
+- Start time: 2025-12-23T19:50:00Z
+- Intended completion: Implement the Phase 3 fidelity + ops enforcement work, update the queue/log, and archive the prompt once done.
+
 ## Lock entry — 2025-12-23T18:28:00Z
 - File(s): docs/obsidian/02_QUEUE/QUEUE.md, docs/obsidian/02_QUEUE/LOCKS.md, docs/obsidian/03_LOGS/CHANGELOG.md, docs/obsidian/06_PROMPTS/2025-12-23__WORKFLOW__repo-skills-validator.md, .codex/skills/vault-ops/SKILL.md, .codex/skills/pr-discipline/SKILL.md, .codex/skills/fidelity-northstar/SKILL.md, .codex/skills/ops-health/SKILL.md, scripts/validate_vault_workflow.py, tests/test_validate_vault_workflow.py
 - Agent name: Codex
