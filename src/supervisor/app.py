@@ -29,8 +29,8 @@ from .models import (
     JobStage,
     JobStatus,
     SupervisorJob,
-    LLMFailure,
 )
+from .debate import LLMFailure
 from .policy import check_autofix_policy
 from .redact import redact_job_for_api, redact_secrets
 from .runner import VerificationRunner
