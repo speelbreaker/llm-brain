@@ -13,7 +13,7 @@ from fastapi.testclient import TestClient
 from src.supervisor.app import app as supervisor_app
 from src.supervisor.app import run_supervisor_job
 from src.supervisor.config import SupervisorSettings
-from src.supervisor.loop.fixers import FixResult
+from src.supervisor.loop.fixers import FixResult, _fix_lint_only
 from src.supervisor.loop.types import FixPlan, LoopDecision, SkepticReport
 from src.supervisor.models import CheckResult, DiffStats, JobStage, JobStatus, VerificationReport
 from src.supervisor.store import JobStore
@@ -115,6 +115,68 @@ class FakeCodexFixer:
 
     def build_fix_prompt(self, *_args, **_kwargs):
         return "prompt"
+
+
+def test_fix_lint_only_targets_changed_files(tmp_path, monkeypatch):
+    workspace = tmp_path / "repo"
+    workspace.mkdir()
+    (workspace / "target.py").write_text("print('ok')\n")
+    commands: list[str] = []
+
+    async def fake_run(command: str, cwd: str):
+        commands.append(command)
+        return 0, ""
+
+    monkeypatch.setattr("src.supervisor.loop.fixers._run_command", fake_run)
+
+    verification = VerificationReport(
+        commit_sha="abc",
+        checks=[
+            CheckResult(
+                command="python -m ruff check target.py",
+                exit_code=1,
+                passed=False,
+                stdout="",
+                stderr="",
+            )
+        ],
+        all_passed=False,
+        failure_summary="",
+        failing_tests=[],
+    )
+
+    result = asyncio.run(_fix_lint_only(str(workspace), ["target.py"], verification))
+    assert result.applied
+    assert "--fix" in commands[0]
+    assert "target.py" in commands[0]
+    assert "target.py" in commands[1]
+    assert "ruff check ." not in commands[0]
+
+
+def test_fix_lint_only_fallbacks_to_failure_summary(tmp_path, monkeypatch):
+    workspace = tmp_path / "repo"
+    workspace.mkdir()
+    (workspace / "fallback.py").write_text("pass\n")
+    commands: list[str] = []
+
+    async def fake_run(command: str, cwd: str):
+        commands.append(command)
+        return 0, ""
+
+    monkeypatch.setattr("src.supervisor.loop.fixers._run_command", fake_run)
+
+    verification = VerificationReport(
+        commit_sha="def",
+        checks=[],
+        all_passed=False,
+        failure_summary="--> fallback.py:1:1\nFound issues",
+        failing_tests=[],
+    )
+
+    result = asyncio.run(_fix_lint_only(str(workspace), [], verification))
+    assert result.applied
+    assert "fallback.py" in commands[0]
+    assert "fallback.py" in commands[1]
 
 
 def test_loop_invariants_lint_only(tmp_path, monkeypatch):
