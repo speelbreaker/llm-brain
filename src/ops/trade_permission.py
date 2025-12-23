@@ -33,13 +33,26 @@ class PermissionCode(str, Enum):
 
 @dataclass
 class TradePermission:
-    """Result of computing trade permission."""
+    """Result of computing trade permission.
+    
+    Attributes:
+        effective_trade_mode: The resolved trading mode after all overrides
+        allow_open: Can open new positions?
+        allow_roll: Can roll (close + open)?
+        allow_close: Can close existing positions?
+        allow_do_nothing: Always True
+        force_reduce_only: Must set reduce_only=True on all Deribit orders?
+        can_trade: Raw value from health/gates (None if unavailable)
+        code: Permission code indicating why blocked/allowed
+        reason: Human-readable explanation
+    """
     effective_trade_mode: TradingMode
     allow_open: bool
     allow_roll: bool
     allow_close: bool
     allow_do_nothing: bool  # Always True
-    can_trade: bool  # From health/gates
+    force_reduce_only: bool  # Must set reduce_only=True on Deribit orders
+    can_trade: Optional[bool]  # From health/gates, None if unavailable
     code: PermissionCode
     reason: str
     
@@ -68,7 +81,7 @@ def compute_trade_permission(
     Args:
         cfg: Settings instance with kill_switch_enabled and trade_mode
         can_trade_from_health: Optional boolean from health/gates system.
-            If None, defaults to True (health not blocking).
+            If None, uses FAIL-CLOSED behavior (block opens, allow closes).
     
     Returns:
         TradePermission with effective permissions and reason codes.
@@ -76,18 +89,20 @@ def compute_trade_permission(
     Priority order (highest to lowest):
     1. Kill switch (blocks everything except DO_NOTHING)
     2. Trade mode = halt (blocks everything except DO_NOTHING)
-    3. Trade mode = close_only (blocks OPEN and ROLL)
-    4. Health/gates can_trade=False (blocks OPEN and ROLL, allows CLOSE)
-    5. Trade mode = normal (allows all, subject to other risk checks)
+    3. Trade mode = close_only (blocks OPEN and ROLL, force reduce_only)
+    4. Health unavailable/None (FAIL-CLOSED: block opens, allow closes, force reduce_only)
+    5. Health/gates can_trade=False (blocks OPEN and ROLL, force reduce_only)
+    6. Trade mode = normal + health OK (allows all)
     """
     # Default: allow everything
     allow_open = True
     allow_roll = True
     allow_close = True
     allow_do_nothing = True  # Always true
+    force_reduce_only = False  # Default: normal order mode
     
-    # Resolve can_trade from health (None means health isn't blocking)
-    can_trade = can_trade_from_health if can_trade_from_health is not None else True
+    # Keep raw can_trade value (None if unavailable)
+    can_trade = can_trade_from_health
     
     # Start with normal mode
     effective_mode = cfg.trade_mode
@@ -99,6 +114,7 @@ def compute_trade_permission(
         allow_open = False
         allow_roll = False
         allow_close = False
+        force_reduce_only = True  # If somehow an order slips through, make it reduce-only
         effective_mode = TradingMode.HALT
         code = PermissionCode.BLOCKED_KILL_SWITCH
         reason = "Kill switch enabled - all trading blocked"
@@ -108,6 +124,7 @@ def compute_trade_permission(
             allow_roll=allow_roll,
             allow_close=allow_close,
             allow_do_nothing=allow_do_nothing,
+            force_reduce_only=force_reduce_only,
             can_trade=can_trade,
             code=code,
             reason=reason,
@@ -118,6 +135,7 @@ def compute_trade_permission(
         allow_open = False
         allow_roll = False
         allow_close = False
+        force_reduce_only = True
         code = PermissionCode.BLOCKED_TRADE_MODE_HALT
         reason = "Trade mode is HALT - all trading blocked"
         return TradePermission(
@@ -126,6 +144,7 @@ def compute_trade_permission(
             allow_roll=allow_roll,
             allow_close=allow_close,
             allow_do_nothing=allow_do_nothing,
+            force_reduce_only=force_reduce_only,
             can_trade=can_trade,
             code=code,
             reason=reason,
@@ -136,45 +155,71 @@ def compute_trade_permission(
         allow_open = False
         allow_roll = False
         # allow_close remains True
+        force_reduce_only = True  # All orders must be reduce-only
         code = PermissionCode.BLOCKED_TRADE_MODE_CLOSE_ONLY
-        reason = "Trade mode is CLOSE_ONLY - only CLOSE actions allowed"
+        reason = "Trade mode is CLOSE_ONLY - only CLOSE actions allowed, reduce_only=True"
         return TradePermission(
             effective_trade_mode=effective_mode,
             allow_open=allow_open,
             allow_roll=allow_roll,
             allow_close=allow_close,
             allow_do_nothing=allow_do_nothing,
+            force_reduce_only=force_reduce_only,
             can_trade=can_trade,
             code=code,
             reason=reason,
         )
     
-    # Priority 4: Health/gates can_trade=False
+    # Priority 4: Health unavailable (FAIL-CLOSED)
+    # If health status is None/unknown, assume we cannot safely open new positions
+    if can_trade is None:
+        allow_open = False
+        allow_roll = False
+        # allow_close remains True (emergency de-risking)
+        force_reduce_only = True  # Safety: force reduce-only on any orders
+        code = PermissionCode.BLOCKED_HEALTH_UNAVAILABLE
+        reason = "Health status unavailable (fail-closed) - only CLOSE actions allowed, reduce_only=True"
+        return TradePermission(
+            effective_trade_mode=effective_mode,
+            allow_open=allow_open,
+            allow_roll=allow_roll,
+            allow_close=allow_close,
+            allow_do_nothing=allow_do_nothing,
+            force_reduce_only=force_reduce_only,
+            can_trade=can_trade,
+            code=code,
+            reason=reason,
+        )
+    
+    # Priority 5: Health/gates can_trade=False
     # This blocks OPEN and ROLL but allows CLOSE (to reduce risk)
     if not can_trade:
         allow_open = False
         allow_roll = False
         # allow_close remains True (to reduce risk)
+        force_reduce_only = True  # All orders must be reduce-only
         code = PermissionCode.BLOCKED_CAN_TRADE_FALSE
-        reason = "Health/gates can_trade=False - only CLOSE actions allowed"
+        reason = "Health/gates can_trade=False - only CLOSE actions allowed, reduce_only=True"
         return TradePermission(
             effective_trade_mode=effective_mode,
             allow_open=allow_open,
             allow_roll=allow_roll,
             allow_close=allow_close,
             allow_do_nothing=allow_do_nothing,
+            force_reduce_only=force_reduce_only,
             can_trade=can_trade,
             code=code,
             reason=reason,
         )
     
-    # Priority 5: Normal mode - everything allowed
+    # Priority 6: Normal mode - everything allowed
     return TradePermission(
         effective_trade_mode=effective_mode,
         allow_open=allow_open,
         allow_roll=allow_roll,
         allow_close=allow_close,
         allow_do_nothing=allow_do_nothing,
+        force_reduce_only=force_reduce_only,
         can_trade=can_trade,
         code=code,
         reason=reason,

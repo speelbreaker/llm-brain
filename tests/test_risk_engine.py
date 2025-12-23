@@ -6,6 +6,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from dataclasses import dataclass, field
 from typing import Any, List
+from unittest.mock import patch, MagicMock
 import pytest
 
 from src.risk_engine import (
@@ -15,6 +16,18 @@ from src.risk_engine import (
 )
 from src.models import ActionType
 from src.config import Settings
+
+
+@pytest.fixture(autouse=True)
+def mock_health_check():
+    """Mock health check to return can_trade=True for all risk engine tests.
+    
+    This is needed because the trade permission layer now uses fail-closed behavior
+    when health is unavailable (None), which would block opens in these tests.
+    """
+    with patch("src.healthcheck.get_cached_health_status") as mock_health:
+        mock_health.return_value = MagicMock(can_trade=True)
+        yield mock_health
 
 
 @dataclass
@@ -73,7 +86,7 @@ class TestKillSwitch:
         allowed, reasons = check_action_allowed(state, action, config=cfg)
         
         assert allowed is False
-        assert any("kill-switch" in r.lower() for r in reasons)
+        assert any("kill" in r.lower() for r in reasons)
 
     def test_kill_switch_allows_do_nothing(self):
         """Kill switch should allow DO_NOTHING action."""
@@ -96,7 +109,7 @@ class TestKillSwitch:
         allowed, reasons = check_action_allowed(state, action, config=cfg)
         
         assert allowed is False
-        assert any("kill-switch" in r.lower() for r in reasons)
+        assert any("kill" in r.lower() for r in reasons)
 
     def test_kill_switch_blocks_roll_covered_call(self):
         """Kill switch should block ROLL_COVERED_CALL action."""
@@ -108,7 +121,7 @@ class TestKillSwitch:
         allowed, reasons = check_action_allowed(state, action, config=cfg)
         
         assert allowed is False
-        assert any("kill-switch" in r.lower() for r in reasons)
+        assert any("kill" in r.lower() for r in reasons)
 
     def test_kill_switch_disabled_allows_trading(self):
         """When kill switch is disabled, trading should be allowed (subject to other checks)."""
@@ -139,7 +152,7 @@ class TestKillSwitch:
         allowed, reasons = check_action_allowed(state, action, config=cfg)
         
         assert allowed is False
-        assert any("kill-switch" in r.lower() for r in reasons)
+        assert any("kill" in r.lower() for r in reasons)
 
 
 class TestDailyDrawdownGuard:

@@ -25,6 +25,24 @@ Phases:
 
 These are **implemented** and here only as reference so we don't re-plan them:
 
+- **Close-Only Mode v2 + Fail-Closed + reduce_only Wiring (2025-12-22)**:
+  - Enhanced `TradePermission` with `force_reduce_only` flag for Deribit orders
+  - **Fail-closed behavior**: When health status is `None`/unavailable, blocks opens but allows closes
+  - Added `BLOCKED_HEALTH_UNAVAILABLE` permission code for fail-closed scenario
+  - Wired `reduce_only=True` into `src/execution.py` when `force_reduce_only` is active
+  - All close orders now explicitly use `reduce_only=True` on Deribit API
+  - ROLL open leg uses `reduce_only` based on permission (will fail at exchange if no position)
+  - New tests: `TestForceReduceOnly` (5 tests), `TestFailClosed` (4 tests)
+  - Total integration tests: 22 passing
+
+- **Close-Only Mode + Unified Trade Permission (2025-12-22)**:
+  - Added `TradingMode` enum (`normal`, `close_only`, `halt`) to `src/config.py`
+  - Created `src/ops/trade_permission.py` – single source of truth for trade auth
+  - Defense in depth: enforced at BOTH agent_loop.py (pre-execution) and risk_engine.py
+  - Updated `/api/system/runtime-config` GET/POST to include `trade_mode`
+  - Updated dashboard UI with Trade Mode dropdown (next to Kill Switch)
+  - Integration test suite: `tests/test_trade_permission_integration.py`
+
 - Centralized IVRV calculation in `src/metrics/volatility.py` and removed duplicates.  
 - Centralized expiry parsing in `src/utils/expiry.py` and removed duplicates.  
 - Basic unit test suite for helpers (IVRV, expiry, scoring) + smoke tests:

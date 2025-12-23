@@ -257,6 +257,83 @@ class TestTradePermissionBasic:
         assert code == PermissionCode.BLOCKED_TRADE_MODE_CLOSE_ONLY  # Code reflects mode, not action
 
 
+class TestForceReduceOnly:
+    """Tests for the force_reduce_only flag on orders."""
+    
+    def test_normal_mode_no_force_reduce_only(self):
+        """In normal mode with gates OK, force_reduce_only should be False."""
+        cfg = make_test_settings(trade_mode=TradingMode.NORMAL)
+        permission = compute_trade_permission(cfg, can_trade_from_health=True)
+        
+        assert permission.force_reduce_only is False
+    
+    def test_close_only_mode_forces_reduce_only(self):
+        """In close_only mode, force_reduce_only should be True."""
+        cfg = make_test_settings(trade_mode=TradingMode.CLOSE_ONLY)
+        permission = compute_trade_permission(cfg, can_trade_from_health=True)
+        
+        assert permission.force_reduce_only is True
+        assert "reduce_only=True" in permission.reason
+    
+    def test_halt_mode_forces_reduce_only(self):
+        """In halt mode, force_reduce_only should be True (safety net)."""
+        cfg = make_test_settings(trade_mode=TradingMode.HALT)
+        permission = compute_trade_permission(cfg, can_trade_from_health=True)
+        
+        assert permission.force_reduce_only is True
+    
+    def test_kill_switch_forces_reduce_only(self):
+        """Kill switch should force reduce_only=True (safety net)."""
+        cfg = make_test_settings(trade_mode=TradingMode.NORMAL, kill_switch_enabled=True)
+        permission = compute_trade_permission(cfg, can_trade_from_health=True)
+        
+        assert permission.force_reduce_only is True
+    
+    def test_can_trade_false_forces_reduce_only(self):
+        """When gates block (can_trade=False), force_reduce_only should be True."""
+        cfg = make_test_settings(trade_mode=TradingMode.NORMAL)
+        permission = compute_trade_permission(cfg, can_trade_from_health=False)
+        
+        assert permission.force_reduce_only is True
+        assert "reduce_only=True" in permission.reason
+
+
+class TestFailClosed:
+    """Tests for fail-closed behavior when health is unavailable."""
+    
+    def test_health_none_blocks_opens(self):
+        """When health status is None (unavailable), opens should be blocked."""
+        cfg = make_test_settings(trade_mode=TradingMode.NORMAL)
+        permission = compute_trade_permission(cfg, can_trade_from_health=None)
+        
+        assert permission.allow_open is False
+        assert permission.allow_roll is False
+        assert permission.code == PermissionCode.BLOCKED_HEALTH_UNAVAILABLE
+    
+    def test_health_none_allows_close(self):
+        """When health is None, closes should still be allowed (emergency de-risk)."""
+        cfg = make_test_settings(trade_mode=TradingMode.NORMAL)
+        permission = compute_trade_permission(cfg, can_trade_from_health=None)
+        
+        assert permission.allow_close is True
+        assert permission.allow_do_nothing is True
+    
+    def test_health_none_forces_reduce_only(self):
+        """When health is None, force_reduce_only should be True."""
+        cfg = make_test_settings(trade_mode=TradingMode.NORMAL)
+        permission = compute_trade_permission(cfg, can_trade_from_health=None)
+        
+        assert permission.force_reduce_only is True
+        assert "fail-closed" in permission.reason.lower()
+    
+    def test_health_none_preserves_raw_can_trade(self):
+        """The raw can_trade value should be preserved as None."""
+        cfg = make_test_settings(trade_mode=TradingMode.NORMAL)
+        permission = compute_trade_permission(cfg, can_trade_from_health=None)
+        
+        assert permission.can_trade is None
+
+
 class TestRiskEngineIntegration:
     """Test that risk engine respects trade permission."""
     

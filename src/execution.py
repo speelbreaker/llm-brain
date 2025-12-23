@@ -2,15 +2,21 @@
 Execution module.
 Translates abstract actions into Deribit orders.
 Supports batch execution for training mode experimentation.
+
+Defense in depth: This layer also enforces trade permission as a safety net,
+in case the agent loop's permission check is somehow bypassed.
 """
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from src.config import Settings, settings
 from src.deribit_client import DeribitClient, DeribitAPIError
 from src.models import ActionType
 from src.position_tracker import position_tracker
+
+logger = logging.getLogger(__name__)
 
 
 def _round_price(price: float) -> float:
@@ -75,6 +81,8 @@ def execute_action(
     
     Returns:
         Dict with execution results including order IDs, prices, and any errors
+    
+    Defense in depth: This function also checks trade permission as a safety net.
     """
     cfg = config or settings
     
@@ -98,13 +106,28 @@ def execute_action(
             "message": "Action is DO_NOTHING, no orders placed",
         }
     
+    # ──────────────────────────────────────────────
+    # Get trade permission (defense in depth)
+    # ──────────────────────────────────────────────
+    from src.ops.trade_permission import get_current_trade_permission
+    
+    permission = get_current_trade_permission(cfg)
+    force_reduce_only = permission.force_reduce_only
+    
+    # Log if forcing reduce_only
+    if force_reduce_only:
+        logger.warning(
+            f"[EXECUTION] Forcing reduce_only=True on all orders: "
+            f"{permission.code.value} - {permission.reason}"
+        )
+    
     # Extract underlying from action_dict or infer from symbol
     underlying = action_dict.get("underlying") or _extract_underlying(params.get("symbol", ""))
     
     if cfg.dry_run:
-        return _simulate_execution(action_type, params, client, cfg, underlying)
+        return _simulate_execution(action_type, params, client, cfg, underlying, force_reduce_only)
     
-    return _execute_real(action_type, params, client, cfg, underlying)
+    return _execute_real(action_type, params, client, cfg, underlying, force_reduce_only)
 
 
 def _simulate_execution(
@@ -113,6 +136,7 @@ def _simulate_execution(
     client: DeribitClient,
     config: Settings,
     underlying: str = "?",
+    force_reduce_only: bool = False,
 ) -> dict[str, Any]:
     """Simulate execution without placing real orders."""
     result = {
@@ -122,6 +146,7 @@ def _simulate_execution(
         "params": params,
         "orders": [],
         "underlying": underlying,
+        "force_reduce_only": force_reduce_only,
     }
     
     if action_type == ActionType.OPEN_COVERED_CALL:
@@ -197,8 +222,14 @@ def _execute_real(
     client: DeribitClient,
     config: Settings,
     underlying: str = "?",
+    force_reduce_only: bool = False,
 ) -> dict[str, Any]:
-    """Execute real orders on Deribit testnet."""
+    """Execute real orders on Deribit testnet.
+    
+    Args:
+        force_reduce_only: If True, all orders will have reduce_only=True set.
+            This is used when trade_mode is close_only or gates block opening.
+    """
     result = {
         "status": "executed",
         "dry_run": False,
@@ -207,6 +238,7 @@ def _execute_real(
         "orders": [],
         "errors": [],
         "underlying": underlying,
+        "force_reduce_only": force_reduce_only,
     }
     
     if action_type == ActionType.OPEN_COVERED_CALL:
@@ -219,6 +251,9 @@ def _execute_real(
             result["errors"].append(f"Could not get price for {symbol}")
             return result
         
+        # Note: OPEN with force_reduce_only=True will likely fail at exchange
+        # because you can't "reduce" a position that doesn't exist.
+        # This is intentional: defense in depth ensures opens are blocked.
         try:
             order_result = client.place_order(
                 instrument_name=symbol,
@@ -227,6 +262,7 @@ def _execute_real(
                 order_type="limit",
                 price=mid_price,
                 post_only=True,
+                reduce_only=force_reduce_only,
                 label="agent_covered_call",
             )
             
@@ -235,10 +271,12 @@ def _execute_real(
                 "symbol": symbol,
                 "size": size,
                 "price": mid_price,
+                "reduce_only": force_reduce_only,
                 "order_id": order_result.get("order", {}).get("order_id"),
                 "order_state": order_result.get("order", {}).get("order_state"),
             })
-            result["message"] = f"Sold {size} {symbol} at {mid_price:.6f}"
+            reduce_only_note = " [reduce_only]" if force_reduce_only else ""
+            result["message"] = f"Sold {size} {symbol} at {mid_price:.6f}{reduce_only_note}"
             print(f"[EXECUTED] {result['message']}")
             
         except DeribitAPIError as e:
@@ -271,10 +309,11 @@ def _execute_real(
                 "symbol": symbol,
                 "size": size,
                 "price": mid_price,
+                "reduce_only": True,  # Close is always reduce_only
                 "order_id": order_result.get("order", {}).get("order_id"),
                 "order_state": order_result.get("order", {}).get("order_state"),
             })
-            result["message"] = f"Bought {size} {symbol} at {mid_price:.6f}"
+            result["message"] = f"Bought {size} {symbol} at {mid_price:.6f} [reduce_only]"
             print(f"[EXECUTED] {result['message']}")
             
         except DeribitAPIError as e:
@@ -315,6 +354,7 @@ def _execute_real(
                 "symbol": from_symbol,
                 "size": size,
                 "price": from_mid,
+                "reduce_only": True,  # Close leg is always reduce_only
                 "order_id": close_result.get("order", {}).get("order_id"),
                 "order_state": close_result.get("order", {}).get("order_state"),
                 "leg": "close",
@@ -325,6 +365,9 @@ def _execute_real(
             result["errors"].append(f"Close leg failed: {e}")
             return result
         
+        # Note: ROLL open leg with force_reduce_only=True will likely fail at exchange
+        # because you can't "reduce" a position that doesn't exist.
+        # This is intentional: defense in depth ensures rolls are blocked in close_only.
         try:
             open_result = client.place_order(
                 instrument_name=to_symbol,
@@ -333,6 +376,7 @@ def _execute_real(
                 order_type="limit",
                 price=to_mid,
                 post_only=True,
+                reduce_only=force_reduce_only,
                 label="agent_roll_open",
             )
             
@@ -341,14 +385,16 @@ def _execute_real(
                 "symbol": to_symbol,
                 "size": size,
                 "price": to_mid,
+                "reduce_only": force_reduce_only,
                 "order_id": open_result.get("order", {}).get("order_id"),
                 "order_state": open_result.get("order", {}).get("order_state"),
                 "leg": "open",
             })
             
+            reduce_only_note = " [reduce_only on open leg]" if force_reduce_only else ""
             result["message"] = (
                 f"Rolled: closed {from_symbol} at {from_mid:.6f}, "
-                f"opened {to_symbol} at {to_mid:.6f}"
+                f"opened {to_symbol} at {to_mid:.6f}{reduce_only_note}"
             )
             print(f"[EXECUTED] {result['message']}")
             
