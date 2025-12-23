@@ -31,11 +31,8 @@ import argparse
 import json
 import os
 import subprocess
-<<<<<<< HEAD
-import traceback
-=======
 import sys
->>>>>>> origin/main
+import traceback
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict
@@ -108,13 +105,11 @@ def _real_payload(repo_root: Path) -> Dict[str, Any]:
     return out
 
 
-<<<<<<< HEAD
 def _truncate_traceback(tb_str: str, max_lines: int = 50) -> str:
     """Truncate traceback to max_lines for readable JSON."""
     lines = tb_str.splitlines()
     if len(lines) <= max_lines:
         return tb_str
-    # Keep first half and last half with truncation marker
     half = max_lines // 2
     return "\n".join(
         lines[:half] + [f"... ({len(lines) - max_lines} lines truncated) ..."] + lines[-half:]
@@ -122,19 +117,13 @@ def _truncate_traceback(tb_str: str, max_lines: int = 50) -> str:
 
 
 def _make_error_payload(repo_root: Path, e: Exception) -> Dict[str, Any]:
-    """Create a fail-closed payload that conforms to the contract.
-    
-    Includes full error details while enforcing all required fields.
-    """
     exc_type = type(e).__name__
     exc_msg = str(e)
     tb_str = _truncate_traceback(traceback.format_exc(), max_lines=50)
-    
+
     return {
-        # Envelope fields
         "generated_at_utc": _now_utc(),
         "head_sha": _head_sha(repo_root),
-        # Contract-required fields (fail-closed)
         "overall_status": "FAIL",
         "can_trade": False,
         "worst_severity": "CRITICAL",
@@ -146,48 +135,17 @@ def _make_error_payload(repo_root: Path, e: Exception) -> Dict[str, Any]:
             "message": "generation error",
             "code": "OPS_HEALTH_GENERATION_ERROR",
         },
-        # Additional context fields
         "checked_at": None,
         "cache_age_seconds": None,
         "last_run_at": None,
         "checks_overall": "FAIL",
         "checks_summary": "",
         "can_trade_by_underlying": None,
-        # Error details
         "error": {
             "code": "OPS_HEALTH_GENERATION_ERROR",
             "exception": f"{exc_type}: {exc_msg}",
             "traceback": tb_str,
         },
-    }
-
-
-def main() -> int:
-    repo_root = _repo_root()
-=======
-def _error_payload(repo_root: Path, exc: Exception) -> Dict[str, Any]:
-    # Always emit the keys the API would normally include, so downstream consumers
-    # (and tests) can rely on schema presence.
-    return {
-        "generated_at_utc": _now_utc(),
-        "head_sha": _head_sha(repo_root),
-        "checked_at": None,
-        "cache_age_seconds": None,
-        "last_run_at": None,
-        "overall_status": "FAIL",
-        "checks_overall": "FAIL",
-        "checks_summary": None,
-        "worst_severity": "FATAL",
-        "can_trade": False,
-        "summary": "OPS_HEALTH_GENERATION_ERROR",
-        "error_code": "OPS_HEALTH_GENERATION_ERROR",
-        "error_message": str(exc),
-        "checks": [],
-        "gates": [],
-        "gate_overall": None,
-        "can_trade_by_underlying": None,
-        "agent_paused_due_to_health": None,
-        "error": {"type": type(exc).__name__, "message": str(exc)},
     }
 
 
@@ -211,7 +169,6 @@ def main(argv: list[str]) -> int:
     repo_root = Path(args.repo_root).resolve() if args.repo_root else _repo_root()
     _validate_repo_root(repo_root)
 
->>>>>>> origin/main
     docs_dir = repo_root / "docs"
     docs_dir.mkdir(parents=True, exist_ok=True)
     out_path = Path(args.out_path).resolve() if args.out_path else (docs_dir / "OPS_HEALTH_latest.json")
@@ -222,12 +179,7 @@ def main(argv: list[str]) -> int:
         try:
             payload = _real_payload(repo_root)
         except Exception as e:
-<<<<<<< HEAD
-            # Always write a JSON artifact with full error details and fail-closed fields.
             payload = _make_error_payload(repo_root, e)
-=======
-            payload = _error_payload(repo_root, e)
->>>>>>> origin/main
 
     out_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     print(f"Wrote {out_path}")
