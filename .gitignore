@@ -98,3 +98,6 @@ attached_assets/codex_vps_key.pub
 
 # mypy
 .mypy_cache/
+
+# Prevent vault files from being accidentally committed to the app repo.
+docs/obsidian/

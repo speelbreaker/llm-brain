@@ -32,13 +32,19 @@ from typing import Optional, List, Dict, Any
 
 # --- Configuration ---
 MODE = os.environ.get("SUPERVISOR_MODE", "dispatch_only")
-REPO_DIR = Path(os.environ.get("SUPERVISOR_REPO_DIR", "."))
+APP_REPO_DIR = Path(
+    os.environ.get("SUPERVISOR_APP_REPO_DIR")
+    or os.environ.get("SUPERVISOR_REPO_DIR")
+    or "."
+).resolve()
+REPO_DIR = APP_REPO_DIR
 AGENT_NAME = os.environ.get("SUPERVISOR_AGENT_NAME", "vps-supervisor")
 REMOTE = os.environ.get("SUPERVISOR_REMOTE", "origin")
 BASE_BRANCH = os.environ.get("SUPERVISOR_BASE_BRANCH", "main")
 DRY_RUN = os.environ.get("DRY_RUN", "false").lower() == "true"
 
-VAULT_ROOT = REPO_DIR / "docs" / "obsidian"
+VAULT_REPO_DIR = Path(os.environ.get("SUPERVISOR_VAULT_REPO_DIR", APP_REPO_DIR)).resolve()
+VAULT_ROOT = VAULT_REPO_DIR / "docs" / "obsidian"
 QUEUE_FILE = VAULT_ROOT / "02_QUEUE" / "QUEUE.md"
 ACTIVE_FILE = VAULT_ROOT / "06_PROMPTS" / "_ACTIVE.md"
 ARCHIVE_DIR = VAULT_ROOT / "99_ARCHIVE"
@@ -99,7 +105,7 @@ def validate_vault():
         raise FileNotFoundError(f"Validator script not found: {validator_script}")
     
     try:
-        run_cmd([sys.executable, str(validator_script)])
+        run_cmd([sys.executable, str(validator_script)], cwd=VAULT_REPO_DIR)
     except subprocess.CalledProcessError:
         log_incident("Vault Validation Failed", "scripts/validate_vault_workflow.py returned non-zero exit code.")
         sys.exit(1)
@@ -472,6 +478,25 @@ def finalize_task(item: Dict[str, str], sections: Dict[str, List[str]]):
 
 def main():
     logger.info(f"Supervisor Loop Starting. Agent: {AGENT_NAME}, Mode: {MODE}")
+    logger.info(f"App repo: {APP_REPO_DIR}")
+    logger.info(f"Vault repo: {VAULT_REPO_DIR}")
+
+    if not VAULT_REPO_DIR.is_dir():
+        logger.error(f"Vault repo missing: {VAULT_REPO_DIR}")
+        sys.exit(1)
+
+    app_vault_path = REPO_DIR / "docs" / "obsidian"
+    if app_vault_path.exists():
+        log_incident(
+            "Unsafe Vault Location",
+            f"Detected {app_vault_path} in the app repo while configuration points to {VAULT_REPO_DIR}. Aborting to prevent leaks.",
+        )
+        logger.error("App repo still contains docs/obsidian; refusing to run to avoid vault leakage.")
+        sys.exit(1)
+
+    if not VAULT_ROOT.exists():
+        logger.error(f"Vault data missing at {VAULT_ROOT}")
+        sys.exit(1)
     
     git_preflight()
     validate_vault()
