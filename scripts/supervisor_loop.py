@@ -72,6 +72,44 @@ def run_cmd(cmd: List[str], cwd: Path = REPO_DIR, check: bool = True) -> subproc
         logger.error(f"Stderr: {e.stderr}")
         raise
 
+def vault_stage_files(paths: List[Path]) -> List[str]:
+    """Stage vault-specific files before committing."""
+    entries = []
+    seen = set()
+    for path in paths:
+        path_str = str(path)
+        if path_str in seen:
+            continue
+        seen.add(path_str)
+        entries.append(path_str)
+
+    if not entries:
+        return []
+
+    run_cmd(["git", "add"] + entries, cwd=VAULT_REPO_DIR)
+    return entries
+
+
+def vault_commit_changes(message: str, paths: List[Path]) -> bool:
+    """Commit staged vault changes if any were applied."""
+    staged = vault_stage_files(paths)
+    if not staged:
+        logger.info("Vault commit '%s' skipped: nothing to stage.", message)
+        return False
+
+    commit_proc = run_cmd(["git", "commit", "-m", message], cwd=VAULT_REPO_DIR, check=False)
+    if commit_proc.returncode == 0:
+        run_cmd(["git", "push"], cwd=VAULT_REPO_DIR)
+        return True
+
+    logger.info(
+        "Vault commit '%s' skipped: %s",
+        message,
+        (commit_proc.stderr or "").strip(),
+    )
+    run_cmd(["git", "reset", "--"] + staged, cwd=VAULT_REPO_DIR)
+    return False
+
 def log_run(action: str, task_id: str, result: str, details: str = ""):
     """Append to supervisor_runs.md."""
     if not RUN_LOG_FILE.parent.exists():
@@ -97,6 +135,8 @@ def log_incident(title: str, description: str):
     
     with open(INCIDENT_LOG_FILE, "a", encoding="utf-8") as f:
         f.write(entry)
+
+    vault_commit_changes(f"incident: {title}", [INCIDENT_LOG_FILE, RUN_LOG_FILE])
 
 def validate_vault():
     """Run the vault validator script."""
@@ -273,12 +313,15 @@ def claim_task(ready_item_str: str, sections: Dict[str, List[str]]):
     active_content = f"# Active Task: {task_id}\n\n- **Task**: {task_name}\n- **Status**: IN_PROGRESS\n- **Branch**: {branch_name}\n- **Claimed By**: {AGENT_NAME}\n- **Prompt**: {item.get('prompt', 'N/A')}\n- **Started**: {item['started']}\n"
     ACTIVE_FILE.write_text(active_content, encoding="utf-8")
     
-    # 5. Commit and Push
-    run_cmd(["git", "add", str(QUEUE_FILE), str(ACTIVE_FILE)])
-    run_cmd(["git", "commit", "-m", f"queue: start {task_id}"])
-    run_cmd(["git", "push", "-u", REMOTE, branch_name])
-    
+    # 5. Log and commit queue changes in the vault repo
     log_run("CLAIM", task_id, "SUCCESS", f"Branch: {branch_name}")
+    vault_commit_changes(
+        f"queue: start {task_id}",
+        [QUEUE_FILE, ACTIVE_FILE, RUN_LOG_FILE],
+    )
+
+    # 6. Push the branch for the code repo
+    run_cmd(["git", "push", "-u", REMOTE, branch_name])
 
 def process_in_progress(item_str: str, sections: Dict[str, List[str]]):
     """Check if we can move to IN_REVIEW (create PR)."""
@@ -307,9 +350,11 @@ def process_in_progress(item_str: str, sections: Dict[str, List[str]]):
             item["pr"] = "pending_manual"
             sections["IN_PROGRESS"] = [build_item(item)]
             write_queue(sections)
-            run_cmd(["git", "add", str(QUEUE_FILE)])
-            run_cmd(["git", "commit", "-m", f"queue: update {task_id} pr pending"])
-            run_cmd(["git", "push"])
+            log_run("PR_PENDING", task_id, "SUCCESS", "PR creation deferred")
+            vault_commit_changes(
+                f"queue: update {task_id} pr pending",
+                [QUEUE_FILE, RUN_LOG_FILE],
+            )
         return
 
     # Check if PR exists
@@ -357,11 +402,11 @@ def process_in_progress(item_str: str, sections: Dict[str, List[str]]):
         active_content += f"- **PR**: {pr_url}\n"
         ACTIVE_FILE.write_text(active_content, encoding="utf-8")
         
-        run_cmd(["git", "add", str(QUEUE_FILE), str(ACTIVE_FILE)])
-        run_cmd(["git", "commit", "-m", f"queue: review {task_id}"])
-        run_cmd(["git", "push"])
-        
         log_run("PR_OPEN", task_id, "SUCCESS", f"PR: {pr_url}")
+        vault_commit_changes(
+            f"queue: review {task_id}",
+            [QUEUE_FILE, ACTIVE_FILE, RUN_LOG_FILE],
+        )
 
 def process_in_review(item_str: str, sections: Dict[str, List[str]]):
     """Check merge status and finalize."""
@@ -405,14 +450,16 @@ def finalize_task(item: Dict[str, str], sections: Dict[str, List[str]]):
     
     # 1. Archive Prompt
     prompt_path = item.get("prompt")
+    vault_prompt_src = None
+    vault_prompt_dst = None
     if prompt_path:
-        src = REPO_DIR / prompt_path
-        if src.exists():
-            dst = ARCHIVE_DIR / src.name
-            if not dst.parent.exists():
-                dst.parent.mkdir(parents=True)
-            shutil.move(str(src), str(dst))
-            logger.info(f"Archived {src} to {dst}")
+        vault_prompt_src = VAULT_REPO_DIR / prompt_path
+        if vault_prompt_src.exists():
+            vault_prompt_dst = ARCHIVE_DIR / vault_prompt_src.name
+            if not vault_prompt_dst.parent.exists():
+                vault_prompt_dst.parent.mkdir(parents=True)
+            shutil.move(str(vault_prompt_src), str(vault_prompt_dst))
+            logger.info(f"Archived {vault_prompt_src} to {vault_prompt_dst}")
     
     # 2. Update Changelog
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
@@ -457,8 +504,16 @@ def finalize_task(item: Dict[str, str], sections: Dict[str, List[str]]):
     
     # 4. Clear Active
     ACTIVE_FILE.write_text("# Active Task: None\n", encoding="utf-8")
-    
-    # 5. Commit and PR
+
+    log_run("FINALIZE", task_id, "SUCCESS", "Archived and Updated Logs")
+    vault_paths = [QUEUE_FILE, ACTIVE_FILE, CHANGELOG_FILE, RUN_LOG_FILE]
+    if vault_prompt_src:
+        vault_paths.append(vault_prompt_src)
+    if vault_prompt_dst:
+        vault_paths.append(vault_prompt_dst)
+    vault_commit_changes(f"queue: done {task_id} (finalize)", vault_paths)
+
+    # 5. Commit and PR (app repo)
     run_cmd(["git", "add", "."])
     run_cmd(["git", "commit", "-m", f"queue: done {task_id} (finalize)"])
     run_cmd(["git", "push", "-u", REMOTE, finalize_branch])
