@@ -310,8 +310,8 @@ def claim_task(ready_item_str: str, sections: Dict[str, List[str]]):
     write_queue(sections)
     
     # 4. Update _ACTIVE.md
-    active_content = f"# Active Task: {task_id}\n\n- **Task**: {task_name}\n- **Status**: IN_PROGRESS\n- **Branch**: {branch_name}\n- **Claimed By**: {AGENT_NAME}\n- **Prompt**: {item.get('prompt', 'N/A')}\n- **Started**: {item['started']}\n"
-    ACTIVE_FILE.write_text(active_content, encoding="utf-8")
+    prompt_path = item.get("prompt", "docs/obsidian/06_PROMPTS/_ACTIVE.md")
+    ACTIVE_FILE.write_text(f"{prompt_path}\n", encoding="utf-8")
     
     # 5. Log and commit queue changes in the vault repo
     log_run("CLAIM", task_id, "SUCCESS", f"Branch: {branch_name}")
@@ -395,12 +395,6 @@ def process_in_progress(item_str: str, sections: Dict[str, List[str]]):
         sections["IN_REVIEW"] = [new_item_str] # Max 1
         
         write_queue(sections)
-        
-        # Update ACTIVE
-        active_content = ACTIVE_FILE.read_text(encoding="utf-8")
-        active_content = active_content.replace("Status: IN_PROGRESS", "Status: IN_REVIEW")
-        active_content += f"- **PR**: {pr_url}\n"
-        ACTIVE_FILE.write_text(active_content, encoding="utf-8")
         
         log_run("PR_OPEN", task_id, "SUCCESS", f"PR: {pr_url}")
         vault_commit_changes(
