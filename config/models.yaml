@@ -1,0 +1,17 @@
+# Model chains for LLM routing (role -> ordered provider:model list)
+trading_optimist:
+  - zhipu:glm-4.7
+  - minimax:minimax-m2.1
+  - openai:gpt-5.2
+trading_skeptic:
+  - google:gemini-3-pro
+  - zhipu:glm-4.7
+  - minimax:minimax-m2.1
+trading_arbiter:
+  - openai:gpt-5.2
+  - google:gemini-3-pro
+  - zhipu:glm-4.7
+  - minimax:minimax-m2.1
+codex_coder:
+  - openai:codex
+  - google:gemini-3-pro
