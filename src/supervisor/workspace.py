@@ -151,12 +151,10 @@ class WorkspaceManager:
             )
     
     async def cleanup_workspace(self, job_id: str, bare_repo_name: Optional[str] = None) -> None:
-        """Clean up a workspace after job completion.
-        
-        Removes the sentinel file first, then cleans up the workspace.
-        """
+        """Clean up a workspace after job completion with retry logic."""
         workspace_path = self.base_dir / job_id
         
+        # 1. Clear sentinel
         sentinel = workspace_path / ACTIVE_SENTINEL
         if sentinel.exists():
             try:
@@ -164,19 +162,37 @@ class WorkspaceManager:
             except OSError:
                 pass
         
+        # 2. Try git worktree remove with retries
         if bare_repo_name:
             bare_repo = self.cache_dir / f"{bare_repo_name}.git"
             if bare_repo.exists():
-                try:
-                    await self._run_git(
-                        ["git", "worktree", "remove", str(workspace_path), "--force"],
-                        cwd=str(bare_repo)
-                    )
-                except Exception:
-                    pass
+                for attempt in range(3):
+                    try:
+                        await self._run_git(
+                            ["git", "worktree", "remove", str(workspace_path), "--force"],
+                            cwd=str(bare_repo)
+                        )
+                        break
+                    except Exception as e:
+                        if attempt < 2:
+                            logger.debug(f"Git worktree remove failed (attempt {attempt+1}): {e}. Retrying...")
+                            await asyncio.sleep(1)
+                        else:
+                            logger.warning(f"Git worktree remove failed after 3 attempts: {e}")
         
+        # 3. Try shutil.rmtree with retries
         if workspace_path.exists():
-            shutil.rmtree(workspace_path, ignore_errors=True)
+            for attempt in range(3):
+                try:
+                    shutil.rmtree(workspace_path, ignore_errors=False)
+                    break
+                except Exception as e:
+                    if attempt < 2:
+                        logger.debug(f"shutil.rmtree failed (attempt {attempt+1}): {e}. Retrying...")
+                        await asyncio.sleep(1)
+                    else:
+                        logger.warning(f"Final rmtree failed: {e}. Trying ignore_errors=True")
+                        shutil.rmtree(workspace_path, ignore_errors=True)
     
     def mark_workspace_inactive(self, workspace_path: str) -> None:
         """Remove the active sentinel from a workspace (for use in finally blocks)."""

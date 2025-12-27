@@ -41,13 +41,26 @@ Loop Stages
 - COMMENTING: PR comment updated with results.
 - DONE: Terminal state for the run.
 
-Limits and Backoff
+Limits and Safety Guards
 - SUPERVISOR_MAX_FIX_ATTEMPTS: Hard cap on total fix attempts.
-- SUPERVISOR_MAX_TOTAL_RUNTIME_SECONDS: Max wall-clock runtime per job.
+- SUPERVISOR_MAX_TOTAL_RUNTIME_SECONDS: Max wall-clock runtime per job (default 1800s).
+- SUPERVISOR_MAX_FILES_CHANGED: Max files allowed in a single auto-fix (default 10).
+- SUPERVISOR_MAX_LOC_CHANGED: Max lines of code allowed in a single auto-fix (default 300).
 - SUPERVISOR_FIX_BACKOFF_BASE_SECONDS / FACTOR / MAX_SECONDS: Backoff before retrying fixes.
+
+LLM Availability
+The loop automatically detects if LLM providers (OpenAI/Gemini) are available based on:
+1. SUPERVISOR_ENABLE_CODEX=1
+2. Valid API keys (OPENAI_API_KEY or GEMINI_API_KEY)
+3. CODEX_BIN exists and is executable (for FIXING stage)
+
+If LLMs are unavailable, the loop falls back to deterministic-only mode or fail-closed depending on the failure type.
 
 Reason Codes
 - LOOP_LIMIT: A stop condition triggered; final_message states the specific limit hit.
+- FIX_TOO_LARGE: The proposed fix exceeds files or LoC thresholds.
+- LLM_UNAVAILABLE: LLM providers or binary not correctly configured.
+- AUTH_FAILED: Webhook signature verification failed.
 
 Extending Categories
 1) Add the category to src/supervisor/loop/policy_defaults.json.

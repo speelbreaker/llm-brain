@@ -124,7 +124,7 @@ class SupervisorJob(BaseModel):
     
     status: JobStatus = JobStatus.PENDING
     reason_code: Optional[str] = None
-    stage_history: list[StageHistory] = Field(default_factory=list)
+    status_history: list[StageHistory] = Field(default_factory=list)
     attempt_counters: dict[str, int] = Field(default_factory=dict)
     
     created_at: datetime = Field(default_factory=datetime.utcnow)
@@ -133,7 +133,7 @@ class SupervisorJob(BaseModel):
     stage: JobStage = JobStage.RECEIVED
     stage_entered_at: datetime = Field(default_factory=datetime.utcnow)
     stage_history: list[JobStageEntry] = Field(default_factory=list)
-
+    
     debate_attempts: int = 0
     fix_attempts: int = 0
     verify_attempts: int = 0
@@ -149,20 +149,19 @@ class SupervisorJob(BaseModel):
     
     final_message: str = ""
     error_message: Optional[str] = None
-    reason_code: Optional[str] = None
     
     def update_status(self, status: JobStatus) -> None:
         """Update job status and timestamp."""
         self.status = status
         self.updated_at = datetime.utcnow()
-        self.stage_history.append(StageHistory(stage=status))
+        self.status_history.append(StageHistory(stage=status))
 
     def transition_stage(self, stage: JobStage) -> None:
         """Move job to a new stage and record the transition."""
         if self.stage == stage:
             return
         now = datetime.utcnow()
-        if self.stage_history:
+        if self.stage_history and isinstance(self.stage_history[-1], JobStageEntry):
             self.stage_history[-1].exited_at = now
         self.stage = stage
         self.stage_entered_at = now

@@ -115,9 +115,25 @@ class SupervisorSettings(BaseSettings):
             return ""
         return os.path.expandvars(os.path.expanduser(codex_bin))
 
+    def is_llm_available(self) -> bool:
+        """Check if all roles have their required LLM provider API keys."""
+        roles = [
+            (self.optimist_provider, self.openai_api_key, self.gemini_api_key),
+            (self.skeptic_provider, self.openai_api_key, self.gemini_api_key),
+            (self.arbiter_provider, self.openai_api_key, self.gemini_api_key),
+        ]
+        for provider, openai_key, gemini_key in roles:
+            if provider == "openai" and not openai_key:
+                return False
+            if provider == "gemini" and not gemini_key:
+                return False
+        return True
+
     def is_codex_available(self) -> bool:
         """Determine whether the configured codex binary exists and is executable."""
         if not self.enable_codex:
+            return False
+        if not self.is_llm_available():
             return False
         codex_bin = self._resolved_codex_bin()
         if not codex_bin:
