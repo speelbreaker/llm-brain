@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import os
 import time
 import uuid
 from contextlib import asynccontextmanager
@@ -422,6 +423,7 @@ async def diag(request: Request):
         "debug_enabled": settings.debug,
         "push_enabled": settings.autofix_push,
         "dry_run": settings.autofix_dry_run,
+        "llm_available": settings.is_llm_available(),
         "codex_available": settings.is_codex_available(),
         "provider_health": provider_health,
     }
@@ -1069,7 +1071,12 @@ async def run_supervisor_job(job: SupervisorJob, app: FastAPI) -> None:
                           fix_attempt.verification = verification
                           
                           if verification.all_passed and not settings.autofix_dry_run:
-                               await notifier.notify_fix_pushed(job, commit_sha)
+                               await notifier.notify_fix_pushed(
+                                   job, 
+                                   commit_sha, 
+                                   diff_stats=diff_stats,
+                                   top_files=changed_files
+                               )
                       
                       # If dry_run, verification is already updated above.
                  else:
