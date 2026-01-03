@@ -7952,7 +7952,7 @@ def render_dashboard_html() -> str:
       }}
 
       try {{
-        const resp = await fetch("/api/data_status/intraday");
+        const resp = await fetch("api/data_status/intraday");
         const data = await resp.json();
 
         if (!data.ok) {{
