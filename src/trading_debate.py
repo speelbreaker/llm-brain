@@ -45,40 +45,27 @@ def _call_openai_like(api_key: str, base_url: str | None, model: str, prompt: st
     try:
         client = _get_openai_client(api_key=api_key, base_url=base_url)
         timeout_s = float(settings.llm_timeout_seconds)
+        req_kwargs = {
+            "model": model,
+            "messages": [
+                {"role": "system", "content": "Return ONLY valid JSON."},
+                {"role": "user", "content": prompt},
+            ],
+            "response_format": {"type": "json_object"},
+            "max_completion_tokens": 900,
+        }
+
         if hasattr(client, "with_options"):
-            client_req = client.with_options(timeout=timeout_s)
-            resp = client_req.chat.completions.create(
-                model=model,
-                messages=[
-                    {"role": "system", "content": "Return ONLY valid JSON."},
-                    {"role": "user", "content": prompt},
-                ],
-                response_format={"type": "json_object"},
-                max_completion_tokens=900,
-            )
+            resp = client.with_options(timeout=timeout_s).chat.completions.create(**req_kwargs)
         else:
             try:
-                resp = client.chat.completions.create(
-                    model=model,
-                    messages=[
-                        {"role": "system", "content": "Return ONLY valid JSON."},
-                        {"role": "user", "content": prompt},
-                    ],
-                    response_format={"type": "json_object"},
-                    max_completion_tokens=900,
-                    timeout=timeout_s,
-                )
-            except TypeError:
-                resp = client.chat.completions.create(
-                    model=model,
-                    messages=[
-                        {"role": "system", "content": "Return ONLY valid JSON."},
-                        {"role": "user", "content": prompt},
-                    ],
-                    response_format={"type": "json_object"},
-                    max_completion_tokens=900,
-                )
-# removed stray duplicated call-site arguments
+                resp = client.chat.completions.create(**req_kwargs, timeout=timeout_s)
+            except TypeError as e:
+                if "unexpected keyword argument" in str(e) and "timeout" in str(e):
+                    resp = client.chat.completions.create(**req_kwargs)
+                else:
+                    raise
+
         content = resp.choices[0].message.content or "{}"
         data = json.loads(content)
         if not isinstance(data, dict):

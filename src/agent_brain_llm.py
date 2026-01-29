@@ -359,43 +359,29 @@ Return ONLY valid JSON matching the requested schema."""
 
     try:
         client = _get_openai_client()
-        # OpenAI Python SDK v1/v2: prefer per-request client options for timeout.
         timeout_s = float(settings.llm_timeout_seconds)
+        req_kwargs = {
+            "model": settings.llm_model_name,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": json.dumps(user_instruction)},
+            ],
+            "response_format": {"type": "json_object"},
+            "max_completion_tokens": 1024,
+        }
+
         if hasattr(client, "with_options"):
-            client_req = client.with_options(timeout=timeout_s)
-            response = client_req.chat.completions.create(
-                model=settings.llm_model_name,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": json.dumps(user_instruction)},
-                ],
-                response_format={"type": "json_object"},
-                max_completion_tokens=1024,
-            )
+            response = client.with_options(timeout=timeout_s).chat.completions.create(**req_kwargs)
         else:
-            # Older SDKs: try passing timeout kwarg; if unsupported, proceed without.
+            # Older SDKs: try passing timeout kwarg; only fall back when it is truly unsupported.
             try:
-                response = client.chat.completions.create(
-                    model=settings.llm_model_name,
-                    messages=[
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": json.dumps(user_instruction)},
-                    ],
-                    response_format={"type": "json_object"},
-                    max_completion_tokens=1024,
-                    timeout=timeout_s,
-                )
-            except TypeError:
-                response = client.chat.completions.create(
-                    model=settings.llm_model_name,
-                    messages=[
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": json.dumps(user_instruction)},
-                    ],
-                    response_format={"type": "json_object"},
-                    max_completion_tokens=1024,
-                )
-        
+                response = client.chat.completions.create(**req_kwargs, timeout=timeout_s)
+            except TypeError as e:
+                if "unexpected keyword argument" in str(e) and "timeout" in str(e):
+                    response = client.chat.completions.create(**req_kwargs)
+                else:
+                    raise
+
         model_output = response.choices[0].message.content or ""
         decision = json.loads(model_output)
         
