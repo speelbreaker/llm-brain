@@ -764,32 +764,56 @@ def render_dashboard_html() -> str:
         <summary style="cursor:pointer;color:#666;">Show paper positions</summary>
         <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:10px;">
           <div style="flex:1;min-width:340px;">
-            <h3 style="margin:0 0 6px 0;">Rule open</h3>
-            <div style="overflow-x:auto; max-height:220px; overflow-y:auto;">
+            <h3 style="margin:0 0 6px 0;">Rule</h3>
+            <div style="font-size:0.85em;color:#666;margin-bottom:6px;" id="paper-rule-closed-summary">Loading...</div>
+            <div style="overflow-x:auto; max-height:180px; overflow-y:auto;">
               <table class="steps-table"><thead><tr>
                 <th>Underlying</th><th>Symbol</th><th>Qty</th><th>Entry</th><th>Mark</th><th>Unreal. PnL</th><th>Unreal. %</th>
               </tr></thead>
               <tbody id="paper-rule-open-body"><tr><td colspan="7" style="text-align:center;color:#666;">Loading...</td></tr></tbody>
               </table>
             </div>
+            <div style="margin-top:8px;overflow-x:auto; max-height:160px; overflow-y:auto;">
+              <table class="steps-table"><thead><tr>
+                <th>Closed At</th><th>Underlying</th><th>Symbol</th><th>Real. PnL</th><th>Real. %</th>
+              </tr></thead>
+              <tbody id="paper-rule-closed-body"><tr><td colspan="5" style="text-align:center;color:#666;">Loading...</td></tr></tbody>
+              </table>
+            </div>
           </div>
           <div style="flex:1;min-width:340px;">
-            <h3 style="margin:0 0 6px 0;">LLM open</h3>
-            <div style="overflow-x:auto; max-height:220px; overflow-y:auto;">
+            <h3 style="margin:0 0 6px 0;">LLM</h3>
+            <div style="font-size:0.85em;color:#666;margin-bottom:6px;" id="paper-llm-closed-summary">Loading...</div>
+            <div style="overflow-x:auto; max-height:180px; overflow-y:auto;">
               <table class="steps-table"><thead><tr>
                 <th>Underlying</th><th>Symbol</th><th>Qty</th><th>Entry</th><th>Mark</th><th>Unreal. PnL</th><th>Unreal. %</th>
               </tr></thead>
               <tbody id="paper-llm-open-body"><tr><td colspan="7" style="text-align:center;color:#666;">Loading...</td></tr></tbody>
               </table>
             </div>
+            <div style="margin-top:8px;overflow-x:auto; max-height:160px; overflow-y:auto;">
+              <table class="steps-table"><thead><tr>
+                <th>Closed At</th><th>Underlying</th><th>Symbol</th><th>Real. PnL</th><th>Real. %</th>
+              </tr></thead>
+              <tbody id="paper-llm-closed-body"><tr><td colspan="5" style="text-align:center;color:#666;">Loading...</td></tr></tbody>
+              </table>
+            </div>
           </div>
           <div style="flex:1;min-width:340px;">
-            <h3 style="margin:0 0 6px 0;">Debate open</h3>
-            <div style="overflow-x:auto; max-height:220px; overflow-y:auto;">
+            <h3 style="margin:0 0 6px 0;">Debate</h3>
+            <div style="font-size:0.85em;color:#666;margin-bottom:6px;" id="paper-debate-closed-summary">Loading...</div>
+            <div style="overflow-x:auto; max-height:180px; overflow-y:auto;">
               <table class="steps-table"><thead><tr>
                 <th>Underlying</th><th>Symbol</th><th>Qty</th><th>Entry</th><th>Mark</th><th>Unreal. PnL</th><th>Unreal. %</th>
               </tr></thead>
               <tbody id="paper-debate-open-body"><tr><td colspan="7" style="text-align:center;color:#666;">Loading...</td></tr></tbody>
+              </table>
+            </div>
+            <div style="margin-top:8px;overflow-x:auto; max-height:160px; overflow-y:auto;">
+              <table class="steps-table"><thead><tr>
+                <th>Closed At</th><th>Underlying</th><th>Symbol</th><th>Real. PnL</th><th>Real. %</th>
+              </tr></thead>
+              <tbody id="paper-debate-closed-body"><tr><td colspan="5" style="text-align:center;color:#666;">Loading...</td></tr></tbody>
               </table>
             </div>
           </div>
@@ -5923,9 +5947,9 @@ def render_dashboard_html() -> str:
     
     async function updatePaperPortfolios() {{
       const lanes = [
-        {{lane:'rule', summary:'paper-rule-summary', tbody:'paper-rule-open-body'}},
-        {{lane:'llm', summary:'paper-llm-summary', tbody:'paper-llm-open-body'}},
-        {{lane:'debate', summary:'paper-debate-summary', tbody:'paper-debate-open-body'}},
+        {{lane:'rule', summary:'paper-rule-summary', tbody:'paper-rule-open-body', closedSummary:'paper-rule-closed-summary', closedBody:'paper-rule-closed-body'}},
+        {{lane:'llm', summary:'paper-llm-summary', tbody:'paper-llm-open-body', closedSummary:'paper-llm-closed-summary', closedBody:'paper-llm-closed-body'}},
+        {{lane:'debate', summary:'paper-debate-summary', tbody:'paper-debate-open-body', closedSummary:'paper-debate-closed-summary', closedBody:'paper-debate-closed-body'}},
       ];
 
       const fmtPnl = (x) => {{
@@ -5940,8 +5964,18 @@ def render_dashboard_html() -> str:
           const data = await res.json();
           const positions = data.positions || [];
           const totals = data.totals || {{}};
-          const pnl = totals.unrealized_pnl || 0;
-          document.getElementById(l.summary).innerHTML = `Unrealized: ${{fmtPnl(pnl)}} &nbsp;|&nbsp; Open positions: <b>${{positions.length}}</b>`;
+          const unreal = totals.unrealized_pnl || 0;
+
+          const cres = await fetch(`api/paper/positions/closed?lane=${{l.lane}}`);
+          const cdata = await cres.json();
+          const chains = cdata.chains || [];
+          const ct = cdata.totals || {{}};
+          const real = ct.realized_pnl || 0;
+
+          const total = Number(unreal) + Number(real);
+
+          document.getElementById(l.summary).innerHTML = `Open: ${{fmtPnl(unreal)}} &nbsp;|&nbsp; Closed: ${{fmtPnl(real)}} &nbsp;|&nbsp; Total: ${{fmtPnl(total)}}`;
+          document.getElementById(l.closedSummary).innerHTML = `Open positions: <b>${{positions.length}}</b> &nbsp;|&nbsp; Closed chains: <b>${{chains.length}}</b>`;
 
           const rows = positions.map(p => {{
             const cls = (p.unrealized_pnl || 0) >= 0 ? 'traded-yes' : 'traded-no';
@@ -5957,9 +5991,28 @@ def render_dashboard_html() -> str:
           }}).join('');
 
           document.getElementById(l.tbody).innerHTML = rows || '<tr><td colspan="7" style="text-align:center;color:#666;">No open positions</td></tr>';
+
+          const crows = chains.slice(0, 40).map(c => {{
+            const cls = (c.realized_pnl || 0) >= 0 ? 'traded-yes' : 'traded-no';
+            const closedAt = (c.close_time || '').toString().replace('T',' ').slice(0,19);
+            return `<tr>
+              <td>${{closedAt || '--'}}</td>
+              <td>${{c.underlying || '--'}}</td>
+              <td>${{c.symbol || '--'}}</td>
+              <td class="${{cls}}">${{Number(c.realized_pnl||0).toFixed(2)}}</td>
+              <td class="${{cls}}">${{Number(c.realized_pnl_pct||0).toFixed(1)}}%</td>
+            </tr>`;
+          }}).join('');
+
+          document.getElementById(l.closedBody).innerHTML = crows || '<tr><td colspan="5" style="text-align:center;color:#666;">No closed chains</td></tr>';
+
         }} catch (e) {{
           document.getElementById(l.summary).innerText = 'Error loading';
           document.getElementById(l.tbody).innerHTML = '<tr><td colspan="7" style="text-align:center;color:#f44336;">Error</td></tr>';
+          const cs = document.getElementById(l.closedSummary);
+          if (cs) cs.innerText = 'Error loading';
+          const cb = document.getElementById(l.closedBody);
+          if (cb) cb.innerHTML = '<tr><td colspan="5" style="text-align:center;color:#f44336;">Error</td></tr>';
         }}
       }}
     }}
