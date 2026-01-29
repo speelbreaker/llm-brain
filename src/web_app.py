@@ -27,6 +27,7 @@ from src.web.routes_bots import router as bots_router
 from src.web.routes_health import router as health_router
 from src.web.routes_deploy import router as deploy_router
 from src.web.routes_supervisor import router as supervisor_router
+from src.web.routes_paper import router as paper_router
 
 from src.supervisor.config import get_settings as get_supervisor_settings
 from src.supervisor.store import JobStore
@@ -49,6 +50,7 @@ app.include_router(fidelity_router)
 app.include_router(bots_router)
 app.include_router(health_router)
 app.include_router(supervisor_router)
+app.include_router(paper_router)
 # Back-compat for GitHub webhooks already configured at /github/webhook
 try:
     from src.web.routes_supervisor import legacy_router as supervisor_legacy_router

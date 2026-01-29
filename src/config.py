@@ -359,6 +359,16 @@ class Settings(BaseSettings):
         default=30.0,
         description="Timeout for LLM API calls in seconds",
     )
+
+    paper_compare_enabled: bool = Field(
+        default=False,
+        description="If True, maintain parallel paper portfolios for rule/llm/debate (no orders sent).",
+    )
+    paper_slippage_bps: float = Field(
+        default=10.0,
+        description="Paper fill slippage in bps applied to mark/mid fills (Phase 1).",
+    )
+
     enable_diagnostic_endpoints: bool = Field(
         default=False,
         description=(

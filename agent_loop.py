@@ -49,6 +49,7 @@ from src.ops.trade_permission import (
     PermissionCode,
 )
 from src.trading.telegram_reporter import get_trading_telegram_reporter, trading_status_callback
+from src.paper_portfolios import apply_decision_to_lane
 
 StatusCallback = Callable[[Dict[str, Any]], None]
 
@@ -988,6 +989,15 @@ def run_agent_loop_forever(
             except Exception as e:
                 print(f"Warning: Failed to log decision: {e}")
             
+            # Update parallel paper portfolios (rule/llm/debate) without affecting live account.
+            try:
+                if settings.paper_compare_enabled:
+                    apply_decision_to_lane(lane="rule", state=agent_state, candidates=agent_state.candidate_options, decision=rule_action, client=client)
+                    apply_decision_to_lane(lane="llm", state=agent_state, candidates=agent_state.candidate_options, decision=llm_action if (llm_action and llm_action.get("validated")) else None, client=client)
+                    apply_decision_to_lane(lane="debate", state=agent_state, candidates=agent_state.candidate_options, decision=debate_action if (debate_action and debate_action.get("validated")) else None, client=client)
+            except Exception as e:
+                print(f"[Paper] update failed: {e}")
+
             # Callbacks
             try:
                 if status_callback is not None:

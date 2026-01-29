@@ -744,6 +744,60 @@ def render_dashboard_html() -> str:
     </div>
 
     <div class="section">
+      <h2>Paper Portfolios (Rule vs LLM vs Debate)</h2>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:8px;">
+        <div style="flex:1;min-width:220px;background:#fff;border:1px solid #ddd;border-radius:8px;padding:10px;">
+          <div style="font-weight:700;color:#1565c0;">Rule (paper)</div>
+          <div id="paper-rule-summary" style="margin-top:6px;color:#444;font-size:0.95em;">Loading...</div>
+        </div>
+        <div style="flex:1;min-width:220px;background:#fff;border:1px solid #ddd;border-radius:8px;padding:10px;">
+          <div style="font-weight:700;color:#7b1fa2;">LLM (paper)</div>
+          <div id="paper-llm-summary" style="margin-top:6px;color:#444;font-size:0.95em;">Loading...</div>
+        </div>
+        <div style="flex:1;min-width:220px;background:#fff;border:1px solid #ddd;border-radius:8px;padding:10px;">
+          <div style="font-weight:700;color:#2e7d32;">Debate (paper)</div>
+          <div id="paper-debate-summary" style="margin-top:6px;color:#444;font-size:0.95em;">Loading...</div>
+        </div>
+      </div>
+
+      <details>
+        <summary style="cursor:pointer;color:#666;">Show paper positions</summary>
+        <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:10px;">
+          <div style="flex:1;min-width:340px;">
+            <h3 style="margin:0 0 6px 0;">Rule open</h3>
+            <div style="overflow-x:auto; max-height:220px; overflow-y:auto;">
+              <table class="steps-table"><thead><tr>
+                <th>Underlying</th><th>Symbol</th><th>Qty</th><th>Entry</th><th>Mark</th><th>Unreal. PnL</th><th>Unreal. %</th>
+              </tr></thead>
+              <tbody id="paper-rule-open-body"><tr><td colspan="7" style="text-align:center;color:#666;">Loading...</td></tr></tbody>
+              </table>
+            </div>
+          </div>
+          <div style="flex:1;min-width:340px;">
+            <h3 style="margin:0 0 6px 0;">LLM open</h3>
+            <div style="overflow-x:auto; max-height:220px; overflow-y:auto;">
+              <table class="steps-table"><thead><tr>
+                <th>Underlying</th><th>Symbol</th><th>Qty</th><th>Entry</th><th>Mark</th><th>Unreal. PnL</th><th>Unreal. %</th>
+              </tr></thead>
+              <tbody id="paper-llm-open-body"><tr><td colspan="7" style="text-align:center;color:#666;">Loading...</td></tr></tbody>
+              </table>
+            </div>
+          </div>
+          <div style="flex:1;min-width:340px;">
+            <h3 style="margin:0 0 6px 0;">Debate open</h3>
+            <div style="overflow-x:auto; max-height:220px; overflow-y:auto;">
+              <table class="steps-table"><thead><tr>
+                <th>Underlying</th><th>Symbol</th><th>Qty</th><th>Entry</th><th>Mark</th><th>Unreal. PnL</th><th>Unreal. %</th>
+              </tr></thead>
+              <tbody id="paper-debate-open-body"><tr><td colspan="7" style="text-align:center;color:#666;">Loading...</td></tr></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </details>
+    </div>
+
+    <div class="section">
       <h2>Bot Positions</h2>
       <div id="positions-pnl-summary" style="font-size:0.9rem;color:#888;margin-bottom:0.5rem;"></div>
       <div id="positions-pnl-summary-closed" style="font-size:0.85rem;color:#777;margin-bottom:0.5rem;"></div>
@@ -5867,6 +5921,49 @@ def render_dashboard_html() -> str:
       }}
     }}
     
+    async function updatePaperPortfolios() {{
+      const lanes = [
+        {{lane:'rule', summary:'paper-rule-summary', tbody:'paper-rule-open-body'}},
+        {{lane:'llm', summary:'paper-llm-summary', tbody:'paper-llm-open-body'}},
+        {{lane:'debate', summary:'paper-debate-summary', tbody:'paper-debate-open-body'}},
+      ];
+
+      const fmtPnl = (x) => {{
+        x = Number(x || 0);
+        const c = x >= 0 ? '#26a69a' : '#ef5350';
+        return `<span style="color:${{c}};font-weight:700;">${{x >= 0 ? '+' : ''}}${{x.toFixed(2)}}</span>`;
+      }};
+
+      for (const l of lanes) {{
+        try {{
+          const res = await fetch(`api/paper/positions/open?lane=${{l.lane}}`);
+          const data = await res.json();
+          const positions = data.positions || [];
+          const totals = data.totals || {{}};
+          const pnl = totals.unrealized_pnl || 0;
+          document.getElementById(l.summary).innerHTML = `Unrealized: ${{fmtPnl(pnl)}} &nbsp;|&nbsp; Open positions: <b>${{positions.length}}</b>`;
+
+          const rows = positions.map(p => {{
+            const cls = (p.unrealized_pnl || 0) >= 0 ? 'traded-yes' : 'traded-no';
+            return `<tr>
+              <td>${{p.underlying}}</td>
+              <td>${{p.symbol}}</td>
+              <td>${{Number(p.quantity||0).toFixed(3)}}</td>
+              <td>${{Number(p.entry_price||0).toFixed(6)}}</td>
+              <td>${{Number(p.mark_price||0).toFixed(6)}}</td>
+              <td class="${{cls}}">${{Number(p.unrealized_pnl||0).toFixed(2)}}</td>
+              <td class="${{cls}}">${{Number(p.unrealized_pnl_pct||0).toFixed(1)}}%</td>
+            </tr>`;
+          }}).join('');
+
+          document.getElementById(l.tbody).innerHTML = rows || '<tr><td colspan="7" style="text-align:center;color:#666;">No open positions</td></tr>';
+        }} catch (e) {{
+          document.getElementById(l.summary).innerText = 'Error loading';
+          document.getElementById(l.tbody).innerHTML = '<tr><td colspan="7" style="text-align:center;color:#f44336;">Error</td></tr>';
+        }}
+      }}
+    }}
+
     async function updateDashboardPositions() {{
       const testTbody = document.getElementById('dashboard-test-positions-body');
       const liveTbody = document.getElementById('dashboard-live-positions-body');
@@ -5982,10 +6079,12 @@ def render_dashboard_html() -> str:
 
       updateDashboardSensors();
       updateDashboardPositions();
+      updatePaperPortfolios();
       fetchParallelProposals();
 
       setInterval(updateDashboardSensors, 30000);
       setInterval(updateDashboardPositions, 30000);
+      setInterval(updatePaperPortfolios, 30000);
       setInterval(fetchParallelProposals, 30000);
     }}
     
