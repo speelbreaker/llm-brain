@@ -276,8 +276,17 @@ async def job_worker(app: FastAPI) -> None:
             try:
                 logger.info("Worker processing job: %s", job.job_id)
                 await run_supervisor_job(job, job_app)
-            except Exception:
-                logger.error("Job %s failed in worker", job.job_id, exc_info=False)
+            except Exception as e:
+                logger.exception("Job %s failed in worker", getattr(job, "job_id", "?"))
+                # Best-effort: mark job as error so the UI can surface it
+                try:
+                    store = getattr(job_app.state, "store", None)
+                    if store and hasattr(job, "update_status"):
+                        job.update_status(JobStatus.ERROR)
+                        job.error_message = str(e)[:500]
+                        store.save(job)
+                except Exception:
+                    pass
             finally:
                 app.state.job_queue.task_done()
                 
@@ -764,7 +773,8 @@ async def get_job(request: Request, job_id: str):
 
 async def run_supervisor_job(job: SupervisorJob, app: FastAPI) -> None:
     """Main supervisor job orchestrator with hardened loop."""
-    settings: SupervisorSettings = app.state.settings
+    # In the integrated platform app, supervisor settings live under app.state.supervisor_settings.
+    settings: SupervisorSettings = getattr(app.state, "supervisor_settings", None) or app.state.settings
     codex_available: bool = settings.is_codex_available()
     store: JobStore = app.state.store
     github_client: GitHubClient = app.state.github_client
