@@ -126,6 +126,9 @@ def update_llm_status(req: LLMConfigUpdate) -> JSONResponse:
 def test_llm_decision() -> JSONResponse:
     """Test LLM decision pipeline (dry run, no trades)."""
     try:
+        if not settings.enable_diagnostic_endpoints:
+            return JSONResponse(status_code=404, content={"ok": False, "error": "not_found"})
+
         if not settings.llm_enabled:
             return JSONResponse(content={
                 "ok": True,
@@ -168,6 +171,9 @@ def test_llm_decision() -> JSONResponse:
 def test_debate_decision() -> JSONResponse:
     """Test Optimist/Skeptic/Arbiter debate decision pipeline (dry run, no trades)."""
     try:
+        if not settings.enable_diagnostic_endpoints:
+            return JSONResponse(status_code=404, content={"ok": False, "error": "not_found"})
+
         if not settings.llm_enabled:
             return JSONResponse(content={
                 "ok": True,

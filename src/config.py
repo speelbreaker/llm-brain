@@ -329,6 +329,13 @@ class Settings(BaseSettings):
             "so we can log and compare against the rule-based action."
         ),
     )
+    debate_shadow_enabled: bool = Field(
+        default=False,
+        description=(
+            "If True and llm_enabled, also compute the Optimist/Skeptic/Arbiter debate proposal "
+            "when it won't be executed (shadow mode)."
+        ),
+    )
     llm_validation_strict: bool = Field(
         default=True,
         description=(
@@ -351,6 +358,13 @@ class Settings(BaseSettings):
     llm_timeout_seconds: float = Field(
         default=30.0,
         description="Timeout for LLM API calls in seconds",
+    )
+    enable_diagnostic_endpoints: bool = Field(
+        default=False,
+        description=(
+            "If True, enables diagnostic endpoints that can trigger exchange and LLM calls (costly). "
+            "Keep False in production unless actively debugging."
+        ),
     )
 
     dry_run: bool = Field(

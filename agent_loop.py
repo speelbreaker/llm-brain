@@ -10,6 +10,8 @@ import sys
 import time
 import traceback
 import asyncio
+import queue
+import threading
 from datetime import datetime
 from typing import Any, Callable, Dict, Optional
 
@@ -55,11 +57,68 @@ last_health_recheck_time: float = 0
 
 
 def _run_async(coro):
-    """Helper to run async code in sync context."""
+    """Helper to run async code in sync context (avoid in hot loop)."""
     try:
         asyncio.run(coro)
     except Exception as e:
         print(f"Async execution failed: {e}")
+
+
+class _TelegramDispatch:
+    """Send Telegram updates from a dedicated background event loop.
+
+    Avoids calling asyncio.run() every loop iteration.
+    """
+
+    def __init__(self) -> None:
+        self._q: queue.Queue[dict] = queue.Queue(maxsize=10)
+        self._stop = threading.Event()
+        self._thread: Optional[threading.Thread] = None
+
+    def start(self) -> None:
+        if self._thread is not None:
+            return
+        self._thread = threading.Thread(target=self._thread_main, name="telegram-dispatch", daemon=True)
+        self._thread.start()
+
+    def stop(self, timeout: float = 2.0) -> None:
+        self._stop.set()
+        try:
+            # unblock queue get
+            self._q.put_nowait({"_stop": True})
+        except Exception:
+            pass
+        if self._thread is not None:
+            self._thread.join(timeout=timeout)
+
+    def submit_snapshot(self, snapshot: dict) -> None:
+        if self._thread is None:
+            return
+        try:
+            self._q.put_nowait(snapshot)
+        except queue.Full:
+            # Drop oldest to keep latest state flowing.
+            try:
+                _ = self._q.get_nowait()
+            except Exception:
+                pass
+            try:
+                self._q.put_nowait(snapshot)
+            except Exception:
+                pass
+
+    def _thread_main(self) -> None:
+        asyncio.run(self._async_main())
+
+    async def _async_main(self) -> None:
+        while not self._stop.is_set():
+            snap = await asyncio.to_thread(self._q.get)
+            if snap.get("_stop"):
+                break
+            try:
+                await trading_status_callback(snap)
+            except Exception as e:
+                print(f"[Telegram] status callback error: {e}")
 
 
 def _health_trading_allowed() -> tuple[bool, str]:
@@ -229,8 +288,12 @@ def run_agent_loop_forever(
     print(f"Position Reconcile: {settings.position_reconcile_action.upper()}")
     print("=" * 60)
     
+    telegram_dispatch: Optional[_TelegramDispatch] = None
+
     # Telegram Startup
     if settings.trading_telegram_enabled:
+        telegram_dispatch = _TelegramDispatch()
+        telegram_dispatch.start()
         print("[Telegram] Sending startup message...")
         _run_async(get_trading_telegram_reporter().send_startup_message())
 
@@ -645,17 +708,28 @@ def run_agent_loop_forever(
 
                     print(f"Rule-based proposed: {rule_action.get('action', 'DO_NOTHING')}")
                     
-                    # Shadow computation (for observation): always compute LLM + Debate when llm_enabled.
+                    # Shadow computation (for observation): compute LLM/Debate only when needed.
                     # These do NOT automatically execute unless decision_mode selects them.
-                    should_compute_llm = settings.llm_enabled
-                    should_compute_shadow = False
-                    
+                    should_compute_llm = bool(settings.llm_enabled) and (
+                        settings.decision_mode == "llm_only" or settings.llm_shadow_enabled or settings.decision_mode == "hybrid_shadow"
+                    )
+                    should_compute_debate = bool(settings.llm_enabled) and (
+                        settings.decision_mode == "debate" or settings.debate_shadow_enabled
+                    )
+
                     if should_compute_llm:
                         try:
-                            llm_action = choose_action_with_llm(
-                                agent_state,
-                                agent_state.candidate_options,
-                            )
+                            import concurrent.futures
+
+                            def _llm_call():
+                                return choose_action_with_llm(
+                                    agent_state,
+                                    agent_state.candidate_options,
+                                )
+
+                            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
+                                fut = ex.submit(_llm_call)
+                                llm_action = fut.result(timeout=float(settings.llm_timeout_seconds))
                             llm_action["strategy_id"] = "covered_call_v1"
                             print(f"LLM proposed: {llm_action.get('action', 'DO_NOTHING')} (validated={llm_action.get('validated', 'N/A')})")
                         except Exception as e:
@@ -665,13 +739,20 @@ def run_agent_loop_forever(
                     
                     # Debate action (shadow)
                     debate_action = None
-                    if settings.llm_enabled:
+                    if should_compute_debate:
                         try:
+                            import concurrent.futures
                             from src.trading_debate import choose_action_with_debate
-                            debate_action = choose_action_with_debate(
-                                agent_state,
-                                agent_state.candidate_options,
-                            )
+
+                            def _debate_call():
+                                return choose_action_with_debate(
+                                    agent_state,
+                                    agent_state.candidate_options,
+                                )
+
+                            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
+                                fut = ex.submit(_debate_call)
+                                debate_action = fut.result(timeout=float(settings.llm_timeout_seconds))
                             debate_action["strategy_id"] = "covered_call_v1"
                             print(
                                 f"Debate proposed: {debate_action.get('action', 'DO_NOTHING')} "
@@ -915,8 +996,8 @@ def run_agent_loop_forever(
                 if status_callback is not None:
                     status_callback(snapshot)
                 
-                if settings.trading_telegram_enabled:
-                    _run_async(trading_status_callback(snapshot))
+                if settings.trading_telegram_enabled and telegram_dispatch is not None:
+                    telegram_dispatch.submit_snapshot(snapshot)
             except Exception as e:
                 print(f"Warning: Status callback failed: {e}")
             
@@ -950,6 +1031,8 @@ def run_agent_loop_forever(
             reason = "shutdown_requested" if shutdown_requested else "error_or_exit"
             print("[Telegram] Sending shutdown message...")
             _run_async(get_trading_telegram_reporter().send_shutdown_message(reason=reason))
+            if telegram_dispatch is not None:
+                telegram_dispatch.stop()
         
         client.close()
         print("Agent stopped.")
