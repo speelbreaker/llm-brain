@@ -392,10 +392,22 @@ app = FastAPI(
 )
 
 
+def _get_runtime_settings(request: Request) -> SupervisorSettings:
+    """Read supervisor settings from app.state without relying on app.state.settings.
+
+    The main dashboard app may use app.state.settings for its own config.
+    """
+    sup = getattr(request.app.state, "supervisor_settings", None)
+    if sup is not None:
+        return sup
+    # Backward-compat for the standalone supervisor app.
+    return request.app.state.settings
+
+
 @app.get("/health", response_model=HealthResponse)
 async def health(request: Request):
     """Health check endpoint."""
-    settings: SupervisorSettings = request.app.state.settings
+    settings: SupervisorSettings = _get_runtime_settings(request)
     ready = request.app.state.ready
     errors = request.app.state.startup_errors
     
@@ -410,7 +422,7 @@ async def health(request: Request):
 @app.get("/api/diag")
 async def diag(request: Request):
     """Runtime diagnostics for the supervisor."""
-    settings: SupervisorSettings = request.app.state.settings
+    settings: SupervisorSettings = _get_runtime_settings(request)
     worker_task = getattr(request.app.state, "supervisor_worker_task", None)
     worker_alive = bool(worker_task and not worker_task.done())
     build_id = os.getenv("BUILD_ID") or os.getenv("BUILD_NUMBER") or None
@@ -438,7 +450,7 @@ async def github_webhook(
     x_github_event: str = Header(None, alias="X-GitHub-Event"),
 ):
     """Handle GitHub PR webhooks."""
-    settings: SupervisorSettings = request.app.state.settings
+    settings: SupervisorSettings = _get_runtime_settings(request)
     
     if not settings.enabled:
         return JobResponse(
@@ -572,7 +584,7 @@ async def simulate_pr_event_handler(
     Enabled only when SUPERVISOR_DEBUG=1.
     Requires X-Debug-Token header if SUPERVISOR_DEBUG_TOKEN is configured.
     """
-    settings: SupervisorSettings = request.app.state.settings
+    settings: SupervisorSettings = _get_runtime_settings(request)
     
     if settings.debug_token and settings.debug_token.strip():
         if not x_debug_token or x_debug_token != settings.debug_token:
@@ -667,7 +679,7 @@ register_debug_routes(app)
 @app.get("/api/jobs")
 async def list_jobs_api(request: Request, limit: int = 50):
     """List recent supervisor jobs (API route)."""
-    settings: SupervisorSettings = request.app.state.settings
+    settings: SupervisorSettings = _get_runtime_settings(request)
     store: JobStore = request.app.state.store
     jobs = store.list_recent(limit)
     
@@ -684,7 +696,7 @@ async def list_jobs_api(request: Request, limit: int = 50):
 @app.get("/api/jobs/{job_id}")
 async def get_job_api(request: Request, job_id: str):
     """Get a specific job by ID (API route)."""
-    settings: SupervisorSettings = request.app.state.settings
+    settings: SupervisorSettings = _get_runtime_settings(request)
     store: JobStore = request.app.state.store
     job = store.get(job_id)
     if not job:
@@ -700,7 +712,7 @@ async def get_job_api(request: Request, job_id: str):
 @app.get("/jobs")
 async def list_jobs(request: Request, limit: int = 50):
     """List recent supervisor jobs with truncation and redaction."""
-    settings: SupervisorSettings = request.app.state.settings
+    settings: SupervisorSettings = _get_runtime_settings(request)
     store: JobStore = request.app.state.store
     jobs = store.list_recent(limit)
     
@@ -717,7 +729,7 @@ async def list_jobs(request: Request, limit: int = 50):
 @app.get("/jobs/{job_id}")
 async def get_job(request: Request, job_id: str):
     """Get a specific job by ID with truncation and redaction."""
-    settings: SupervisorSettings = request.app.state.settings
+    settings: SupervisorSettings = _get_runtime_settings(request)
     store: JobStore = request.app.state.store
     job = store.get(job_id)
     if not job:

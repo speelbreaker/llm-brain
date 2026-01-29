@@ -25,31 +25,15 @@ router = APIRouter(prefix="/api/supervisor", tags=["Supervisor"])
 # This logic will be handled in the main app's startup event, but we define
 # the dependency here or expect request.app.state to be populated.
 
-def _with_supervisor_settings(request: Request):
-    """Temporarily provide supervisor settings under request.app.state.settings for legacy supervisor handlers."""
-    sup = getattr(request.app.state, "supervisor_settings", None) or get_supervisor_settings()
-    old = getattr(request.app.state, "settings", None)
-    request.app.state.settings = sup
-    return old
-
-
 @router.get("/health", response_model=HealthResponse)
 async def health_endpoint(request: Request):
     """Health check for supervisor module."""
-    old = _with_supervisor_settings(request)
-    try:
-        return await supervisor_health(request)
-    finally:
-        request.app.state.settings = old
+    return await supervisor_health(request)
 
 @router.get("/diag")
 async def diag_endpoint(request: Request):
     """Diagnostic info for supervisor module."""
-    old = _with_supervisor_settings(request)
-    try:
-        return await supervisor_diag(request)
-    finally:
-        request.app.state.settings = old
+    return await supervisor_diag(request)
 
 @router.post("/github/webhook")
 async def webhook_endpoint(
@@ -58,27 +42,15 @@ async def webhook_endpoint(
     x_github_event: str = Header(None, alias="X-GitHub-Event"),
 ):
     """Handle GitHub PR webhooks."""
-    old = _with_supervisor_settings(request)
-    try:
-        return await github_webhook(request, x_hub_signature_256, x_github_event)
-    finally:
-        request.app.state.settings = old
+    return await github_webhook(request, x_hub_signature_256, x_github_event)
 
 @router.get("/jobs")
 async def list_jobs_endpoint(request: Request, limit: int = 50):
     """List recent supervisor jobs."""
-    old = _with_supervisor_settings(request)
-    try:
-        return await list_jobs(request, limit)
-    finally:
-        request.app.state.settings = old
+    return await list_jobs(request, limit)
 
 
 @router.get("/jobs/{job_id}")
 async def get_job_endpoint(request: Request, job_id: str):
     """Get a specific job details."""
-    old = _with_supervisor_settings(request)
-    try:
-        return await get_job(request, job_id)
-    finally:
-        request.app.state.settings = old
+    return await get_job(request, job_id)

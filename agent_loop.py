@@ -83,11 +83,18 @@ class _TelegramDispatch:
 
     def stop(self, timeout: float = 2.0) -> None:
         self._stop.set()
-        try:
-            # unblock queue get
-            self._q.put_nowait({"_stop": True})
-        except Exception:
-            pass
+        # Ensure the consumer unblocks even if the queue is full.
+        for _ in range(3):
+            try:
+                self._q.put_nowait({"_stop": True})
+                break
+            except queue.Full:
+                try:
+                    _ = self._q.get_nowait()
+                except Exception:
+                    break
+            except Exception:
+                break
         if self._thread is not None:
             self._thread.join(timeout=timeout)
 
@@ -719,17 +726,10 @@ def run_agent_loop_forever(
 
                     if should_compute_llm:
                         try:
-                            import concurrent.futures
-
-                            def _llm_call():
-                                return choose_action_with_llm(
-                                    agent_state,
-                                    agent_state.candidate_options,
-                                )
-
-                            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
-                                fut = ex.submit(_llm_call)
-                                llm_action = fut.result(timeout=float(settings.llm_timeout_seconds))
+                            llm_action = choose_action_with_llm(
+                                agent_state,
+                                agent_state.candidate_options,
+                            )
                             llm_action["strategy_id"] = "covered_call_v1"
                             print(f"LLM proposed: {llm_action.get('action', 'DO_NOTHING')} (validated={llm_action.get('validated', 'N/A')})")
                         except Exception as e:
@@ -741,18 +741,11 @@ def run_agent_loop_forever(
                     debate_action = None
                     if should_compute_debate:
                         try:
-                            import concurrent.futures
                             from src.trading_debate import choose_action_with_debate
-
-                            def _debate_call():
-                                return choose_action_with_debate(
-                                    agent_state,
-                                    agent_state.candidate_options,
-                                )
-
-                            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
-                                fut = ex.submit(_debate_call)
-                                debate_action = fut.result(timeout=float(settings.llm_timeout_seconds))
+                            debate_action = choose_action_with_debate(
+                                agent_state,
+                                agent_state.candidate_options,
+                            )
                             debate_action["strategy_id"] = "covered_call_v1"
                             print(
                                 f"Debate proposed: {debate_action.get('action', 'DO_NOTHING')} "

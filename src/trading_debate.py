@@ -52,6 +52,7 @@ def _call_openai_like(api_key: str, base_url: str | None, model: str, prompt: st
             ],
             response_format={"type": "json_object"},
             max_completion_tokens=900,
+            timeout=float(settings.llm_timeout_seconds),
         )
         content = resp.choices[0].message.content or "{}"
         data = json.loads(content)

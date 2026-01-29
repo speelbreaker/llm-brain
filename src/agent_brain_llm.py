@@ -367,6 +367,7 @@ Return ONLY valid JSON matching the requested schema."""
             ],
             response_format={"type": "json_object"},
             max_completion_tokens=1024,
+            timeout=float(settings.llm_timeout_seconds),
         )
         
         model_output = response.choices[0].message.content or ""
