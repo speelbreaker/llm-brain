@@ -95,7 +95,7 @@ def update_llm_status(req: LLMConfigUpdate) -> JSONResponse:
             settings.llm_enabled = req.llm_enabled
         
         if req.decision_mode is not None:
-            valid_modes = ["rule_only", "llm_only", "hybrid_shadow"]
+            valid_modes = ["rule_only", "llm_only", "hybrid_shadow", "debate"]
             if req.decision_mode not in valid_modes:
                 return JSONResponse(
                     status_code=400,
