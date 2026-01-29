@@ -44,33 +44,20 @@ def _role_cfg(role: Role) -> tuple[str, str]:
 def _call_openai_like(api_key: str, base_url: str | None, model: str, prompt: str) -> tuple[dict[str, Any], str | None]:
     try:
         client = _get_openai_client(api_key=api_key, base_url=base_url)
+        from src.llm_client import chat_completions_create_with_timeout
+
         timeout_s = float(settings.llm_timeout_seconds)
         req_kwargs = {
-            'model': model,
-            'messages': [
-                {'role': 'system', 'content': 'Return ONLY valid JSON.'},
-                {'role': 'user', 'content': prompt},
+            "model": model,
+            "messages": [
+                {"role": "system", "content": "Return ONLY valid JSON."},
+                {"role": "user", "content": prompt},
             ],
-            'response_format': {'type': 'json_object'},
-            'max_completion_tokens': 900,
+            "response_format": {"type": "json_object"},
+            "max_completion_tokens": 900,
         }
 
-        resp = None
-        if hasattr(client, 'with_options'):
-            try:
-                resp = client.with_options(timeout=timeout_s).chat.completions.create(**req_kwargs)
-            except TypeError as e:
-                if 'timeout' not in str(e):
-                    raise
-        if resp is None:
-            try:
-                resp = client.chat.completions.create(**req_kwargs, timeout=timeout_s)
-            except TypeError as e:
-                msg = str(e)
-                if 'unexpected keyword argument' in msg and 'timeout' in msg:
-                    resp = client.chat.completions.create(**req_kwargs)
-                else:
-                    raise
+        resp = chat_completions_create_with_timeout(client, timeout_s=timeout_s, req_kwargs=req_kwargs)
 
         content = resp.choices[0].message.content or "{}"
         data = json.loads(content)
