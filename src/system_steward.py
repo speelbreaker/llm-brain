@@ -77,7 +77,6 @@ def generate_steward_report() -> StewardReport:
         "backlog": _load_file_snippet("ROADMAP_BACKLOG.md"),
         "ui_gaps": _load_file_snippet("UI_FEATURE_GAPS.md"),
         "healthcheck": _load_file_snippet("HEALTHCHECK.md"),
-        "replit": _load_file_snippet("replit.md"),
     }
 
     fallback = StewardReport(
@@ -90,7 +89,7 @@ def generate_steward_report() -> StewardReport:
         ),
         top_items=[],
         builder_prompt=(
-            "LLM not available inside the app. Configure Replit/OpenAI integrations "
+            "LLM not available inside the app. Configure OpenAI API key "
             "and re-run the steward to get AI-generated next steps."
         ),
     )

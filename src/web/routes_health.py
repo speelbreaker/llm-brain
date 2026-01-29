@@ -164,6 +164,48 @@ def test_llm_decision() -> JSONResponse:
         return JSONResponse(content={"ok": False, "error": str(e)})
 
 
+@router.post("/api/test_debate_decision")
+def test_debate_decision() -> JSONResponse:
+    """Test Optimist/Skeptic/Arbiter debate decision pipeline (dry run, no trades)."""
+    try:
+        if not settings.llm_enabled:
+            return JSONResponse(content={
+                "ok": True,
+                "action": "SKIPPED",
+                "reasoning": "LLM is disabled (llm_enabled=False). Enable LLM to test debate decision pipeline."
+            })
+
+        from src.deribit_client import DeribitClient
+        from src.state_builder import build_agent_state
+        from src.trading_debate import choose_action_with_debate
+
+        with DeribitClient() as client:
+            state = build_agent_state(client, settings)
+            candidates = state.candidate_options or []
+            if not candidates:
+                return JSONResponse(content={
+                    "ok": True,
+                    "action": "DO_NOTHING",
+                    "reasoning": "No candidate options available for testing"
+                })
+
+            decision = choose_action_with_debate(state, candidates)
+            action = decision.get("action", "DO_NOTHING")
+            reasoning = decision.get("reasoning", "") or ""
+            if len(reasoning) > 200:
+                reasoning = reasoning[:200] + "..."
+
+            return JSONResponse(content={
+                "ok": True,
+                "action": action,
+                "reasoning": reasoning,
+                "validated": bool(decision.get("validated", False)),
+                "debug": decision.get("debate_debug"),
+            })
+    except Exception as e:
+        return JSONResponse(content={"ok": False, "error": str(e)})
+
+
 @router.get("/api/risk_limits")
 def get_risk_limits() -> JSONResponse:
     """Get current risk limit configuration."""

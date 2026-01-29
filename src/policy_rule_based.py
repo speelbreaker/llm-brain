@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import math
 import random
+from datetime import datetime
 from typing import Any
 
 from src.config import Settings, settings
@@ -186,6 +187,37 @@ def _should_roll_position(
     return False, ""
 
 
+def _get_open_positions_summary_from_tracker() -> tuple[int, datetime | None]:
+    """Best-effort: use local PositionTracker state (incl. healed positions) to:
+    - count total open positions
+    - find most recent open_time
+
+    This is used for global entry pacing/caps.
+    """
+    try:
+        from datetime import datetime
+        from src.position_tracker import position_tracker
+
+        payload = position_tracker.get_open_positions_payload() or {}
+        positions = payload.get("positions") or []
+
+        latest: datetime | None = None
+        for p in positions:
+            ts = p.get("entry_time")
+            if not ts:
+                continue
+            try:
+                dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+            except Exception:
+                continue
+            if latest is None or dt > latest:
+                latest = dt
+
+        return len(positions), latest
+    except Exception:
+        return 0, None
+
+
 def decide_action(
     agent_state: AgentState,
     config: Settings | None = None,
@@ -258,6 +290,58 @@ def decide_action(
                     "decision_source": "rule_based",
                 }
     
+    # Global non-training gates (applies before considering any new opens)
+    # - max open positions total
+    # - max new positions per day (24h rolling window)
+    open_total, last_open_time = _get_open_positions_summary_from_tracker()
+    if not cfg.is_training_on_testnet:
+        if open_total >= cfg.max_open_positions_total:
+            return {
+                "action": ActionType.DO_NOTHING.value,
+                "params": {},
+                "reasoning": (
+                    f"Global cap hit: open_positions_total={open_total} >= {cfg.max_open_positions_total}. "
+                    f"No new entries allowed. Mode={cfg.mode}, policy={cfg.policy_version}."
+                ),
+                "mode": cfg.mode,
+                "policy_version": cfg.policy_version,
+                "decision_source": "rule_based",
+            }
+
+        if cfg.max_new_positions_per_day_total <= 0:
+            return {
+                "action": ActionType.DO_NOTHING.value,
+                "params": {},
+                "reasoning": (
+                    f"Entry throttle disabled new entries (max_new_positions_per_day_total={cfg.max_new_positions_per_day_total}). "
+                    f"Mode={cfg.mode}, policy={cfg.policy_version}."
+                ),
+                "mode": cfg.mode,
+                "policy_version": cfg.policy_version,
+                "decision_source": "rule_based",
+            }
+
+        if last_open_time is not None:
+            from datetime import datetime, timezone, timedelta
+            now = datetime.now(timezone.utc)
+            # Rolling 24h window; since we only allow 1/day, this is sufficient.
+            if now - last_open_time < timedelta(hours=24):
+                remaining = timedelta(hours=24) - (now - last_open_time)
+                hrs = int(remaining.total_seconds() // 3600)
+                mins = int((remaining.total_seconds() % 3600) // 60)
+                return {
+                    "action": ActionType.DO_NOTHING.value,
+                    "params": {},
+                    "reasoning": (
+                        f"Entry throttle: last open at {last_open_time.isoformat()}. "
+                        f"Next allowed in ~{hrs}h {mins}m (max 1 new position per 24h). "
+                        f"Mode={cfg.mode}, policy={cfg.policy_version}."
+                    ),
+                    "mode": cfg.mode,
+                    "policy_version": cfg.policy_version,
+                    "decision_source": "rule_based",
+                }
+
     for underlying in cfg.underlyings:
         covered_calls = _get_open_covered_calls(agent_state, underlying)
         existing_symbols = {cc.symbol for cc in covered_calls}

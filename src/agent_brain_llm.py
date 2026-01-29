@@ -1,7 +1,6 @@
 """
 LLM-based decision module using OpenAI Chat Completions API.
 Provides AI-powered action selection for covered call strategy.
-Uses Replit AI Integrations for OpenAI access.
 """
 from __future__ import annotations
 
@@ -20,23 +19,22 @@ _client: OpenAI | None = None
 
 def _get_openai_client() -> OpenAI:
     """
-    Lazily initialize the OpenAI client.
+    Lazily initialize the OpenAI client using project settings.
     Only creates the client when LLM mode is actually used.
-    Raises RuntimeError if the required environment variables are not set.
+    Raises RuntimeError if the required API key is not set.
     """
     global _client
     if _client is not None:
         return _client
     
-    api_key = os.environ.get("AI_INTEGRATIONS_OPENAI_API_KEY")
-    base_url = os.environ.get("AI_INTEGRATIONS_OPENAI_BASE_URL")
+    api_key = settings.openai_api_key
+    base_url = settings.openai_base_url
     
-    if not api_key or not base_url:
+    if not api_key:
         raise RuntimeError(
-            "LLM mode requires Replit AI Integrations to be configured. "
-            "The AI_INTEGRATIONS_OPENAI_API_KEY and AI_INTEGRATIONS_OPENAI_BASE_URL "
-            "environment variables are not set. Please ensure the OpenAI integration "
-            "is properly installed, or disable LLM mode by setting LLM_ENABLED=false."
+            "LLM mode requires an OpenAI API key to be configured. "
+            "The OPENAI_API_KEY environment variable (or openai_api_key in settings) "
+            "is not set. Please set the key or disable LLM mode by setting LLM_ENABLED=false."
         )
     
     _client = OpenAI(api_key=api_key, base_url=base_url)

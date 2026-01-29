@@ -9,6 +9,7 @@ import signal
 import sys
 import time
 import traceback
+import asyncio
 from datetime import datetime
 from typing import Any, Callable, Dict, Optional
 
@@ -45,11 +46,20 @@ from src.ops.trade_permission import (
     TradePermission,
     PermissionCode,
 )
+from src.trading.telegram_reporter import get_trading_telegram_reporter, trading_status_callback
 
 StatusCallback = Callable[[Dict[str, Any]], None]
 
 shutdown_requested = False
 last_health_recheck_time: float = 0
+
+
+def _run_async(coro):
+    """Helper to run async code in sync context."""
+    try:
+        asyncio.run(coro)
+    except Exception as e:
+        print(f"Async execution failed: {e}")
 
 
 def _health_trading_allowed() -> tuple[bool, str]:
@@ -80,6 +90,8 @@ def _build_status_snapshot(
     execution_result: Dict[str, Any],
     rule_action: Optional[Dict[str, Any]] = None,
     llm_action: Optional[Dict[str, Any]] = None,
+    debate_action: Optional[Dict[str, Any]] = None,
+    strategy_proposals: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Build a compact status snapshot for the status store and logging."""
     return {
@@ -160,6 +172,8 @@ def _build_status_snapshot(
         "decision_mode": settings.decision_mode,
         "rule_action": rule_action,
         "llm_action": llm_action,
+        "debate_action": debate_action,
+        "strategy_proposals": strategy_proposals,
     }
 
 
@@ -215,6 +229,11 @@ def run_agent_loop_forever(
     print(f"Position Reconcile: {settings.position_reconcile_action.upper()}")
     print("=" * 60)
     
+    # Telegram Startup
+    if settings.trading_telegram_enabled:
+        print("[Telegram] Sending startup message...")
+        _run_async(get_trading_telegram_reporter().send_startup_message())
+
     global last_health_recheck_time
     
     if settings.health_check_on_startup:
@@ -226,17 +245,17 @@ def run_agent_loop_forever(
             last_health_recheck_time = time.time()
             
             if cached_health.overall_status == "FAIL":
-                severity = cached_health.worst_severity
-                sev_str = severity.value if severity else "unknown"
+                severity = (cached_health.worst_severity or "unknown").upper()
+                sev_str = severity
                 
                 if not settings.is_testnet:
-                    if severity == HealthSeverity.FATAL:
+                    if severity == "FATAL":
                         print("\n" + "!" * 60)
                         print(f"FATAL HEALTH FAILURE ON MAINNET - ABORTING AGENT START")
                         print("!" * 60)
                         print("Fix the issues above before running on mainnet.")
                         sys.exit(1)
-                    elif severity == HealthSeverity.TRANSIENT:
+                    elif severity == "TRANSIENT":
                         print(f"\n[WARNING] TRANSIENT health issue ({sev_str}). Proceeding with caution on mainnet...")
                     else:
                         print("\n" + "!" * 60)
@@ -244,7 +263,7 @@ def run_agent_loop_forever(
                         print("!" * 60)
                         sys.exit(1)
                 elif settings.auto_kill_on_health_fail:
-                    if severity == HealthSeverity.TRANSIENT:
+                    if severity == "TRANSIENT":
                         print(f"\n[WARNING] TRANSIENT health issue on testnet ({sev_str}). Continuing...")
                     else:
                         print(f"\n[WARNING] Health FAIL (severity: {sev_str}) on testnet, auto_kill armed...")
@@ -503,6 +522,10 @@ def run_agent_loop_forever(
                     risk_allowed=allowed,
                     risk_reasons=reasons,
                     execution_result=execution_result,
+                    strategy_proposals={},
+                    rule_action=None,
+                    llm_action=None,
+                    debate_action=None,
                 )
                 snapshot["reconciliation"] = reconciliation_stats
                 snapshot["reconciliation_status"] = reconciliation_status
@@ -579,21 +602,49 @@ def run_agent_loop_forever(
                         training_actions = []
                         decision_source = "training_mode"
                 else:
-                    rule_action = rule_decide_action(agent_state, settings)
-                    rule_action["strategy_id"] = "covered_call_v1"
+                    # New Strategy Interface (Phase 2)
+                    active_strategies = strategy_registry.get_active_strategies()
+                    strategy_proposals: dict[str, Any] = {}
+
+                    # Collect proposals from *all* active strategies so we can observe them side-by-side.
+                    # Execution behavior remains unchanged: we still pick the first strategy as the
+                    # rule-based baseline action (until we implement a proper arbiter).
+                    if active_strategies:
+                        for s in active_strategies:
+                            try:
+                                proposed_list = s.propose_actions(agent_state) or []
+                                first = proposed_list[0] if proposed_list else {"action": "DO_NOTHING", "reasoning": "No proposal"}
+                                if "strategy_id" not in first:
+                                    first["strategy_id"] = s.strategy_id
+                                strategy_proposals[s.strategy_id] = first
+                            except Exception as e:
+                                strategy_proposals[s.strategy_id] = {
+                                    "action": "DO_NOTHING",
+                                    "reasoning": f"Strategy error: {e}",
+                                    "strategy_id": s.strategy_id,
+                                }
+
+                        # Keep existing behavior: first active strategy drives the baseline rule_action
+                        first_strategy = active_strategies[0]
+                        rule_action = strategy_proposals.get(first_strategy.strategy_id) or {
+                            "action": "DO_NOTHING",
+                            "reasoning": "Strategy proposed no actions",
+                            "strategy_id": first_strategy.strategy_id,
+                        }
+                    else:
+                        # Fallback legacy rule-based
+                        rule_action = rule_decide_action(agent_state, settings)
+                        rule_action["strategy_id"] = "covered_call_v1"
+                        strategy_proposals["covered_call_v1"] = rule_action.copy()
+
                     print(f"Rule-based proposed: {rule_action.get('action', 'DO_NOTHING')}")
                     
-                    should_compute_llm = (
-                        settings.llm_enabled and 
-                        settings.decision_mode in ("llm_only", "hybrid_shadow")
-                    )
-                    should_compute_shadow = (
-                        settings.llm_enabled and 
-                        settings.llm_shadow_enabled and
-                        settings.decision_mode == "rule_only"
-                    )
+                    # Shadow computation (for observation): always compute LLM + Debate when llm_enabled.
+                    # These do NOT automatically execute unless decision_mode selects them.
+                    should_compute_llm = settings.llm_enabled
+                    should_compute_shadow = False
                     
-                    if should_compute_llm or should_compute_shadow:
+                    if should_compute_llm:
                         try:
                             llm_action = choose_action_with_llm(
                                 agent_state,
@@ -606,10 +657,35 @@ def run_agent_loop_forever(
                             print(f"LLM error (using rule fallback): {e}")
                             llm_action = None
                     
+                    # Debate action (shadow)
+                    debate_action = None
+                    if settings.llm_enabled:
+                        try:
+                            from src.trading_debate import choose_action_with_debate
+                            debate_action = choose_action_with_debate(
+                                agent_state,
+                                agent_state.candidate_options,
+                            )
+                            debate_action["strategy_id"] = "covered_call_v1"
+                            print(
+                                f"Debate proposed: {debate_action.get('action', 'DO_NOTHING')} "
+                                f"(validated={debate_action.get('validated', 'N/A')})"
+                            )
+                        except Exception as e:
+                            log_error("debate_decision_error", str(e), {"traceback": traceback.format_exc()})
+                            debate_action = {
+                                "action": ActionType.DO_NOTHING.value,
+                                "params": {},
+                                "reasoning": f"Debate error: {e}",
+                                "decision_source": "debate_error",
+                                "validated": False,
+                            }
+
+                    # Execution selection: keep current behavior unless decision_mode explicitly selects LLM/Debate.
                     if settings.decision_mode == "rule_only":
                         proposed_action = rule_action.copy()
                         decision_source = "rule_based"
-                        
+
                     elif settings.decision_mode == "llm_only":
                         if llm_action is not None and llm_action.get("validated", False):
                             proposed_action = llm_action.copy()
@@ -618,7 +694,16 @@ def run_agent_loop_forever(
                             proposed_action = rule_action.copy()
                             decision_source = "llm_fallback_to_rule"
                             print("LLM invalid/failed, falling back to rule-based")
-                            
+
+                    elif settings.decision_mode == "debate":
+                        if debate_action is not None and debate_action.get("validated", False):
+                            proposed_action = debate_action.copy()
+                            decision_source = "debate"
+                        else:
+                            proposed_action = rule_action.copy()
+                            decision_source = "debate_fallback_to_rule"
+                            print("Debate invalid/failed, falling back to rule-based")
+
                     elif settings.decision_mode == "hybrid_shadow":
                         proposed_action = rule_action.copy()
                         decision_source = "rule_based_shadow_llm"
@@ -741,6 +826,8 @@ def run_agent_loop_forever(
                 execution_result=execution_result,
                 rule_action=rule_action,
                 llm_action=llm_action,
+                debate_action=debate_action,
+                strategy_proposals=strategy_proposals,
             )
             snapshot["reconciliation"] = reconciliation_stats
             snapshot["trade_permission"] = {
@@ -817,11 +904,15 @@ def run_agent_loop_forever(
             except Exception as e:
                 print(f"Warning: Failed to log decision: {e}")
             
-            if status_callback is not None:
-                try:
+            # Callbacks
+            try:
+                if status_callback is not None:
                     status_callback(snapshot)
-                except Exception as e:
-                    print(f"Warning: Status callback failed: {e}")
+                
+                if settings.trading_telegram_enabled:
+                    _run_async(trading_status_callback(snapshot))
+            except Exception as e:
+                print(f"Warning: Status callback failed: {e}")
             
             print_decision_summary(
                 proposed_action=proposed_action,
@@ -849,6 +940,11 @@ def run_agent_loop_forever(
     
     finally:
         print("\nShutting down...")
+        if settings.trading_telegram_enabled:
+            reason = "shutdown_requested" if shutdown_requested else "error_or_exit"
+            print("[Telegram] Sending shutdown message...")
+            _run_async(get_trading_telegram_reporter().send_shutdown_message(reason=reason))
+        
         client.close()
         print("Agent stopped.")
 

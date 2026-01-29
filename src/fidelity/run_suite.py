@@ -25,6 +25,8 @@ from .market_replay import (
     make_synthetic_replay,
 )
 from .metrics import (
+    compute_iv_surface_fidelity,
+    compute_strategy_pnl_parity,
     ks_statistic,
     quantile_diffs,
     strategy_metrics_from_returns,
@@ -59,50 +61,6 @@ def _corr(x: List[float], y: List[float]) -> Optional[float]:
     if denx <= 0 or deny <= 0:
         return None
     return float(num / ((denx ** 0.5) * (deny ** 0.5)))
-
-
-def _bucket_iv_errors(
-    *,
-    live_snaps: List[Any],
-    synth_snaps: List[Any],
-    tenors: List[int],
-    deltas: List[float],
-) -> Dict[str, Any]:
-    # Bucket by nearest tenor + nearest abs(delta).
-    def nearest(items: List[float], v: float) -> float:
-        return min(items, key=lambda x: abs(x - v))
-
-    buckets: Dict[str, List[float]] = {}
-    covered = 0
-    total = 0
-
-    for ls, ss in zip(live_snaps, synth_snaps):
-        live_by_name = {q.instrument_name: q for q in ls.options}
-        for q in ss.options:
-            total += 1
-            ql = live_by_name.get(q.instrument_name)
-            if not ql:
-                continue
-            if q.mark_iv is None or ql.mark_iv is None:
-                continue
-            if q.delta is None or ql.delta is None:
-                continue
-            dte = max(0.0, (q.expiry_ts - ss.ts) / 86400.0)
-            tenor = int(nearest([float(t) for t in tenors], float(dte)))
-            ad = float(abs(q.delta))
-            db = float(nearest(deltas, ad))
-            key = f"tenor_{tenor}d_delta_{db:.2f}"
-            buckets.setdefault(key, []).append(abs(float(q.mark_iv) - float(ql.mark_iv)))
-            covered += 1
-
-    mae_by_bucket = {k: (sum(v) / len(v) if v else 0.0) for k, v in buckets.items()}
-    all_errs: List[float] = []
-    for v in buckets.values():
-        all_errs.extend(v)
-    mae = sum(all_errs) / len(all_errs) if all_errs else None
-    coverage = (covered / total) if total > 0 else 0.0
-
-    return {"mae": mae, "mae_by_bucket": mae_by_bucket, "coverage": coverage}
 
 
 def run_fidelity_suite(
@@ -263,12 +221,14 @@ def run_fidelity_suite(
     }
 
     # ===== IV surface fidelity (bucket IV errors) =====
-    iv_errs = _bucket_iv_errors(
-        live_snaps=live_snaps,
-        synth_snaps=synth_snaps,
+    iv_res = compute_iv_surface_fidelity(
+        live_options_by_snap=[s.options for s in live_snaps],
+        synth_options_by_snap=[s.options for s in synth_snaps],
+        timestamps=[s.ts for s in synth_snaps],
         tenors=[7, 14, 30],
         deltas=[0.10, 0.25, 0.50],
     )
+    iv_errs = {"mae": iv_res.mae, "mae_by_bucket": iv_res.mae_by_bucket, "coverage": iv_res.coverage}
     iv_status = "ok" if (iv_errs.get("mae") is not None and float(iv_errs.get("coverage") or 0.0) > 0.05) else "not_available"
     iv_comp = {
         "weight": 0.30,
@@ -409,10 +369,11 @@ def run_fidelity_suite(
         }
 
         if len(live_returns) >= 2 and len(synth_returns) >= 2:
-            parity_errors.append(sum(abs(v) for v in qdiffs.values()) / max(1, len(qdiffs)))
-            ks_errors.append(float(ks))
-            es_errors.append(abs(float(synth_m.get("es_1pct", 0.0)) - float(live_m.get("es_1pct", 0.0))))
-            dd_errors.append(abs(float(synth_m.get("max_drawdown", 0.0)) - float(live_m.get("max_drawdown", 0.0))))
+            pm = compute_strategy_pnl_parity(live_returns=live_returns, synth_returns=synth_returns)
+            parity_errors.append(pm.return_quantile_diff)
+            ks_errors.append(pm.ks_stat)
+            es_errors.append(pm.es_1pct_diff)
+            dd_errors.append(pm.max_dd_diff)
 
     parity_status = "ok" if parity_errors else "not_available"
     parity_comp = {

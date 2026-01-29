@@ -342,7 +342,7 @@ def _is_live_mode(cfg: Settings) -> bool:
 
 
 def _resolve_fidelity_gate_mode() -> str:
-    mode = (os.getenv("FIDELITY_GATE_MODE") or "off").strip().lower()
+    mode = (settings.fidelity_gate_mode or "off").strip().lower()
     if mode not in ("off", "warn", "block"):
         mode = "off"
     return mode
@@ -710,24 +710,26 @@ def check_fidelity_gate(cfg: Settings, base_dir: str | Path | None = None) -> He
     }
 
     if worst_label == "MISSING":
+        can_trade = (gate_mode != "block")
         return HealthCheckResult(
             name="fidelity_gate",
             status=CheckStatus.FAIL if gate_mode == "block" else CheckStatus.WARN,
             detail=detail,
             error_code="FIDELITY_MISSING",
             severity="FATAL" if gate_mode == "block" else "DEGRADED",
-            can_trade=True,
+            can_trade=can_trade,
             meta=meta,
         )
 
     if worst_label == "UNTRUSTED":
+        can_trade = (gate_mode != "block")
         return HealthCheckResult(
             name="fidelity_gate",
             status=CheckStatus.FAIL if gate_mode == "block" else CheckStatus.WARN,
             detail=detail,
             error_code="FIDELITY_UNTRUSTED",
             severity="FATAL" if gate_mode == "block" else "DEGRADED",
-            can_trade=True,
+            can_trade=can_trade,
             meta=meta,
         )
 
@@ -1266,6 +1268,10 @@ def run_agent_healthcheck(cfg: Settings | None = None) -> dict[str, Any]:
         # Single truth: when gates are present, overall status/summary is gate-authoritative.
         overall_status = gate_status
         summary = _format_gate_summary(gate_info) if gate_info else f"gates {gate_status}"
+        
+        # If gate status is FAIL, it must be FAIL even if no individual blocking_check was found above
+        if gate_status == "FAIL":
+            overall_status = "FAIL"
     else:
         overall_status = checks_overall_status
         if overall_status == "FAIL" and fail_check is not None:

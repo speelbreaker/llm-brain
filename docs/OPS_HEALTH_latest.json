@@ -1,19 +1,26 @@
 {
-  "_note": "Deterministic stub written because CONTEXT_PACK_FAKE_OPS_HEALTH=1",
-  "cache_age_seconds": 0.0,
-  "can_trade": true,
+  "cache_age_seconds": null,
+  "can_trade": false,
   "can_trade_by_underlying": null,
-  "checked_at": "2000-01-01T00:00:00+00:00",
+  "checked_at": null,
   "checks": [],
-  "checks_overall": "OK",
+  "checks_overall": "FAIL",
   "checks_summary": "",
-  "gate_overall": null,
+  "error": {
+    "code": "OPS_HEALTH_GENERATION_ERROR",
+    "exception": "ModuleNotFoundError: No module named 'src'",
+    "traceback": "Traceback (most recent call last):\n  File \"/srv/llmagentbrain/platform/scripts/gen_ops_health_latest.py\", line 189, in main\n    payload = _real_payload(repo_root)\n              ^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/srv/llmagentbrain/platform/scripts/gen_ops_health_latest.py\", line 91, in _real_payload\n    from src import healthcheck\nModuleNotFoundError: No module named 'src'\n"
+  },
+  "gate_overall": {
+    "code": "OPS_HEALTH_GENERATION_ERROR",
+    "message": "generation error",
+    "status": "FAIL"
+  },
   "gates": [],
-  "generated_at_utc": "2000-01-01T00:00Z",
-  "head_sha": "0000000000000000000000000000000000000000",
-  "last_run_at": "2000-01-01T00:00:00+00:00",
-  "ops_facts": {},
-  "overall_status": "OK",
-  "summary": "FAKE_OPS_HEALTH",
-  "worst_severity": "OK"
+  "generated_at_utc": "2026-01-29T19:07Z",
+  "head_sha": "63b3bbe7ddbad600c0c3dd7c82cc0d826d1bed72",
+  "last_run_at": null,
+  "overall_status": "FAIL",
+  "summary": "OPS_HEALTH_GENERATION_ERROR: ModuleNotFoundError: No module named 'src'",
+  "worst_severity": "CRITICAL"
 }

@@ -152,10 +152,13 @@ class SupervisorJob(BaseModel):
     reason_code: Optional[str] = None
     
     def update_status(self, status: JobStatus) -> None:
-        """Update job status and timestamp."""
+        """Update job status and timestamp.
+
+        NOTE: stage_history tracks JobStage transitions only (see transition_stage()).
+        Do not append status entries here.
+        """
         self.status = status
         self.updated_at = datetime.utcnow()
-        self.stage_history.append(StageHistory(stage=status))
 
     def transition_stage(self, stage: JobStage) -> None:
         """Move job to a new stage and record the transition."""

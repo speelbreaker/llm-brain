@@ -60,12 +60,32 @@ class Settings(BaseSettings):
         description="Secret path segment for Telegram webhook routing",
     )
 
+    trading_telegram_enabled: bool = Field(
+        default=False,
+        alias="TRADING_TELEGRAM_ENABLED",
+        description="Enable Telegram reporting for the trading loop",
+    )
+    telegram_supergroup_id: str = Field(
+        default="",
+        alias="TELEGRAM_SUPERGROUP_ID",
+        description="Telegram supergroup ID for trading reports",
+    )
+    telegram_topic_trading: int = Field(
+        default=0,
+        alias="TELEGRAM_TOPIC_TRADING",
+        description="Telegram topic ID (thread_id) for trading reports",
+    )
+
     openai_api_key: str = Field(
         default="",
         description="OpenAI API key for Conversations + Responses API",
     )
+    openai_base_url: str = Field(
+        default="https://api.openai.com/v1",
+        description="Base URL for OpenAI API",
+    )
     openai_model: str = Field(
-        default="gpt-4.1",
+        default="gpt-5.2",
         description="Default OpenAI model used for Telegram responses",
     )
     telegram_bootstrap_context: str = Field(
@@ -75,6 +95,11 @@ class Settings(BaseSettings):
     telegram_store_path: str = Field(
         default="data/telegram_conversations.json",
         description="JSON store path when database is not configured",
+    )
+    fidelity_gate_mode: str = Field(
+        default="off",
+        alias="FIDELITY_GATE_MODE",
+        description="Fidelity gate mode: 'off', 'warn', or 'block'",
     )
 
     mode: Literal["production", "research"] = Field(
@@ -210,6 +235,22 @@ class Settings(BaseSettings):
         default=1,
         description="Maximum covered calls per underlying in live mode",
     )
+
+    # Entry pacing + global caps (non-training)
+    max_new_positions_per_day_total: int = Field(
+        default=1,
+        description=(
+            "Global throttle for OPEN actions: maximum number of NEW positions allowed per 24h window "
+            "across ALL underlyings combined (non-training mode)."
+        ),
+    )
+    max_open_positions_total: int = Field(
+        default=7,
+        description=(
+            "Global cap for total open positions across ALL strategies/underlyings (non-training mode)."
+        ),
+    )
+
     max_calls_per_underlying_training: int = Field(
         default=6,
         description="Maximum covered calls per underlying in training mode",
@@ -272,7 +313,7 @@ class Settings(BaseSettings):
         default=False,
         description="Enable LLM-based decision making",
     )
-    decision_mode: Literal["rule_only", "llm_only", "hybrid_shadow"] = Field(
+    decision_mode: Literal["rule_only", "llm_only", "hybrid_shadow", "debate"] = Field(
         default="rule_only",
         description=(
             "Decision mode for non-training runs: "
@@ -296,7 +337,7 @@ class Settings(BaseSettings):
         ),
     )
     llm_model_name: str = Field(
-        default="gpt-4.1-mini",
+        default="gpt-5-mini",
         description="OpenAI model name for LLM decisions",
     )
     llm_chat_model_name: str = Field(
