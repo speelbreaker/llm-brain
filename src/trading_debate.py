@@ -46,22 +46,28 @@ def _call_openai_like(api_key: str, base_url: str | None, model: str, prompt: st
         client = _get_openai_client(api_key=api_key, base_url=base_url)
         timeout_s = float(settings.llm_timeout_seconds)
         req_kwargs = {
-            "model": model,
-            "messages": [
-                {"role": "system", "content": "Return ONLY valid JSON."},
-                {"role": "user", "content": prompt},
+            'model': model,
+            'messages': [
+                {'role': 'system', 'content': 'Return ONLY valid JSON.'},
+                {'role': 'user', 'content': prompt},
             ],
-            "response_format": {"type": "json_object"},
-            "max_completion_tokens": 900,
+            'response_format': {'type': 'json_object'},
+            'max_completion_tokens': 900,
         }
 
-        if hasattr(client, "with_options"):
-            resp = client.with_options(timeout=timeout_s).chat.completions.create(**req_kwargs)
-        else:
+        resp = None
+        if hasattr(client, 'with_options'):
+            try:
+                resp = client.with_options(timeout=timeout_s).chat.completions.create(**req_kwargs)
+            except TypeError as e:
+                if 'timeout' not in str(e):
+                    raise
+        if resp is None:
             try:
                 resp = client.chat.completions.create(**req_kwargs, timeout=timeout_s)
             except TypeError as e:
-                if "unexpected keyword argument" in str(e) and "timeout" in str(e):
+                msg = str(e)
+                if 'unexpected keyword argument' in msg and 'timeout' in msg:
                     resp = client.chat.completions.create(**req_kwargs)
                 else:
                     raise

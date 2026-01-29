@@ -40,6 +40,31 @@ def _get_openai_client() -> OpenAI:
     _client = OpenAI(api_key=api_key, base_url=base_url)
     return _client
 
+def _call_chat_with_timeout(client, *, timeout_s: float, req_kwargs: dict):
+    """Call chat.completions.create with best-effort timeout across SDK variants."""
+    # Preferred: per-request client options (OpenAI SDK v1/v2).
+    try:
+        if hasattr(client, "with_options"):
+            try:
+                return client.with_options(timeout=timeout_s).chat.completions.create(**req_kwargs)
+            except TypeError as e:
+                # Some wrappers may not accept timeout
+                if "timeout" not in str(e):
+                    raise
+    except Exception:
+        # fall through to call-site timeout attempt
+        pass
+
+    # Fallback: timeout kwarg on create (some SDKs)
+    try:
+        return client.chat.completions.create(**req_kwargs, timeout=timeout_s)
+    except TypeError as e:
+        msg=str(e)
+        if "unexpected keyword argument" in msg and "timeout" in msg:
+            return client.chat.completions.create(**req_kwargs)
+        raise
+
+
 
 def _compress_market_context(mc: MarketContext | None) -> dict[str, Any] | None:
     """Serialize market context for LLM consumption."""
@@ -370,17 +395,7 @@ Return ONLY valid JSON matching the requested schema."""
             "max_completion_tokens": 1024,
         }
 
-        if hasattr(client, "with_options"):
-            response = client.with_options(timeout=timeout_s).chat.completions.create(**req_kwargs)
-        else:
-            # Older SDKs: try passing timeout kwarg; only fall back when it is truly unsupported.
-            try:
-                response = client.chat.completions.create(**req_kwargs, timeout=timeout_s)
-            except TypeError as e:
-                if "unexpected keyword argument" in str(e) and "timeout" in str(e):
-                    response = client.chat.completions.create(**req_kwargs)
-                else:
-                    raise
+        response = _call_chat_with_timeout(client, timeout_s=timeout_s, req_kwargs=req_kwargs)
 
         model_output = response.choices[0].message.content or ""
         decision = json.loads(model_output)
