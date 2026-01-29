@@ -77,7 +77,8 @@ class SupervisorSettings(BaseSettings):
     
     supervisor_api_url: Optional[str] = Field(default=None, alias="SUPERVISOR_API_URL")
     
-    model_config = {"env_file": ".env", "extra": "ignore"}
+    # Do not load from a repo-local .env file (tests and deployments should rely on real environment).
+    model_config = {"extra": "ignore"}
     
     def get_check_commands(self) -> list[str]:
         """Return list of configured check commands."""

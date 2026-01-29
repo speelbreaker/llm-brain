@@ -7,8 +7,22 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional, List, Any
 
-from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
+try:
+    from telegram import Update
+    from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
+    _TELEGRAM_AVAILABLE = True
+except Exception:  # pragma: no cover
+    # Optional dependency in many deployments/tests.
+    Update = object  # type: ignore
+    ApplicationBuilder = None  # type: ignore
+    CommandHandler = None  # type: ignore
+    MessageHandler = None  # type: ignore
+    class _DummyContextTypes:  # pragma: no cover
+        DEFAULT_TYPE = object
+
+    ContextTypes = _DummyContextTypes  # type: ignore
+    filters = None  # type: ignore
+    _TELEGRAM_AVAILABLE = False
 
 import httpx
 from src.config import settings as trading_settings
@@ -128,16 +142,25 @@ class BotStoreAdapter:
 
 class TelegramBotManager:
     """Manages the Telegram bot lifecycle and command routing."""
-    
+
     def __init__(self, settings: SupervisorSettings, store: JobStore):
         self.settings = settings
         self.adapter = BotStoreAdapter(settings, store)
         self.app = None
         self._is_running = False
 
+        if settings.telegram_enabled and not _TELEGRAM_AVAILABLE:
+            logger.warning(
+                "python-telegram-bot is not installed; Supervisor Telegram bot is disabled. "
+                "Install python-telegram-bot to enable it."
+            )
+
     async def start(self):
         if not self.settings.telegram_enabled or not self.settings.telegram_bot_token:
             logger.warning("Telegram bot disabled (missing token or disabled in settings)")
+            return
+        if not _TELEGRAM_AVAILABLE:
+            logger.warning("Telegram bot cannot start: python-telegram-bot not installed")
             return
 
         token = self.settings.telegram_bot_token

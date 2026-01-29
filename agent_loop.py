@@ -82,6 +82,10 @@ class _TelegramDispatch:
         self._thread.start()
 
     def stop(self, timeout: float = 2.0) -> None:
+        """Stop the dispatcher.
+
+        Note: during shutdown we may drop one queued snapshot to make room for a stop sentinel.
+        """
         self._stop.set()
         # Ensure the consumer unblocks even if the queue is full.
         for _ in range(3):

@@ -359,7 +359,9 @@ Return ONLY valid JSON matching the requested schema."""
 
     try:
         client = _get_openai_client()
-        response = client.chat.completions.create(
+        # OpenAI Python SDK v1/v2: prefer per-request client options for timeout.
+        client_req = client.with_options(timeout=float(settings.llm_timeout_seconds)) if hasattr(client, "with_options") else client
+        response = client_req.chat.completions.create(
             model=settings.llm_model_name,
             messages=[
                 {"role": "system", "content": system_prompt},
@@ -367,7 +369,6 @@ Return ONLY valid JSON matching the requested schema."""
             ],
             response_format={"type": "json_object"},
             max_completion_tokens=1024,
-            timeout=float(settings.llm_timeout_seconds),
         )
         
         model_output = response.choices[0].message.content or ""

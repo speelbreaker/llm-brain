@@ -21,6 +21,9 @@ import asyncio
 
 router = APIRouter(prefix="/api/supervisor", tags=["Supervisor"])
 
+# Back-compat: existing GitHub webhooks may be pointed at /github/webhook.
+legacy_router = APIRouter(prefix="", tags=["Supervisor"])
+
 # We need to ensure the main app's state has the supervisor components initialized.
 # This logic will be handled in the main app's startup event, but we define
 # the dependency here or expect request.app.state to be populated.
@@ -42,6 +45,16 @@ async def webhook_endpoint(
     x_github_event: str = Header(None, alias="X-GitHub-Event"),
 ):
     """Handle GitHub PR webhooks."""
+    return await github_webhook(request, x_hub_signature_256, x_github_event)
+
+
+@legacy_router.post("/github/webhook")
+async def webhook_endpoint_legacy(
+    request: Request,
+    x_hub_signature_256: str = Header(None, alias="X-Hub-Signature-256"),
+    x_github_event: str = Header(None, alias="X-GitHub-Event"),
+):
+    """Legacy webhook path (no /api/supervisor prefix)."""
     return await github_webhook(request, x_hub_signature_256, x_github_event)
 
 @router.get("/jobs")

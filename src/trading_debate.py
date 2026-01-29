@@ -44,7 +44,8 @@ def _role_cfg(role: Role) -> tuple[str, str]:
 def _call_openai_like(api_key: str, base_url: str | None, model: str, prompt: str) -> tuple[dict[str, Any], str | None]:
     try:
         client = _get_openai_client(api_key=api_key, base_url=base_url)
-        resp = client.chat.completions.create(
+        client_req = client.with_options(timeout=float(settings.llm_timeout_seconds)) if hasattr(client, "with_options") else client
+        resp = client_req.chat.completions.create(
             model=model,
             messages=[
                 {"role": "system", "content": "Return ONLY valid JSON."},
@@ -52,7 +53,6 @@ def _call_openai_like(api_key: str, base_url: str | None, model: str, prompt: st
             ],
             response_format={"type": "json_object"},
             max_completion_tokens=900,
-            timeout=float(settings.llm_timeout_seconds),
         )
         content = resp.choices[0].message.content or "{}"
         data = json.loads(content)

@@ -1,14 +1,25 @@
-[project]
-name = "repl-nix-workspace"
-version = "0.1.0"
-description = "Add your description here"
-requires-python = ">=3.11"
-dependencies = [
-    "httpx>=0.28.1",
-    "numpy>=2.3.5",
-    "openai>=2.9.0",
-    "pandas>=2.3.3",
-    "pydantic>=2.12.5",
-    "pydantic-settings>=2.12.0",
-    "python-dotenv>=1.2.1",
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM"]
+ignore = [
+  "E501", # allow long lines in embedded HTML/JS strings
 ]
+
+[tool.ruff.lint.per-file-ignores]
+"src/web/dashboard.py" = ["E501"]
+
+[tool.mypy]
+python_version = "3.12"
+ignore_missing_imports = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+warn_unused_configs = true
+no_implicit_optional = true
+check_untyped_defs = false
+
+# Avoid noisy false-positives from embedded/optional integrations.
+[mypy-src.web.dashboard]
+ignore_errors = true

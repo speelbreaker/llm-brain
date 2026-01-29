@@ -49,6 +49,12 @@ app.include_router(fidelity_router)
 app.include_router(bots_router)
 app.include_router(health_router)
 app.include_router(supervisor_router)
+# Back-compat for GitHub webhooks already configured at /github/webhook
+try:
+    from src.web.routes_supervisor import legacy_router as supervisor_legacy_router
+    app.include_router(supervisor_legacy_router)
+except Exception:
+    pass
 
 if os.environ.get("DEPLOY_WEBHOOK_SECRET"):
     app.include_router(deploy_router)
