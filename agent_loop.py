@@ -245,17 +245,23 @@ def run_agent_loop_forever(
             last_health_recheck_time = time.time()
             
             if cached_health.overall_status == "FAIL":
-                severity = (cached_health.worst_severity or "unknown").upper()
-                sev_str = severity
-                
+                # Normalize severity robustly (can be enum or string)
+                worst = cached_health.worst_severity
+                if worst is None:
+                    sev_str = "UNKNOWN"
+                elif hasattr(worst, "value"):
+                    sev_str = str(getattr(worst, "value", worst)).upper()
+                else:
+                    sev_str = str(worst).upper()
+
                 if not settings.is_testnet:
-                    if severity == "FATAL":
+                    if sev_str == "FATAL":
                         print("\n" + "!" * 60)
                         print(f"FATAL HEALTH FAILURE ON MAINNET - ABORTING AGENT START")
                         print("!" * 60)
                         print("Fix the issues above before running on mainnet.")
                         sys.exit(1)
-                    elif severity == "TRANSIENT":
+                    elif sev_str == "TRANSIENT":
                         print(f"\n[WARNING] TRANSIENT health issue ({sev_str}). Proceeding with caution on mainnet...")
                     else:
                         print("\n" + "!" * 60)

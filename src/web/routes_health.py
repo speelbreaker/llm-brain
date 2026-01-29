@@ -726,45 +726,5 @@ def update_runtime_config(update: RuntimeConfigUpdate) -> JSONResponse:
     })
 
 
-@router.get("/api/supervisor/jobs")
-async def get_supervisor_jobs():
-    """Proxy supervisor jobs list from supervisor service."""
-    if not SUPERVISOR_API_URL:
-        return JSONResponse(content={"error": "not_configured", "jobs": []})
-    
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.get(f"{SUPERVISOR_API_URL.rstrip('/')}/jobs")
-            resp.raise_for_status()
-            return JSONResponse(content=resp.json())
-    except Exception as e:
-        return JSONResponse(
-            status_code=500,
-            content={"error": str(e), "jobs": []}
-        )
-
-
-@router.get("/api/supervisor/jobs/{job_id}")
-async def get_supervisor_job(job_id: str):
-    """Proxy single supervisor job from supervisor service."""
-    if not SUPERVISOR_API_URL:
-        return JSONResponse(
-            status_code=503,
-            content={"error": "Supervisor not configured"}
-        )
-    
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.get(f"{SUPERVISOR_API_URL.rstrip('/')}/jobs/{job_id}")
-            resp.raise_for_status()
-            return JSONResponse(content=resp.json())
-    except httpx.HTTPStatusError as e:
-        return JSONResponse(
-            status_code=e.response.status_code,
-            content={"error": str(e)}
-        )
-    except Exception as e:
-        return JSONResponse(
-            status_code=500,
-            content={"error": str(e)}
-        )
+# NOTE: Supervisor API routes are provided by src/web/routes_supervisor.py under /api/supervisor.
+# (The legacy proxy endpoints were removed to avoid path conflicts.)

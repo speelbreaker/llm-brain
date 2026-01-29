@@ -19,21 +19,37 @@ from src.supervisor.config import get_settings as get_supervisor_settings
 from src.supervisor.store import JobStore
 import asyncio
 
-router = APIRouter(prefix="/supervisor", tags=["Supervisor"])
+router = APIRouter(prefix="/api/supervisor", tags=["Supervisor"])
 
 # We need to ensure the main app's state has the supervisor components initialized.
 # This logic will be handled in the main app's startup event, but we define
 # the dependency here or expect request.app.state to be populated.
 
+def _with_supervisor_settings(request: Request):
+    """Temporarily provide supervisor settings under request.app.state.settings for legacy supervisor handlers."""
+    sup = getattr(request.app.state, "supervisor_settings", None) or get_supervisor_settings()
+    old = getattr(request.app.state, "settings", None)
+    request.app.state.settings = sup
+    return old
+
+
 @router.get("/health", response_model=HealthResponse)
 async def health_endpoint(request: Request):
     """Health check for supervisor module."""
-    return await supervisor_health(request)
+    old = _with_supervisor_settings(request)
+    try:
+        return await supervisor_health(request)
+    finally:
+        request.app.state.settings = old
 
 @router.get("/diag")
 async def diag_endpoint(request: Request):
     """Diagnostic info for supervisor module."""
-    return await supervisor_diag(request)
+    old = _with_supervisor_settings(request)
+    try:
+        return await supervisor_diag(request)
+    finally:
+        request.app.state.settings = old
 
 @router.post("/github/webhook")
 async def webhook_endpoint(
@@ -42,14 +58,27 @@ async def webhook_endpoint(
     x_github_event: str = Header(None, alias="X-GitHub-Event"),
 ):
     """Handle GitHub PR webhooks."""
-    return await github_webhook(request, x_hub_signature_256, x_github_event)
+    old = _with_supervisor_settings(request)
+    try:
+        return await github_webhook(request, x_hub_signature_256, x_github_event)
+    finally:
+        request.app.state.settings = old
 
 @router.get("/jobs")
 async def list_jobs_endpoint(request: Request, limit: int = 50):
     """List recent supervisor jobs."""
-    return await list_jobs(request, limit)
+    old = _with_supervisor_settings(request)
+    try:
+        return await list_jobs(request, limit)
+    finally:
+        request.app.state.settings = old
+
 
 @router.get("/jobs/{job_id}")
 async def get_job_endpoint(request: Request, job_id: str):
     """Get a specific job details."""
-    return await get_job(request, job_id)
+    old = _with_supervisor_settings(request)
+    try:
+        return await get_job(request, job_id)
+    finally:
+        request.app.state.settings = old

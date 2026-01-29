@@ -110,7 +110,9 @@ def _init_supervisor_state(app_instance: FastAPI) -> None:
     """Initialize Supervisor state on the main app instance."""
     print("[Supervisor] Initializing configuration...")
     sup_settings = get_supervisor_settings()
-    app_instance.state.settings = sup_settings # Supervisor endpoints expect this in app.state
+    # Do NOT overwrite app.state.settings (used by the main app in many codebases).
+    # Store supervisor config under a dedicated namespace.
+    app_instance.state.supervisor_settings = sup_settings
     
     # Initialize common components
     app_instance.state.job_queue = asyncio.Queue()
