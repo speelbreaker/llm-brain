@@ -53,12 +53,9 @@ app.include_router(supervisor_router)
 try:
     from src.web.routes_supervisor import legacy_router as supervisor_legacy_router
     app.include_router(supervisor_legacy_router)
-except ImportError:
+except (ImportError, ModuleNotFoundError, AttributeError):
     import logging
-    logging.getLogger(__name__).info("[Supervisor] legacy_router not available (ImportError)")
-except Exception:
-    import logging
-    logging.getLogger(__name__).exception("[Supervisor] Failed to include legacy_router")
+    logging.getLogger(__name__).info("[Supervisor] legacy_router not available")
 
 if os.environ.get("DEPLOY_WEBHOOK_SECRET"):
     app.include_router(deploy_router)
