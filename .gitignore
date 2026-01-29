@@ -106,4 +106,5 @@ docs/obsidian/
 .env.platform
 .env
 .env.*
+!.env.platform.example
 logs/
