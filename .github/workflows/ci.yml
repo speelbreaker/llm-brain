@@ -32,10 +32,11 @@ jobs:
           pyright --version
           pyright
 
-      - name: Typecheck (mypy)
+      - name: Typecheck (mypy) [informational]
         run: |
           mypy --version
-          mypy src || true
+          mypy src
+        continue-on-error: true
 
       - name: Tests
         env:

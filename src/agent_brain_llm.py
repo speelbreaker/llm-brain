@@ -360,16 +360,41 @@ Return ONLY valid JSON matching the requested schema."""
     try:
         client = _get_openai_client()
         # OpenAI Python SDK v1/v2: prefer per-request client options for timeout.
-        client_req = client.with_options(timeout=float(settings.llm_timeout_seconds)) if hasattr(client, "with_options") else client
-        response = client_req.chat.completions.create(
-            model=settings.llm_model_name,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": json.dumps(user_instruction)},
-            ],
-            response_format={"type": "json_object"},
-            max_completion_tokens=1024,
-        )
+        timeout_s = float(settings.llm_timeout_seconds)
+        if hasattr(client, "with_options"):
+            client_req = client.with_options(timeout=timeout_s)
+            response = client_req.chat.completions.create(
+                model=settings.llm_model_name,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": json.dumps(user_instruction)},
+                ],
+                response_format={"type": "json_object"},
+                max_completion_tokens=1024,
+            )
+        else:
+            # Older SDKs: try passing timeout kwarg; if unsupported, proceed without.
+            try:
+                response = client.chat.completions.create(
+                    model=settings.llm_model_name,
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": json.dumps(user_instruction)},
+                    ],
+                    response_format={"type": "json_object"},
+                    max_completion_tokens=1024,
+                    timeout=timeout_s,
+                )
+            except TypeError:
+                response = client.chat.completions.create(
+                    model=settings.llm_model_name,
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": json.dumps(user_instruction)},
+                    ],
+                    response_format={"type": "json_object"},
+                    max_completion_tokens=1024,
+                )
         
         model_output = response.choices[0].message.content or ""
         decision = json.loads(model_output)

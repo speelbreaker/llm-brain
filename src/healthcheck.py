@@ -712,8 +712,8 @@ def check_fidelity_gate(cfg: Settings, base_dir: str | Path | None = None) -> He
     }
 
     if worst_label == "MISSING":
-        # This check reports policy health; trade permission is handled separately.
-        can_trade = True
+        # Fail-closed only when gate_mode=block; otherwise advisory.
+        can_trade = (gate_mode != "block")
         return HealthCheckResult(
             name="fidelity_gate",
             status=CheckStatus.FAIL if gate_mode == "block" else CheckStatus.WARN,
@@ -725,8 +725,8 @@ def check_fidelity_gate(cfg: Settings, base_dir: str | Path | None = None) -> He
         )
 
     if worst_label == "UNTRUSTED":
-        # This check reports policy health; trade permission is handled separately.
-        can_trade = True
+        # Fail-closed only when gate_mode=block; otherwise advisory.
+        can_trade = (gate_mode != "block")
         return HealthCheckResult(
             name="fidelity_gate",
             status=CheckStatus.FAIL if gate_mode == "block" else CheckStatus.WARN,

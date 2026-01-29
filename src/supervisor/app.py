@@ -859,10 +859,11 @@ async def run_supervisor_job(job: SupervisorJob, app: FastAPI) -> None:
                 job.final_message = "Codex auto-fixes require Codex to be available (CODEX_BIN). Codex unavailable; manual review required"
                 store.save(job)
                 # Post comment with check results (no fixes attempted)
+                checks_list = verification.checks or []
                 comment = format_pr_comment(
                     run_number=run_number,
                     commit_sha=job.head_sha,
-                    checks=[c.model_dump() for c in verification.checks],
+                    checks=[c.model_dump() for c in checks_list],
                     failure_summary=redact_secrets(verification.failure_summary, settings),
                     final_status="🛑 Needs human: Codex unavailable",
                     telegram_enabled=settings.telegram_enabled,
