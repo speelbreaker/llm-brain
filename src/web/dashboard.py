@@ -5972,13 +5972,13 @@ def render_dashboard_html() -> str:
 
       for (const l of lanes) {{
         try {{
-          const res = await fetch(`${API_BASE}/api/paper/positions/open?lane=${{l.lane}}`);
+          const res = await fetch(`${{API_BASE}}/api/paper/positions/open?lane=${{l.lane}}`);
           const data = await res.json();
           const positions = data.positions || [];
           const totals = data.totals || {{}};
           const unreal = totals.unrealized_pnl || 0;
 
-          const cres = await fetch(`${API_BASE}/api/paper/positions/closed?lane=${{l.lane}}`);
+          const cres = await fetch(`${{API_BASE}}/api/paper/positions/closed?lane=${{l.lane}}`);
           const cdata = await cres.json();
           const chains = cdata.chains || [];
           const ct = cdata.totals || {{}};
