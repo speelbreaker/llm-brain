@@ -14,6 +14,27 @@ from src.config import Settings, settings
 from src.models import ActionType, AgentState, CandidateOption, OptionPosition, Side
 from src.scoring.candidates import score_option_candidate
 
+def _get_tracker_entry_time_for_symbol(symbol: str) -> datetime | None:
+    """Best-effort lookup of entry_time from PositionTracker persisted state."""
+    try:
+        from src.position_tracker import position_tracker
+
+        payload = position_tracker.get_open_positions_payload(include_sandbox=True) or {}
+        for p in payload.get("positions") or []:
+            if p.get("symbol") != symbol:
+                continue
+            ts = p.get("entry_time")
+            if not ts:
+                return None
+            try:
+                return datetime.fromisoformat(ts.replace("Z", "+00:00"))
+            except Exception:
+                return None
+        return None
+    except Exception:
+        return None
+
+
 
 def _get_open_covered_calls(
     agent_state: AgentState,
@@ -163,14 +184,36 @@ def _should_roll_position(
     Determine if a position should be rolled.
     
     Roll conditions:
-    1. DTE < 1 day (near expiry)
-    2. Position is ITM (assignment risk)
-    3. Position is ATM with low IV (not much premium left)
+    1. Profit capture: short option price decayed enough to capture configured fraction of premium
+    2. DTE < 1 day (near expiry)
+    3. Position is ITM (assignment risk)
+    4. Position is ATM with low DTE (assignment/churn risk)
     """
     cfg = config or settings
     
     dte = position.expiry_dte or 0
-    
+
+    # Profit capture roll: if we have captured >= cfg.profit_capture_pct of premium
+    # (i.e., mark price <= entry_price * (1 - pct)). Guard with min hold time + DTE.
+    try:
+        if position.side == Side.SELL and position.avg_price and position.avg_price > 0 and position.mark_price is not None:
+            entry = float(position.avg_price)
+            mark = float(position.mark_price)
+            captured = (entry - mark) / entry
+
+            if captured >= float(getattr(cfg, "profit_capture_pct", 0.75)):
+                if dte > int(getattr(cfg, "profit_capture_roll_only_if_dte_gt", 3)):
+                    entry_time = _get_tracker_entry_time_for_symbol(position.symbol)
+                    if entry_time is None:
+                        # If we can't determine age, allow profit capture action (best effort).
+                        return True, f"Profit capture {captured*100:.0f}% (mark={mark:.6f} <= {100*(1-captured):.0f}% of entry), age=unknown"
+                    from datetime import timezone
+                    age_h = (datetime.now(timezone.utc) - entry_time).total_seconds() / 3600.0
+                    if age_h >= float(getattr(cfg, "profit_capture_min_hold_hours", 12.0)):
+                        return True, f"Profit capture {captured*100:.0f}% (age={age_h:.1f}h, DTE={dte})"
+    except Exception:
+        pass
+
     if dte < 1:
         return True, f"Near expiry (DTE={dte})"
     

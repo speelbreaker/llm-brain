@@ -369,6 +369,20 @@ class Settings(BaseSettings):
         description="Paper fill slippage in bps applied to mark/mid fills (Phase 1).",
     )
 
+    # Rule policy: profit-capture roll settings
+    profit_capture_pct: float = Field(
+        default=0.75,
+        description="If >= this fraction of premium is captured (short option price decays), trigger an early roll/close (rule policy).",
+    )
+    profit_capture_min_hold_hours: float = Field(
+        default=12.0,
+        description="Minimum hours to hold a position before profit-capture can trigger a roll/close (rule policy).",
+    )
+    profit_capture_roll_only_if_dte_gt: int = Field(
+        default=3,
+        description="Only trigger profit-capture roll if current position DTE is greater than this (avoid churn near expiry).",
+    )
+
     enable_diagnostic_endpoints: bool = Field(
         default=False,
         description=(
