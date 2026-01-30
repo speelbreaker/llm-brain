@@ -205,8 +205,8 @@ def _should_roll_position(
                 if dte > int(getattr(cfg, "profit_capture_roll_only_if_dte_gt", 3)):
                     entry_time = _get_tracker_entry_time_for_symbol(position.symbol)
                     if entry_time is None:
-                        # If we can't determine age, allow profit capture action (best effort).
-                        return True, f"Profit capture {captured*100:.0f}% (mark={mark:.6f} <= {100*(1-captured):.0f}% of entry), age=unknown"
+                        # If we can't determine age, be conservative and skip profit-capture.
+                        return False, "Profit capture hit but entry_time unknown (skip)"
                     from datetime import timezone
                     age_h = (datetime.now(timezone.utc) - entry_time).total_seconds() / 3600.0
                     if age_h >= float(getattr(cfg, "profit_capture_min_hold_hours", 12.0)):

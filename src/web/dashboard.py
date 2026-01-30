@@ -5945,6 +5945,16 @@ def render_dashboard_html() -> str:
       }}
     }}
     
+    function escapeHtml(s) {
+      s = (s === null || s === undefined) ? '' : String(s);
+      return s
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
+    }
+
     async function updatePaperPortfolios() {{
       const lanes = [
         {{lane:'rule', summary:'paper-rule-summary', tbody:'paper-rule-open-body', closedSummary:'paper-rule-closed-summary', closedBody:'paper-rule-closed-body'}},
@@ -5960,13 +5970,13 @@ def render_dashboard_html() -> str:
 
       for (const l of lanes) {{
         try {{
-          const res = await fetch(`api/paper/positions/open?lane=${{l.lane}}`);
+          const res = await fetch(`/api/paper/positions/open?lane=${{l.lane}}`);
           const data = await res.json();
           const positions = data.positions || [];
           const totals = data.totals || {{}};
           const unreal = totals.unrealized_pnl || 0;
 
-          const cres = await fetch(`api/paper/positions/closed?lane=${{l.lane}}`);
+          const cres = await fetch(`/api/paper/positions/closed?lane=${{l.lane}}`);
           const cdata = await cres.json();
           const chains = cdata.chains || [];
           const ct = cdata.totals || {{}};
@@ -5980,8 +5990,8 @@ def render_dashboard_html() -> str:
           const rows = positions.map(p => {{
             const cls = (p.unrealized_pnl || 0) >= 0 ? 'traded-yes' : 'traded-no';
             return `<tr>
-              <td>${{p.underlying}}</td>
-              <td>${{p.symbol}}</td>
+              <td>${{escapeHtml(p.underlying)}}</td>
+              <td>${{escapeHtml(p.symbol)}}</td>
               <td>${{Number(p.quantity||0).toFixed(3)}}</td>
               <td>${{Number(p.entry_price||0).toFixed(6)}}</td>
               <td>${{Number(p.mark_price||0).toFixed(6)}}</td>
@@ -5996,9 +6006,9 @@ def render_dashboard_html() -> str:
             const cls = (c.realized_pnl || 0) >= 0 ? 'traded-yes' : 'traded-no';
             const closedAt = (c.close_time || '').toString().replace('T',' ').slice(0,19);
             return `<tr>
-              <td>${{closedAt || '--'}}</td>
-              <td>${{c.underlying || '--'}}</td>
-              <td>${{c.symbol || '--'}}</td>
+              <td>${{escapeHtml(closedAt || '--')}}</td>
+              <td>${{escapeHtml(c.underlying || '--')}}</td>
+              <td>${{escapeHtml(c.symbol || '--')}}</td>
               <td class="${{cls}}">${{Number(c.realized_pnl||0).toFixed(2)}}</td>
               <td class="${{cls}}">${{Number(c.realized_pnl_pct||0).toFixed(1)}}%</td>
             </tr>`;
@@ -6077,11 +6087,11 @@ def render_dashboard_html() -> str:
           const pnlClass = (c.realized_pnl || 0) >= 0 ? 'traded-yes' : 'traded-no';
           const closedAt = (c.close_time || c.open_time || '').toString().replace('T', ' ').slice(0, 19);
           return `<tr>
-            <td>${{closedAt || '--'}}</td>
-            <td>${{c.underlying || '--'}}</td>
+            <td>${{escapeHtml(closedAt || '--')}}</td>
+            <td>${{escapeHtml(c.underlying || '--')}}</td>
             <td>${{(c.option_type || '--').toString().toUpperCase()}}</td>
             <td>${{stratLabel || '--'}}</td>
-            <td>${{c.symbol || '--'}}</td>
+            <td>${{escapeHtml(c.symbol || '--')}}</td>
             <td>${{c.num_legs || '--'}}</td>
             <td>${{c.num_rolls || 0}}</td>
             <td class="${{pnlClass}}">${{Number(c.realized_pnl || 0).toFixed(2)}}</td>

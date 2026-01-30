@@ -85,6 +85,7 @@ def apply_decision_to_lane(
     candidates: list[CandidateOption],
     decision: Dict[str, Any] | None,
     client: Any,
+    refresh_marks: bool = True,
 ) -> None:
     """Apply a decision into a paper portfolio lane.
 
@@ -94,7 +95,8 @@ def apply_decision_to_lane(
         return
 
     tracker = get_tracker(lane)
-    tracker.refresh_marks(client)
+    if refresh_marks:
+        tracker.refresh_marks(client)
 
     if not decision or not isinstance(decision, dict):
         return
@@ -112,11 +114,13 @@ def apply_decision_to_lane(
         if not symbol:
             return
         # don't spam opens in paper lane
-        if _has_open_symbol(tracker, symbol) or _has_any_open_call(tracker, params.get("underlying") or state.underlyings[0]):
+        if _has_open_symbol(tracker, symbol) or _has_any_open_call(tracker, params.get("underlying") or (state.underlyings[0] if getattr(state, "underlyings", None) else None)):
             return
 
         cand = next((c for c in candidates if c.symbol == symbol), None)
         mark = _candidate_mark(cand) if cand else 0.0
+        if mark <= 0:
+            return
         price = _fill_price(mark, side="sell", slippage_bps=slippage_bps)
         size = float(params.get("size") or params.get("quantity") or settings.default_order_size)
 
@@ -140,6 +144,8 @@ def apply_decision_to_lane(
             mark = float(ticker.get("mark_price") or 0.0) if ticker else 0.0
         except Exception:
             mark = 0.0
+        if mark <= 0:
+            return
         price = _fill_price(mark, side="buy", slippage_bps=slippage_bps)
         size = float(params.get("size") or params.get("quantity") or settings.default_order_size)
         tracker.process_execution_result(
@@ -165,10 +171,14 @@ def apply_decision_to_lane(
             from_mark = float(ticker.get("mark_price") or 0.0) if ticker else 0.0
         except Exception:
             from_mark = 0.0
+        if from_mark <= 0:
+            return
         buy_price = _fill_price(from_mark, side="buy", slippage_bps=slippage_bps)
 
         cand = next((c for c in candidates if c.symbol == to_symbol), None)
         to_mark = _candidate_mark(cand) if cand else 0.0
+        if to_mark <= 0:
+            return
         sell_price = _fill_price(to_mark, side="sell", slippage_bps=slippage_bps)
 
         size = float(params.get("size") or params.get("quantity") or settings.default_order_size)

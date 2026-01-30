@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import fcntl
 from dataclasses import dataclass, field, asdict
 from datetime import datetime, timezone
 from pathlib import Path
@@ -458,6 +459,23 @@ class PositionTracker:
             "expiry": expiry_str,
         }
 
+
+    def _with_file_lock(self, fp, mode: str) -> None:
+        """Advisory file lock to avoid concurrent writers across processes."""
+        try:
+            if mode == "shared":
+                fcntl.flock(fp.fileno(), fcntl.LOCK_SH)
+            else:
+                fcntl.flock(fp.fileno(), fcntl.LOCK_EX)
+        except Exception:
+            pass
+
+    def _unlock_file(self, fp) -> None:
+        try:
+            fcntl.flock(fp.fileno(), fcntl.LOCK_UN)
+        except Exception:
+            pass
+
     def _save_to_disk(self) -> None:
         """Save all chains to disk (must be called with lock held)."""
         try:
@@ -524,6 +542,7 @@ class PositionTracker:
         try:
             with open(self._persistence_path, "r") as f:
                 data = json.load(f)
+                self._unlock_file(f)
             
             if data.get("version") != 1:
                 print(f"[PositionTracker] Unknown version {data.get('version')}, skipping load")
