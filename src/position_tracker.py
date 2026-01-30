@@ -13,7 +13,10 @@ from __future__ import annotations
 import json
 import os
 import re
-import fcntl
+try:
+    import fcntl  # type: ignore
+except ImportError:  # pragma: no cover
+    fcntl = None
 from dataclasses import dataclass, field, asdict
 from datetime import datetime, timezone
 from pathlib import Path
@@ -464,27 +467,34 @@ class PositionTracker:
         """Advisory file lock to avoid concurrent writers across processes."""
         try:
             if mode == "shared":
+                if fcntl is None: return
                 fcntl.flock(fp.fileno(), fcntl.LOCK_SH)
             else:
+                if fcntl is None: return
                 fcntl.flock(fp.fileno(), fcntl.LOCK_EX)
         except Exception:
             pass
 
     def _unlock_file(self, fp) -> None:
         try:
+            if fcntl is None: return
             fcntl.flock(fp.fileno(), fcntl.LOCK_UN)
         except Exception:
             pass
 
     def _save_to_disk(self) -> None:
-        """Save all chains to disk (must be called with lock held)."""
+        """Save all chains to disk (must be called with lock held).
+
+        Uses a temp file + os.replace for atomicity and best-effort advisory locking
+        (no-op on platforms without fcntl).
+        """
         try:
             data = {
                 "version": 1,
                 "saved_at": _utc_now().isoformat(),
                 "chains": {},
             }
-            
+
             for position_id, chain in self._chains.items():
                 chain_data = {
                     "position_id": chain.position_id,
@@ -504,34 +514,40 @@ class PositionTracker:
                     "sandbox": chain.sandbox,
                     "origin": chain.origin,
                     "run_id": chain.run_id,
-                    "legs": [],
+                    "legs": [
+                        {
+                            "symbol": leg.symbol,
+                            "underlying": leg.underlying,
+                            "option_type": leg.option_type,
+                            "side": leg.side,
+                            "quantity": leg.quantity,
+                            "entry_price": leg.entry_price,
+                            "entry_time": leg.entry_time.isoformat(),
+                            "exit_price": leg.exit_price,
+                            "exit_time": leg.exit_time.isoformat() if leg.exit_time else None,
+                            "mark_price": leg.mark_price,
+                        }
+                        for leg in chain.legs
+                    ],
                 }
-                
-                for leg in chain.legs:
-                    leg_data = {
-                        "symbol": leg.symbol,
-                        "underlying": leg.underlying,
-                        "option_type": leg.option_type,
-                        "side": leg.side,
-                        "quantity": leg.quantity,
-                        "entry_price": leg.entry_price,
-                        "entry_time": leg.entry_time.isoformat(),
-                        "exit_price": leg.exit_price,
-                        "exit_time": leg.exit_time.isoformat() if leg.exit_time else None,
-                        "mark_price": leg.mark_price,
-                    }
-                    chain_data["legs"].append(leg_data)
-                
                 data["chains"][position_id] = chain_data
-            
-            # Write atomically using temp file + os.replace (cross-platform)
-            temp_path = self._persistence_path.with_suffix(".tmp")
-            with open(temp_path, "w") as f:
-                json.dump(data, f, indent=2)
-            os.replace(temp_path, self._persistence_path)
-            
+
+            tmp_path = self._persistence_path.with_suffix(self._persistence_path.suffix + ".tmp")
+            self._persistence_path.parent.mkdir(parents=True, exist_ok=True)
+
+            with open(tmp_path, "w", encoding="utf-8") as f:
+                self._with_file_lock(f, "exclusive")
+                json.dump(data, f, indent=2, default=str)
+                f.flush()
+                try:
+                    os.fsync(f.fileno())
+                except Exception:
+                    pass
+                self._unlock_file(f)
+
+            os.replace(tmp_path, self._persistence_path)
         except Exception as e:
-            print(f"[PositionTracker] Failed to save positions: {e}")
+            print(f"[PositionTracker] Warning: Failed to save positions: {e}")
 
     def _load_from_disk(self) -> None:
         """Load chains from disk on startup."""
@@ -540,7 +556,8 @@ class PositionTracker:
             return
         
         try:
-            with open(self._persistence_path, "r") as f:
+            with open(self._persistence_path, "r", encoding="utf-8") as f:
+                self._with_file_lock(f, "shared")
                 data = json.load(f)
                 self._unlock_file(f)
             

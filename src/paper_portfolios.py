@@ -114,12 +114,13 @@ def apply_decision_to_lane(
         if not symbol:
             return
         # don't spam opens in paper lane
-        if _has_open_symbol(tracker, symbol) or _has_any_open_call(tracker, params.get("underlying") or (state.underlyings[0] if getattr(state, "underlyings", None) else None)):
+        if _has_open_symbol(tracker, symbol) or _has_any_open_call(tracker, params.get("underlying") or ((getattr(state, "underlyings", None) or [None])[0] if (getattr(state, "underlyings", None) or []) else None)):
             return
 
         cand = next((c for c in candidates if c.symbol == symbol), None)
         mark = _candidate_mark(cand) if cand else 0.0
         if mark <= 0:
+            print(f"[Paper:{lane}] skip OPEN {symbol}: invalid mark={mark}")
             return
         price = _fill_price(mark, side="sell", slippage_bps=slippage_bps)
         size = float(params.get("size") or params.get("quantity") or settings.default_order_size)
@@ -145,6 +146,7 @@ def apply_decision_to_lane(
         except Exception:
             mark = 0.0
         if mark <= 0:
+            print(f"[Paper:{lane}] skip OPEN {symbol}: invalid mark={mark}")
             return
         price = _fill_price(mark, side="buy", slippage_bps=slippage_bps)
         size = float(params.get("size") or params.get("quantity") or settings.default_order_size)
@@ -172,12 +174,14 @@ def apply_decision_to_lane(
         except Exception:
             from_mark = 0.0
         if from_mark <= 0:
+            print(f"[Paper:{lane}] skip ROLL close {from_symbol}: invalid mark={from_mark}")
             return
         buy_price = _fill_price(from_mark, side="buy", slippage_bps=slippage_bps)
 
         cand = next((c for c in candidates if c.symbol == to_symbol), None)
         to_mark = _candidate_mark(cand) if cand else 0.0
         if to_mark <= 0:
+            print(f"[Paper:{lane}] skip ROLL open {to_symbol}: invalid mark={to_mark}")
             return
         sell_price = _fill_price(to_mark, side="sell", slippage_bps=slippage_bps)
 

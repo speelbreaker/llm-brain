@@ -17,8 +17,6 @@ router = APIRouter(tags=["paper"])
 def paper_open_positions(request: Request, lane: str = "rule") -> JSONResponse:
     if not settings.paper_compare_enabled:
         return JSONResponse(status_code=404, content={"ok": False, "error": "not_found"})
-    if not settings.paper_compare_enabled:
-        return JSONResponse(status_code=404, content={"ok": False, "error": "not_found"})
     lane = (lane or "rule").strip().lower()
     if lane not in ("rule", "llm", "debate"):
         return JSONResponse(status_code=400, content={"ok": False, "error": "lane must be rule|llm|debate"})
@@ -28,6 +26,8 @@ def paper_open_positions(request: Request, lane: str = "rule") -> JSONResponse:
 
 @router.get("/api/paper/positions/closed")
 def paper_closed_positions(request: Request, lane: str = "rule") -> JSONResponse:
+    if not settings.paper_compare_enabled:
+        return JSONResponse(status_code=404, content={"ok": False, "error": "not_found"})
     lane = (lane or "rule").strip().lower()
     if lane not in ("rule", "llm", "debate"):
         return JSONResponse(status_code=400, content={"ok": False, "error": "lane must be rule|llm|debate"})

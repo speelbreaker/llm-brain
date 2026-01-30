@@ -4489,7 +4489,7 @@ def render_dashboard_html() -> str:
         html += `<tr style="border-bottom: 1px solid #eee; border-left: 3px solid ${{prioStyle.border}};" title="${{prioStyle.tooltip}}: ${{s.reason}}">
           <td style="padding: 0.5rem;">${{typeBadge}}</td>
           <td style="padding: 0.5rem; font-weight: 600;">${{s.underlying}}</td>
-          <td style="padding: 0.5rem;">${{stratLabel}}</td>
+          <td style="padding: 0.5rem;">${{escapeHtml(stratLabel)}}</td>
           <td style="padding: 0.5rem; font-size: 0.8rem; color: #666;">${{s.position_id.substring(0, 25)}}...</td>
           <td style="padding: 0.5rem;">
             <span style="background: ${{actionStyle.bg}}; color: ${{actionStyle.color}}; padding: 0.2rem 0.5rem; border-radius: 4px; font-weight: 600; font-size: 0.8rem;">
@@ -5889,7 +5889,7 @@ def render_dashboard_html() -> str:
             <td>${{t}}</td>
             <td>${{chain.underlying}}</td>
             <td>${{typeLabel}}</td>
-            <td>${{stratLabel}}</td>
+            <td>${{escapeHtml(stratLabel)}}</td>
             <td>${{chain.symbol}}</td>
             <td>${{chain.num_legs}}</td>
             <td>${{chain.num_rolls}}</td>
@@ -6071,7 +6071,7 @@ def render_dashboard_html() -> str:
           const entryMode = pos.entry_mode || 'NATURAL';
           return `<tr>
             <td>${{pos.underlying}}</td>
-            <td>${{stratLabel}}</td>
+            <td>${{escapeHtml(stratLabel)}}</td>
             <td>${{pos.symbol}}</td>
             <td>${{Number(pos.quantity || 0).toFixed(3)}}</td>
             <td>${{Number(pos.entry_price || 0).toFixed(6)}}</td>
