@@ -894,6 +894,15 @@ def run_agent_loop_forever(
                     }
             
             try:
+                # Recovery / idempotency: reconcile any in-flight execution intents before dispatching new orders.
+                try:
+                    from src.execution_reconcile import reconcile_execution_ledger
+                    from src.execution import _ledger
+
+                    reconcile_execution_ledger(client, _ledger)
+                except Exception:
+                    pass
+
                 if is_training and training_actions:
                     print(f"\nExecuting {len(training_actions)} training actions...")
                     execution_result = execute_actions(client, training_actions, settings)

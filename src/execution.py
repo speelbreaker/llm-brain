@@ -12,6 +12,7 @@ from src.config import Settings, settings
 from src.deribit_client import DeribitClient, DeribitAPIError
 from src.models import ActionType
 from src.position_tracker import position_tracker
+from src.execution_ledger import ExecutionLedger, OrderPlan
 
 
 def _round_price(price: float) -> float:
@@ -40,24 +41,48 @@ def _extract_underlying(symbol: str) -> str:
     return "?"
 
 
-def _wait_for_fill(
+class OrderPollStatus:
+    FILLED = "FILLED"
+    CANCELLED = "CANCELLED"
+    REJECTED = "REJECTED"
+    OPEN_TIMEOUT_UNFILLED = "OPEN_TIMEOUT_UNFILLED"
+    OPEN_TIMEOUT_PARTIAL = "OPEN_TIMEOUT_PARTIAL"
+
+
+def _normalize_order_state_payload(st: dict[str, Any]) -> dict[str, Any]:
+    """Normalize Deribit order state payload to include fill metrics always."""
+    order = st.get("order") if isinstance(st, dict) and "order" in st else st
+    order = order or {}
+    return {
+        "order_id": order.get("order_id"),
+        "instrument": order.get("instrument_name") or order.get("instrument") or order.get("instrument_name"),
+        "order_state": order.get("order_state"),
+        "amount": float(order.get("amount") or 0.0),
+        "filled_amount": float(order.get("filled_amount") or 0.0),
+        "average_price": (float(order.get("average_price")) if order.get("average_price") is not None else None),
+        "last_update_timestamp_ms": order.get("last_update_timestamp"),
+    }
+
+
+def _poll_order_until_terminal_or_timeout(
     client: DeribitClient,
     order_id: str,
     *,
     timeout_seconds: float = 20.0,
     poll_seconds: float = 0.5,
-) -> Tuple[bool, dict[str, Any]]:
-    """Poll Deribit order state until filled/cancelled/timeout.
+) -> Tuple[str, dict[str, Any]]:
+    """Poll Deribit order state until terminal or timeout.
 
-    Returns (filled, order_state_dict).
+    Returns (status_enum, normalized_payload).
     """
+    eps = 1e-9
     deadline = time.time() + max(timeout_seconds, 0.5)
     last: dict[str, Any] = {}
 
     while time.time() < deadline:
         try:
             st = client.get_order_state(order_id)
-            last = st.get("order") if isinstance(st, dict) and "order" in st else st
+            last = _normalize_order_state_payload(st)
         except Exception:
             last = last or {}
 
@@ -65,16 +90,28 @@ def _wait_for_fill(
         filled_amount = float((last or {}).get("filled_amount") or 0.0)
         amount = float((last or {}).get("amount") or 0.0)
 
-        if state in ("filled", "cancelled", "rejected"):
-            return state == "filled", last
-
-        # Some venues report 'open' but filled_amount==amount.
-        if amount > 0 and filled_amount >= amount - 1e-9:
-            return True, last
+        if state == "filled" or (amount > 0 and filled_amount >= amount - eps):
+            return OrderPollStatus.FILLED, last
+        if state == "cancelled":
+            return OrderPollStatus.CANCELLED, last
+        if state == "rejected":
+            return OrderPollStatus.REJECTED, last
 
         time.sleep(poll_seconds)
 
-    return False, last
+    # Timeout: re-fetch once (do not trust cached last)
+    try:
+        st = client.get_order_state(order_id)
+        last = _normalize_order_state_payload(st)
+    except Exception:
+        last = last or {}
+
+    filled_amount = float((last or {}).get("filled_amount") or 0.0)
+    amount = float((last or {}).get("amount") or 0.0)
+
+    if filled_amount > eps and amount > 0 and filled_amount < amount - eps:
+        return OrderPollStatus.OPEN_TIMEOUT_PARTIAL, last
+    return OrderPollStatus.OPEN_TIMEOUT_UNFILLED, last
 
 
 def _get_mid_price(client: DeribitClient, symbol: str) -> float:
@@ -96,6 +133,9 @@ def _get_mid_price(client: DeribitClient, symbol: str) -> float:
         return _round_price(mid)
     except DeribitAPIError:
         return 0.0
+
+
+_ledger = ExecutionLedger()
 
 
 def execute_action(
@@ -269,15 +309,15 @@ def _execute_real(
             )
             
             oid = order_result.get("order", {}).get("order_id")
-            filled = False
+            status = None
             avg_px = mid_price
             filled_amt = 0.0
             if oid:
-                filled, st = _wait_for_fill(client, oid, timeout_seconds=30.0, poll_seconds=0.5)
+                status, st = _poll_order_until_terminal_or_timeout(client, oid, timeout_seconds=30.0, poll_seconds=0.5)
                 avg_px = float((st or {}).get("average_price") or mid_price)
                 filled_amt = float((st or {}).get("filled_amount") or 0.0)
 
-            if not filled:
+            if (not oid) or status != OrderPollStatus.FILLED:
                 result["status"] = "error"
                 result["errors"].append(f"OPEN not filled within timeout for {symbol} (order_id={oid})")
                 # best-effort cancel
@@ -327,15 +367,15 @@ def _execute_real(
             )
             
             oid = order_result.get("order", {}).get("order_id")
-            filled = False
+            status = None
             avg_px = mid_price
             filled_amt = 0.0
             if oid:
-                filled, st = _wait_for_fill(client, oid, timeout_seconds=30.0, poll_seconds=0.5)
+                status, st = _poll_order_until_terminal_or_timeout(client, oid, timeout_seconds=30.0, poll_seconds=0.5)
                 avg_px = float((st or {}).get("average_price") or mid_price)
                 filled_amt = float((st or {}).get("filled_amount") or 0.0)
 
-            if not filled:
+            if (not oid) or status != OrderPollStatus.FILLED:
                 result["status"] = "error"
                 result["errors"].append(f"CLOSE not filled within timeout for {symbol} (order_id={oid})")
                 if oid:
@@ -381,33 +421,128 @@ def _execute_real(
             return result
         
         try:
-            close_result = client.place_order(
-                instrument_name=from_symbol,
-                side="buy",
-                amount=size,
-                order_type="limit",
-                price=from_mid,
-                reduce_only=True,
-                label="agent_roll_close",
-            )
+            # WAL + idempotent close-leg dispatch (narrow PR#30 scope: ROLL close leg only)
+            import uuid
 
-            close_oid = close_result.get("order", {}).get("order_id")
-            if not close_oid:
+            intent_id = str(params.get("intent_id") or uuid.uuid4().hex)
+            # Best-effort position_id for linkage
+            position_id = position_tracker.get_open_position_id_for_symbol(from_symbol) or from_symbol
+
+            # Currency resolver: prefer explicit underlying param, else derive from instrument.
+            currency = (params.get("currency") or params.get("underlying") or "")
+            if not currency:
+                if from_symbol and "-" in from_symbol:
+                    currency = from_symbol.split("-")[0]
+            currency = str(currency).upper()
+            if not currency:
                 result["status"] = "error"
-                result["errors"].append("Close leg missing order_id")
+                result["errors"].append("Currency resolution failed for roll close")
                 return result
 
-            close_filled, close_state = _wait_for_fill(client, close_oid, timeout_seconds=30.0, poll_seconds=0.5)
-            close_avg = float((close_state or {}).get("average_price") or from_mid)
-            close_filled_amt = float((close_state or {}).get("filled_amount") or 0.0)
+            plan = OrderPlan(
+                instrument_name=from_symbol,
+                side="buy",
+                amount=float(size),
+                order_type="limit",
+                price=float(from_mid),
+                post_only=False,
+                reduce_only=True,
+            )
 
-            if not close_filled:
+            attempt = 0
+            label = _ledger.prewrite_attempt(
+                intent_id=intent_id,
+                position_id=str(position_id),
+                intent_type="ROLL_CC",
+                currency=currency,
+                leg="CLOSE",
+                attempt=attempt,
+                plan=plan,
+            )
+
+            close_oid = None
+            try:
+                close_result = client.place_order(
+                    instrument_name=from_symbol,
+                    side="buy",
+                    amount=size,
+                    order_type="limit",
+                    price=from_mid,
+                    reduce_only=True,
+                    label=label,
+                )
+                close_oid = close_result.get("order", {}).get("order_id")
+                _ledger.commit_dispatch_result(
+                    intent_id=intent_id,
+                    leg="CLOSE",
+                    attempt=attempt,
+                    ok=True,
+                    order_id=close_oid,
+                    error=None,
+                )
+            except Exception as e:
+                _ledger.commit_dispatch_result(
+                    intent_id=intent_id,
+                    leg="CLOSE",
+                    attempt=attempt,
+                    ok=False,
+                    order_id=None,
+                    error=str(e),
+                )
+                # Do not retry; allow reconcile loop to adopt by label.
                 result["status"] = "error"
-                result["errors"].append(f"Close leg not filled within timeout (order_id={close_oid})")
+                result["errors"].append(f"Close leg dispatch failed (SUBMIT_UNKNOWN): {e}")
+                result["intent_id"] = intent_id
+                result["close_label"] = label
+                return result
+
+            if not close_oid:
+                # Ack returned without order_id; treat as submit-unknown.
+                _ledger.commit_dispatch_result(
+                    intent_id=intent_id,
+                    leg="CLOSE",
+                    attempt=attempt,
+                    ok=False,
+                    order_id=None,
+                    error="Missing order_id in Deribit response",
+                )
+                result["status"] = "error"
+                result["errors"].append("Close leg missing order_id (SUBMIT_UNKNOWN)")
+                result["intent_id"] = intent_id
+                result["close_label"] = label
+                return result
+
+            poll_status, close_state = _poll_order_until_terminal_or_timeout(client, close_oid, timeout_seconds=30.0, poll_seconds=0.5)
+
+            # On timeout: best-effort cancel, then re-fetch to record final fill facts.
+            if poll_status in (OrderPollStatus.OPEN_TIMEOUT_PARTIAL, OrderPollStatus.OPEN_TIMEOUT_UNFILLED):
                 try:
                     client.cancel_order(close_oid)
                 except Exception:
                     pass
+                try:
+                    st2 = client.get_order_state(close_oid)
+                    close_state = _normalize_order_state_payload(st2)
+                except Exception:
+                    close_state = close_state or {}
+
+            _ledger.update_attempt_from_truth(
+                intent_id=intent_id,
+                leg="CLOSE",
+                attempt=attempt,
+                truth={
+                    **(close_state or {}),
+                    "order_id": close_oid,
+                    "instrument": from_symbol,
+                },
+            )
+
+            close_avg = float((close_state or {}).get("average_price") or from_mid)
+            close_filled_amt = float((close_state or {}).get("filled_amount") or 0.0)
+
+            if poll_status != OrderPollStatus.FILLED:
+                result["status"] = "error"
+                result["errors"].append(f"Close leg not filled (status={poll_status}, order_id={close_oid})")
                 result["orders"].append({
                     "type": "BUY",
                     "symbol": from_symbol,
@@ -416,7 +551,10 @@ def _execute_real(
                     "order_id": close_oid,
                     "order_state": str((close_state or {}).get("order_state") or "unknown"),
                     "leg": "close",
+                    "label": label,
+                    "poll_status": poll_status,
                 })
+                result["intent_id"] = intent_id
                 return result
 
             result["orders"].append({
@@ -429,7 +567,9 @@ def _execute_real(
                 "filled_amount": close_filled_amt,
                 "average_price": close_avg,
                 "leg": "close",
+                "label": label,
             })
+            result["intent_id"] = intent_id
 
         except DeribitAPIError as e:
             result["status"] = "error"
