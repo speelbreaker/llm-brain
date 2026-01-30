@@ -223,25 +223,39 @@ def _should_roll_position(
 
             ask_px: float | None = None
             bid_px: float | None = None
+            quote_age_ok = False
             try:
+                from datetime import timezone
                 from src.position_tracker import position_tracker
 
                 payload = position_tracker.get_open_positions_payload(include_sandbox=True) or {}
+                max_age = int(getattr(cfg, "profit_capture_quote_max_age_seconds", 180) or 180)
+                now = datetime.now(timezone.utc)
                 for p in payload.get("positions") or []:
-                    if p.get("symbol") == position.symbol:
-                        ask_px = float(p.get("ask_price") or 0.0) or None
-                        bid_px = float(p.get("bid_price") or 0.0) or None
-                        break
+                    if p.get("symbol") != position.symbol:
+                        continue
+                    ask_px = float(p.get("ask_price") or 0.0) or None
+                    bid_px = float(p.get("bid_price") or 0.0) or None
+                    qt = p.get("quote_time")
+                    if qt:
+                        try:
+                            qdt = datetime.fromisoformat(str(qt).replace("Z", "+00:00"))
+                            age_s = (now - qdt).total_seconds()
+                            quote_age_ok = age_s <= max_age
+                        except Exception:
+                            quote_age_ok = False
+                    break
             except Exception:
                 ask_px = None
                 bid_px = None
+                quote_age_ok = False
 
-            if ask_px is not None and ask_px > 0:
+            if ask_px is not None and ask_px > 0 and quote_age_ok:
                 # Apply slippage buffer on top of ask.
                 slippage_tax = (float(getattr(cfg, "paper_slippage_bps", 10.0)) / 10_000.0) * max(ask_px, floor)
                 close_cost_est = ask_px + slippage_tax
             else:
-                # Fallback approximation when no quote available.
+                # Fallback approximation when no fresh quote available.
                 spread_tax = 0.5 * close_spread_cap * max(mark, floor)
                 slippage_tax = (float(getattr(cfg, "paper_slippage_bps", 10.0)) / 10_000.0) * max(mark, floor)
                 close_cost_est = mark + spread_tax + slippage_tax

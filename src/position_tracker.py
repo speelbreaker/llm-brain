@@ -66,6 +66,7 @@ class PositionLeg:
     mark_price: Optional[float] = None
     bid_price: Optional[float] = None
     ask_price: Optional[float] = None
+    quote_time: Optional[datetime] = None
 
     def is_open(self) -> bool:
         return self.exit_time is None
@@ -359,6 +360,9 @@ class PositionTracker:
                                 leg.bid_price = float(bid)
                             if ask is not None:
                                 leg.ask_price = float(ask)
+
+                            if bid is not None or ask is not None or ticker.get("mark_price") is not None:
+                                leg.quote_time = _utc_now()
                         except Exception:
                             pass
                 self._update_chain_unrealized(chain)
@@ -488,6 +492,7 @@ class PositionTracker:
             "mark_price": mark,
             "bid_price": (current_leg.bid_price if current_leg else None),
             "ask_price": (current_leg.ask_price if current_leg else None),
+            "quote_time": (current_leg.quote_time.isoformat() if (current_leg and current_leg.quote_time) else None),
             "unrealized_pnl": chain.unrealized_pnl,
             "unrealized_pnl_pct": chain.unrealized_pnl_pct,
             "entry_time": chain.open_time.isoformat(),
@@ -561,7 +566,7 @@ class PositionTracker:
         """
         try:
             data = {
-                "version": 3,
+                "version": 4,
                 "saved_at": _utc_now().isoformat(),
                 "chains": {},
             }
@@ -603,6 +608,7 @@ class PositionTracker:
                             "mark_price": leg.mark_price,
                             "bid_price": getattr(leg, "bid_price", None),
                             "ask_price": getattr(leg, "ask_price", None),
+                            "quote_time": (leg.quote_time.isoformat() if getattr(leg, "quote_time", None) else None),
                         }
                         for leg in chain.legs
                     ],
@@ -648,7 +654,7 @@ class PositionTracker:
                 finally:
                     self._unlock_file(f)
             
-            if data.get("version") not in (1, 2, 3):
+            if data.get("version") not in (1, 2, 3, 4):
                 print(f"[PositionTracker] Unknown version {data.get('version')}, skipping load")
                 return
             
@@ -671,6 +677,7 @@ class PositionTracker:
                         mark_price=leg_data.get("mark_price"),
                         bid_price=leg_data.get("bid_price"),
                         ask_price=leg_data.get("ask_price"),
+                        quote_time=(datetime.fromisoformat(leg_data["quote_time"]) if leg_data.get("quote_time") else None),
                     )
                     legs.append(leg)
                 

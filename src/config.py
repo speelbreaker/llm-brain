@@ -403,6 +403,10 @@ class Settings(BaseSettings):
         default=15,
         description="Cooldown after entering EXIT_OR_ROLL to prevent tick-thrash.",
     )
+    profit_capture_quote_max_age_seconds: int = Field(
+        default=180,
+        description="Max age (seconds) for bid/ask quotes used in close_cost_est; older quotes are treated as unavailable.",
+    )
 
     enable_diagnostic_endpoints: bool = Field(
         default=False,
