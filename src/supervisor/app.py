@@ -424,10 +424,14 @@ def _get_runtime_settings(request: Request) -> SupervisorSettings:
             return sup
         raise RuntimeError("app.state.supervisor_settings is not a SupervisorSettings")
 
-    # Backward-compat for the standalone supervisor app.
+    # Backward-compat for the standalone supervisor app (and some unit tests).
+    # Tests sometimes inject a MagicMock with the expected attributes.
     s = getattr(request.app.state, "settings", None)
     if isinstance(s, SupervisorSettings):
         return s
+    if s is not None and hasattr(s, "enabled") and hasattr(s, "github_webhook_secret"):
+        # Duck-typed settings object (e.g., MagicMock). Treat as settings.
+        return s  # type: ignore[return-value]
 
     # Integrated app without supervisor config: fail closed (disabled).
     return SupervisorSettings(enabled=False)

@@ -105,14 +105,16 @@ class FixAttempt(BaseModel):
 
 
 class StageHistory(BaseModel):
-    """Record of a stage transition."""
-    stage: str
+    """Record of a *status* transition (append-only)."""
+
+    stage: JobStatus
     timestamp: datetime = Field(default_factory=datetime.utcnow)
     payload: Optional[dict] = None
 
 
 class SupervisorJob(BaseModel):
     """A supervisor job for a PR."""
+
     job_id: str
     repo_full_name: str
     pr_number: int
@@ -121,23 +123,31 @@ class SupervisorJob(BaseModel):
     base_ref: str
     pr_url: str
     is_fork: bool = False
-    
+
+    # Status (what we're doing / outcome)
     status: JobStatus = JobStatus.PENDING
     reason_code: Optional[str] = None
-    stage_history: list[StageHistory] = Field(default_factory=list)
+
+    # Append-only status history.
+    status_history: list[StageHistory] = Field(default_factory=list)
+
+    # Loop attempt counters (keys are JobStatus values)
     attempt_counters: dict[str, int] = Field(default_factory=dict)
-    
+
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
 
+    # Lifecycle stages (orthogonal to JobStatus)
     stage: JobStage = JobStage.RECEIVED
     stage_entered_at: datetime = Field(default_factory=datetime.utcnow)
+
+    # Append-only lifecycle history (tests rely on this for exact stage sequence)
     stage_history: list[JobStageEntry] = Field(default_factory=list)
 
     debate_attempts: int = 0
     fix_attempts: int = 0
     verify_attempts: int = 0
-    
+
     workspace_path: Optional[str] = None
     verification: Optional[VerificationReport] = None
     arbiter_decision: Optional[ArbiterDecision] = None
@@ -146,22 +156,19 @@ class SupervisorJob(BaseModel):
     loop_decision: Optional[dict] = None
     fix_attempt_history: list[FixAttempt] = Field(default_factory=list)
     pr_comment_id: Optional[int] = None
-    
+
     final_message: str = ""
     error_message: Optional[str] = None
-    reason_code: Optional[str] = None
-    
-    def update_status(self, status: JobStatus) -> None:
-        """Update job status and timestamp.
 
-        NOTE: stage_history tracks JobStage transitions only (see transition_stage()).
-        Do not append status entries here.
-        """
+    def update_status(self, status: JobStatus) -> None:
+        """Update job status and append to status_history."""
         self.status = status
-        self.updated_at = datetime.utcnow()
+        now = datetime.utcnow()
+        self.updated_at = now
+        self.status_history.append(StageHistory(stage=status, timestamp=now))
 
     def transition_stage(self, stage: JobStage) -> None:
-        """Move job to a new stage and record the transition."""
+        """Move job to a new lifecycle stage and record the transition."""
         if self.stage == stage:
             return
         now = datetime.utcnow()
@@ -188,12 +195,18 @@ class SupervisorJob(BaseModel):
         self.updated_at = datetime.utcnow()
 
     @model_validator(mode="after")
-    def _ensure_stage_history(self) -> "SupervisorJob":
-        """Ensure stage history is initialized for new jobs."""
+    def _ensure_histories(self) -> "SupervisorJob":
+        """Ensure history lists are initialized for new jobs."""
+        now = datetime.utcnow()
+
+        if not self.status_history:
+            # Status history starts at initial status.
+            self.status_history.append(StageHistory(stage=self.status, timestamp=now))
+
         if not self.stage_history:
-            self.stage_history.append(
-                JobStageEntry(stage=self.stage, entered_at=self.stage_entered_at)
-            )
+            # Lifecycle history starts at initial lifecycle stage.
+            self.stage_history.append(JobStageEntry(stage=self.stage, entered_at=self.stage_entered_at))
+
         return self
 
 
