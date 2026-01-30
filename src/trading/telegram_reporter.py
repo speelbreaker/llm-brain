@@ -29,22 +29,28 @@ logger = logging.getLogger(__name__)
 
 
 class TradingTelegramReporter:
-    """
-    Reports significant trading events to Telegram.
-    
+    """Reports significant events to Telegram.
+
+    Primary use is the trading loop, but we also reuse it for:
+    - supervisor status changes
+    - agent health changes
+    - paper portfolio OPEN/CLOSE/ROLL events
+
     Features:
     - Rate limiting (max 1 message per minute unless critical)
     - Significant event filtering
-    - Snapshot ID tracking
     - Graceful degradation if Telegram unavailable
     """
-    
+
     def __init__(self):
         self.bot: Optional[Bot] = None
         self.last_message_time: Optional[datetime] = None
         self.min_interval = timedelta(minutes=1)
         self._initialized = False
-        
+
+        # Change detectors
+        self._last_health_state: Optional[str] = None
+
         if not TELEGRAM_AVAILABLE:
             logger.warning("python-telegram-bot not installed, Telegram disabled")
     
@@ -223,19 +229,37 @@ class TradingTelegramReporter:
             return False
     
     async def on_status_update(self, snapshot: Dict[str, Any]) -> None:
-        """
-        Called by agent_loop on each status update.
-        
-        Only posts to Telegram if the event is significant.
-        Use this as the status_callback.
-        """
+        """Called by agent_loop on each status update."""
+        # 1) Health change notifications (best-effort)
+        try:
+            from src.healthcheck import get_cached_health_status
+
+            cached = get_cached_health_status()
+            if cached is not None:
+                state = str(cached.overall_status or "").upper()
+                if self._last_health_state is None:
+                    self._last_health_state = state
+                elif state != self._last_health_state:
+                    self._last_health_state = state
+                    await self._send_health_change(cached)
+        except Exception:
+            pass
+
+        # 2) Paper trade notifications (if present)
+        try:
+            events = snapshot.get("paper_events") or []
+            if isinstance(events, list) and events:
+                for ev in events:
+                    await self._send_paper_event(ev)
+        except Exception:
+            pass
+
+        # 3) Existing significant-event status card
         is_significant, reason = self._is_significant(snapshot)
-        
         if not is_significant:
             return
-        
+
         is_critical = reason in ("error", "kill_switch", "trade_executed")
-        
         message = self._format_status_card(snapshot)
         await self.send_message(message, is_critical=is_critical)
     
@@ -271,7 +295,7 @@ class TradingTelegramReporter:
     ) -> None:
         """Send alert for trade execution."""
         emoji = "🔔" if action.upper() != "CLOSE" else "✅"
-        
+
         lines = [
             f"{emoji} <b>TRADE EXECUTED</b>",
             "",
@@ -279,16 +303,99 @@ class TradingTelegramReporter:
             f"<b>Instrument:</b> {instrument}",
             f"<b>Size:</b> {size:+.4f}",
         ]
-        
+
         if premium is not None:
             lines.append(f"<b>Premium:</b> ${premium:,.2f}")
-        
+
         if reason:
             lines.append(f"<b>Reason:</b> {reason}")
-        
+
         lines.append("")
         lines.append(f"<i>{datetime.utcnow().strftime('%H:%M:%S UTC')}</i>")
-        
+
+        await self.send_message("\n".join(lines), is_critical=True)
+
+    async def send_supervisor_status(
+        self,
+        *,
+        status: str,
+        pr_url: Optional[str] = None,
+        job_id: Optional[str] = None,
+        comment_url: Optional[str] = None,
+        message: Optional[str] = None,
+        is_error: bool = False,
+    ) -> None:
+        """Send PR supervisor status changes (queued/running/done/error)."""
+        emoji = "🧰"
+        if is_error:
+            emoji = "🛑"
+        elif status.lower() in ("queued", "running"):
+            emoji = "🟡" if status.lower() == "queued" else "🔵"
+        elif status.lower() in ("done", "fixed", "checks_passed"):
+            emoji = "🟢"
+
+        lines = [f"{emoji} <b>PR SUPERVISOR</b>", "", f"<b>Status:</b> {status}"]
+        if job_id:
+            lines.append(f"<b>Job:</b> {job_id}")
+        if pr_url:
+            lines.append(f"<b>PR:</b> {pr_url}")
+        if comment_url:
+            lines.append(f"<b>Comment:</b> {comment_url}")
+        if message:
+            lines.append(f"<b>Info:</b> {message}")
+
+        lines.append("")
+        lines.append(f"<i>{datetime.utcnow().strftime('%H:%M:%S UTC')}</i>")
+        await self.send_message("\n".join(lines), is_critical=True)
+
+    async def _send_health_change(self, cached: Any) -> None:
+        """Send agent health state changes (OK/WARN/FAIL) and failing checks."""
+        overall = str(getattr(cached, "overall_status", "UNKNOWN") or "UNKNOWN").upper()
+        emoji = {"OK": "🟢", "WARN": "🟡", "FAIL": "🔴"}.get(overall, "⚪")
+        summary = getattr(cached, "summary", "") or ""
+
+        lines = [f"{emoji} <b>AGENT HEALTH</b>", "", f"<b>Status:</b> {overall}"]
+        if summary:
+            lines.append(f"<b>Summary:</b> {summary}")
+
+        details = getattr(cached, "details", None) or {}
+        checks = details.get("checks") or details.get("results") or []
+        failing = [c for c in checks if str(c.get("status") or "").upper() in ("FAIL", "WARN")]
+        if failing:
+            lines.append("")
+            lines.append("<b>Failing/Warn checks:</b>")
+            for c in failing[:12]:
+                name = c.get("name") or "check"
+                st = str(c.get("status") or "?")
+                detail = c.get("detail") or ""
+                lines.append(f"  • {name}: {st} — {detail}"[:350])
+
+        lines.append("")
+        lines.append(f"<i>{datetime.utcnow().strftime('%H:%M:%S UTC')}</i>")
+        await self.send_message("\n".join(lines), is_critical=True)
+
+    async def _send_paper_event(self, ev: Dict[str, Any]) -> None:
+        """Send a paper lane OPEN/CLOSE/ROLL event."""
+        et = str(ev.get("type") or "").upper()
+        lane = str(ev.get("lane") or "?")
+        emoji = {"OPEN": "📝", "CLOSE": "✅", "ROLL": "🔄"}.get(et, "🧾")
+
+        lines = [f"{emoji} <b>PAPER {lane.upper()}</b>", "", f"<b>Event:</b> {et}"]
+        if et == "ROLL":
+            lines.append(f"<b>From:</b> {ev.get('from_symbol')}")
+            lines.append(f"<b>To:</b> {ev.get('to_symbol')}")
+            lines.append(f"<b>Size:</b> {float(ev.get('size') or 0):.4f}")
+            lines.append(f"<b>Close:</b> {float(ev.get('close_price') or 0):.6f}")
+            lines.append(f"<b>Open:</b> {float(ev.get('open_price') or 0):.6f}")
+        else:
+            lines.append(f"<b>Symbol:</b> {ev.get('symbol')}")
+            if ev.get("underlying"):
+                lines.append(f"<b>Underlying:</b> {ev.get('underlying')}")
+            lines.append(f"<b>Size:</b> {float(ev.get('size') or 0):.4f}")
+            lines.append(f"<b>Price:</b> {float(ev.get('price') or 0):.6f}")
+
+        lines.append("")
+        lines.append(f"<i>{datetime.utcnow().strftime('%H:%M:%S UTC')}</i>")
         await self.send_message("\n".join(lines), is_critical=True)
 
 

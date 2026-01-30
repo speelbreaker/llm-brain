@@ -46,6 +46,13 @@ logger = logging.getLogger(__name__)
 MAX_TRUNCATE_CHARS = 5000
 
 
+def _comment_url(job: SupervisorJob) -> Optional[str]:
+    """Best-effort link to the bot's PR comment."""
+    if not getattr(job, "pr_url", None) or not getattr(job, "pr_comment_id", None):
+        return None
+    return f"{job.pr_url}#issuecomment-{job.pr_comment_id}"
+
+
 _original_get_event_loop = asyncio.get_event_loop
 
 
@@ -219,6 +226,21 @@ async def _finalize_with_limit(
         store.save(job)
         await upsert_pr_comment(job, github_client, store, settings, comment)
         await notifier.notify_final_result(job, success=False, message=reason)
+
+    # Telegram notify
+    try:
+        from src.trading.telegram_reporter import get_trading_telegram_reporter
+
+        await get_trading_telegram_reporter().send_supervisor_status(
+            status="needs_human",
+            pr_url=job.pr_url,
+            job_id=job.job_id,
+            comment_url=_comment_url(job),
+            message=reason,
+            is_error=True,
+        )
+    except Exception:
+        pass
 
     job.transition_stage(JobStage.DONE)
     store.save(job)
@@ -589,9 +611,22 @@ async def github_webhook(
     )
     
     store.save(job)
-    
+
     await request.app.state.job_queue.put(job)
-    
+
+    # Telegram notify (reuse trading reporter if configured)
+    try:
+        from src.trading.telegram_reporter import get_trading_telegram_reporter
+
+        await get_trading_telegram_reporter().send_supervisor_status(
+            status="queued",
+            pr_url=payload.pr_url,
+            job_id=job_id,
+            message=f"PR #{payload.pr_number} queued",
+        )
+    except Exception:
+        pass
+
     return JobResponse(
         job_id=job_id,
         status="queued",
@@ -816,6 +851,19 @@ async def run_supervisor_job(job: SupervisorJob, app: FastAPI) -> None:
         job.transition_stage(JobStage.ANALYZING)
         store.save(job)
 
+        # Telegram notify
+        try:
+            from src.trading.telegram_reporter import get_trading_telegram_reporter
+
+            await get_trading_telegram_reporter().send_supervisor_status(
+                status="running",
+                pr_url=job.pr_url,
+                job_id=job.job_id,
+                message="Job started",
+            )
+        except Exception:
+            pass
+
         run_number = store.get_run_count(job.repo_full_name, job.pr_number)
 
         if _runtime_exceeded(job, settings):
@@ -885,6 +933,22 @@ async def run_supervisor_job(job: SupervisorJob, app: FastAPI) -> None:
                 job.transition_stage(JobStage.COMMENTING)
                 store.save(job)
                 await upsert_pr_comment(job, github_client, store, settings, comment)
+
+                # Telegram notify
+                try:
+                    from src.trading.telegram_reporter import get_trading_telegram_reporter
+
+                    await get_trading_telegram_reporter().send_supervisor_status(
+                        status="needs_human",
+                        pr_url=job.pr_url,
+                        job_id=job.job_id,
+                        comment_url=_comment_url(job),
+                        message=job.final_message,
+                        is_error=True,
+                    )
+                except Exception:
+                    pass
+
                 job.transition_stage(JobStage.DONE)
                 store.save(job)
                 return
@@ -947,13 +1011,28 @@ async def run_supervisor_job(job: SupervisorJob, app: FastAPI) -> None:
                 job.transition_stage(JobStage.COMMENTING)
                 store.save(job)
                 await upsert_pr_comment(job, github_client, store, settings, comment)
-                
+
+                # Telegram notify
+                try:
+                    from src.trading.telegram_reporter import get_trading_telegram_reporter
+
+                    await get_trading_telegram_reporter().send_supervisor_status(
+                        status=str(job.status.value),
+                        pr_url=job.pr_url,
+                        job_id=job.job_id,
+                        comment_url=_comment_url(job),
+                        message=job.final_message,
+                        is_error=False,
+                    )
+                except Exception:
+                    pass
+
                 if not settings.autofix_dry_run:
                     await notifier.notify_checks_result(job, passed=True, checks=verification.checks)
                     await notifier.notify_final_result(job, success=True)
                 else:
                     logger.info("DRY RUN: Checks passed. Would post comment and notify success.")
-                
+
                 job.transition_stage(JobStage.DONE)
                 store.save(job)
                 return
@@ -1213,6 +1292,22 @@ async def run_supervisor_job(job: SupervisorJob, app: FastAPI) -> None:
         error_msg = redact_secrets(str(e)[:500], settings)
         job.error_message = error_msg
         store.save(job)
+
+        # Telegram notify
+        try:
+            from src.trading.telegram_reporter import get_trading_telegram_reporter
+
+            await get_trading_telegram_reporter().send_supervisor_status(
+                status="error",
+                pr_url=job.pr_url,
+                job_id=job.job_id,
+                comment_url=_comment_url(job),
+                message=error_msg,
+                is_error=True,
+            )
+        except Exception:
+            pass
+
         if not settings.autofix_dry_run:
             await notifier.notify_final_result(job, success=False, message=f"Error: {error_msg[:100]}")
     

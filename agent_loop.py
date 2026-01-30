@@ -993,9 +993,12 @@ def run_agent_loop_forever(
             try:
                 if settings.paper_compare_enabled:
                     refresh_marks_for_all(client)
-                    apply_decision_to_lane(lane="rule", state=agent_state, candidates=agent_state.candidate_options, decision=rule_action, client=client, refresh_marks=False)
-                    apply_decision_to_lane(lane="llm", state=agent_state, candidates=agent_state.candidate_options, decision=llm_action if (llm_action and llm_action.get("validated")) else None, client=client, refresh_marks=False)
-                    apply_decision_to_lane(lane="debate", state=agent_state, candidates=agent_state.candidate_options, decision=debate_action if (debate_action and debate_action.get("validated")) else None, client=client, refresh_marks=False)
+                    paper_events: list[dict] = []
+                    paper_events += apply_decision_to_lane(lane="rule", state=agent_state, candidates=agent_state.candidate_options, decision=rule_action, client=client, refresh_marks=False)
+                    paper_events += apply_decision_to_lane(lane="llm", state=agent_state, candidates=agent_state.candidate_options, decision=llm_action if (llm_action and llm_action.get("validated")) else None, client=client, refresh_marks=False)
+                    paper_events += apply_decision_to_lane(lane="debate", state=agent_state, candidates=agent_state.candidate_options, decision=debate_action if (debate_action and debate_action.get("validated")) else None, client=client, refresh_marks=False)
+                    if paper_events:
+                        snapshot["paper_events"] = paper_events
             except Exception as e:
                 print(f"[Paper] update failed: {e}")
 

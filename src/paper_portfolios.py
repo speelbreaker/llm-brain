@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import logging
 
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Literal
 
@@ -21,6 +20,7 @@ from src.position_tracker import PositionTracker
 Lane = Literal["rule", "llm", "debate"]
 
 logger = logging.getLogger(__name__)
+
 
 def _lane_path(lane: Lane) -> Path:
     return Path(f"data/paper_positions_{lane}.json")
@@ -89,42 +89,55 @@ def apply_decision_to_lane(
     decision: Dict[str, Any] | None,
     client: Any,
     refresh_marks: bool = True,
-) -> None:
+) -> list[dict[str, Any]]:
     """Apply a decision into a paper portfolio lane.
 
     This never sends orders. It only updates paper PositionTracker state.
+
+    Returns:
+        A list of paper trade events to be surfaced to the caller.
+        Event schema (best-effort):
+          {"type": "OPEN"|"CLOSE"|"ROLL", "lane": str, "symbol": str, ...}
     """
     if not getattr(settings, "paper_compare_enabled", False):
-        return
+        return []
 
     tracker = get_tracker(lane)
     if refresh_marks:
         tracker.refresh_marks(client)
 
+    events: list[dict[str, Any]] = []
+
     if not decision or not isinstance(decision, dict):
-        return
+        return events
 
     action = str(decision.get("action") or ActionType.DO_NOTHING.value)
     params = decision.get("params") or {}
 
     if action == ActionType.DO_NOTHING.value:
-        return
+        return events
 
     slippage_bps = float(getattr(settings, "paper_slippage_bps", 10.0))
 
     if action == ActionType.OPEN_COVERED_CALL.value:
         symbol = str(params.get("symbol") or "")
         if not symbol:
-            return
+            return events
+
         # don't spam opens in paper lane
-        if _has_open_symbol(tracker, symbol) or _has_any_open_call(tracker, params.get("underlying") or ((getattr(state, "underlyings", None) or [None])[0] if (getattr(state, "underlyings", None) or []) else None)):
-            return
+        if _has_open_symbol(tracker, symbol) or _has_any_open_call(
+            tracker,
+            params.get("underlying")
+            or ((getattr(state, "underlyings", None) or [None])[0] if (getattr(state, "underlyings", None) or []) else None),
+        ):
+            return events
 
         cand = next((c for c in candidates if c.symbol == symbol), None)
         mark = _candidate_mark(cand) if cand else 0.0
         if mark <= 0:
             logger.info("[Paper:%s] skip OPEN %s: invalid mark=%s", lane, symbol, mark)
-            return
+            return events
+
         price = _fill_price(mark, side="sell", slippage_bps=slippage_bps)
         size = float(params.get("size") or params.get("quantity") or settings.default_order_size)
 
@@ -132,27 +145,48 @@ def apply_decision_to_lane(
             {
                 "status": "simulated",
                 "action": action,
-                "params": {**params, "symbol": symbol, "underlying": params.get("underlying") or (cand.underlying if cand else "BTC"), "size": size},
+                "params": {
+                    **params,
+                    "symbol": symbol,
+                    "underlying": params.get("underlying") or (cand.underlying if cand else "BTC"),
+                    "size": size,
+                },
                 "orders": [{"symbol": symbol, "size": size, "price": price}],
                 "dry_run": True,
             }
         )
-        return
+
+        events.append(
+            {
+                "type": "OPEN",
+                "lane": lane,
+                "symbol": symbol,
+                "underlying": params.get("underlying") or (cand.underlying if cand else None),
+                "size": size,
+                "price": price,
+                "mark": mark,
+            }
+        )
+        return events
 
     if action == ActionType.CLOSE_COVERED_CALL.value:
         symbol = str(params.get("symbol") or "")
         if not symbol:
-            return
+            return events
+
         try:
             ticker = client.get_ticker(symbol)
             mark = float(ticker.get("mark_price") or 0.0) if ticker else 0.0
         except Exception:
             mark = 0.0
+
         if mark <= 0:
-            logger.info("[Paper:%s] skip OPEN %s: invalid mark=%s", lane, symbol, mark)
-            return
+            logger.info("[Paper:%s] skip CLOSE %s: invalid mark=%s", lane, symbol, mark)
+            return events
+
         price = _fill_price(mark, side="buy", slippage_bps=slippage_bps)
         size = float(params.get("size") or params.get("quantity") or settings.default_order_size)
+
         tracker.process_execution_result(
             {
                 "status": "simulated",
@@ -162,13 +196,24 @@ def apply_decision_to_lane(
                 "dry_run": True,
             }
         )
-        return
+
+        events.append(
+            {
+                "type": "CLOSE",
+                "lane": lane,
+                "symbol": symbol,
+                "size": size,
+                "price": price,
+                "mark": mark,
+            }
+        )
+        return events
 
     if action == ActionType.ROLL_COVERED_CALL.value:
         from_symbol = str(params.get("from_symbol") or "")
         to_symbol = str(params.get("to_symbol") or "")
         if not from_symbol or not to_symbol:
-            return
+            return events
 
         # buy back old
         try:
@@ -176,18 +221,20 @@ def apply_decision_to_lane(
             from_mark = float(ticker.get("mark_price") or 0.0) if ticker else 0.0
         except Exception:
             from_mark = 0.0
+
         if from_mark <= 0:
             logger.info("[Paper:%s] skip ROLL close %s: invalid mark=%s", lane, from_symbol, from_mark)
-            return
+            return events
+
         buy_price = _fill_price(from_mark, side="buy", slippage_bps=slippage_bps)
 
         cand = next((c for c in candidates if c.symbol == to_symbol), None)
         to_mark = _candidate_mark(cand) if cand else 0.0
         if to_mark <= 0:
             logger.info("[Paper:%s] skip ROLL open %s: invalid mark=%s", lane, to_symbol, to_mark)
-            return
-        sell_price = _fill_price(to_mark, side="sell", slippage_bps=slippage_bps)
+            return events
 
+        sell_price = _fill_price(to_mark, side="sell", slippage_bps=slippage_bps)
         size = float(params.get("size") or params.get("quantity") or settings.default_order_size)
 
         tracker.process_execution_result(
@@ -202,4 +249,20 @@ def apply_decision_to_lane(
                 "dry_run": True,
             }
         )
-        return
+
+        events.append(
+            {
+                "type": "ROLL",
+                "lane": lane,
+                "from_symbol": from_symbol,
+                "to_symbol": to_symbol,
+                "size": size,
+                "close_price": buy_price,
+                "open_price": sell_price,
+                "from_mark": from_mark,
+                "to_mark": to_mark,
+            }
+        )
+        return events
+
+    return events
