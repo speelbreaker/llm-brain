@@ -216,14 +216,35 @@ def _should_roll_position(
             credit0 = float(position.avg_price) * abs(float(position.size or 0.0))
             mark = float(position.mark_price)
 
-            # Conservative close cost estimate: mark + half-spread buffer (approximated) + slippage buffer.
+            # Conservative close cost estimate:
+            # Prefer tracker ask if available (ask is conservative for buyback). Otherwise fall back to mark + buffers.
             floor = float(getattr(cfg, "profit_capture_spread_pct_price_floor_usd", 5.0))
             close_spread_cap = float(getattr(cfg, "profit_capture_max_spread_pct_close", 0.25))
-            # We don't have bid/ask on positions here; approximate by allowing up to close_spread_cap of max(mark,floor)
-            # and charging half of that as 'spread tax'.
-            spread_tax = 0.5 * close_spread_cap * max(mark, floor)
-            slippage_tax = (float(getattr(cfg, "paper_slippage_bps", 10.0)) / 10_000.0) * max(mark, floor)
-            close_cost_est = mark + spread_tax + slippage_tax
+
+            ask_px: float | None = None
+            bid_px: float | None = None
+            try:
+                from src.position_tracker import position_tracker
+
+                payload = position_tracker.get_open_positions_payload(include_sandbox=True) or {}
+                for p in payload.get("positions") or []:
+                    if p.get("symbol") == position.symbol:
+                        ask_px = float(p.get("ask_price") or 0.0) or None
+                        bid_px = float(p.get("bid_price") or 0.0) or None
+                        break
+            except Exception:
+                ask_px = None
+                bid_px = None
+
+            if ask_px is not None and ask_px > 0:
+                # Apply slippage buffer on top of ask.
+                slippage_tax = (float(getattr(cfg, "paper_slippage_bps", 10.0)) / 10_000.0) * max(ask_px, floor)
+                close_cost_est = ask_px + slippage_tax
+            else:
+                # Fallback approximation when no quote available.
+                spread_tax = 0.5 * close_spread_cap * max(mark, floor)
+                slippage_tax = (float(getattr(cfg, "paper_slippage_bps", 10.0)) / 10_000.0) * max(mark, floor)
+                close_cost_est = mark + spread_tax + slippage_tax
 
             profit_capture_pct = (credit0 - close_cost_est) / max(credit0, 1e-9)
 

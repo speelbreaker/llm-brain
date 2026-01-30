@@ -51,6 +51,7 @@ def _utc_now() -> datetime:
 @dataclass
 class PositionLeg:
     """Single executed leg within a position chain."""
+
     symbol: str
     underlying: str
     option_type: OptionType
@@ -60,7 +61,11 @@ class PositionLeg:
     entry_time: datetime
     exit_price: Optional[float] = None
     exit_time: Optional[datetime] = None
+
+    # Latest quotes (best-effort)
     mark_price: Optional[float] = None
+    bid_price: Optional[float] = None
+    ask_price: Optional[float] = None
 
     def is_open(self) -> bool:
         return self.exit_time is None
@@ -335,9 +340,25 @@ class PositionTracker:
                 for leg in chain.legs:
                     if leg.is_open() and leg.symbol:
                         try:
-                            ticker = client.get_ticker(leg.symbol)
-                            if ticker and "mark_price" in ticker:
+                            ticker = client.get_ticker(leg.symbol) or {}
+                            if "mark_price" in ticker and ticker.get("mark_price") is not None:
                                 leg.mark_price = float(ticker["mark_price"])
+
+                            # Deribit ticker keys (best-effort)
+                            bid = (
+                                ticker.get("best_bid_price")
+                                or ticker.get("bid_price")
+                                or ticker.get("bid")
+                            )
+                            ask = (
+                                ticker.get("best_ask_price")
+                                or ticker.get("ask_price")
+                                or ticker.get("ask")
+                            )
+                            if bid is not None:
+                                leg.bid_price = float(bid)
+                            if ask is not None:
+                                leg.ask_price = float(ask)
                         except Exception:
                             pass
                 self._update_chain_unrealized(chain)
@@ -465,6 +486,8 @@ class PositionTracker:
             "quantity": current_leg.quantity if current_leg else 0.0,
             "entry_price": chain.legs[0].entry_price if chain.legs else 0.0,
             "mark_price": mark,
+            "bid_price": (current_leg.bid_price if current_leg else None),
+            "ask_price": (current_leg.ask_price if current_leg else None),
             "unrealized_pnl": chain.unrealized_pnl,
             "unrealized_pnl_pct": chain.unrealized_pnl_pct,
             "entry_time": chain.open_time.isoformat(),
@@ -538,7 +561,7 @@ class PositionTracker:
         """
         try:
             data = {
-                "version": 2,
+                "version": 3,
                 "saved_at": _utc_now().isoformat(),
                 "chains": {},
             }
@@ -578,6 +601,8 @@ class PositionTracker:
                             "exit_price": leg.exit_price,
                             "exit_time": leg.exit_time.isoformat() if leg.exit_time else None,
                             "mark_price": leg.mark_price,
+                            "bid_price": getattr(leg, "bid_price", None),
+                            "ask_price": getattr(leg, "ask_price", None),
                         }
                         for leg in chain.legs
                     ],
@@ -623,7 +648,7 @@ class PositionTracker:
                 finally:
                     self._unlock_file(f)
             
-            if data.get("version") not in (1, 2):
+            if data.get("version") not in (1, 2, 3):
                 print(f"[PositionTracker] Unknown version {data.get('version')}, skipping load")
                 return
             
@@ -644,6 +669,8 @@ class PositionTracker:
                         exit_price=leg_data.get("exit_price"),
                         exit_time=datetime.fromisoformat(leg_data["exit_time"]) if leg_data.get("exit_time") else None,
                         mark_price=leg_data.get("mark_price"),
+                        bid_price=leg_data.get("bid_price"),
+                        ask_price=leg_data.get("ask_price"),
                     )
                     legs.append(leg)
                 
