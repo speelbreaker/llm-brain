@@ -726,10 +726,18 @@ def run_agent_loop_forever(
                         if rc.startswith("EXIT_OR_ROLL"):
                             symbol = str((rule_action or {}).get("params", {}).get("symbol") or (rule_action or {}).get("params", {}).get("from_symbol") or "")
                             if symbol:
-                                position_tracker.set_exit_or_roll_cooldown(
-                                    symbol=symbol,
-                                    cooldown_minutes=int(getattr(settings, "profit_capture_cooldown_minutes", 15)),
-                                )
+                                pid = position_tracker.get_open_position_id_for_symbol(symbol)
+                                if pid:
+                                    position_tracker.set_exit_or_roll_cooldown_for_position(
+                                        position_id=pid,
+                                        cooldown_minutes=int(getattr(settings, "profit_capture_cooldown_minutes", 15)),
+                                    )
+                                else:
+                                    # fallback
+                                    position_tracker.set_exit_or_roll_cooldown(
+                                        symbol=symbol,
+                                        cooldown_minutes=int(getattr(settings, "profit_capture_cooldown_minutes", 15)),
+                                    )
                     except Exception:
                         pass
 

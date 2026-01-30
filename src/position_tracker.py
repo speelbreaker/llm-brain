@@ -161,6 +161,46 @@ class PositionTracker:
                 return chain
         return None
 
+    def set_exit_or_roll_cooldown_for_position(
+        self,
+        *,
+        position_id: str,
+        cooldown_minutes: int,
+        increment_failures: bool = False,
+    ) -> bool:
+        """Mark a specific position chain as being in EXIT_OR_ROLL cooldown.
+
+        Cooldown must be keyed by a unique position identifier to avoid cross-position
+        interference (especially when multiple calls per underlying are allowed).
+        """
+        try:
+            with self._lock:
+                chain = self._chains.get(position_id)
+                if chain is None or not chain.is_open():
+                    return False
+
+                if increment_failures:
+                    chain.exit_or_roll_failures = int(getattr(chain, "exit_or_roll_failures", 0) or 0) + 1
+                else:
+                    chain.exit_or_roll_failures = int(getattr(chain, "exit_or_roll_failures", 0) or 0)
+
+                cd = max(int(cooldown_minutes), 0)
+                chain.exit_or_roll_cooldown_until = _utc_now() + timedelta(minutes=cd)
+                self._save_to_disk()
+                return True
+        except Exception:
+            return False
+
+    def get_open_position_id_for_symbol(self, symbol: str) -> Optional[str]:
+        """Return the open position_id whose current leg matches symbol."""
+        with self._lock:
+            for pid, chain in self._chains.items():
+                if not chain.is_open():
+                    continue
+                if chain.symbol == symbol:
+                    return pid
+        return None
+
     def set_exit_or_roll_cooldown(
         self,
         *,
@@ -168,37 +208,18 @@ class PositionTracker:
         cooldown_minutes: int,
         increment_failures: bool = False,
     ) -> bool:
-        """Mark a position as being in EXIT_OR_ROLL cooldown.
+        """Backward-compatible wrapper.
 
-        This is used to prevent tick-thrash once profit capture triggers.
-
-        Args:
-            symbol: current leg symbol
-            cooldown_minutes: cooldown duration (minutes)
-            increment_failures: if True, increases failure counter (for backoff logic)
-
-        Returns:
-            True if a matching open chain was found and updated.
+        Prefer set_exit_or_roll_cooldown_for_position(position_id=...).
         """
-        try:
-            with self._lock:
-                for chain in self._chains.values():
-                    if not chain.is_open():
-                        continue
-                    if chain.symbol != symbol:
-                        continue
-                    if increment_failures:
-                        chain.exit_or_roll_failures = int(getattr(chain, "exit_or_roll_failures", 0) or 0) + 1
-                    else:
-                        chain.exit_or_roll_failures = int(getattr(chain, "exit_or_roll_failures", 0) or 0)
-
-                    cd = max(int(cooldown_minutes), 0)
-                    chain.exit_or_roll_cooldown_until = _utc_now() + timedelta(minutes=cd)
-                    self._save_to_disk()
-                    return True
-        except Exception:
+        pid = self.get_open_position_id_for_symbol(symbol)
+        if not pid:
             return False
-        return False
+        return self.set_exit_or_roll_cooldown_for_position(
+            position_id=pid,
+            cooldown_minutes=cooldown_minutes,
+            increment_failures=increment_failures,
+        )
 
     def process_execution_result(self, result: Dict[str, Any]) -> None:
         """
