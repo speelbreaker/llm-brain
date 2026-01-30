@@ -130,7 +130,7 @@ def reconcile_execution_ledger(client: DeribitClient, ledger: ExecutionLedger) -
             if len(open_orders) > 1:
                 # I2 violation
                 try:
-                    client.cancel_by_label(str(label))
+                    client.cancel_by_label(str(label), ccy)
                 except Exception:
                     pass
                 ledger.abort_intent(intent_id=intent_id, reason="I2_MULTIPLE_OPEN_ORDERS_PER_LABEL")
@@ -215,6 +215,6 @@ def reconcile_execution_ledger(client: DeribitClient, ledger: ExecutionLedger) -
                 ledger.abort_intent(intent_id=intent_id, reason="I5_CLOSE_PARTIAL_ABORT")
                 try:
                     if label:
-                        client.cancel_by_label(str(label))
+                        client.cancel_by_label(str(label), ccy)
                 except Exception:
                     pass

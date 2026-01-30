@@ -146,6 +146,12 @@ class ExecutionLedger:
                 "reduce_only": bool(plan.reduce_only),
             }
 
+            # Idempotent prewrite: if attempt N already exists, return its label and do NOT append.
+            existing_attempts = leg_rec.get("attempts", []) or []
+            for a in existing_attempts:
+                if int(a.get("attempt", -1)) == int(attempt):
+                    return str(a.get("label") or label)
+
             # Append attempt record
             attempt_rec = {
                 "attempt": int(attempt),
