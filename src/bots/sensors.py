@@ -14,6 +14,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import pandas as pd
 
 from src.deribit_client import DeribitClient
+from src.data.snapshot_loader import load_latest_snapshot
 
 
 @lru_cache(maxsize=2)
@@ -459,10 +460,27 @@ def _fetch_options_chain_cached(underlying: str, cache_key: str) -> List[Dict[st
     """
     Fetch active options instruments for an underlying.
     Cached with 10-minute invalidation.
+    Prioritizes local snapshot for reliability/IV data.
     """
-    with DeribitClient() as client:
-        instruments = client.get_instruments(currency=underlying, kind="option")
-    return instruments
+    try:
+        with open("/tmp/snapshot_debug.log", "a") as f: f.write(f"Entering _fetch_options_chain_cached for {underlying}\n")
+    except: pass
+
+    # Try snapshot first (offline-first / hybrid approach)
+    instruments = load_latest_snapshot(underlying)
+    if instruments:
+        print(f"[Sensors] Loaded {len(instruments)} instruments from snapshot for {underlying}")
+        # Check if snapshot is stale? For now, just use it.
+        # Harvester runs every 15m.
+        return instruments
+
+    try:
+        with DeribitClient() as client:
+            instruments = client.get_instruments(currency=underlying, kind="option")
+    except Exception as e:
+        print(f"[Sensors] Live fetch failed for {underlying}: {e}")
+            
+    return instruments or []
 
 
 def get_options_chain(underlying: str) -> List[Dict[str, Any]]:
@@ -529,6 +547,7 @@ def compute_term_structure_and_atm_iv(
             "strike": inst["strike"],
             "dte": dte,
             "expiry": expiry,
+            "mark_iv": inst.get("mark_iv"),  # Capture mark_iv from snapshot/API
         })
     
     if not expiry_groups:
@@ -569,6 +588,12 @@ def compute_term_structure_and_atm_iv(
         
         atm_option = options_sorted[0]
         
+        # Optimized: try to use data already in the instrument dict if available
+        # (Snapshot loader populates 'mark_iv', live API might not in get_instruments output)
+        if "mark_iv" in atm_option and atm_option["mark_iv"] is not None:
+             return float(atm_option["mark_iv"])
+
+        # Fallback to live ticker fetch if not in list (legacy behavior)
         try:
             with DeribitClient() as client:
                 ticker = client.get_ticker(atm_option["instrument_name"])
@@ -624,6 +649,7 @@ def compute_skew_25d(underlying: str, spot: float) -> Optional[float]:
                 "strike": inst["strike"],
                 "option_type": inst.get("option_type"),
                 "dte": dte,
+                "mark_iv": inst.get("mark_iv"), # Capture mark_iv
             })
     
     if not valid_options:
@@ -632,8 +658,8 @@ def compute_skew_25d(underlying: str, spot: float) -> Optional[float]:
     best_dte = min(valid_options, key=lambda o: abs(o["dte"] - target_dte))["dte"]
     options_at_expiry = [o for o in valid_options if o["dte"] == best_dte]
     
-    calls = [o for o in options_at_expiry if o["option_type"] == "call"]
-    puts = [o for o in options_at_expiry if o["option_type"] == "put"]
+    calls = [o for o in options_at_expiry if o.get("option_type") == "call"]
+    puts = [o for o in options_at_expiry if o.get("option_type") == "put"]
     
     if not calls or not puts:
         return None
@@ -653,7 +679,15 @@ def compute_skew_25d(underlying: str, spot: float) -> Optional[float]:
     
     if not call_25d or not put_25d:
         return None
+
+    # Optimized: use data from snapshot if available
+    call_iv = call_25d.get("mark_iv")
+    put_iv = put_25d.get("mark_iv")
+
+    if call_iv is not None and put_iv is not None:
+         return float(put_iv - call_iv)
     
+    # Fallback to live fetch
     try:
         with DeribitClient() as client:
             call_ticker = client.get_ticker(call_25d["instrument_name"])
@@ -875,43 +909,82 @@ def compute_sensors_for_underlying(
     """
     bundle = SensorBundle(underlying)
     
+    # --- 1. OHLC Data (Spot, RSI, ADX, MA200, RV) ---
+    df = pd.DataFrame()
     try:
         df = get_ohlc_data(underlying)
     except Exception:
-        bundle._missing = [
-            "vrp_30d", "chop_factor_7d", "iv_rank_6m", "term_structure_spread",
-            "skew_25d", "adx_14d", "rsi_14d", "price_vs_ma200"
-        ]
-        return bundle
+        pass
     
-    if df.empty or len(df) < 30:
-        bundle._missing = [
-            "vrp_30d", "chop_factor_7d", "iv_rank_6m", "term_structure_spread",
-            "skew_25d", "adx_14d", "rsi_14d", "price_vs_ma200"
-        ]
-        return bundle
-    
-    closes = df["close"]
-    bundle.spot = float(closes.iloc[-1])
-    
-    deribit_rv = get_deribit_historical_volatility(underlying)
-    if deribit_rv is not None:
-        bundle.rv_30d = deribit_rv
-    else:
+    if not df.empty and len(df) >= 30:
+        closes = df["close"]
+        bundle.spot = float(closes.iloc[-1])
+        
+        bundle.adx_14d = compute_adx(df, period=14)
+        if bundle.adx_14d is None:
+            bundle._missing.append("adx_14d")
+        
+        bundle.rsi_14d = compute_rsi(closes, period=14)
+        if bundle.rsi_14d is None:
+            bundle._missing.append("rsi_14d")
+        
+        bundle.ma200 = compute_ma200(closes)
+        bundle.price_vs_ma200 = compute_price_vs_ma200(bundle.spot, bundle.ma200)
+        if bundle.price_vs_ma200 is None:
+            bundle._missing.append("price_vs_ma200")
+            
+        deribit_rv = get_deribit_historical_volatility(underlying)
+        if deribit_rv is not None:
+            bundle.rv_30d = deribit_rv
+        else:
+            hourly_df = get_hourly_ohlc_data(underlying)
+            if not hourly_df.empty and len(hourly_df) >= 48:
+                hourly_closes = hourly_df["close"]
+                bundle.rv_30d = compute_realized_volatility_hourly(hourly_closes, hours=720)
+            else:
+                bundle.rv_30d = compute_realized_volatility(closes, window=30)
+        
         hourly_df = get_hourly_ohlc_data(underlying)
         if not hourly_df.empty and len(hourly_df) >= 48:
             hourly_closes = hourly_df["close"]
-            bundle.rv_30d = compute_realized_volatility_hourly(hourly_closes, hours=720)
+            bundle.rv_7d = compute_realized_volatility_hourly(hourly_closes, hours=168)
         else:
-            bundle.rv_30d = compute_realized_volatility(closes, window=30)
-    
-    hourly_df = get_hourly_ohlc_data(underlying)
-    if not hourly_df.empty and len(hourly_df) >= 48:
-        hourly_closes = hourly_df["close"]
-        bundle.rv_7d = compute_realized_volatility_hourly(hourly_closes, hours=168)
+            bundle.rv_7d = compute_realized_volatility(closes, window=7)
+
     else:
-        bundle.rv_7d = compute_realized_volatility(closes, window=7)
-    
+        # OHLC Missing - try to get spot from snapshot/ticker at least
+        bundle._missing.extend(["adx_14d", "rsi_14d", "price_vs_ma200", "rv_30d", "rv_7d"])
+        
+        # Try to recover spot from options chain (using ATM option underlying_price)
+        try:
+            instruments = get_options_chain(underlying)
+            if instruments:
+                # Use the underlying_price from the first instrument that has it
+                # Harvester saves 'underlying_price', live API returns it in get_book_summary
+                for inst in instruments:
+                    u_price = inst.get("underlying_price")
+                    if u_price and u_price > 0:
+                        bundle.spot = float(u_price)
+                        break
+        except Exception:
+            pass
+            
+    # If spot is still missing, we can't do Skew/Term Structure properly without ATM
+    if bundle.spot is None:
+        # Try one last ditch effort: simple ticker fetch (might fail rate limit)
+        try:
+            with DeribitClient() as client:
+                idx = client.get_index_price(underlying)
+                if idx: bundle.spot = float(idx)
+        except Exception:
+            pass
+            
+    # If still no spot, we are really stuck for skew/term structure relative to spot
+    if bundle.spot is None:
+        bundle._missing.extend(["vrp_30d", "chop_factor_7d", "iv_rank_6m", "term_structure_spread", "skew_25d"])
+        return bundle
+
+    # --- 2. IV & Volatility Metrics (DVOL, Volmex, Term Structure, Skew) ---
     dvol = get_dvol(underlying)
     if iv_30d is None and dvol is not None:
         iv_30d = dvol
@@ -976,18 +1049,5 @@ def compute_sensors_for_underlying(
     bundle.iv_rank_6m = compute_iv_rank_lite(iv_30d, underlying)
     if bundle.iv_rank_6m is None:
         bundle._missing.append("iv_rank_6m")
-    
-    bundle.adx_14d = compute_adx(df, period=14)
-    if bundle.adx_14d is None:
-        bundle._missing.append("adx_14d")
-    
-    bundle.rsi_14d = compute_rsi(closes, period=14)
-    if bundle.rsi_14d is None:
-        bundle._missing.append("rsi_14d")
-    
-    bundle.ma200 = compute_ma200(closes)
-    bundle.price_vs_ma200 = compute_price_vs_ma200(bundle.spot, bundle.ma200)
-    if bundle.price_vs_ma200 is None:
-        bundle._missing.append("price_vs_ma200")
     
     return bundle

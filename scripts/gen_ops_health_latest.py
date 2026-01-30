@@ -71,7 +71,7 @@ def _fake_payload(repo_root: Path) -> Dict[str, Any]:
         "overall_status": "OK",
         "can_trade": True,
         "worst_severity": "OK",
-        "summary": "FAKE_OPS_HEALTH: Deterministic stub for testing",
+        "summary": "FAKE_OPS_HEALTH", 
         "checks": [],
         "gates": [],
         "gate_overall": {"status": "OFF", "message": "fake payload"},

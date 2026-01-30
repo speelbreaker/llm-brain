@@ -341,8 +341,10 @@ def _is_live_mode(cfg: Settings) -> bool:
     return cfg.mode == "production"
 
 
-def _resolve_fidelity_gate_mode() -> str:
-    mode = (os.getenv("FIDELITY_GATE_MODE") or "off").strip().lower()
+def _resolve_fidelity_gate_mode(cfg: Settings) -> str:
+    # Prefer env var for testability/runtime overrides; fall back to cfg.
+    env = (os.getenv("FIDELITY_GATE_MODE") or "").strip().lower()
+    mode = env or (getattr(cfg, "fidelity_gate_mode", None) or "off").strip().lower()
     if mode not in ("off", "warn", "block"):
         mode = "off"
     return mode
@@ -657,7 +659,7 @@ def check_calibration_freshness(cfg: Settings, base_dir: str | Path | None = Non
 
 def check_fidelity_gate(cfg: Settings, base_dir: str | Path | None = None) -> HealthCheckResult:
     """Check latest Synthetic Fidelity gate status."""
-    gate_mode = _resolve_fidelity_gate_mode()
+    gate_mode = _resolve_fidelity_gate_mode(cfg)
     from src.ops.fidelity_status import get_fidelity_facts
 
     per_underlying: dict[str, dict[str, Any]] = {}
@@ -710,24 +712,28 @@ def check_fidelity_gate(cfg: Settings, base_dir: str | Path | None = None) -> He
     }
 
     if worst_label == "MISSING":
+        # Fail-closed only when gate_mode=block; otherwise advisory.
+        can_trade = (gate_mode != "block")
         return HealthCheckResult(
             name="fidelity_gate",
             status=CheckStatus.FAIL if gate_mode == "block" else CheckStatus.WARN,
             detail=detail,
             error_code="FIDELITY_MISSING",
             severity="FATAL" if gate_mode == "block" else "DEGRADED",
-            can_trade=True,
+            can_trade=can_trade,
             meta=meta,
         )
 
     if worst_label == "UNTRUSTED":
+        # Fail-closed only when gate_mode=block; otherwise advisory.
+        can_trade = (gate_mode != "block")
         return HealthCheckResult(
             name="fidelity_gate",
             status=CheckStatus.FAIL if gate_mode == "block" else CheckStatus.WARN,
             detail=detail,
             error_code="FIDELITY_UNTRUSTED",
             severity="FATAL" if gate_mode == "block" else "DEGRADED",
-            can_trade=True,
+            can_trade=can_trade,
             meta=meta,
         )
 
@@ -1159,7 +1165,7 @@ def run_agent_healthcheck(cfg: Settings | None = None) -> dict[str, Any]:
     gates_check_added = False
 
     # Gate modes determine whether gate evaluation errors must fail closed.
-    fidelity_mode_env = _resolve_fidelity_gate_mode()
+    fidelity_mode_env = _resolve_fidelity_gate_mode(cfg)
     calibration_mode_env = (os.getenv("CALIBRATION_GATE_MODE") or "off").strip().lower()
     gates_required = fidelity_mode_env != "off" or calibration_mode_env != "off"
     try:
@@ -1266,6 +1272,10 @@ def run_agent_healthcheck(cfg: Settings | None = None) -> dict[str, Any]:
         # Single truth: when gates are present, overall status/summary is gate-authoritative.
         overall_status = gate_status
         summary = _format_gate_summary(gate_info) if gate_info else f"gates {gate_status}"
+        
+        # If gate status is FAIL, it must be FAIL even if no individual blocking_check was found above
+        if gate_status == "FAIL":
+            overall_status = "FAIL"
     else:
         overall_status = checks_overall_status
         if overall_status == "FAIL" and fail_check is not None:

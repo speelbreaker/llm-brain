@@ -187,7 +187,7 @@ class TestCheckFidelityGateModes:
         )
         result = healthcheck.check_fidelity_gate(Settings())
         assert result.status == CheckStatus.FAIL
-        assert result.can_trade is True
+        assert result.can_trade is False
 
     def test_fidelity_gate_block_blocks_missing(self, monkeypatch):
         from src import healthcheck
@@ -201,7 +201,7 @@ class TestCheckFidelityGateModes:
         )
         result = healthcheck.check_fidelity_gate(Settings())
         assert result.status == CheckStatus.FAIL
-        assert result.can_trade is True
+        assert result.can_trade is False
 
 class TestCheckStateBuilder:
     """Tests for check_state_builder function."""

@@ -10,7 +10,7 @@ from enum import Enum
 from typing import Any, Dict, List, Optional
 
 from sqlalchemy import (
-    BigInteger,
+    Integer,
     Boolean,
     Column,
     DateTime,
@@ -54,7 +54,9 @@ class GregDecisionLog(Base):
         Index("ix_greg_decision_log_position", "position_id"),
     )
 
-    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    # IMPORTANT (SQLite): autoincrement only works reliably with INTEGER PRIMARY KEY.
+    # We use Integer here so sqlite can generate ids (decision log inserts should never fail silently).
+    id = Column(Integer, primary_key=True, autoincrement=True)
     timestamp = Column(DateTime(timezone=True), default=func.now(), nullable=False)
     
     underlying = Column(String(10), nullable=False)

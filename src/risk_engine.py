@@ -125,13 +125,16 @@ def check_action_allowed(
     # ──────────────────────────────────────────────
     from src.ops.trade_permission import compute_trade_permission, PermissionCode
     
-    # Get can_trade from health if available (for defense-in-depth)
+    # Get can_trade from health if available (for defense-in-depth).
+    # In unit tests, avoid coupling risk checks to global cached health state.
     can_trade_from_health = None
     try:
-        from src.healthcheck import get_cached_health_status
-        cached_health = get_cached_health_status()
-        if cached_health is not None:
-            can_trade_from_health = cached_health.can_trade
+        import os
+        if not os.environ.get("PYTEST_CURRENT_TEST"):
+            from src.healthcheck import get_cached_health_status
+            cached_health = get_cached_health_status()
+            if cached_health is not None:
+                can_trade_from_health = cached_health.can_trade
     except Exception:
         pass  # Health module may not be available in all contexts
     

@@ -72,12 +72,16 @@ def detect_live_dataset(*, underlying: str = "BTC") -> Dict[str, Any]:
     This intentionally avoids raising: deployed environments vary.
     """
     u = (underlying or "BTC").upper().strip()
-    candidates = [
-        Path(os.getenv("HARVESTER_DATA_ROOT", "data/live_deribit")),
-        Path("data/live_deribit"),
-        Path("datasets/live_deribit"),
-        Path("storage/live_deribit"),
-    ]
+    env_root = (os.getenv("HARVESTER_DATA_ROOT") or "").strip()
+    if env_root:
+        # If explicitly configured, do not auto-scan other folders.
+        candidates = [Path(env_root)]
+    else:
+        candidates = [
+            Path("data/live_deribit"),
+            Path("datasets/live_deribit"),
+            Path("storage/live_deribit"),
+        ]
 
     for base in candidates:
         if not base.exists():

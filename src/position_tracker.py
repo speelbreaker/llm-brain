@@ -13,8 +13,13 @@ from __future__ import annotations
 import json
 import os
 import re
+import tempfile
+try:
+    import fcntl  # type: ignore
+except ImportError:  # pragma: no cover
+    fcntl = None
 from dataclasses import dataclass, field, asdict
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from threading import Lock
 from typing import Dict, List, Optional, Literal, Any
@@ -46,6 +51,7 @@ def _utc_now() -> datetime:
 @dataclass
 class PositionLeg:
     """Single executed leg within a position chain."""
+
     symbol: str
     underlying: str
     option_type: OptionType
@@ -55,7 +61,12 @@ class PositionLeg:
     entry_time: datetime
     exit_price: Optional[float] = None
     exit_time: Optional[datetime] = None
+
+    # Latest quotes (best-effort)
     mark_price: Optional[float] = None
+    bid_price: Optional[float] = None
+    ask_price: Optional[float] = None
+    quote_time: Optional[datetime] = None
 
     def is_open(self) -> bool:
         return self.exit_time is None
@@ -92,6 +103,10 @@ class PositionChain:
     sandbox: bool = False
     origin: Optional[str] = None
     run_id: Optional[str] = None
+
+    # Profit-capture checkpoint state (persisted)
+    exit_or_roll_cooldown_until: Optional[datetime] = None
+    exit_or_roll_failures: int = 0
 
     def is_open(self) -> bool:
         return self.close_time is None
@@ -145,6 +160,71 @@ class PositionTracker:
             if chain.is_open() and chain.underlying == underlying and chain.strategy_type == strategy_type:
                 return chain
         return None
+
+    def set_exit_or_roll_cooldown_for_position(
+        self,
+        *,
+        position_id: str,
+        cooldown_minutes: int,
+        increment_failures: bool = False,
+    ) -> bool:
+        """Mark a specific position chain as being in EXIT_OR_ROLL cooldown.
+
+        Cooldown must be keyed by a unique position identifier to avoid cross-position
+        interference (especially when multiple calls per underlying are allowed).
+        """
+        try:
+            with self._lock:
+                chain = self._chains.get(position_id)
+                if chain is None or not chain.is_open():
+                    return False
+
+                if increment_failures:
+                    chain.exit_or_roll_failures = int(getattr(chain, "exit_or_roll_failures", 0) or 0) + 1
+                else:
+                    chain.exit_or_roll_failures = int(getattr(chain, "exit_or_roll_failures", 0) or 0)
+
+                base_cd = max(int(cooldown_minutes), 0)
+                # Failure backoff: cooldown = base * min(4, 2 ** failures)
+                # failures=0 => multiplier 1; failures=1 => 2; failures=2 => 4; failures>=2 capped at 4.
+                failures = int(getattr(chain, "exit_or_roll_failures", 0) or 0)
+                multiplier = min(4, 2**failures) if base_cd > 0 else 0
+                effective_cd = int(base_cd * multiplier) if multiplier else 0
+                chain.exit_or_roll_cooldown_until = _utc_now() + timedelta(minutes=effective_cd)
+                self._save_to_disk()
+                return True
+        except Exception:
+            return False
+
+    def get_open_position_id_for_symbol(self, symbol: str) -> Optional[str]:
+        """Return the open position_id whose current leg matches symbol."""
+        with self._lock:
+            for pid, chain in self._chains.items():
+                if not chain.is_open():
+                    continue
+                if chain.symbol == symbol:
+                    return pid
+        return None
+
+    def set_exit_or_roll_cooldown(
+        self,
+        *,
+        symbol: str,
+        cooldown_minutes: int,
+        increment_failures: bool = False,
+    ) -> bool:
+        """Backward-compatible wrapper.
+
+        Prefer set_exit_or_roll_cooldown_for_position(position_id=...).
+        """
+        pid = self.get_open_position_id_for_symbol(symbol)
+        if not pid:
+            return False
+        return self.set_exit_or_roll_cooldown_for_position(
+            position_id=pid,
+            cooldown_minutes=cooldown_minutes,
+            increment_failures=increment_failures,
+        )
 
     def process_execution_result(self, result: Dict[str, Any]) -> None:
         """
@@ -287,9 +367,30 @@ class PositionTracker:
                 for leg in chain.legs:
                     if leg.is_open() and leg.symbol:
                         try:
-                            ticker = client.get_ticker(leg.symbol)
-                            if ticker and "mark_price" in ticker:
+                            ticker = client.get_ticker(leg.symbol) or {}
+                            if "mark_price" in ticker and ticker.get("mark_price") is not None:
                                 leg.mark_price = float(ticker["mark_price"])
+
+                            # Deribit ticker keys (best-effort)
+                            bid = (
+                                ticker.get("best_bid_price")
+                                or ticker.get("bid_price")
+                                or ticker.get("bid")
+                            )
+                            ask = (
+                                ticker.get("best_ask_price")
+                                or ticker.get("ask_price")
+                                or ticker.get("ask")
+                            )
+                            if bid is not None:
+                                leg.bid_price = float(bid)
+                            if ask is not None:
+                                leg.ask_price = float(ask)
+
+                            # quote_time is the timestamp for bid/ask freshness.
+                            # Only set it when at least one of bid/ask updated in this refresh.
+                            if bid is not None or ask is not None:
+                                leg.quote_time = _utc_now()
                         except Exception:
                             pass
                 self._update_chain_unrealized(chain)
@@ -417,6 +518,9 @@ class PositionTracker:
             "quantity": current_leg.quantity if current_leg else 0.0,
             "entry_price": chain.legs[0].entry_price if chain.legs else 0.0,
             "mark_price": mark,
+            "bid_price": (current_leg.bid_price if current_leg else None),
+            "ask_price": (current_leg.ask_price if current_leg else None),
+            "quote_time": (current_leg.quote_time.isoformat() if (current_leg and current_leg.quote_time) else None),
             "unrealized_pnl": chain.unrealized_pnl,
             "unrealized_pnl_pct": chain.unrealized_pnl_pct,
             "entry_time": chain.open_time.isoformat(),
@@ -426,6 +530,10 @@ class PositionTracker:
             "mode": chain.mode,
             "entry_mode": getattr(chain, "entry_mode", "NATURAL"),
             "exit_style": chain.exit_style or "hold_to_expiry",
+            "exit_or_roll_cooldown_until": (
+                chain.exit_or_roll_cooldown_until.isoformat() if chain.exit_or_roll_cooldown_until else None
+            ),
+            "exit_or_roll_failures": int(getattr(chain, "exit_or_roll_failures", 0) or 0),
         }
 
     def _chain_to_closed_summary(self, chain: PositionChain) -> Dict[str, Any]:
@@ -458,15 +566,39 @@ class PositionTracker:
             "expiry": expiry_str,
         }
 
+
+    def _with_file_lock(self, fp, mode: str) -> None:
+        """Advisory file lock to avoid concurrent writers across processes."""
+        try:
+            if mode == "shared":
+                if fcntl is None: return
+                fcntl.flock(fp.fileno(), fcntl.LOCK_SH)
+            else:
+                if fcntl is None: return
+                fcntl.flock(fp.fileno(), fcntl.LOCK_EX)
+        except Exception:
+            pass
+
+    def _unlock_file(self, fp) -> None:
+        try:
+            if fcntl is None: return
+            fcntl.flock(fp.fileno(), fcntl.LOCK_UN)
+        except Exception:
+            pass
+
     def _save_to_disk(self) -> None:
-        """Save all chains to disk (must be called with lock held)."""
+        """Save all chains to disk (must be called with lock held).
+
+        Uses a temp file + os.replace for atomicity and best-effort advisory locking
+        (no-op on platforms without fcntl).
+        """
         try:
             data = {
-                "version": 1,
+                "version": 4,
                 "saved_at": _utc_now().isoformat(),
                 "chains": {},
             }
-            
+
             for position_id, chain in self._chains.items():
                 chain_data = {
                     "position_id": chain.position_id,
@@ -486,34 +618,55 @@ class PositionTracker:
                     "sandbox": chain.sandbox,
                     "origin": chain.origin,
                     "run_id": chain.run_id,
-                    "legs": [],
+                    "exit_or_roll_cooldown_until": (
+                        chain.exit_or_roll_cooldown_until.isoformat() if chain.exit_or_roll_cooldown_until else None
+                    ),
+                    "exit_or_roll_failures": int(getattr(chain, "exit_or_roll_failures", 0) or 0),
+                    "legs": [
+                        {
+                            "symbol": leg.symbol,
+                            "underlying": leg.underlying,
+                            "option_type": leg.option_type,
+                            "side": leg.side,
+                            "quantity": leg.quantity,
+                            "entry_price": leg.entry_price,
+                            "entry_time": (leg.entry_time.isoformat() if leg.entry_time else None),
+                            "exit_price": leg.exit_price,
+                            "exit_time": leg.exit_time.isoformat() if leg.exit_time else None,
+                            "mark_price": leg.mark_price,
+                            "bid_price": getattr(leg, "bid_price", None),
+                            "ask_price": getattr(leg, "ask_price", None),
+                            "quote_time": (leg.quote_time.isoformat() if getattr(leg, "quote_time", None) else None),
+                        }
+                        for leg in chain.legs
+                    ],
                 }
-                
-                for leg in chain.legs:
-                    leg_data = {
-                        "symbol": leg.symbol,
-                        "underlying": leg.underlying,
-                        "option_type": leg.option_type,
-                        "side": leg.side,
-                        "quantity": leg.quantity,
-                        "entry_price": leg.entry_price,
-                        "entry_time": leg.entry_time.isoformat(),
-                        "exit_price": leg.exit_price,
-                        "exit_time": leg.exit_time.isoformat() if leg.exit_time else None,
-                        "mark_price": leg.mark_price,
-                    }
-                    chain_data["legs"].append(leg_data)
-                
                 data["chains"][position_id] = chain_data
-            
-            # Write atomically using temp file + os.replace (cross-platform)
-            temp_path = self._persistence_path.with_suffix(".tmp")
-            with open(temp_path, "w") as f:
-                json.dump(data, f, indent=2)
-            os.replace(temp_path, self._persistence_path)
-            
+
+            # Unique temp file per save to avoid collisions when file locking is unavailable.
+            fd, tmp_name = tempfile.mkstemp(
+                prefix=self._persistence_path.name + ".",
+                suffix=".tmp",
+                dir=str(self._persistence_path.parent),
+            )
+            tmp_path = Path(tmp_name)
+            self._persistence_path.parent.mkdir(parents=True, exist_ok=True)
+
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                self._with_file_lock(f, "exclusive")
+                try:
+                    json.dump(data, f, indent=2, default=str)
+                    f.flush()
+                    try:
+                        os.fsync(f.fileno())
+                    except Exception:
+                        pass
+                finally:
+                    self._unlock_file(f)
+
+            os.replace(tmp_path, self._persistence_path)
         except Exception as e:
-            print(f"[PositionTracker] Failed to save positions: {e}")
+            print(f"[PositionTracker] Warning: Failed to save positions: {e}")
 
     def _load_from_disk(self) -> None:
         """Load chains from disk on startup."""
@@ -522,10 +675,14 @@ class PositionTracker:
             return
         
         try:
-            with open(self._persistence_path, "r") as f:
-                data = json.load(f)
+            with open(self._persistence_path, "r", encoding="utf-8") as f:
+                self._with_file_lock(f, "shared")
+                try:
+                    data = json.load(f)
+                finally:
+                    self._unlock_file(f)
             
-            if data.get("version") != 1:
+            if data.get("version") not in (1, 2, 3, 4):
                 print(f"[PositionTracker] Unknown version {data.get('version')}, skipping load")
                 return
             
@@ -542,10 +699,13 @@ class PositionTracker:
                         side=leg_data["side"],
                         quantity=leg_data["quantity"],
                         entry_price=leg_data["entry_price"],
-                        entry_time=datetime.fromisoformat(leg_data["entry_time"]),
+                        entry_time=datetime.fromisoformat(leg_data["entry_time"]) if leg_data.get("entry_time") else _utc_now(),
                         exit_price=leg_data.get("exit_price"),
                         exit_time=datetime.fromisoformat(leg_data["exit_time"]) if leg_data.get("exit_time") else None,
                         mark_price=leg_data.get("mark_price"),
+                        bid_price=leg_data.get("bid_price"),
+                        ask_price=leg_data.get("ask_price"),
+                        quote_time=(datetime.fromisoformat(leg_data["quote_time"]) if leg_data.get("quote_time") else None),
                     )
                     legs.append(leg)
                 
@@ -568,6 +728,10 @@ class PositionTracker:
                     sandbox=chain_data.get("sandbox", False),
                     origin=chain_data.get("origin"),
                     run_id=chain_data.get("run_id"),
+                    exit_or_roll_cooldown_until=(
+                        datetime.fromisoformat(chain_data["exit_or_roll_cooldown_until"]) if chain_data.get("exit_or_roll_cooldown_until") else None
+                    ),
+                    exit_or_roll_failures=int(chain_data.get("exit_or_roll_failures", 0) or 0),
                 )
                 self._chains[position_id] = chain
                 loaded_count += 1

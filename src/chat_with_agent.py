@@ -1,6 +1,6 @@
 """
 Chat with the options trading agent using real-time state and decision logs.
-Uses OpenAI via Replit AI Integrations to answer questions about the agent's behavior.
+Uses OpenAI to answer questions about the agent's behavior.
 
 Features:
 - Multi-turn conversation history
@@ -27,15 +27,14 @@ from src.position_tracker import position_tracker
 
 
 def _get_openai_client() -> OpenAI:
-    """Get OpenAI client configured for Replit AI Integrations."""
-    api_key = os.environ.get("AI_INTEGRATIONS_OPENAI_API_KEY")
-    base_url = os.environ.get("AI_INTEGRATIONS_OPENAI_BASE_URL")
+    """Get OpenAI client configured via settings."""
+    api_key = settings.openai_api_key
+    base_url = settings.openai_base_url
     
-    if not api_key or not base_url:
+    if not api_key:
         raise RuntimeError(
-            "Chat requires Replit AI Integrations to be configured. "
-            "The AI_INTEGRATIONS_OPENAI_API_KEY and AI_INTEGRATIONS_OPENAI_BASE_URL "
-            "environment variables are not set."
+            "Chat requires an OpenAI API key. "
+            "Please configure OPENAI_API_KEY in .env."
         )
     
     return OpenAI(api_key=api_key, base_url=base_url)

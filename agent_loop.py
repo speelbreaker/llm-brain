@@ -9,6 +9,9 @@ import signal
 import sys
 import time
 import traceback
+import asyncio
+import queue
+import threading
 from datetime import datetime
 from typing import Any, Callable, Dict, Optional
 
@@ -45,11 +48,89 @@ from src.ops.trade_permission import (
     TradePermission,
     PermissionCode,
 )
+from src.trading.telegram_reporter import get_trading_telegram_reporter, trading_status_callback
+from src.paper_portfolios import apply_decision_to_lane, refresh_marks_for_all
 
 StatusCallback = Callable[[Dict[str, Any]], None]
 
 shutdown_requested = False
 last_health_recheck_time: float = 0
+
+
+def _run_async(coro):
+    """Helper to run async code in sync context (avoid in hot loop)."""
+    try:
+        asyncio.run(coro)
+    except Exception as e:
+        print(f"Async execution failed: {e}")
+
+
+class _TelegramDispatch:
+    """Send Telegram updates from a dedicated background event loop.
+
+    Avoids calling asyncio.run() every loop iteration.
+    """
+
+    def __init__(self) -> None:
+        self._q: queue.Queue[dict] = queue.Queue(maxsize=10)
+        self._stop = threading.Event()
+        self._thread: Optional[threading.Thread] = None
+
+    def start(self) -> None:
+        if self._thread is not None:
+            return
+        self._thread = threading.Thread(target=self._thread_main, name="telegram-dispatch", daemon=True)
+        self._thread.start()
+
+    def stop(self, timeout: float = 2.0) -> None:
+        """Stop the dispatcher.
+
+        Note: during shutdown we may drop one queued snapshot to make room for a stop sentinel.
+        """
+        self._stop.set()
+        # Ensure the consumer unblocks even if the queue is full.
+        for _ in range(3):
+            try:
+                self._q.put_nowait({"_stop": True})
+                break
+            except queue.Full:
+                try:
+                    _ = self._q.get_nowait()
+                except Exception:
+                    break
+            except Exception:
+                break
+        if self._thread is not None:
+            self._thread.join(timeout=timeout)
+
+    def submit_snapshot(self, snapshot: dict) -> None:
+        if self._thread is None:
+            return
+        try:
+            self._q.put_nowait(snapshot)
+        except queue.Full:
+            # Drop oldest to keep latest state flowing.
+            try:
+                _ = self._q.get_nowait()
+            except Exception:
+                pass
+            try:
+                self._q.put_nowait(snapshot)
+            except Exception:
+                pass
+
+    def _thread_main(self) -> None:
+        asyncio.run(self._async_main())
+
+    async def _async_main(self) -> None:
+        while not self._stop.is_set():
+            snap = await asyncio.to_thread(self._q.get)
+            if snap.get("_stop"):
+                break
+            try:
+                await trading_status_callback(snap)
+            except Exception as e:
+                print(f"[Telegram] status callback error: {e}")
 
 
 def _health_trading_allowed() -> tuple[bool, str]:
@@ -80,6 +161,8 @@ def _build_status_snapshot(
     execution_result: Dict[str, Any],
     rule_action: Optional[Dict[str, Any]] = None,
     llm_action: Optional[Dict[str, Any]] = None,
+    debate_action: Optional[Dict[str, Any]] = None,
+    strategy_proposals: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Build a compact status snapshot for the status store and logging."""
     return {
@@ -160,6 +243,8 @@ def _build_status_snapshot(
         "decision_mode": settings.decision_mode,
         "rule_action": rule_action,
         "llm_action": llm_action,
+        "debate_action": debate_action,
+        "strategy_proposals": strategy_proposals,
     }
 
 
@@ -215,6 +300,15 @@ def run_agent_loop_forever(
     print(f"Position Reconcile: {settings.position_reconcile_action.upper()}")
     print("=" * 60)
     
+    telegram_dispatch: Optional[_TelegramDispatch] = None
+
+    # Telegram Startup
+    if settings.trading_telegram_enabled:
+        telegram_dispatch = _TelegramDispatch()
+        telegram_dispatch.start()
+        print("[Telegram] Sending startup message...")
+        _run_async(get_trading_telegram_reporter().send_startup_message())
+
     global last_health_recheck_time
     
     if settings.health_check_on_startup:
@@ -226,17 +320,23 @@ def run_agent_loop_forever(
             last_health_recheck_time = time.time()
             
             if cached_health.overall_status == "FAIL":
-                severity = cached_health.worst_severity
-                sev_str = severity.value if severity else "unknown"
-                
+                # Normalize severity robustly (can be enum or string)
+                worst = cached_health.worst_severity
+                if worst is None:
+                    sev_str = "UNKNOWN"
+                elif hasattr(worst, "value"):
+                    sev_str = str(getattr(worst, "value", worst)).upper()
+                else:
+                    sev_str = str(worst).upper()
+
                 if not settings.is_testnet:
-                    if severity == HealthSeverity.FATAL:
+                    if sev_str == "FATAL":
                         print("\n" + "!" * 60)
                         print(f"FATAL HEALTH FAILURE ON MAINNET - ABORTING AGENT START")
                         print("!" * 60)
                         print("Fix the issues above before running on mainnet.")
                         sys.exit(1)
-                    elif severity == HealthSeverity.TRANSIENT:
+                    elif sev_str == "TRANSIENT":
                         print(f"\n[WARNING] TRANSIENT health issue ({sev_str}). Proceeding with caution on mainnet...")
                     else:
                         print("\n" + "!" * 60)
@@ -244,7 +344,7 @@ def run_agent_loop_forever(
                         print("!" * 60)
                         sys.exit(1)
                 elif settings.auto_kill_on_health_fail:
-                    if severity == HealthSeverity.TRANSIENT:
+                    if severity == "TRANSIENT":
                         print(f"\n[WARNING] TRANSIENT health issue on testnet ({sev_str}). Continuing...")
                     else:
                         print(f"\n[WARNING] Health FAIL (severity: {sev_str}) on testnet, auto_kill armed...")
@@ -503,6 +603,10 @@ def run_agent_loop_forever(
                     risk_allowed=allowed,
                     risk_reasons=reasons,
                     execution_result=execution_result,
+                    strategy_proposals={},
+                    rule_action=None,
+                    llm_action=None,
+                    debate_action=None,
                 )
                 snapshot["reconciliation"] = reconciliation_stats
                 snapshot["reconciliation_status"] = reconciliation_status
@@ -579,21 +683,76 @@ def run_agent_loop_forever(
                         training_actions = []
                         decision_source = "training_mode"
                 else:
-                    rule_action = rule_decide_action(agent_state, settings)
-                    rule_action["strategy_id"] = "covered_call_v1"
+                    # New Strategy Interface (Phase 2)
+                    active_strategies = strategy_registry.get_active_strategies()
+                    strategy_proposals: dict[str, Any] = {}
+
+                    # Collect proposals from *all* active strategies so we can observe them side-by-side.
+                    # Execution behavior remains unchanged: we still pick the first strategy as the
+                    # rule-based baseline action (until we implement a proper arbiter).
+                    if active_strategies:
+                        for s in active_strategies:
+                            try:
+                                proposed_list = s.propose_actions(agent_state) or []
+                                first = proposed_list[0] if proposed_list else {"action": "DO_NOTHING", "reasoning": "No proposal"}
+                                if "strategy_id" not in first:
+                                    first["strategy_id"] = s.strategy_id
+                                strategy_proposals[s.strategy_id] = first
+                            except Exception as e:
+                                strategy_proposals[s.strategy_id] = {
+                                    "action": "DO_NOTHING",
+                                    "reasoning": f"Strategy error: {e}",
+                                    "strategy_id": s.strategy_id,
+                                }
+
+                        # Keep existing behavior: first active strategy drives the baseline rule_action
+                        first_strategy = active_strategies[0]
+                        rule_action = strategy_proposals.get(first_strategy.strategy_id) or {
+                            "action": "DO_NOTHING",
+                            "reasoning": "Strategy proposed no actions",
+                            "strategy_id": first_strategy.strategy_id,
+                        }
+                    else:
+                        # Fallback legacy rule-based
+                        rule_action = rule_decide_action(agent_state, settings)
+                        rule_action["strategy_id"] = "covered_call_v1"
+                        strategy_proposals["covered_call_v1"] = rule_action.copy()
+
+                    # If profit-capture checkpoint fired, set an anti-thrash cooldown in the PositionTracker.
+                    try:
+                        from src.position_tracker import position_tracker
+
+                        rc = str((rule_action or {}).get("reason_code") or "")
+                        if rc.startswith("EXIT_OR_ROLL"):
+                            symbol = str((rule_action or {}).get("params", {}).get("symbol") or (rule_action or {}).get("params", {}).get("from_symbol") or "")
+                            if symbol:
+                                pid = position_tracker.get_open_position_id_for_symbol(symbol)
+                                if pid:
+                                    position_tracker.set_exit_or_roll_cooldown_for_position(
+                                        position_id=pid,
+                                        cooldown_minutes=int(getattr(settings, "profit_capture_cooldown_minutes", 15)),
+                                    )
+                                else:
+                                    # fallback
+                                    position_tracker.set_exit_or_roll_cooldown(
+                                        symbol=symbol,
+                                        cooldown_minutes=int(getattr(settings, "profit_capture_cooldown_minutes", 15)),
+                                    )
+                    except Exception:
+                        pass
+
                     print(f"Rule-based proposed: {rule_action.get('action', 'DO_NOTHING')}")
                     
-                    should_compute_llm = (
-                        settings.llm_enabled and 
-                        settings.decision_mode in ("llm_only", "hybrid_shadow")
+                    # Shadow computation (for observation): compute LLM/Debate only when needed.
+                    # These do NOT automatically execute unless decision_mode selects them.
+                    should_compute_llm = bool(settings.llm_enabled) and (
+                        settings.decision_mode == "llm_only" or settings.llm_shadow_enabled or settings.decision_mode == "hybrid_shadow"
                     )
-                    should_compute_shadow = (
-                        settings.llm_enabled and 
-                        settings.llm_shadow_enabled and
-                        settings.decision_mode == "rule_only"
+                    should_compute_debate = bool(settings.llm_enabled) and (
+                        settings.decision_mode == "debate" or settings.debate_shadow_enabled
                     )
-                    
-                    if should_compute_llm or should_compute_shadow:
+
+                    if should_compute_llm:
                         try:
                             llm_action = choose_action_with_llm(
                                 agent_state,
@@ -606,10 +765,35 @@ def run_agent_loop_forever(
                             print(f"LLM error (using rule fallback): {e}")
                             llm_action = None
                     
+                    # Debate action (shadow)
+                    debate_action = None
+                    if should_compute_debate:
+                        try:
+                            from src.trading_debate import choose_action_with_debate
+                            debate_action = choose_action_with_debate(
+                                agent_state,
+                                agent_state.candidate_options,
+                            )
+                            debate_action["strategy_id"] = "covered_call_v1"
+                            print(
+                                f"Debate proposed: {debate_action.get('action', 'DO_NOTHING')} "
+                                f"(validated={debate_action.get('validated', 'N/A')})"
+                            )
+                        except Exception as e:
+                            log_error("debate_decision_error", str(e), {"traceback": traceback.format_exc()})
+                            debate_action = {
+                                "action": ActionType.DO_NOTHING.value,
+                                "params": {},
+                                "reasoning": f"Debate error: {e}",
+                                "decision_source": "debate_error",
+                                "validated": False,
+                            }
+
+                    # Execution selection: keep current behavior unless decision_mode explicitly selects LLM/Debate.
                     if settings.decision_mode == "rule_only":
                         proposed_action = rule_action.copy()
                         decision_source = "rule_based"
-                        
+
                     elif settings.decision_mode == "llm_only":
                         if llm_action is not None and llm_action.get("validated", False):
                             proposed_action = llm_action.copy()
@@ -618,7 +802,16 @@ def run_agent_loop_forever(
                             proposed_action = rule_action.copy()
                             decision_source = "llm_fallback_to_rule"
                             print("LLM invalid/failed, falling back to rule-based")
-                            
+
+                    elif settings.decision_mode == "debate":
+                        if debate_action is not None and debate_action.get("validated", False):
+                            proposed_action = debate_action.copy()
+                            decision_source = "debate"
+                        else:
+                            proposed_action = rule_action.copy()
+                            decision_source = "debate_fallback_to_rule"
+                            print("Debate invalid/failed, falling back to rule-based")
+
                     elif settings.decision_mode == "hybrid_shadow":
                         proposed_action = rule_action.copy()
                         decision_source = "rule_based_shadow_llm"
@@ -715,7 +908,119 @@ def run_agent_loop_forever(
                     
                     if final_action_type != ActionType.DO_NOTHING.value:
                         print(f"\nExecuting: {final_action_type}")
-                        execution_result = execute_action(client, final_action, settings)
+
+                        # Safe roll execution: wait for close fill, then refresh state + re-check OPEN.
+                        if final_action_type == ActionType.ROLL_COVERED_CALL.value and not settings.dry_run:
+                            from src.state_builder import build_agent_state
+
+                            # 1) Execute close leg (execution.py defers open leg; returns status=close_filled)
+                            execution_result = execute_action(client, final_action, settings)
+
+                            if execution_result.get("status") == "close_filled":
+                                # 2) Refresh state after close
+                                refreshed_state = build_agent_state(client, settings)
+
+                                from_symbol = str(final_action.get("params", {}).get("from_symbol") or "")
+                                orig_to_symbol = str(final_action.get("params", {}).get("to_symbol") or "")
+                                size2 = final_action.get("params", {}).get("size", settings.default_order_size)
+                                underlying2 = final_action.get("params", {}).get("underlying")
+
+                                # 3) Recompute candidate eligibility/score post-close (market moved, latches may flip)
+                                # Deterministic selection mirrors profit-capture roll scoring.
+                                def _spread_pct(bid: float, ask: float, mark: float, floor_usd: float) -> float:
+                                    denom = max(float(mark or 0.0), float(floor_usd or 0.0), 1e-9)
+                                    return max(0.0, float(ask) - float(bid)) / denom
+
+                                def _annualized_yield_on_notional(credit_usd: float, spot_usd: float, size_underlying: float, dte: float) -> float:
+                                    notional = float(spot_usd) * max(float(size_underlying), 1e-9)
+                                    if notional <= 0 or dte <= 0:
+                                        return 0.0
+                                    return (float(credit_usd) / notional) * (365.0 / float(dte))
+
+                                floor = float(getattr(settings, "profit_capture_spread_pct_price_floor_usd", 5.0))
+                                max_spread_open = float(getattr(settings, "profit_capture_max_spread_pct_open", 0.10))
+                                min_credit_usd = float(getattr(settings, "profit_capture_min_credit_usd", 25.0))
+                                spot = float(refreshed_state.spot.get(str(underlying2) or "") or 0.0)
+                                size_u = abs(float(size2 or 0.0))
+
+                                eligible: list[tuple[float, Any]] = []
+                                blocked: list[str] = []
+                                for c in refreshed_state.candidate_options:
+                                    if underlying2 and c.underlying != underlying2:
+                                        continue
+                                    if from_symbol and c.symbol == from_symbol:
+                                        continue
+
+                                    mark = float(getattr(c, "mid_price", 0.0) or 0.0)
+                                    bid = float(getattr(c, "bid", 0.0) or 0.0)
+                                    ask = float(getattr(c, "ask", 0.0) or 0.0)
+                                    spr = _spread_pct(bid, ask, mark, floor)
+                                    if spr > max_spread_open:
+                                        blocked.append("SPREAD_TOO_WIDE")
+                                        continue
+                                    credit = float(getattr(c, "premium_usd", 0.0) or 0.0)
+                                    if credit < min_credit_usd:
+                                        blocked.append("BELOW_MIN_CREDIT")
+                                        continue
+
+                                    y = _annualized_yield_on_notional(credit, spot, size_u or float(settings.default_order_size), float(getattr(c, "dte", 0) or 0))
+                                    delta = float(getattr(c, "delta", 0.0) or 0.0)
+                                    score = y / max(abs(delta), 0.05)
+                                    eligible.append((score, c))
+
+                                eligible.sort(key=lambda x: x[0], reverse=True)
+                                chosen = eligible[0][1] if eligible else None
+                                chosen_symbol = str(getattr(chosen, "symbol", "") or "") if chosen else ""
+                                chosen_score = float(eligible[0][0]) if eligible else 0.0
+
+                                if not chosen_symbol:
+                                    execution_result["open_leg"] = {
+                                        "allowed": False,
+                                        "reasons": ["NO_ELIGIBLE_CANDIDATE_POST_CLOSE"],
+                                        "blocked_reasons": sorted(set(blocked))[:6],
+                                        "original_to_symbol": orig_to_symbol,
+                                    }
+                                    # Close already executed; treat as completed close-only.
+                                    execution_result["status"] = "executed"
+                                    execution_result["message"] = "Close filled; no eligible OPEN candidate post-close (safe abort)"
+                                else:
+                                    # 4) Re-check latches/risk for OPEN (using post-close chosen_symbol)
+                                    open_action = {
+                                        "action": ActionType.OPEN_COVERED_CALL.value,
+                                        "params": {
+                                            "symbol": chosen_symbol,
+                                            "underlying": underlying2,
+                                            "size": size2,
+                                        },
+                                        "reasoning": "ROLL follow-up OPEN after close fill (re-scored + rechecked)",
+                                    }
+
+                                    open_allowed, open_reasons = check_action_allowed(refreshed_state, open_action, settings)
+                                    if open_allowed:
+                                        open_exec = execute_action(client, open_action, settings)
+                                        execution_result["open_leg"] = {
+                                            "allowed": True,
+                                            "reasons": open_reasons,
+                                            "chosen_symbol": chosen_symbol,
+                                            "chosen_score": chosen_score,
+                                            "original_to_symbol": orig_to_symbol,
+                                            "execution": open_exec,
+                                        }
+                                        if open_exec.get("status") == "executed":
+                                            execution_result["status"] = "executed"
+                                            execution_result["message"] = f"Rolled: close filled; open filled ({chosen_symbol})"
+                                    else:
+                                        execution_result["open_leg"] = {
+                                            "allowed": False,
+                                            "reasons": open_reasons,
+                                            "chosen_symbol": chosen_symbol,
+                                            "chosen_score": chosen_score,
+                                            "original_to_symbol": orig_to_symbol,
+                                        }
+                                        execution_result["status"] = "partial_error"
+                                        execution_result["message"] = "Close filled, but OPEN blocked after re-check"
+                        else:
+                            execution_result = execute_action(client, final_action, settings)
                     else:
                         execution_result = {
                             "status": "skipped",
@@ -741,6 +1046,8 @@ def run_agent_loop_forever(
                 execution_result=execution_result,
                 rule_action=rule_action,
                 llm_action=llm_action,
+                debate_action=debate_action,
+                strategy_proposals=strategy_proposals,
             )
             snapshot["reconciliation"] = reconciliation_stats
             snapshot["trade_permission"] = {
@@ -817,11 +1124,28 @@ def run_agent_loop_forever(
             except Exception as e:
                 print(f"Warning: Failed to log decision: {e}")
             
-            if status_callback is not None:
-                try:
+            # Update parallel paper portfolios (rule/llm/debate) without affecting live account.
+            try:
+                if settings.paper_compare_enabled:
+                    refresh_marks_for_all(client)
+                    paper_events: list[dict] = []
+                    paper_events += apply_decision_to_lane(lane="rule", state=agent_state, candidates=agent_state.candidate_options, decision=rule_action, client=client, refresh_marks=False)
+                    paper_events += apply_decision_to_lane(lane="llm", state=agent_state, candidates=agent_state.candidate_options, decision=llm_action if (llm_action and llm_action.get("validated")) else None, client=client, refresh_marks=False)
+                    paper_events += apply_decision_to_lane(lane="debate", state=agent_state, candidates=agent_state.candidate_options, decision=debate_action if (debate_action and debate_action.get("validated")) else None, client=client, refresh_marks=False)
+                    if paper_events:
+                        snapshot["paper_events"] = paper_events
+            except Exception as e:
+                print(f"[Paper] update failed: {e}")
+
+            # Callbacks
+            try:
+                if status_callback is not None:
                     status_callback(snapshot)
-                except Exception as e:
-                    print(f"Warning: Status callback failed: {e}")
+                
+                if settings.trading_telegram_enabled and telegram_dispatch is not None:
+                    telegram_dispatch.submit_snapshot(snapshot)
+            except Exception as e:
+                print(f"Warning: Status callback failed: {e}")
             
             print_decision_summary(
                 proposed_action=proposed_action,
@@ -849,6 +1173,13 @@ def run_agent_loop_forever(
     
     finally:
         print("\nShutting down...")
+        if settings.trading_telegram_enabled:
+            reason = "shutdown_requested" if shutdown_requested else "error_or_exit"
+            print("[Telegram] Sending shutdown message...")
+            _run_async(get_trading_telegram_reporter().send_shutdown_message(reason=reason))
+            if telegram_dispatch is not None:
+                telegram_dispatch.stop()
+        
         client.close()
         print("Agent stopped.")
 

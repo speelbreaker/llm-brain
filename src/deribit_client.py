@@ -185,6 +185,11 @@ class DeribitClient(DeribitBaseClient):
         """Cancel all orders for an instrument (private endpoint)."""
         params = {"instrument_name": instrument_name}
         return self._make_request("private/cancel_all_by_instrument", params, private=True)
+
+    def get_order_state(self, order_id: str) -> dict[str, Any]:
+        """Get order state by order_id (private endpoint)."""
+        params = {"order_id": order_id}
+        return self._make_request("private/get_order_state", params, private=True)
     
     def get_tradingview_chart_data(
         self,

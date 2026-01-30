@@ -5,7 +5,8 @@ Supports batch execution for training mode experimentation.
 """
 from __future__ import annotations
 
-from typing import Any
+import time
+from typing import Any, Optional, Tuple
 
 from src.config import Settings, settings
 from src.deribit_client import DeribitClient, DeribitAPIError
@@ -37,6 +38,43 @@ def _extract_underlying(symbol: str) -> str:
     elif symbol.startswith("ETH"):
         return "ETH"
     return "?"
+
+
+def _wait_for_fill(
+    client: DeribitClient,
+    order_id: str,
+    *,
+    timeout_seconds: float = 20.0,
+    poll_seconds: float = 0.5,
+) -> Tuple[bool, dict[str, Any]]:
+    """Poll Deribit order state until filled/cancelled/timeout.
+
+    Returns (filled, order_state_dict).
+    """
+    deadline = time.time() + max(timeout_seconds, 0.5)
+    last: dict[str, Any] = {}
+
+    while time.time() < deadline:
+        try:
+            st = client.get_order_state(order_id)
+            last = st.get("order") if isinstance(st, dict) and "order" in st else st
+        except Exception:
+            last = last or {}
+
+        state = str((last or {}).get("order_state") or "").lower()
+        filled_amount = float((last or {}).get("filled_amount") or 0.0)
+        amount = float((last or {}).get("amount") or 0.0)
+
+        if state in ("filled", "cancelled", "rejected"):
+            return state == "filled", last
+
+        # Some venues report 'open' but filled_amount==amount.
+        if amount > 0 and filled_amount >= amount - 1e-9:
+            return True, last
+
+        time.sleep(poll_seconds)
+
+    return False, last
 
 
 def _get_mid_price(client: DeribitClient, symbol: str) -> float:
@@ -230,15 +268,37 @@ def _execute_real(
                 label="agent_covered_call",
             )
             
+            oid = order_result.get("order", {}).get("order_id")
+            filled = False
+            avg_px = mid_price
+            filled_amt = 0.0
+            if oid:
+                filled, st = _wait_for_fill(client, oid, timeout_seconds=30.0, poll_seconds=0.5)
+                avg_px = float((st or {}).get("average_price") or mid_price)
+                filled_amt = float((st or {}).get("filled_amount") or 0.0)
+
+            if not filled:
+                result["status"] = "error"
+                result["errors"].append(f"OPEN not filled within timeout for {symbol} (order_id={oid})")
+                # best-effort cancel
+                if oid:
+                    try:
+                        client.cancel_order(oid)
+                    except Exception:
+                        pass
+                return result
+
             result["orders"].append({
                 "type": "SELL",
                 "symbol": symbol,
-                "size": size,
-                "price": mid_price,
-                "order_id": order_result.get("order", {}).get("order_id"),
-                "order_state": order_result.get("order", {}).get("order_state"),
+                "size": filled_amt or size,
+                "price": avg_px,
+                "order_id": oid,
+                "order_state": "filled",
+                "filled_amount": filled_amt,
+                "average_price": avg_px,
             })
-            result["message"] = f"Sold {size} {symbol} at {mid_price:.6f}"
+            result["message"] = f"Sold {filled_amt or size} {symbol} at {avg_px:.6f}"
             print(f"[EXECUTED] {result['message']}")
             
         except DeribitAPIError as e:
@@ -266,15 +326,36 @@ def _execute_real(
                 label="agent_close_cc",
             )
             
+            oid = order_result.get("order", {}).get("order_id")
+            filled = False
+            avg_px = mid_price
+            filled_amt = 0.0
+            if oid:
+                filled, st = _wait_for_fill(client, oid, timeout_seconds=30.0, poll_seconds=0.5)
+                avg_px = float((st or {}).get("average_price") or mid_price)
+                filled_amt = float((st or {}).get("filled_amount") or 0.0)
+
+            if not filled:
+                result["status"] = "error"
+                result["errors"].append(f"CLOSE not filled within timeout for {symbol} (order_id={oid})")
+                if oid:
+                    try:
+                        client.cancel_order(oid)
+                    except Exception:
+                        pass
+                return result
+
             result["orders"].append({
                 "type": "BUY",
                 "symbol": symbol,
-                "size": size,
-                "price": mid_price,
-                "order_id": order_result.get("order", {}).get("order_id"),
-                "order_state": order_result.get("order", {}).get("order_state"),
+                "size": filled_amt or size,
+                "price": avg_px,
+                "order_id": oid,
+                "order_state": "filled",
+                "filled_amount": filled_amt,
+                "average_price": avg_px,
             })
-            result["message"] = f"Bought {size} {symbol} at {mid_price:.6f}"
+            result["message"] = f"Bought {filled_amt or size} {symbol} at {avg_px:.6f}"
             print(f"[EXECUTED] {result['message']}")
             
         except DeribitAPIError as e:
@@ -309,52 +390,56 @@ def _execute_real(
                 reduce_only=True,
                 label="agent_roll_close",
             )
-            
+
+            close_oid = close_result.get("order", {}).get("order_id")
+            if not close_oid:
+                result["status"] = "error"
+                result["errors"].append("Close leg missing order_id")
+                return result
+
+            close_filled, close_state = _wait_for_fill(client, close_oid, timeout_seconds=30.0, poll_seconds=0.5)
+            close_avg = float((close_state or {}).get("average_price") or from_mid)
+            close_filled_amt = float((close_state or {}).get("filled_amount") or 0.0)
+
+            if not close_filled:
+                result["status"] = "error"
+                result["errors"].append(f"Close leg not filled within timeout (order_id={close_oid})")
+                try:
+                    client.cancel_order(close_oid)
+                except Exception:
+                    pass
+                result["orders"].append({
+                    "type": "BUY",
+                    "symbol": from_symbol,
+                    "size": close_filled_amt or size,
+                    "price": close_avg,
+                    "order_id": close_oid,
+                    "order_state": str((close_state or {}).get("order_state") or "unknown"),
+                    "leg": "close",
+                })
+                return result
+
             result["orders"].append({
                 "type": "BUY",
                 "symbol": from_symbol,
-                "size": size,
-                "price": from_mid,
-                "order_id": close_result.get("order", {}).get("order_id"),
-                "order_state": close_result.get("order", {}).get("order_state"),
+                "size": close_filled_amt or size,
+                "price": close_avg,
+                "order_id": close_oid,
+                "order_state": "filled",
+                "filled_amount": close_filled_amt,
+                "average_price": close_avg,
                 "leg": "close",
             })
-            
+
         except DeribitAPIError as e:
-            result["status"] = "partial_error"
+            result["status"] = "error"
             result["errors"].append(f"Close leg failed: {e}")
             return result
-        
-        try:
-            open_result = client.place_order(
-                instrument_name=to_symbol,
-                side="sell",
-                amount=size,
-                order_type="limit",
-                price=to_mid,
-                post_only=True,
-                label="agent_roll_open",
-            )
-            
-            result["orders"].append({
-                "type": "SELL",
-                "symbol": to_symbol,
-                "size": size,
-                "price": to_mid,
-                "order_id": open_result.get("order", {}).get("order_id"),
-                "order_state": open_result.get("order", {}).get("order_state"),
-                "leg": "open",
-            })
-            
-            result["message"] = (
-                f"Rolled: closed {from_symbol} at {from_mid:.6f}, "
-                f"opened {to_symbol} at {to_mid:.6f}"
-            )
-            print(f"[EXECUTED] {result['message']}")
-            
-        except DeribitAPIError as e:
-            result["status"] = "partial_error"
-            result["errors"].append(f"Open leg failed: {e}")
+
+        # NOTE: open leg is NOT executed here anymore.
+        # Agent loop must re-check latches + recompute eligibility after close fill.
+        result["status"] = "close_filled"
+        result["message"] = f"Close leg filled for roll ({from_symbol}); open leg deferred"
     
     try:
         position_tracker.process_execution_result(result)

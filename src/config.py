@@ -60,12 +60,32 @@ class Settings(BaseSettings):
         description="Secret path segment for Telegram webhook routing",
     )
 
+    trading_telegram_enabled: bool = Field(
+        default=False,
+        alias="TRADING_TELEGRAM_ENABLED",
+        description="Enable Telegram reporting for the trading loop",
+    )
+    telegram_supergroup_id: str = Field(
+        default="",
+        alias="TELEGRAM_SUPERGROUP_ID",
+        description="Telegram supergroup ID for trading reports",
+    )
+    telegram_topic_trading: int = Field(
+        default=0,
+        alias="TELEGRAM_TOPIC_TRADING",
+        description="Telegram topic ID (thread_id) for trading reports",
+    )
+
     openai_api_key: str = Field(
         default="",
         description="OpenAI API key for Conversations + Responses API",
     )
+    openai_base_url: str = Field(
+        default="https://api.openai.com/v1",
+        description="Base URL for OpenAI API",
+    )
     openai_model: str = Field(
-        default="gpt-4.1",
+        default="gpt-5.2",
         description="Default OpenAI model used for Telegram responses",
     )
     telegram_bootstrap_context: str = Field(
@@ -75,6 +95,11 @@ class Settings(BaseSettings):
     telegram_store_path: str = Field(
         default="data/telegram_conversations.json",
         description="JSON store path when database is not configured",
+    )
+    fidelity_gate_mode: str = Field(
+        default="off",
+        alias="FIDELITY_GATE_MODE",
+        description="Fidelity gate mode: 'off', 'warn', or 'block'",
     )
 
     mode: Literal["production", "research"] = Field(
@@ -210,6 +235,22 @@ class Settings(BaseSettings):
         default=1,
         description="Maximum covered calls per underlying in live mode",
     )
+
+    # Entry pacing + global caps (non-training)
+    max_new_positions_per_day_total: int = Field(
+        default=1,
+        description=(
+            "Global throttle for OPEN actions: maximum number of NEW positions allowed per 24h window "
+            "across ALL underlyings combined (non-training mode)."
+        ),
+    )
+    max_open_positions_total: int = Field(
+        default=7,
+        description=(
+            "Global cap for total open positions across ALL strategies/underlyings (non-training mode)."
+        ),
+    )
+
     max_calls_per_underlying_training: int = Field(
         default=6,
         description="Maximum covered calls per underlying in training mode",
@@ -272,7 +313,7 @@ class Settings(BaseSettings):
         default=False,
         description="Enable LLM-based decision making",
     )
-    decision_mode: Literal["rule_only", "llm_only", "hybrid_shadow"] = Field(
+    decision_mode: Literal["rule_only", "llm_only", "hybrid_shadow", "debate"] = Field(
         default="rule_only",
         description=(
             "Decision mode for non-training runs: "
@@ -288,6 +329,13 @@ class Settings(BaseSettings):
             "so we can log and compare against the rule-based action."
         ),
     )
+    debate_shadow_enabled: bool = Field(
+        default=False,
+        description=(
+            "If True and llm_enabled, also compute the Optimist/Skeptic/Arbiter debate proposal "
+            "when it won't be executed (shadow mode)."
+        ),
+    )
     llm_validation_strict: bool = Field(
         default=True,
         description=(
@@ -296,7 +344,7 @@ class Settings(BaseSettings):
         ),
     )
     llm_model_name: str = Field(
-        default="gpt-4.1-mini",
+        default="gpt-5-mini",
         description="OpenAI model name for LLM decisions",
     )
     llm_chat_model_name: str = Field(
@@ -310,6 +358,62 @@ class Settings(BaseSettings):
     llm_timeout_seconds: float = Field(
         default=30.0,
         description="Timeout for LLM API calls in seconds",
+    )
+
+    paper_compare_enabled: bool = Field(
+        default=False,
+        description="If True, maintain parallel paper portfolios for rule/llm/debate (no orders sent).",
+    )
+    paper_slippage_bps: float = Field(
+        default=10.0,
+        description="Paper fill slippage in bps applied to mark/mid fills (Phase 1).",
+    )
+
+    # Rule policy: profit-capture checkpoint settings
+    # NOTE: This is a decision checkpoint (EXIT_OR_ROLL), not an automatic roll.
+    profit_capture_pct: float = Field(
+        default=0.75,
+        description="Trigger EXIT_OR_ROLL checkpoint when captured premium >= this fraction.",
+    )
+    profit_capture_min_hold_hours: float = Field(
+        default=12.0,
+        description="Minimum hours to hold before profit-capture can trigger EXIT_OR_ROLL.",
+    )
+    profit_capture_roll_only_if_dte_gt: int = Field(
+        default=3,
+        description="Only allow profit-capture checkpoint if current position DTE is greater than this.",
+    )
+    profit_capture_min_credit_usd: float = Field(
+        default=25.0,
+        description="Minimum net credit (USD) required to open the new call during a roll (prevents churn-for-pennies).",
+    )
+    profit_capture_max_spread_pct_close: float = Field(
+        default=0.25,
+        description="Max spread_pct for close-cost estimation diagnostics (close is still allowed even if wider).",
+    )
+    profit_capture_max_spread_pct_open: float = Field(
+        default=0.10,
+        description="Max spread_pct allowed for the open leg candidate during profit-capture roll eligibility.",
+    )
+    profit_capture_spread_pct_price_floor_usd: float = Field(
+        default=5.0,
+        description="Spread pct floor denom: spread_pct=(ask-bid)/max(mark,floor). Avoid deadlocking on cheap options.",
+    )
+    profit_capture_cooldown_minutes: int = Field(
+        default=15,
+        description="Cooldown after entering EXIT_OR_ROLL to prevent tick-thrash.",
+    )
+    profit_capture_quote_max_age_seconds: int = Field(
+        default=180,
+        description="Max age (seconds) for bid/ask quotes used in close_cost_est; older quotes are treated as unavailable.",
+    )
+
+    enable_diagnostic_endpoints: bool = Field(
+        default=False,
+        description=(
+            "If True, enables diagnostic endpoints that can trigger exchange and LLM calls (costly). "
+            "Keep False in production unless actively debugging."
+        ),
     )
 
     dry_run: bool = Field(

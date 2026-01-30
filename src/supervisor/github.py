@@ -195,16 +195,19 @@ def format_pr_comment(
         "",
     ]
     
+    # Always render a "Check Results" section so PR comments are consistent
+    # (and tests can assert against stable headings).
     all_passed = all(c.get("passed", False) for c in checks)
+    lines.append("### Check Results")
+    lines.append("")
+    for check in checks:
+        status = "✅" if check.get("passed") else "❌"
+        cmd = check.get("command", "unknown").split()[0].split("/")[-1]
+        lines.append(f"- {status} `{cmd}`")
+
     if all_passed:
-        lines.append("### ✅ All checks passed")
-    else:
-        lines.append("### Check Results")
         lines.append("")
-        for check in checks:
-            status = "✅" if check.get("passed") else "❌"
-            cmd = check.get("command", "unknown").split()[0].split("/")[-1]
-            lines.append(f"- {status} `{cmd}`")
+        lines.append("_All checks passed._")
     
     lines.append("")
     

@@ -101,7 +101,7 @@ def compute_trade_permission(
         allow_close = False
         effective_mode = TradingMode.HALT
         code = PermissionCode.BLOCKED_KILL_SWITCH
-        reason = "Kill switch enabled - all trading blocked"
+        reason = "Kill-switch enabled - all trading blocked"
         return TradePermission(
             effective_trade_mode=effective_mode,
             allow_open=allow_open,
