@@ -369,18 +369,39 @@ class Settings(BaseSettings):
         description="Paper fill slippage in bps applied to mark/mid fills (Phase 1).",
     )
 
-    # Rule policy: profit-capture roll settings
+    # Rule policy: profit-capture checkpoint settings
+    # NOTE: This is a decision checkpoint (EXIT_OR_ROLL), not an automatic roll.
     profit_capture_pct: float = Field(
         default=0.75,
-        description="If >= this fraction of premium is captured (short option price decays), trigger an early roll/close (rule policy).",
+        description="Trigger EXIT_OR_ROLL checkpoint when captured premium >= this fraction.",
     )
     profit_capture_min_hold_hours: float = Field(
         default=12.0,
-        description="Minimum hours to hold a position before profit-capture can trigger a roll/close (rule policy).",
+        description="Minimum hours to hold before profit-capture can trigger EXIT_OR_ROLL.",
     )
     profit_capture_roll_only_if_dte_gt: int = Field(
         default=3,
-        description="Only trigger profit-capture roll if current position DTE is greater than this (avoid churn near expiry).",
+        description="Only allow profit-capture checkpoint if current position DTE is greater than this.",
+    )
+    profit_capture_min_credit_usd: float = Field(
+        default=25.0,
+        description="Minimum net credit (USD) required to open the new call during a roll (prevents churn-for-pennies).",
+    )
+    profit_capture_max_spread_pct_close: float = Field(
+        default=0.25,
+        description="Max spread_pct for close-cost estimation diagnostics (close is still allowed even if wider).",
+    )
+    profit_capture_max_spread_pct_open: float = Field(
+        default=0.10,
+        description="Max spread_pct allowed for the open leg candidate during profit-capture roll eligibility.",
+    )
+    profit_capture_spread_pct_price_floor_usd: float = Field(
+        default=5.0,
+        description="Spread pct floor denom: spread_pct=(ask-bid)/max(mark,floor). Avoid deadlocking on cheap options.",
+    )
+    profit_capture_cooldown_minutes: int = Field(
+        default=15,
+        description="Cooldown after entering EXIT_OR_ROLL to prevent tick-thrash.",
     )
 
     enable_diagnostic_endpoints: bool = Field(

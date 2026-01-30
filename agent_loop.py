@@ -718,6 +718,21 @@ def run_agent_loop_forever(
                         rule_action["strategy_id"] = "covered_call_v1"
                         strategy_proposals["covered_call_v1"] = rule_action.copy()
 
+                    # If profit-capture checkpoint fired, set an anti-thrash cooldown in the PositionTracker.
+                    try:
+                        from src.position_tracker import position_tracker
+
+                        rc = str((rule_action or {}).get("reason_code") or "")
+                        if rc.startswith("EXIT_OR_ROLL"):
+                            symbol = str((rule_action or {}).get("params", {}).get("symbol") or (rule_action or {}).get("params", {}).get("from_symbol") or "")
+                            if symbol:
+                                position_tracker.set_exit_or_roll_cooldown(
+                                    symbol=symbol,
+                                    cooldown_minutes=int(getattr(settings, "profit_capture_cooldown_minutes", 15)),
+                                )
+                    except Exception:
+                        pass
+
                     print(f"Rule-based proposed: {rule_action.get('action', 'DO_NOTHING')}")
                     
                     # Shadow computation (for observation): compute LLM/Debate only when needed.

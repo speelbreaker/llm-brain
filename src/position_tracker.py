@@ -19,7 +19,7 @@ try:
 except ImportError:  # pragma: no cover
     fcntl = None
 from dataclasses import dataclass, field, asdict
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from threading import Lock
 from typing import Dict, List, Optional, Literal, Any
@@ -98,6 +98,10 @@ class PositionChain:
     origin: Optional[str] = None
     run_id: Optional[str] = None
 
+    # Profit-capture checkpoint state (persisted)
+    exit_or_roll_cooldown_until: Optional[datetime] = None
+    exit_or_roll_failures: int = 0
+
     def is_open(self) -> bool:
         return self.close_time is None
 
@@ -150,6 +154,45 @@ class PositionTracker:
             if chain.is_open() and chain.underlying == underlying and chain.strategy_type == strategy_type:
                 return chain
         return None
+
+    def set_exit_or_roll_cooldown(
+        self,
+        *,
+        symbol: str,
+        cooldown_minutes: int,
+        increment_failures: bool = False,
+    ) -> bool:
+        """Mark a position as being in EXIT_OR_ROLL cooldown.
+
+        This is used to prevent tick-thrash once profit capture triggers.
+
+        Args:
+            symbol: current leg symbol
+            cooldown_minutes: cooldown duration (minutes)
+            increment_failures: if True, increases failure counter (for backoff logic)
+
+        Returns:
+            True if a matching open chain was found and updated.
+        """
+        try:
+            with self._lock:
+                for chain in self._chains.values():
+                    if not chain.is_open():
+                        continue
+                    if chain.symbol != symbol:
+                        continue
+                    if increment_failures:
+                        chain.exit_or_roll_failures = int(getattr(chain, "exit_or_roll_failures", 0) or 0) + 1
+                    else:
+                        chain.exit_or_roll_failures = int(getattr(chain, "exit_or_roll_failures", 0) or 0)
+
+                    cd = max(int(cooldown_minutes), 0)
+                    chain.exit_or_roll_cooldown_until = _utc_now() + timedelta(minutes=cd)
+                    self._save_to_disk()
+                    return True
+        except Exception:
+            return False
+        return False
 
     def process_execution_result(self, result: Dict[str, Any]) -> None:
         """
@@ -431,6 +474,10 @@ class PositionTracker:
             "mode": chain.mode,
             "entry_mode": getattr(chain, "entry_mode", "NATURAL"),
             "exit_style": chain.exit_style or "hold_to_expiry",
+            "exit_or_roll_cooldown_until": (
+                chain.exit_or_roll_cooldown_until.isoformat() if chain.exit_or_roll_cooldown_until else None
+            ),
+            "exit_or_roll_failures": int(getattr(chain, "exit_or_roll_failures", 0) or 0),
         }
 
     def _chain_to_closed_summary(self, chain: PositionChain) -> Dict[str, Any]:
@@ -491,7 +538,7 @@ class PositionTracker:
         """
         try:
             data = {
-                "version": 1,
+                "version": 2,
                 "saved_at": _utc_now().isoformat(),
                 "chains": {},
             }
@@ -515,6 +562,10 @@ class PositionTracker:
                     "sandbox": chain.sandbox,
                     "origin": chain.origin,
                     "run_id": chain.run_id,
+                    "exit_or_roll_cooldown_until": (
+                        chain.exit_or_roll_cooldown_until.isoformat() if chain.exit_or_roll_cooldown_until else None
+                    ),
+                    "exit_or_roll_failures": int(getattr(chain, "exit_or_roll_failures", 0) or 0),
                     "legs": [
                         {
                             "symbol": leg.symbol,
@@ -572,7 +623,7 @@ class PositionTracker:
                 finally:
                     self._unlock_file(f)
             
-            if data.get("version") != 1:
+            if data.get("version") not in (1, 2):
                 print(f"[PositionTracker] Unknown version {data.get('version')}, skipping load")
                 return
             
@@ -615,6 +666,10 @@ class PositionTracker:
                     sandbox=chain_data.get("sandbox", False),
                     origin=chain_data.get("origin"),
                     run_id=chain_data.get("run_id"),
+                    exit_or_roll_cooldown_until=(
+                        datetime.fromisoformat(chain_data["exit_or_roll_cooldown_until"]) if chain_data.get("exit_or_roll_cooldown_until") else None
+                    ),
+                    exit_or_roll_failures=int(chain_data.get("exit_or_roll_failures", 0) or 0),
                 )
                 self._chains[position_id] = chain
                 loaded_count += 1

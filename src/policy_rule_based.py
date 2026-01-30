@@ -175,11 +175,26 @@ def _select_best_candidate(
     return chosen
 
 
+def _spread_pct(*, bid: float, ask: float, mark: float, floor_usd: float) -> float:
+    denom = max(float(mark or 0.0), float(floor_usd or 0.0), 1e-9)
+    return max(0.0, float(ask) - float(bid)) / denom
+
+
+def _annualized_yield_on_notional(*, credit_usd: float, spot_usd: float, size_underlying: float, dte: float) -> float:
+    # Dimensionless yield/year on notional (preferred over unitful 'annualized_credit_usd').
+    notional = float(spot_usd) * max(float(size_underlying), 1e-9)
+    if notional <= 0:
+        return 0.0
+    if dte <= 0:
+        return 0.0
+    return (float(credit_usd) / notional) * (365.0 / float(dte))
+
+
 def _should_roll_position(
     position: OptionPosition,
     agent_state: AgentState,
     config: Settings | None = None,
-) -> tuple[bool, str]:
+) -> tuple[bool, str, dict[str, Any]]:
     """
     Determine if a position should be rolled.
     
@@ -193,41 +208,59 @@ def _should_roll_position(
     
     dte = position.expiry_dte or 0
 
-    # Profit capture roll: if we have captured >= cfg.profit_capture_pct of premium
-    # (i.e., mark price <= entry_price * (1 - pct)). Guard with min hold time + DTE.
+    # Profit capture checkpoint:
+    # Treat as EXIT_OR_ROLL decision checkpoint, not an automatic roll.
+    # Use conservative close-cost estimate and deterministic roll-eligibility.
     try:
         if position.side == Side.SELL and position.avg_price and position.avg_price > 0 and position.mark_price is not None:
-            entry = float(position.avg_price)
+            credit0 = float(position.avg_price) * abs(float(position.size or 0.0))
             mark = float(position.mark_price)
-            captured = (entry - mark) / entry
 
-            if captured >= float(getattr(cfg, "profit_capture_pct", 0.75)):
+            # Conservative close cost estimate: mark + half-spread buffer (approximated) + slippage buffer.
+            floor = float(getattr(cfg, "profit_capture_spread_pct_price_floor_usd", 5.0))
+            close_spread_cap = float(getattr(cfg, "profit_capture_max_spread_pct_close", 0.25))
+            # We don't have bid/ask on positions here; approximate by allowing up to close_spread_cap of max(mark,floor)
+            # and charging half of that as 'spread tax'.
+            spread_tax = 0.5 * close_spread_cap * max(mark, floor)
+            slippage_tax = (float(getattr(cfg, "paper_slippage_bps", 10.0)) / 10_000.0) * max(mark, floor)
+            close_cost_est = mark + spread_tax + slippage_tax
+
+            profit_capture_pct = (credit0 - close_cost_est) / max(credit0, 1e-9)
+
+            if profit_capture_pct >= float(getattr(cfg, "profit_capture_pct", 0.75)):
                 if dte > int(getattr(cfg, "profit_capture_roll_only_if_dte_gt", 3)):
                     entry_time = _get_tracker_entry_time_for_symbol(position.symbol)
                     if entry_time is None:
-                        # If we can't determine age, be conservative and skip profit-capture.
-                        return False, "Profit capture hit but entry_time unknown (skip)"
+                        return False, "Profit capture hit but entry_time unknown (skip)", {"reason_code": "PROFIT_CAPTURE_ENTRY_TIME_UNKNOWN"}
                     from datetime import timezone
                     age_h = (datetime.now(timezone.utc) - entry_time).total_seconds() / 3600.0
                     if age_h >= float(getattr(cfg, "profit_capture_min_hold_hours", 12.0)):
-                        return True, f"Profit capture {captured*100:.0f}% (age={age_h:.1f}h, DTE={dte})"
+                        meta = {
+                            "reason_code": "EXIT_OR_ROLL_PROFIT_CAPTURE",
+                            "credit0": credit0,
+                            "close_cost_est": close_cost_est,
+                            "profit_capture_pct": profit_capture_pct,
+                            "dte": dte,
+                            "age_h": age_h,
+                        }
+                        return True, f"Profit capture checkpoint {profit_capture_pct*100:.1f}% (age={age_h:.1f}h, DTE={dte})", meta
     except Exception:
         pass
 
     if dte < 1:
-        return True, f"Near expiry (DTE={dte})"
-    
+        return True, f"Near expiry (DTE={dte})", {"reason_code": "NEAR_EXPIRY"}
+
     if position.moneyness == "ITM":
         if dte <= 2:
-            return True, f"ITM with low DTE ({dte} days) - assignment risk"
+            return True, f"ITM with low DTE ({dte} days) - assignment risk", {"reason_code": "ITM_ASSIGNMENT_RISK"}
     
     spot = agent_state.spot.get(position.underlying, 0)
     if spot > 0 and position.strike > 0:
         pct_from_strike = (position.strike - spot) / spot * 100
         if pct_from_strike < 2.0 and dte <= 1:
-            return True, f"ATM (only {pct_from_strike:.1f}% OTM) with low DTE"
-    
-    return False, ""
+            return True, f"ATM (only {pct_from_strike:.1f}% OTM) with low DTE", {"reason_code": "ATM_LOW_DTE"}
+
+    return False, "", {}
 
 
 def _get_open_positions_summary_from_tracker() -> tuple[int, datetime | None]:
@@ -287,17 +320,128 @@ def decide_action(
         covered_calls = _get_open_covered_calls(agent_state, underlying)
         
         for cc in covered_calls:
-            should_roll, roll_reason = _should_roll_position(cc, agent_state, cfg)
-            
+            should_roll, roll_reason, roll_meta = _should_roll_position(cc, agent_state, cfg)
+
             if should_roll:
+                reason_code = str(roll_meta.get("reason_code") or "").strip() if isinstance(roll_meta, dict) else ""
+
+                # Profit-capture checkpoint: deterministic eligibility + scoring; roll only if a good candidate exists.
+                if reason_code == "EXIT_OR_ROLL_PROFIT_CAPTURE":
+                    floor = float(getattr(cfg, "profit_capture_spread_pct_price_floor_usd", 5.0))
+                    max_spread_open = float(getattr(cfg, "profit_capture_max_spread_pct_open", 0.10))
+                    min_credit_usd = float(getattr(cfg, "profit_capture_min_credit_usd", 25.0))
+
+                    candidates = [
+                        c for c in agent_state.candidate_options
+                        if c.underlying == underlying and c.symbol != cc.symbol
+                    ]
+
+                    spot = float(agent_state.spot.get(underlying) or 0.0)
+                    size_u = abs(float(cc.size or 0.0))
+
+                    eligible: list[tuple[float, CandidateOption]] = []
+                    reasons_blocked: list[str] = []
+
+                    for c in candidates:
+                        mark = float(c.mid_price or 0.0)
+                        spr = _spread_pct(bid=c.bid, ask=c.ask, mark=mark, floor_usd=floor)
+                        if spr > max_spread_open:
+                            reasons_blocked.append("SPREAD_TOO_WIDE")
+                            continue
+                        if float(c.premium_usd or 0.0) < min_credit_usd:
+                            reasons_blocked.append("BELOW_MIN_CREDIT")
+                            continue
+
+                        y = _annualized_yield_on_notional(
+                            credit_usd=float(c.premium_usd or 0.0),
+                            spot_usd=spot,
+                            size_underlying=size_u or float(getattr(cfg, "default_order_size", 0.0) or 0.0),
+                            dte=float(c.dte or 0.0),
+                        )
+                        # Simple deterministic score: yield / |delta| (delta small => higher score), clamp delta floor
+                        score = y / max(abs(float(c.delta or 0.0)), 0.05)
+                        eligible.append((score, c))
+
+                    eligible.sort(key=lambda x: x[0], reverse=True)
+                    chosen = eligible[0][1] if eligible else None
+
+                    meta_out = {
+                        **(roll_meta if isinstance(roll_meta, dict) else {}),
+                        "eligible_candidates_count": len(eligible),
+                        "blocked_reasons": sorted(set(reasons_blocked))[:6],
+                    }
+                    if chosen is not None:
+                        score = eligible[0][0]
+                        meta_out["chosen"] = {
+                            "symbol": chosen.symbol,
+                            "strike": chosen.strike,
+                            "expiry": chosen.expiry.isoformat() if hasattr(chosen, "expiry") else None,
+                            "dte": chosen.dte,
+                            "delta": chosen.delta,
+                            "bid": chosen.bid,
+                            "ask": chosen.ask,
+                            "mid": chosen.mid_price,
+                            "premium_usd": chosen.premium_usd,
+                            "spread_pct": _spread_pct(bid=chosen.bid, ask=chosen.ask, mark=float(chosen.mid_price or 0.0), floor_usd=floor),
+                            "annualized_yield": _annualized_yield_on_notional(
+                                credit_usd=float(chosen.premium_usd or 0.0),
+                                spot_usd=spot,
+                                size_underlying=size_u or float(getattr(cfg, "default_order_size", 0.0) or 0.0),
+                                dte=float(chosen.dte or 0.0),
+                            ),
+                            "score": score,
+                        }
+
+                        return {
+                            "action": ActionType.ROLL_COVERED_CALL.value,
+                            "params": {
+                                "underlying": underlying,
+                                "from_symbol": cc.symbol,
+                                "to_symbol": chosen.symbol,
+                                "size": cc.size,
+                            },
+                            "reason_code": "EXIT_OR_ROLL_PROFIT_CAPTURE",
+                            "decision_meta": meta_out,
+                            "reasoning": (
+                                f"EXIT_OR_ROLL checkpoint: {roll_reason}. "
+                                f"Eligible={len(eligible)}; chosen={chosen.symbol} score={score:.4f}. "
+                                f"min_credit_usd={min_credit_usd}, max_spread_open={max_spread_open:.2f}. "
+                                f"Mode={cfg.mode}, policy={cfg.policy_version}."
+                            ),
+                            "mode": cfg.mode,
+                            "policy_version": cfg.policy_version,
+                            "decision_source": "rule_based",
+                        }
+
+                    # No eligible candidates -> CLOSE
+                    return {
+                        "action": ActionType.CLOSE_COVERED_CALL.value,
+                        "params": {
+                            "underlying": underlying,
+                            "symbol": cc.symbol,
+                            "size": cc.size,
+                        },
+                        "reason_code": "EXIT_OR_ROLL_NO_CANDIDATE",
+                        "decision_meta": meta_out,
+                        "reasoning": (
+                            f"EXIT_OR_ROLL checkpoint: {roll_reason}. "
+                            f"No eligible roll candidates (min_credit_usd={min_credit_usd}, max_spread_open={max_spread_open:.2f}). "
+                            f"Mode={cfg.mode}, policy={cfg.policy_version}."
+                        ),
+                        "mode": cfg.mode,
+                        "policy_version": cfg.policy_version,
+                        "decision_source": "rule_based",
+                    }
+
+                # Non profit-capture roll behavior (existing)
                 candidates = [
                     c for c in agent_state.candidate_options
                     if c.underlying == underlying and c.symbol != cc.symbol
                 ]
-                
+
                 if candidates:
                     new_candidate, was_exploration = choose_candidate_with_exploration(candidates, cfg)
-                    
+
                     if new_candidate:
                         explore_tag = "Exploratory " if was_exploration else ""
                         return {
@@ -317,7 +461,7 @@ def decide_action(
                             "policy_version": cfg.policy_version,
                             "decision_source": "rule_based",
                         }
-                
+
                 return {
                     "action": ActionType.CLOSE_COVERED_CALL.value,
                     "params": {
