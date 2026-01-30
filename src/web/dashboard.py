@@ -5945,7 +5945,7 @@ def render_dashboard_html() -> str:
       }}
     }}
     
-    function escapeHtml(s) {
+    function escapeHtml(s) {{
       s = (s === null || s === undefined) ? '' : String(s);
       return s
         .replace(/&/g, '&amp;')
@@ -5953,7 +5953,7 @@ def render_dashboard_html() -> str:
         .replace(/>/g, '&gt;')
         .replace(/"/g, '&quot;')
         .replace(/'/g, '&#039;');
-    }
+    }}
 
     async function updatePaperPortfolios() {{
       const lanes = [
