@@ -45,12 +45,13 @@ class ReviewResult:
 class ReviewService:
     """Orchestrates the code review process."""
     
-    def __init__(self):
-        self.change_detector = ChangeDetector()
+    def __init__(self, repo_path=None):
+        # Default behavior: current working directory.
+        self.change_detector = ChangeDetector(repo_path=repo_path)
         self.llm_client = LLMClient()
     
     def review_latest_changes(self, initiator_id: int) -> ReviewResult:
-        """Review changes since the last reviewed commit."""
+        """Review changes since the last reviewed commit (current repo)."""
         change_result = self.change_detector.get_recent_changes_since_last_review()
         
         if change_result.error and not change_result.has_changes:
@@ -98,6 +99,70 @@ class ReviewService:
         
         self.change_detector.mark_reviewed(change_result.to_ref)
         
+        return ReviewResult(
+            review_id=review_id,
+            summary_md=summary_md,
+            overall_severity=llm_result.overall_severity,
+            issues=llm_result.issues,
+            next_steps=llm_result.next_steps,
+            diff_summary=diff_summary,
+            change_result=change_result,
+            has_changes=True,
+        )
+
+    def review_explicit_range(
+        self,
+        *,
+        initiator_id: int,
+        repo_label: str,
+        from_ref: str,
+        to_ref: str,
+    ) -> ReviewResult:
+        """Review an explicit git range (from_ref..to_ref).
+
+        Used for remote repos (Option B) so we don't mix per-repo last_reviewed metadata.
+        """
+        from agent.change_detector_ext import get_git_changes_between
+
+        change_result = get_git_changes_between(self.change_detector.repo_path, from_ref, to_ref)
+        if change_result.error:
+            return ReviewResult(
+                review_id=0,
+                summary_md=f"Error detecting changes: {change_result.error}",
+                overall_severity="INFO",
+                has_changes=False,
+                error=change_result.error,
+            )
+
+        if not change_result.has_changes:
+            return ReviewResult(
+                review_id=0,
+                summary_md="No changes detected in that range.",
+                overall_severity="INFO",
+                has_changes=False,
+            )
+
+        analysis = analyze_changes(change_result.changed_files, change_result.diff_text)
+        llm_result = self.llm_client.review_changes(analysis=analysis, diff_text=change_result.diff_text)
+
+        summary_md = self._build_summary_md(llm_result, change_result)
+        summary_md = summary_md.replace("*Review Result:", f"*Review Result ({repo_label}):")
+
+        diff_summary = [fs.to_dict() for fs in analysis.file_summaries]
+
+        review_id = save_review(
+            initiator_id=initiator_id,
+            target_type="repo",
+            target_ref=f"{repo_label}:{from_ref}..{to_ref}",
+            git_head=self.change_detector.get_current_head(),
+            change_detector_mode=change_result.mode,
+            overall_severity=llm_result.overall_severity,
+            summary_md=summary_md,
+            issues=llm_result.issues,
+            next_steps=llm_result.next_steps,
+            diff_summary=diff_summary,
+        )
+
         return ReviewResult(
             review_id=review_id,
             summary_md=summary_md,
