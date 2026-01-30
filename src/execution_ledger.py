@@ -144,7 +144,12 @@ class ExecutionLedger:
             # Idempotent prewrite: if attempt N already exists, return its label and do NOT mutate persisted plan.
             existing_attempts = leg_rec.get("attempts", []) or []
             for a in existing_attempts:
-                if int(a.get("attempt", -1)) == int(attempt):
+                try:
+                    a_attempt = int(a.get("attempt", -1))
+                except Exception:
+                    # corrupted attempt record
+                    continue
+                if a_attempt == int(attempt):
                     return str(a.get("label") or label), False
 
             # Overwrite plan for this attempt (only for a newly-created attempt)
