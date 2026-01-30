@@ -908,7 +908,52 @@ def run_agent_loop_forever(
                     
                     if final_action_type != ActionType.DO_NOTHING.value:
                         print(f"\nExecuting: {final_action_type}")
-                        execution_result = execute_action(client, final_action, settings)
+
+                        # Safe roll execution: wait for close fill, then refresh state + re-check OPEN.
+                        if final_action_type == ActionType.ROLL_COVERED_CALL.value and not settings.dry_run:
+                            from src.state_builder import build_agent_state
+
+                            # 1) Execute close leg (execution.py defers open leg; returns status=close_filled)
+                            execution_result = execute_action(client, final_action, settings)
+
+                            if execution_result.get("status") == "close_filled":
+                                # 2) Refresh state after close
+                                refreshed_state = build_agent_state(client, settings)
+
+                                to_symbol = str(final_action.get("params", {}).get("to_symbol") or "")
+                                size2 = final_action.get("params", {}).get("size", settings.default_order_size)
+
+                                # 3) Re-check latches/risk for OPEN
+                                open_action = {
+                                    "action": ActionType.OPEN_COVERED_CALL.value,
+                                    "params": {
+                                        "symbol": to_symbol,
+                                        "underlying": final_action.get("params", {}).get("underlying"),
+                                        "size": size2,
+                                    },
+                                    "reasoning": "ROLL follow-up OPEN after close fill (rechecked)",
+                                }
+
+                                open_allowed, open_reasons = check_action_allowed(refreshed_state, open_action, settings)
+                                if open_allowed:
+                                    open_exec = execute_action(client, open_action, settings)
+                                    execution_result["open_leg"] = {
+                                        "allowed": True,
+                                        "reasons": open_reasons,
+                                        "execution": open_exec,
+                                    }
+                                    if open_exec.get("status") == "executed":
+                                        execution_result["status"] = "executed"
+                                        execution_result["message"] = f"Rolled: close filled; open filled ({to_symbol})"
+                                else:
+                                    execution_result["open_leg"] = {
+                                        "allowed": False,
+                                        "reasons": open_reasons,
+                                    }
+                                    execution_result["status"] = "partial_error"
+                                    execution_result["message"] = "Close filled, but OPEN blocked after re-check"
+                        else:
+                            execution_result = execute_action(client, final_action, settings)
                     else:
                         execution_result = {
                             "status": "skipped",
