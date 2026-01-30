@@ -28,6 +28,36 @@ def reconcile_execution_ledger(client: DeribitClient, ledger: ExecutionLedger) -
     """
     eps = 1e-9
 
+    active = ledger.get_active_intents()
+
+    # Corruption sweep: multiple ACTIVE intents for same (position_id,intent_type)
+    groups: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    for it in active:
+        key = (str(it.get("position_id")), str(it.get("intent_type")))
+        groups.setdefault(key, []).append(it)
+
+    for (pid, itype), items in groups.items():
+        if pid and itype and len(items) > 1:
+            # Fail-closed: cancel all known attempt labels and abort all intents.
+            for it in items:
+                iid = it.get("intent_id")
+                ccy = _resolve_currency(it.get("currency"), None)
+                legs = it.get("legs") or {}
+                for leg_key in ("close", "open"):
+                    for a in (legs.get(leg_key) or {}).get("attempts", []) or []:
+                        lbl = a.get("label")
+                        if lbl:
+                            try:
+                                if ccy:
+                                    client.cancel_by_label(str(lbl), ccy)
+                                else:
+                                    client.cancel_by_label(str(lbl))
+                            except Exception:
+                                pass
+                if iid:
+                    ledger.abort_intent(intent_id=str(iid), reason="CORRUPT_MULTIPLE_ACTIVE")
+
+    # Refresh list after aborts
     for intent in ledger.get_active_intents():
         intent_id = intent.get("intent_id")
         if not intent_id:

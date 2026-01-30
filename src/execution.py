@@ -474,28 +474,7 @@ def _execute_real(
                     result["message"] = f"ROLL close leg in-flight (dispatch_state={ds}); awaiting reconcile"
                     return result
 
-                # Crash-window hardening: if we have an old PREWRITTEN attempt (WAL written, but we may have
-                # already dispatched and crashed before ACK), force reconcile first.
-                if ds == "PREWRITTEN":
-                    from datetime import datetime, timezone
-
-                    submitted_at = latest.get("submitted_at")
-                    try:
-                        t0 = datetime.fromisoformat(str(submitted_at))
-                        if t0.tzinfo is None:
-                            t0 = t0.replace(tzinfo=timezone.utc)
-                        age_s = (datetime.now(timezone.utc) - t0).total_seconds()
-                    except Exception:
-                        age_s = 999999
-
-                    if age_s > 5.0:
-                        result["status"] = "in_flight"
-                        result["intent_id"] = intent_id
-                        result["close_label"] = latest.get("label")
-                        result["message"] = "ROLL close leg PREWRITTEN is stale; reconcile before dispatch"
-                        return result
-
-            label = _ledger.prewrite_attempt(
+            label, created_now = _ledger.prewrite_attempt(
                 intent_id=intent_id,
                 position_id=str(position_id),
                 intent_type="ROLL_CC",
@@ -504,6 +483,15 @@ def _execute_real(
                 attempt=attempt,
                 plan=plan,
             )
+
+            # PREWRITTEN is only dispatchable by the call that created it. If we did not
+            # create it now, treat it as in-flight and let reconcile recover by label.
+            if not created_now:
+                result["status"] = "in_flight"
+                result["intent_id"] = intent_id
+                result["close_label"] = label
+                result["message"] = "ROLL close leg attempt already PREWRITTEN; reconcile before any dispatch"
+                return result
 
             close_oid = None
             try:

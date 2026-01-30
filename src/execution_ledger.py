@@ -108,8 +108,11 @@ class ExecutionLedger:
         attempt: int,
         plan: OrderPlan,
         now: Optional[datetime] = None,
-    ) -> str:
-        """WAL write-before-dispatch: commit PREWRITTEN attempt before any network call."""
+    ) -> tuple[str, bool]:
+        """WAL write-before-dispatch: commit PREWRITTEN attempt before any network call.
+
+        Returns (label, created_now). created_now is True only when this call created the attempt record.
+        """
         ts = (now or _utc_now()).isoformat()
         label = make_label(intent_id, leg, attempt)
 
@@ -138,8 +141,13 @@ class ExecutionLedger:
 
             leg_key = "close" if leg == "CLOSE" else "open"
             leg_rec = intent["legs"][leg_key]
+            # Idempotent prewrite: if attempt N already exists, return its label and do NOT mutate persisted plan.
+            existing_attempts = leg_rec.get("attempts", []) or []
+            for a in existing_attempts:
+                if int(a.get("attempt", -1)) == int(attempt):
+                    return str(a.get("label") or label), False
 
-            # Overwrite plan for this attempt
+            # Overwrite plan for this attempt (only for a newly-created attempt)
             leg_rec["plan"] = {
                 "instrument_name": plan.instrument_name,
                 "side": plan.side,
@@ -149,12 +157,6 @@ class ExecutionLedger:
                 "post_only": bool(plan.post_only),
                 "reduce_only": bool(plan.reduce_only),
             }
-
-            # Idempotent prewrite: if attempt N already exists, return its label and do NOT append.
-            existing_attempts = leg_rec.get("attempts", []) or []
-            for a in existing_attempts:
-                if int(a.get("attempt", -1)) == int(attempt):
-                    return str(a.get("label") or label)
 
             # Append attempt record
             attempt_rec = {
@@ -186,7 +188,7 @@ class ExecutionLedger:
 
             self._save_unlocked(data)
 
-        return label
+        return label, True
 
     def commit_dispatch_result(
         self,

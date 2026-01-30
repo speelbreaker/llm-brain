@@ -179,7 +179,7 @@ def test_i6_instrument_mismatch_aborts_intent(tmp_path: Path):
     ledger = ExecutionLedger(path=tmp_path / "execution_ledger.json")
 
     iid = "a" * 32
-    label = ledger.prewrite_attempt(
+    label, created_now = ledger.prewrite_attempt(
         intent_id=iid,
         position_id="pid-1",
         intent_type="ROLL_CC",
@@ -196,6 +196,7 @@ def test_i6_instrument_mismatch_aborts_intent(tmp_path: Path):
             reduce_only=True,
         ),
     )
+    assert created_now is True
     assert label.startswith("cc|")
 
     # Now update with mismatched instrument_name
