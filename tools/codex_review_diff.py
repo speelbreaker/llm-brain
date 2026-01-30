@@ -12,7 +12,8 @@ Usage:
 
 Env:
   - OPENAI_API_KEY (or source /etc/llmagentbrain/platform.env before running)
-  - CODE_REVIEW_MODEL (optional, default: gpt-4o-mini)
+  - CODE_REVIEW_PROVIDER (optional, default: openai)
+  - CODE_REVIEW_MODEL (optional, default depends on provider)
   - CODE_REVIEW_THRESHOLD (optional, default: HIGH)
 """
 
@@ -58,6 +59,27 @@ def _redact_diff(diff: str) -> str:
 def _severity_rank(s: str) -> int:
     order = {"INFO": 0, "LOW": 1, "MEDIUM": 2, "HIGH": 3, "CRITICAL": 4}
     return order.get((s or "").upper().strip(), 0)
+
+
+def _safe_json_loads(s: str) -> dict[str, Any]:
+    """Parse JSON with best-effort salvage (extract first {...} block)."""
+    try:
+        data = json.loads(s)
+        if isinstance(data, dict):
+            return data
+    except Exception:
+        pass
+
+    # salvage: extract outermost object
+    start = s.find('{')
+    end = s.rfind('}')
+    if start != -1 and end != -1 and end > start:
+        snippet = s[start:end+1]
+        data = json.loads(snippet)
+        if isinstance(data, dict):
+            return data
+
+    raise ValueError('model did not return a JSON object')
 
 
 def _call_openai(prompt: str) -> dict[str, Any]:
@@ -116,10 +138,50 @@ def _call_openai(prompt: str) -> dict[str, Any]:
             )
         content = resp.choices[0].message.content or "{}"
 
-    data = json.loads(content)
-    if not isinstance(data, dict):
-        raise ValueError("model did not return a JSON object")
-    return data
+    return _safe_json_loads(content)
+
+
+def _call_gemini(prompt: str) -> dict[str, Any]:
+    """Call Gemini generateContent with JSON output."""
+    api_key = (os.environ.get("GEMINI_API_KEY") or "").strip()
+    if not api_key:
+        raise RuntimeError("GEMINI_API_KEY is missing")
+
+    # Gemini REST expects model like: models/gemini-2.5-flash
+    model = (os.environ.get("CODE_REVIEW_MODEL") or "models/gemini-2.5-flash").strip()
+    timeout_s = float(os.environ.get("CODE_REVIEW_TIMEOUT_S") or "45")
+
+    import httpx
+
+    url = f"https://generativelanguage.googleapis.com/v1beta/{model}:generateContent?key={api_key}"
+    payload = {
+        "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+        "generationConfig": {
+            "temperature": 0.0,
+            "responseMimeType": "application/json",
+            "maxOutputTokens": 2048,
+        },
+    }
+    r = httpx.post(url, json=payload, timeout=timeout_s)
+    r.raise_for_status()
+    j = r.json()
+    candidates = j.get("candidates") or []
+    parts = (((candidates[0] or {}).get("content") or {}).get("parts") or []) if candidates else []
+    text_out = (parts[0] or {}).get("text") if parts else None
+    if not text_out:
+        raise ValueError("Gemini returned no text")
+    try:
+        return _safe_json_loads(text_out)
+    except Exception as e:
+        preview = (text_out or "").strip().replace("\n", " ")[:400]
+        raise ValueError(f"Gemini returned non-JSON output: {preview}") from e
+
+
+def _call_llm(prompt: str) -> dict[str, Any]:
+    provider = (os.environ.get("CODE_REVIEW_PROVIDER") or "openai").strip().lower()
+    if provider == "gemini":
+        return _call_gemini(prompt)
+    return _call_openai(prompt)
 
 
 def main() -> int:
@@ -150,11 +212,11 @@ def main() -> int:
         "    {\"severity\": \"INFO|LOW|MEDIUM|HIGH|CRITICAL\", \"title\": string, \"details\": string, \"files\": [string], \"suggested_fix\": string}\n"
         "  ]\n"
         "}\n\n"
-        "DIFF:\n" + redacted_diff[:180_000]
+        "DIFF:\n" + redacted_diff[:180_000] + "\n\nREMINDER: Reply with ONLY a single JSON object. No markdown, no extra text."
     )
 
     try:
-        review = _call_openai(prompt)
+        review = _call_llm(prompt)
     except Exception as e:
         print(f"[codex-review] ERROR calling model: {e}")
         # Fail closed: we don't want silent skips when the gate is expected.

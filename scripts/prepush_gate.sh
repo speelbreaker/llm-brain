@@ -12,10 +12,13 @@ if [[ "${SKIP_PREPUSH_REVIEW:-}" == "1" ]]; then
   exit 0
 fi
 
-# Ensure we have environment for OpenAI key
+# Load ONLY the API keys needed for optional LLM review.
+# Do NOT source the full platform.env here (it contains runtime config like DATABASE_URL
+# that can interfere with unit tests).
 if [[ -f /etc/llmagentbrain/platform.env ]]; then
-  # shellcheck disable=SC1091
-  source /etc/llmagentbrain/platform.env || true
+  OPENAI_API_KEY=${OPENAI_API_KEY:-$(grep -E '^OPENAI_API_KEY=' /etc/llmagentbrain/platform.env | head -n1 | cut -d= -f2- || true)}
+  GEMINI_API_KEY=${GEMINI_API_KEY:-$(grep -E '^GEMINI_API_KEY=' /etc/llmagentbrain/platform.env | head -n1 | cut -d= -f2- || true)}
+  export OPENAI_API_KEY GEMINI_API_KEY
 fi
 
 cd "$(git rev-parse --show-toplevel)"
