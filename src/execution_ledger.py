@@ -137,7 +137,7 @@ class ExecutionLedger:
 
             # Overwrite plan for this attempt
             leg_rec["plan"] = {
-                "instrument": plan.instrument_name,
+                "instrument_name": plan.instrument_name,
                 "side": plan.side,
                 "amount": float(plan.amount),
                 "type": plan.order_type,
@@ -154,7 +154,7 @@ class ExecutionLedger:
                 "dispatch_state": "PREWRITTEN",
                 "submitted_at": ts,
                 "last_checked_at": None,
-                "instrument": plan.instrument_name,
+                "instrument_name": plan.instrument_name,
                 "amount": float(plan.amount),
                 "filled_amount": 0.0,
                 "average_price": None,
@@ -252,6 +252,38 @@ class ExecutionLedger:
                     out.append({"intent_id": intent_id, **rec})
             return out
 
+    def get_active_intent_id(self, *, position_id: str, intent_type: str) -> Optional[str]:
+        """Return the active intent_id for a position+type if exactly one exists."""
+        with self._lock:
+            data = self._load_unlocked()
+            intents = data.get("intents") or {}
+            found = None
+            for iid, rec in intents.items():
+                if rec.get("state") != "ACTIVE":
+                    continue
+                if str(rec.get("position_id")) != str(position_id):
+                    continue
+                if str(rec.get("intent_type")) != str(intent_type):
+                    continue
+                if found and found != iid:
+                    # Multiple active intents for same position/type is corruption
+                    return None
+                found = iid
+            return found
+
+    def get_latest_attempt(self, *, intent_id: str, leg: LegName) -> Optional[Dict[str, Any]]:
+        with self._lock:
+            data = self._load_unlocked()
+            intent = (data.get("intents") or {}).get(intent_id)
+            if not intent:
+                return None
+            leg_key = "close" if leg == "CLOSE" else "open"
+            leg_rec = (intent.get("legs") or {}).get(leg_key) or {}
+            attempts = list(leg_rec.get("attempts") or [])
+            if not attempts:
+                return None
+            return attempts[-1]
+
     def update_attempt_from_truth(
         self,
         *,
@@ -290,13 +322,14 @@ class ExecutionLedger:
                 "average_price",
                 "order_id",
                 "last_update_timestamp_ms",
+                "instrument_name",
             ):
                 if k in truth and truth[k] is not None:
                     tgt[k] = truth[k]
 
             # I6 instrument match
-            planned_instr = (leg_rec.get("plan") or {}).get("instrument")
-            obs_instr = truth.get("instrument")
+            planned_instr = (leg_rec.get("plan") or {}).get("instrument_name")
+            obs_instr = truth.get("instrument_name")
             if planned_instr and obs_instr and str(planned_instr) != str(obs_instr):
                 intent["state"] = "ABORTED"
                 intent["abort_reason"] = "I6_INSTRUMENT_MISMATCH"

@@ -55,7 +55,7 @@ def _normalize_order_state_payload(st: dict[str, Any]) -> dict[str, Any]:
     order = order or {}
     return {
         "order_id": order.get("order_id"),
-        "instrument": order.get("instrument_name") or order.get("instrument") or order.get("instrument_name"),
+        "instrument_name": order.get("instrument_name") or order.get("instrument"),
         "order_state": order.get("order_state"),
         "amount": float(order.get("amount") or 0.0),
         "filled_amount": float(order.get("filled_amount") or 0.0),
@@ -424,9 +424,12 @@ def _execute_real(
             # WAL + idempotent close-leg dispatch (narrow PR#30 scope: ROLL close leg only)
             import uuid
 
-            intent_id = str(params.get("intent_id") or uuid.uuid4().hex)
             # Best-effort position_id for linkage
             position_id = position_tracker.get_open_position_id_for_symbol(from_symbol) or from_symbol
+
+            # Enforce at most one ACTIVE ROLL_CC intent per position_id (I*):
+            existing_intent_id = _ledger.get_active_intent_id(position_id=str(position_id), intent_type="ROLL_CC")
+            intent_id = str(existing_intent_id or params.get("intent_id") or uuid.uuid4().hex)
 
             # Currency resolver: prefer explicit underlying param, else derive from instrument.
             currency = (params.get("currency") or params.get("underlying") or "")
@@ -450,6 +453,20 @@ def _execute_real(
             )
 
             attempt = 0
+
+            # I4: do not dispatch again while existence is uncertain (SUBMIT_UNKNOWN)
+            # or already acknowledged (ACKED). In those cases return in-flight and let
+            # reconcile loop advance the intent.
+            latest = _ledger.get_latest_attempt(intent_id=intent_id, leg="CLOSE")
+            if latest is not None:
+                ds = str(latest.get("dispatch_state") or "")
+                if ds in {"ACKED", "SUBMIT_UNKNOWN"}:
+                    result["status"] = "in_flight"
+                    result["intent_id"] = intent_id
+                    result["close_label"] = latest.get("label")
+                    result["message"] = f"ROLL close leg in-flight (dispatch_state={ds}); awaiting reconcile"
+                    return result
+
             label = _ledger.prewrite_attempt(
                 intent_id=intent_id,
                 position_id=str(position_id),
@@ -533,7 +550,7 @@ def _execute_real(
                 truth={
                     **(close_state or {}),
                     "order_id": close_oid,
-                    "instrument": from_symbol,
+                    "instrument_name": from_symbol,
                 },
             )
 

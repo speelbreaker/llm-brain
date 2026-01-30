@@ -82,15 +82,15 @@ def reconcile_execution_ledger(client: DeribitClient, ledger: ExecutionLedger) -
         order_id = a.get("order_id")
 
         plan = leg.get("plan") or {}
-        planned_instr = plan.get("instrument")
-        ccy = _resolve_currency(currency, planned_instr or a.get("instrument"))
+        planned_instr = plan.get("instrument_name")
+        ccy = _resolve_currency(currency, planned_instr or a.get("instrument_name"))
         if not ccy:
             ledger.abort_intent(intent_id=intent_id, reason="CURRENCY_RESOLVE_FAILED")
             continue
 
         truth: Dict[str, Any] = {
             "order_id": order_id,
-            "instrument": None,
+            "instrument_name": None,
             "order_state": None,
             "amount": None,
             "filled_amount": None,
@@ -107,7 +107,7 @@ def reconcile_execution_ledger(client: DeribitClient, ledger: ExecutionLedger) -
                 truth.update(
                     {
                         "order_id": o.get("order_id") or order_id,
-                        "instrument": o.get("instrument_name"),
+                        "instrument_name": o.get("instrument_name"),
                         "order_state": o.get("order_state"),
                         "amount": float(o.get("amount") or 0.0),
                         "filled_amount": float(o.get("filled_amount") or 0.0),
@@ -142,7 +142,7 @@ def reconcile_execution_ledger(client: DeribitClient, ledger: ExecutionLedger) -
                 truth.update(
                     {
                         "order_id": oid,
-                        "instrument": o.get("instrument_name"),
+                        "instrument_name": o.get("instrument_name"),
                         "order_state": o.get("order_state") or "open",
                         "amount": float(o.get("amount") or 0.0),
                         "filled_amount": float(o.get("filled_amount") or 0.0),
@@ -159,7 +159,7 @@ def reconcile_execution_ledger(client: DeribitClient, ledger: ExecutionLedger) -
                         truth.update(
                             {
                                 "order_id": o2.get("order_id") or oid,
-                                "instrument": o2.get("instrument_name"),
+                                "instrument_name": o2.get("instrument_name"),
                                 "order_state": o2.get("order_state"),
                                 "amount": float(o2.get("amount") or 0.0),
                                 "filled_amount": float(o2.get("filled_amount") or 0.0),
@@ -192,7 +192,7 @@ def reconcile_execution_ledger(client: DeribitClient, ledger: ExecutionLedger) -
                 truth.update(
                     {
                         "order_id": best.get("order_id"),
-                        "instrument": best.get("instrument_name"),
+                        "instrument_name": best.get("instrument_name"),
                         "order_state": best.get("order_state"),
                         "amount": float(best.get("amount") or 0.0),
                         "filled_amount": float(best.get("filled_amount") or 0.0),
