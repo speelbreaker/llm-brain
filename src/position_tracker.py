@@ -184,8 +184,13 @@ class PositionTracker:
                 else:
                     chain.exit_or_roll_failures = int(getattr(chain, "exit_or_roll_failures", 0) or 0)
 
-                cd = max(int(cooldown_minutes), 0)
-                chain.exit_or_roll_cooldown_until = _utc_now() + timedelta(minutes=cd)
+                base_cd = max(int(cooldown_minutes), 0)
+                # Failure backoff: cooldown = base * min(4, 2 ** failures)
+                # failures=0 => multiplier 1; failures=1 => 2; failures=2 => 4; failures>=2 capped at 4.
+                failures = int(getattr(chain, "exit_or_roll_failures", 0) or 0)
+                multiplier = min(4, 2**failures) if base_cd > 0 else 0
+                effective_cd = int(base_cd * multiplier) if multiplier else 0
+                chain.exit_or_roll_cooldown_until = _utc_now() + timedelta(minutes=effective_cd)
                 self._save_to_disk()
                 return True
         except Exception:
