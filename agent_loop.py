@@ -920,38 +920,105 @@ def run_agent_loop_forever(
                                 # 2) Refresh state after close
                                 refreshed_state = build_agent_state(client, settings)
 
-                                to_symbol = str(final_action.get("params", {}).get("to_symbol") or "")
+                                from_symbol = str(final_action.get("params", {}).get("from_symbol") or "")
+                                orig_to_symbol = str(final_action.get("params", {}).get("to_symbol") or "")
                                 size2 = final_action.get("params", {}).get("size", settings.default_order_size)
+                                underlying2 = final_action.get("params", {}).get("underlying")
 
-                                # 3) Re-check latches/risk for OPEN
-                                open_action = {
-                                    "action": ActionType.OPEN_COVERED_CALL.value,
-                                    "params": {
-                                        "symbol": to_symbol,
-                                        "underlying": final_action.get("params", {}).get("underlying"),
-                                        "size": size2,
-                                    },
-                                    "reasoning": "ROLL follow-up OPEN after close fill (rechecked)",
-                                }
+                                # 3) Recompute candidate eligibility/score post-close (market moved, latches may flip)
+                                # Deterministic selection mirrors profit-capture roll scoring.
+                                def _spread_pct(bid: float, ask: float, mark: float, floor_usd: float) -> float:
+                                    denom = max(float(mark or 0.0), float(floor_usd or 0.0), 1e-9)
+                                    return max(0.0, float(ask) - float(bid)) / denom
 
-                                open_allowed, open_reasons = check_action_allowed(refreshed_state, open_action, settings)
-                                if open_allowed:
-                                    open_exec = execute_action(client, open_action, settings)
-                                    execution_result["open_leg"] = {
-                                        "allowed": True,
-                                        "reasons": open_reasons,
-                                        "execution": open_exec,
-                                    }
-                                    if open_exec.get("status") == "executed":
-                                        execution_result["status"] = "executed"
-                                        execution_result["message"] = f"Rolled: close filled; open filled ({to_symbol})"
-                                else:
+                                def _annualized_yield_on_notional(credit_usd: float, spot_usd: float, size_underlying: float, dte: float) -> float:
+                                    notional = float(spot_usd) * max(float(size_underlying), 1e-9)
+                                    if notional <= 0 or dte <= 0:
+                                        return 0.0
+                                    return (float(credit_usd) / notional) * (365.0 / float(dte))
+
+                                floor = float(getattr(settings, "profit_capture_spread_pct_price_floor_usd", 5.0))
+                                max_spread_open = float(getattr(settings, "profit_capture_max_spread_pct_open", 0.10))
+                                min_credit_usd = float(getattr(settings, "profit_capture_min_credit_usd", 25.0))
+                                spot = float(refreshed_state.spot.get(str(underlying2) or "") or 0.0)
+                                size_u = abs(float(size2 or 0.0))
+
+                                eligible: list[tuple[float, Any]] = []
+                                blocked: list[str] = []
+                                for c in refreshed_state.candidate_options:
+                                    if underlying2 and c.underlying != underlying2:
+                                        continue
+                                    if from_symbol and c.symbol == from_symbol:
+                                        continue
+
+                                    mark = float(getattr(c, "mid_price", 0.0) or 0.0)
+                                    bid = float(getattr(c, "bid", 0.0) or 0.0)
+                                    ask = float(getattr(c, "ask", 0.0) or 0.0)
+                                    spr = _spread_pct(bid, ask, mark, floor)
+                                    if spr > max_spread_open:
+                                        blocked.append("SPREAD_TOO_WIDE")
+                                        continue
+                                    credit = float(getattr(c, "premium_usd", 0.0) or 0.0)
+                                    if credit < min_credit_usd:
+                                        blocked.append("BELOW_MIN_CREDIT")
+                                        continue
+
+                                    y = _annualized_yield_on_notional(credit, spot, size_u or float(settings.default_order_size), float(getattr(c, "dte", 0) or 0))
+                                    delta = float(getattr(c, "delta", 0.0) or 0.0)
+                                    score = y / max(abs(delta), 0.05)
+                                    eligible.append((score, c))
+
+                                eligible.sort(key=lambda x: x[0], reverse=True)
+                                chosen = eligible[0][1] if eligible else None
+                                chosen_symbol = str(getattr(chosen, "symbol", "") or "") if chosen else ""
+                                chosen_score = float(eligible[0][0]) if eligible else 0.0
+
+                                if not chosen_symbol:
                                     execution_result["open_leg"] = {
                                         "allowed": False,
-                                        "reasons": open_reasons,
+                                        "reasons": ["NO_ELIGIBLE_CANDIDATE_POST_CLOSE"],
+                                        "blocked_reasons": sorted(set(blocked))[:6],
+                                        "original_to_symbol": orig_to_symbol,
                                     }
-                                    execution_result["status"] = "partial_error"
-                                    execution_result["message"] = "Close filled, but OPEN blocked after re-check"
+                                    # Close already executed; treat as completed close-only.
+                                    execution_result["status"] = "executed"
+                                    execution_result["message"] = "Close filled; no eligible OPEN candidate post-close (safe abort)"
+                                else:
+                                    # 4) Re-check latches/risk for OPEN (using post-close chosen_symbol)
+                                    open_action = {
+                                        "action": ActionType.OPEN_COVERED_CALL.value,
+                                        "params": {
+                                            "symbol": chosen_symbol,
+                                            "underlying": underlying2,
+                                            "size": size2,
+                                        },
+                                        "reasoning": "ROLL follow-up OPEN after close fill (re-scored + rechecked)",
+                                    }
+
+                                    open_allowed, open_reasons = check_action_allowed(refreshed_state, open_action, settings)
+                                    if open_allowed:
+                                        open_exec = execute_action(client, open_action, settings)
+                                        execution_result["open_leg"] = {
+                                            "allowed": True,
+                                            "reasons": open_reasons,
+                                            "chosen_symbol": chosen_symbol,
+                                            "chosen_score": chosen_score,
+                                            "original_to_symbol": orig_to_symbol,
+                                            "execution": open_exec,
+                                        }
+                                        if open_exec.get("status") == "executed":
+                                            execution_result["status"] = "executed"
+                                            execution_result["message"] = f"Rolled: close filled; open filled ({chosen_symbol})"
+                                    else:
+                                        execution_result["open_leg"] = {
+                                            "allowed": False,
+                                            "reasons": open_reasons,
+                                            "chosen_symbol": chosen_symbol,
+                                            "chosen_score": chosen_score,
+                                            "original_to_symbol": orig_to_symbol,
+                                        }
+                                        execution_result["status"] = "partial_error"
+                                        execution_result["message"] = "Close filled, but OPEN blocked after re-check"
                         else:
                             execution_result = execute_action(client, final_action, settings)
                     else:
