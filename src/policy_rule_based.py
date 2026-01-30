@@ -264,12 +264,24 @@ def _should_roll_position(
 
             if profit_capture_pct >= float(getattr(cfg, "profit_capture_pct", 0.75)):
                 if dte > int(getattr(cfg, "profit_capture_roll_only_if_dte_gt", 3)):
+                    min_hold = float(getattr(cfg, "profit_capture_min_hold_hours", 12.0))
+                    if min_hold <= 0:
+                        meta = {
+                            "reason_code": "EXIT_OR_ROLL_PROFIT_CAPTURE",
+                            "credit0": credit0,
+                            "close_cost_est": close_cost_est,
+                            "profit_capture_pct": profit_capture_pct,
+                            "dte": dte,
+                            "age_h": None,
+                        }
+                        return True, f"Profit capture checkpoint {profit_capture_pct*100:.1f}% (no min-hold, DTE={dte})", meta
+
                     entry_time = _get_tracker_entry_time_for_symbol(position.symbol)
                     if entry_time is None:
                         return False, "Profit capture hit but entry_time unknown (skip)", {"reason_code": "PROFIT_CAPTURE_ENTRY_TIME_UNKNOWN"}
                     from datetime import timezone
                     age_h = (datetime.now(timezone.utc) - entry_time).total_seconds() / 3600.0
-                    if age_h >= float(getattr(cfg, "profit_capture_min_hold_hours", 12.0)):
+                    if age_h >= min_hold:
                         meta = {
                             "reason_code": "EXIT_OR_ROLL_PROFIT_CAPTURE",
                             "credit0": credit0,
@@ -374,7 +386,8 @@ def decide_action(
                     spot = float(agent_state.spot.get(underlying) or 0.0)
                     size_u = abs(float(cc.size or 0.0))
 
-                    eligible: list[tuple[float, CandidateOption]] = []
+                    # eligible tuples: (score, credit_usd, -spread_pct, symbol, candidate)
+                    eligible: list[tuple[float, float, float, str, CandidateOption]] = []
                     reasons_blocked: list[str] = []
 
                     for c in candidates:
@@ -395,10 +408,15 @@ def decide_action(
                         )
                         # Simple deterministic score: yield / |delta| (delta small => higher score), clamp delta floor
                         score = y / max(abs(float(c.delta or 0.0)), 0.05)
-                        eligible.append((score, c))
+                        eligible.append((score, float(c.premium_usd or 0.0), spr, str(c.symbol), c))
 
-                    eligible.sort(key=lambda x: x[0], reverse=True)
-                    chosen = eligible[0][1] if eligible else None
+                    # Deterministic ordering:
+                    # - higher score
+                    # - higher credit
+                    # - tighter spread
+                    # - lexicographically smallest symbol
+                    eligible.sort(key=lambda x: (-x[0], -x[1], x[2], x[3]))
+                    chosen = eligible[0][4] if eligible else None
 
                     meta_out = {
                         **(roll_meta if isinstance(roll_meta, dict) else {}),

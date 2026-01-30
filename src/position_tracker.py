@@ -382,7 +382,9 @@ class PositionTracker:
                             if ask is not None:
                                 leg.ask_price = float(ask)
 
-                            if bid is not None or ask is not None or ticker.get("mark_price") is not None:
+                            # quote_time is the timestamp for bid/ask freshness.
+                            # Only set it when at least one of bid/ask updated in this refresh.
+                            if bid is not None or ask is not None:
                                 leg.quote_time = _utc_now()
                         except Exception:
                             pass
