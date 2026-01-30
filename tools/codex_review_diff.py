@@ -33,6 +33,27 @@ def _read_diff(args: argparse.Namespace) -> str:
         return open(args.diff_file, "r", encoding="utf-8", errors="ignore").read()
     return sys.stdin.read()
 
+def _redact_diff(diff: str) -> str:
+    """Best-effort redaction for common secret patterns before sending to external LLMs."""
+    import re
+
+    patterns = [
+        # OpenAI style
+        (re.compile(r"sk-[A-Za-z0-9_-]{10,}"), "sk-REDACTED"),
+        # GitHub PAT
+        (re.compile(r"ghp_[A-Za-z0-9]{20,}"), "ghp_REDACTED"),
+        (re.compile(r"github_pat_[A-Za-z0-9_]{10,}"), "github_pat_REDACTED"),
+        # Generic KEY=... lines (keep key name, redact value)
+        (re.compile(r"(?im)^(\s*[A-Z0-9_]{3,}_(?:KEY|TOKEN|SECRET)\s*=\s*)(.+)$"), r"\1REDACTED"),
+        (re.compile(r"(?im)^(\s*(?:OPENAI_API_KEY|GITHUB_TOKEN|DERIBIT_CLIENT_SECRET)\s*=\s*)(.+)$"), r"\1REDACTED"),
+    ]
+
+    out = diff
+    for rx, repl in patterns:
+        out = rx.sub(repl, out)
+    return out
+
+
 
 def _severity_rank(s: str) -> int:
     order = {"INFO": 0, "LOW": 1, "MEDIUM": 2, "HIGH": 3, "CRITICAL": 4}
@@ -112,6 +133,7 @@ def main() -> int:
     args = ap.parse_args()
 
     diff = _read_diff(args)
+    redacted_diff = _redact_diff(diff)
     if not diff.strip():
         print("[codex-review] No diff; skipping.")
         return 0
@@ -128,7 +150,7 @@ def main() -> int:
         "    {\"severity\": \"INFO|LOW|MEDIUM|HIGH|CRITICAL\", \"title\": string, \"details\": string, \"files\": [string], \"suggested_fix\": string}\n"
         "  ]\n"
         "}\n\n"
-        "DIFF:\n" + diff[:180_000]
+        "DIFF:\n" + redacted_diff[:180_000]
     )
 
     try:
