@@ -428,7 +428,14 @@ def _execute_real(
             position_id = position_tracker.get_open_position_id_for_symbol(from_symbol) or from_symbol
 
             # Enforce at most one ACTIVE ROLL_CC intent per position_id (I*):
-            existing_intent_id = _ledger.get_active_intent_id(position_id=str(position_id), intent_type="ROLL_CC")
+            try:
+                existing_intent_id = _ledger.get_active_intent_id(position_id=str(position_id), intent_type="ROLL_CC")
+            except Exception as e:
+                # Fail-closed on ledger corruption; do NOT mint a new intent.
+                result["status"] = "error"
+                result["errors"].append(f"Execution ledger corruption: {e}")
+                return result
+
             intent_id = str(existing_intent_id or params.get("intent_id") or uuid.uuid4().hex)
 
             # Currency resolver: prefer explicit underlying param, else derive from instrument.
@@ -467,6 +474,27 @@ def _execute_real(
                     result["message"] = f"ROLL close leg in-flight (dispatch_state={ds}); awaiting reconcile"
                     return result
 
+                # Crash-window hardening: if we have an old PREWRITTEN attempt (WAL written, but we may have
+                # already dispatched and crashed before ACK), force reconcile first.
+                if ds == "PREWRITTEN":
+                    from datetime import datetime, timezone
+
+                    submitted_at = latest.get("submitted_at")
+                    try:
+                        t0 = datetime.fromisoformat(str(submitted_at))
+                        if t0.tzinfo is None:
+                            t0 = t0.replace(tzinfo=timezone.utc)
+                        age_s = (datetime.now(timezone.utc) - t0).total_seconds()
+                    except Exception:
+                        age_s = 999999
+
+                    if age_s > 5.0:
+                        result["status"] = "in_flight"
+                        result["intent_id"] = intent_id
+                        result["close_label"] = latest.get("label")
+                        result["message"] = "ROLL close leg PREWRITTEN is stale; reconcile before dispatch"
+                        return result
+
             label = _ledger.prewrite_attempt(
                 intent_id=intent_id,
                 position_id=str(position_id),
@@ -485,7 +513,8 @@ def _execute_real(
                     amount=size,
                     order_type="limit",
                     price=from_mid,
-                    reduce_only=True,
+                    post_only=bool(plan.post_only),
+                    reduce_only=bool(plan.reduce_only),
                     label=label,
                 )
                 close_oid = close_result.get("order", {}).get("order_id")

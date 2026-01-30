@@ -18,6 +18,10 @@ DispatchState = Literal["PREWRITTEN", "ACKED", "SUBMIT_UNKNOWN"]
 TerminalOutcome = Literal["FILLED", "CANCELLED", "REJECTED", "PARTIAL"]
 
 
+class LedgerCorruptionError(RuntimeError):
+    pass
+
+
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -259,7 +263,11 @@ class ExecutionLedger:
             return out
 
     def get_active_intent_id(self, *, position_id: str, intent_type: str) -> Optional[str]:
-        """Return the active intent_id for a position+type if exactly one exists."""
+        """Return the active intent_id for a position+type.
+
+        - Returns None if none exists.
+        - Raises LedgerCorruptionError if multiple ACTIVE intents exist for the same (position_id,intent_type).
+        """
         with self._lock:
             data = self._load_unlocked()
             intents = data.get("intents") or {}
@@ -272,8 +280,9 @@ class ExecutionLedger:
                 if str(rec.get("intent_type")) != str(intent_type):
                     continue
                 if found and found != iid:
-                    # Multiple active intents for same position/type is corruption
-                    return None
+                    raise LedgerCorruptionError(
+                        f"multiple ACTIVE intents for position_id={position_id}, intent_type={intent_type}: {found}, {iid}"
+                    )
                 found = iid
             return found
 
@@ -351,6 +360,12 @@ class ExecutionLedger:
                 terminal = True
             if amount > 0 and filled >= amount - eps:
                 terminal = True
+
+            # Promote PREWRITTEN/SUBMIT_UNKNOWN to ACKED when truth shows an order exists (crash-window safety).
+            if (tgt.get("dispatch_state") in {"PREWRITTEN", "SUBMIT_UNKNOWN"}) and (
+                tgt.get("order_id") is not None or tgt.get("order_state") not in (None, "unknown")
+            ):
+                tgt["dispatch_state"] = "ACKED"
 
             if terminal:
                 leg_rec["leg_state"] = "TERMINAL"
