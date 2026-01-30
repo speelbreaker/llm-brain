@@ -12,7 +12,7 @@ Usage:
 
 Env:
   - OPENAI_API_KEY (or source /etc/llmagentbrain/platform.env before running)
-  - CODE_REVIEW_MODEL (optional, default: gpt-5.2)
+  - CODE_REVIEW_MODEL (optional, default: gpt-4o-mini)
   - CODE_REVIEW_THRESHOLD (optional, default: HIGH)
 """
 
@@ -47,7 +47,7 @@ def _call_openai(prompt: str) -> dict[str, Any]:
     if not api_key:
         raise RuntimeError("OPENAI_API_KEY is missing")
 
-    model = (os.environ.get("CODE_REVIEW_MODEL") or "gpt-5.2").strip()
+    model = (os.environ.get("CODE_REVIEW_MODEL") or "gpt-4o-mini").strip()
     timeout_s = float(os.environ.get("CODE_REVIEW_TIMEOUT_S") or "45")
 
     client = OpenAI(api_key=api_key)
@@ -72,16 +72,27 @@ def _call_openai(prompt: str) -> dict[str, Any]:
         content = resp.choices[0].message.content or "{}"
     except Exception:
         # Fallback to raw call
-        resp = client.chat.completions.create(
-            model=model,
-            messages=[
-                {"role": "system", "content": "Return ONLY valid JSON."},
-                {"role": "user", "content": prompt},
-            ],
-            response_format={"type": "json_object"},
-            max_completion_tokens=1200,
-            timeout=timeout_s,
-        )
+        try:
+            resp = client.chat.completions.create(
+                model=model,
+                messages=[
+                    {"role": "system", "content": "Return ONLY valid JSON."},
+                    {"role": "user", "content": prompt},
+                ],
+                response_format={"type": "json_object"},
+                max_completion_tokens=1200,
+                timeout=timeout_s,
+            )
+        except Exception:
+            resp = client.chat.completions.create(
+                model=model,
+                messages=[
+                    {"role": "system", "content": "Return ONLY valid JSON."},
+                    {"role": "user", "content": prompt},
+                ],
+                max_completion_tokens=1200,
+                timeout=timeout_s,
+            )
         content = resp.choices[0].message.content or "{}"
 
     data = json.loads(content)

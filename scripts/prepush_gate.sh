@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Local pre-push gate: tests + static checks + Codex diff review
+# Local pre-push gate: tests + static checks + OPTIONAL Codex diff review
+#
+# SECURITY: The Codex step sends staged diffs to an external LLM provider.
+# It is OFF by default. Enable explicitly with: CODE_REVIEW_ENABLE=1
 # Bypass: SKIP_PREPUSH_REVIEW=1
 
 if [[ "${SKIP_PREPUSH_REVIEW:-}" == "1" ]]; then
@@ -38,8 +41,12 @@ fi
 
 # 3) Codex review of staged diff
 if [[ -x ./.venv/bin/python ]]; then
-  echo "[pre-push] Running Codex diff review..." >&2
-  git diff --cached | ./.venv/bin/python tools/codex_review_diff.py --threshold "${CODE_REVIEW_THRESHOLD:-HIGH}"
+  if [[ "${CODE_REVIEW_ENABLE:-}" == "1" ]]; then
+    echo "[pre-push] Running Codex diff review (CODE_REVIEW_ENABLE=1)..." >&2
+    git diff --cached | ./.venv/bin/python tools/codex_review_diff.py --threshold "${CODE_REVIEW_THRESHOLD:-HIGH}"
+  else
+    echo "[pre-push] Skipping Codex diff review (set CODE_REVIEW_ENABLE=1 to enable)" >&2
+  fi
 else
   echo "[pre-push] WARNING: .venv not found; skipping Codex review" >&2
 fi

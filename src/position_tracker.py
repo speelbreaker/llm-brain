@@ -533,10 +533,16 @@ class PositionTracker:
                 }
                 data["chains"][position_id] = chain_data
 
-            tmp_path = self._persistence_path.with_suffix(self._persistence_path.suffix + ".tmp")
+            # Unique temp file per save to avoid collisions when file locking is unavailable.
+            fd, tmp_name = tempfile.mkstemp(
+                prefix=self._persistence_path.name + ".",
+                suffix=".tmp",
+                dir=str(self._persistence_path.parent),
+            )
+            tmp_path = Path(tmp_name)
             self._persistence_path.parent.mkdir(parents=True, exist_ok=True)
 
-            with open(tmp_path, "w", encoding="utf-8") as f:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
                 self._with_file_lock(f, "exclusive")
                 try:
                     json.dump(data, f, indent=2, default=str)
@@ -583,7 +589,7 @@ class PositionTracker:
                         side=leg_data["side"],
                         quantity=leg_data["quantity"],
                         entry_price=leg_data["entry_price"],
-                        entry_time=datetime.fromisoformat(leg_data["entry_time"]),
+                        entry_time=datetime.fromisoformat(leg_data["entry_time"]) if leg_data.get("entry_time") else _utc_now(),
                         exit_price=leg_data.get("exit_price"),
                         exit_time=datetime.fromisoformat(leg_data["exit_time"]) if leg_data.get("exit_time") else None,
                         mark_price=leg_data.get("mark_price"),
