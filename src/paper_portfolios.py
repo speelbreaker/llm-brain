@@ -8,6 +8,8 @@ Fill model (Phase 1): mark price +/- fixed bps (slippage).
 
 from __future__ import annotations
 
+import logging
+
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Literal
@@ -18,6 +20,7 @@ from src.position_tracker import PositionTracker
 
 Lane = Literal["rule", "llm", "debate"]
 
+logger = logging.getLogger(__name__)
 
 def _lane_path(lane: Lane) -> Path:
     return Path(f"data/paper_positions_{lane}.json")
@@ -120,7 +123,7 @@ def apply_decision_to_lane(
         cand = next((c for c in candidates if c.symbol == symbol), None)
         mark = _candidate_mark(cand) if cand else 0.0
         if mark <= 0:
-            print(f"[Paper:{lane}] skip OPEN {symbol}: invalid mark={mark}")
+            logger.info("[Paper:%s] skip OPEN %s: invalid mark=%s", lane, symbol, mark)
             return
         price = _fill_price(mark, side="sell", slippage_bps=slippage_bps)
         size = float(params.get("size") or params.get("quantity") or settings.default_order_size)
@@ -146,7 +149,7 @@ def apply_decision_to_lane(
         except Exception:
             mark = 0.0
         if mark <= 0:
-            print(f"[Paper:{lane}] skip OPEN {symbol}: invalid mark={mark}")
+            logger.info("[Paper:%s] skip OPEN %s: invalid mark=%s", lane, symbol, mark)
             return
         price = _fill_price(mark, side="buy", slippage_bps=slippage_bps)
         size = float(params.get("size") or params.get("quantity") or settings.default_order_size)
@@ -174,14 +177,14 @@ def apply_decision_to_lane(
         except Exception:
             from_mark = 0.0
         if from_mark <= 0:
-            print(f"[Paper:{lane}] skip ROLL close {from_symbol}: invalid mark={from_mark}")
+            logger.info("[Paper:%s] skip ROLL close %s: invalid mark=%s", lane, from_symbol, from_mark)
             return
         buy_price = _fill_price(from_mark, side="buy", slippage_bps=slippage_bps)
 
         cand = next((c for c in candidates if c.symbol == to_symbol), None)
         to_mark = _candidate_mark(cand) if cand else 0.0
         if to_mark <= 0:
-            print(f"[Paper:{lane}] skip ROLL open {to_symbol}: invalid mark={to_mark}")
+            logger.info("[Paper:%s] skip ROLL open %s: invalid mark=%s", lane, to_symbol, to_mark)
             return
         sell_price = _fill_price(to_mark, side="sell", slippage_bps=slippage_bps)
 

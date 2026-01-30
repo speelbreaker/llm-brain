@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import tempfile
 try:
     import fcntl  # type: ignore
 except ImportError:  # pragma: no cover
@@ -522,7 +523,7 @@ class PositionTracker:
                             "side": leg.side,
                             "quantity": leg.quantity,
                             "entry_price": leg.entry_price,
-                            "entry_time": leg.entry_time.isoformat(),
+                            "entry_time": (leg.entry_time.isoformat() if leg.entry_time else None),
                             "exit_price": leg.exit_price,
                             "exit_time": leg.exit_time.isoformat() if leg.exit_time else None,
                             "mark_price": leg.mark_price,
@@ -537,13 +538,15 @@ class PositionTracker:
 
             with open(tmp_path, "w", encoding="utf-8") as f:
                 self._with_file_lock(f, "exclusive")
-                json.dump(data, f, indent=2, default=str)
-                f.flush()
                 try:
-                    os.fsync(f.fileno())
-                except Exception:
-                    pass
-                self._unlock_file(f)
+                    json.dump(data, f, indent=2, default=str)
+                    f.flush()
+                    try:
+                        os.fsync(f.fileno())
+                    except Exception:
+                        pass
+                finally:
+                    self._unlock_file(f)
 
             os.replace(tmp_path, self._persistence_path)
         except Exception as e:
@@ -558,8 +561,10 @@ class PositionTracker:
         try:
             with open(self._persistence_path, "r", encoding="utf-8") as f:
                 self._with_file_lock(f, "shared")
-                data = json.load(f)
-                self._unlock_file(f)
+                try:
+                    data = json.load(f)
+                finally:
+                    self._unlock_file(f)
             
             if data.get("version") != 1:
                 print(f"[PositionTracker] Unknown version {data.get('version')}, skipping load")
