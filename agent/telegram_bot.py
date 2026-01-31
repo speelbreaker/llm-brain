@@ -126,6 +126,8 @@ class TelegramBot:
         self.application.add_handler(CommandHandler("help", self.cmd_help))
         self.application.add_handler(CommandHandler("status", self.cmd_status))
         self.application.add_handler(CommandHandler("review", self.cmd_review))
+        # Convenience aliases for multi-repo usage
+        self.application.add_handler(CommandHandler("review1", self.cmd_review_ralph_trader))
         self.application.add_handler(CommandHandler("review_repo", self.cmd_review_repo))
         self.application.add_handler(CommandHandler("diff", self.cmd_diff))
         self.application.add_handler(CommandHandler("risks", self.cmd_risks))
@@ -179,7 +181,8 @@ Models:
   Voice: {model_transcribe}
 
 Code Review:
-/review - Review latest changes
+/review - Review latest changes (this repo)
+/review1 - Review latest changes for ralph-trader
 /diff - Show diff summary
 /risks - Show issues from last review
 /next - Recommended actions
@@ -337,6 +340,16 @@ INFO - Observations"""
             logger.error(f"Error in /review: {e}")
             await reply_safe(update, f"Error during review: {str(e)[:200]}", context)
     
+    async def cmd_review_ralph_trader(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Shortcut: /review1 reviews the ralph-trader repo (default range)."""
+        if not _is_authorized(update):
+            await reply_safe(update, _unauthorized_response(), context)
+            return
+
+        # Reuse the /review_repo implementation by injecting args
+        context.args = ["https://github.com/speelbreaker/ralph-trader"]
+        await self.cmd_review_repo(update, context)
+
     async def cmd_review_repo(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle /review_repo <github_url> [from..to]."""
         if not _is_authorized(update):
