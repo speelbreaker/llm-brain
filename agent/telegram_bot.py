@@ -126,6 +126,9 @@ class TelegramBot:
         self.application.add_handler(CommandHandler("help", self.cmd_help))
         self.application.add_handler(CommandHandler("status", self.cmd_status))
         self.application.add_handler(CommandHandler("review", self.cmd_review))
+        # Convenience aliases for multi-repo usage
+        self.application.add_handler(CommandHandler("review1", self.cmd_review_ralph_trader))
+        self.application.add_handler(CommandHandler("review_repo", self.cmd_review_repo))
         self.application.add_handler(CommandHandler("diff", self.cmd_diff))
         self.application.add_handler(CommandHandler("risks", self.cmd_risks))
         self.application.add_handler(CommandHandler("next", self.cmd_next))
@@ -178,7 +181,8 @@ Models:
   Voice: {model_transcribe}
 
 Code Review:
-/review - Review latest changes
+/review - Review latest changes (this repo)
+/review1 - Review latest changes for ralph-trader
 /diff - Show diff summary
 /risks - Show issues from last review
 /next - Recommended actions
@@ -336,6 +340,59 @@ INFO - Observations"""
             logger.error(f"Error in /review: {e}")
             await reply_safe(update, f"Error during review: {str(e)[:200]}", context)
     
+    async def cmd_review_ralph_trader(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Shortcut: /review1 reviews the ralph-trader repo (default range)."""
+        if not _is_authorized(update):
+            await reply_safe(update, _unauthorized_response(), context)
+            return
+
+        # Reuse the /review_repo implementation by injecting args
+        context.args = ["https://github.com/speelbreaker/ralph-trader"]
+        await self.cmd_review_repo(update, context)
+
+    async def cmd_review_repo(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Handle /review_repo <github_url> [from..to]."""
+        if not _is_authorized(update):
+            await reply_safe(update, _unauthorized_response(), context)
+            return
+
+        if not context.args:
+            await reply_safe(update, Path("agent/telegram_review_repo.md").read_text(), context)
+            return
+
+        url = context.args[0]
+        range_arg = context.args[1] if len(context.args) > 1 else ""
+
+        await reply_safe(update, "Fetching repo + analyzing changes...", context)
+
+        try:
+            from agent.repo_manager import ensure_repo_checked_out, default_compare_range
+
+            repo_path, spec = ensure_repo_checked_out(url)
+            repo_label = spec.slug
+
+            if range_arg and ".." in range_arg:
+                from_ref, to_ref = range_arg.split("..", 1)
+                from_ref = from_ref.strip() or "HEAD~1"
+                to_ref = to_ref.strip() or "HEAD"
+            else:
+                from_ref, to_ref = default_compare_range(repo_path)
+
+            service = ReviewService(repo_path=repo_path)
+            user_id = update.effective_user.id
+            result = service.review_explicit_range(
+                initiator_id=user_id,
+                repo_label=repo_label,
+                from_ref=from_ref,
+                to_ref=to_ref,
+            )
+
+            await reply_safe(update, result.summary_md, context)
+
+        except Exception as e:
+            logger.error(f"Error in /review_repo: {e}")
+            await reply_safe(update, f"Error during review_repo: {str(e)[:200]}", context)
+
     async def cmd_diff(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle /diff command."""
         if not _is_authorized(update):

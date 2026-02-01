@@ -77,7 +77,10 @@ MODEL_FALLBACK_CHAIN = [
 
 RESPONSES_API_MODELS = {"gpt-5.2-pro", "o3", "o3-pro"}
 
-ARTIFACTS_DIR = Path(".auditor/artifacts")
+# Where we store run artifacts (raw LLM outputs, logs, etc.).
+# Default is repo-local .auditor/, but some deployments run in read-only filesystems.
+# In that case, set AUDITOR_DIR or fall back to /tmp.
+ARTIFACTS_DIR = Path(os.environ.get("AUDITOR_DIR", ".auditor")) / "artifacts"
 
 
 @dataclass
@@ -168,10 +171,23 @@ def _build_review_prompt(
 
 
 def _save_artifact(run_id: str, filename: str, content: str) -> Path:
-    """Save raw output artifact for debugging."""
+    """Save raw output artifact for debugging.
+
+    If the current working directory is read-only (e.g. some bot/container deployments),
+    fall back to /tmp/.auditor.
+    """
     artifact_dir = ARTIFACTS_DIR / run_id
-    artifact_dir.mkdir(parents=True, exist_ok=True)
-    
+    try:
+        artifact_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        # Errno 30 is "Read-only file system".
+        if getattr(e, "errno", None) == 30:
+            fallback_root = Path("/tmp/.auditor/artifacts")
+            artifact_dir = fallback_root / run_id
+            artifact_dir.mkdir(parents=True, exist_ok=True)
+        else:
+            raise
+
     filepath = artifact_dir / filename
     filepath.write_text(content, encoding="utf-8")
     logger.info(f"Saved artifact: {filepath}")

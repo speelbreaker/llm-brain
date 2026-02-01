@@ -41,6 +41,7 @@ class SupervisorSettings(BaseSettings):
     telegram_chat_id: Optional[str] = Field(default=None, alias="TELEGRAM_CHAT_ID")
     telegram_admin_chat_id: Optional[str] = Field(default=None, alias="TELEGRAM_ADMIN_CHAT_ID")
     telegram_allowed_user_ids: str = Field(default="", alias="TELEGRAM_ALLOWED_USER_IDS")
+    telegram_allowed_chat_ids: str = Field(default="", alias="TELEGRAM_ALLOWED_CHAT_IDS")
     telegram_status_mode: str = Field(default="card", alias="TELEGRAM_STATUS_MODE")
     telegram_max_chars: int = Field(default=3500, alias="TELEGRAM_MAX_CHARS")
     telegram_debounce_seconds: int = Field(default=3, alias="TELEGRAM_DEBOUNCE_SECONDS")
@@ -76,7 +77,8 @@ class SupervisorSettings(BaseSettings):
     
     supervisor_api_url: Optional[str] = Field(default=None, alias="SUPERVISOR_API_URL")
     
-    model_config = {"env_file": ".env", "extra": "ignore"}
+    # Do not load from a repo-local .env file (tests and deployments should rely on real environment).
+    model_config = {"extra": "ignore"}
     
     def get_check_commands(self) -> list[str]:
         """Return list of configured check commands."""
@@ -95,6 +97,17 @@ class SupervisorSettings(BaseSettings):
         for part in self.telegram_allowed_user_ids.split(","):
             part = part.strip()
             if part.isdigit():
+                ids.add(int(part))
+        return ids
+
+    def get_allowed_chat_ids(self) -> set[int]:
+        """Parse TELEGRAM_ALLOWED_CHAT_IDS into a set of integers."""
+        if not self.telegram_allowed_chat_ids:
+            return set()
+        ids = set()
+        for part in self.telegram_allowed_chat_ids.split(","):
+            part = part.strip()
+            if part.strip("-").isdigit():
                 ids.add(int(part))
         return ids
     
@@ -125,6 +138,10 @@ class SupervisorSettings(BaseSettings):
         if os.path.isabs(codex_bin) and os.access(codex_bin, os.X_OK):
             return True
         return shutil.which(codex_bin) is not None
+
+    def is_llm_available(self) -> bool:
+        """Check if any LLM API key is configured."""
+        return bool(self.openai_api_key or self.gemini_api_key)
 
 
 def get_settings() -> SupervisorSettings:

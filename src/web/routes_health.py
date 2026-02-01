@@ -95,7 +95,7 @@ def update_llm_status(req: LLMConfigUpdate) -> JSONResponse:
             settings.llm_enabled = req.llm_enabled
         
         if req.decision_mode is not None:
-            valid_modes = ["rule_only", "llm_only", "hybrid_shadow"]
+            valid_modes = ["rule_only", "llm_only", "hybrid_shadow", "debate"]
             if req.decision_mode not in valid_modes:
                 return JSONResponse(
                     status_code=400,
@@ -126,6 +126,9 @@ def update_llm_status(req: LLMConfigUpdate) -> JSONResponse:
 def test_llm_decision() -> JSONResponse:
     """Test LLM decision pipeline (dry run, no trades)."""
     try:
+        if not settings.enable_diagnostic_endpoints:
+            return JSONResponse(status_code=404, content={"ok": False, "error": "not_found"})
+
         if not settings.llm_enabled:
             return JSONResponse(content={
                 "ok": True,
@@ -159,6 +162,51 @@ def test_llm_decision() -> JSONResponse:
                 "ok": True,
                 "action": action,
                 "reasoning": reasoning
+            })
+    except Exception as e:
+        return JSONResponse(content={"ok": False, "error": str(e)})
+
+
+@router.post("/api/test_debate_decision")
+def test_debate_decision() -> JSONResponse:
+    """Test Optimist/Skeptic/Arbiter debate decision pipeline (dry run, no trades)."""
+    try:
+        if not settings.enable_diagnostic_endpoints:
+            return JSONResponse(status_code=404, content={"ok": False, "error": "not_found"})
+
+        if not settings.llm_enabled:
+            return JSONResponse(content={
+                "ok": True,
+                "action": "SKIPPED",
+                "reasoning": "LLM is disabled (llm_enabled=False). Enable LLM to test debate decision pipeline."
+            })
+
+        from src.deribit_client import DeribitClient
+        from src.state_builder import build_agent_state
+        from src.trading_debate import choose_action_with_debate
+
+        with DeribitClient() as client:
+            state = build_agent_state(client, settings)
+            candidates = state.candidate_options or []
+            if not candidates:
+                return JSONResponse(content={
+                    "ok": True,
+                    "action": "DO_NOTHING",
+                    "reasoning": "No candidate options available for testing"
+                })
+
+            decision = choose_action_with_debate(state, candidates)
+            action = decision.get("action", "DO_NOTHING")
+            reasoning = decision.get("reasoning", "") or ""
+            if len(reasoning) > 200:
+                reasoning = reasoning[:200] + "..."
+
+            return JSONResponse(content={
+                "ok": True,
+                "action": action,
+                "reasoning": reasoning,
+                "validated": bool(decision.get("validated", False)),
+                "debug": decision.get("debate_debug"),
             })
     except Exception as e:
         return JSONResponse(content={"ok": False, "error": str(e)})
@@ -684,45 +732,5 @@ def update_runtime_config(update: RuntimeConfigUpdate) -> JSONResponse:
     })
 
 
-@router.get("/api/supervisor/jobs")
-async def get_supervisor_jobs():
-    """Proxy supervisor jobs list from supervisor service."""
-    if not SUPERVISOR_API_URL:
-        return JSONResponse(content={"error": "not_configured", "jobs": []})
-    
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.get(f"{SUPERVISOR_API_URL.rstrip('/')}/jobs")
-            resp.raise_for_status()
-            return JSONResponse(content=resp.json())
-    except Exception as e:
-        return JSONResponse(
-            status_code=500,
-            content={"error": str(e), "jobs": []}
-        )
-
-
-@router.get("/api/supervisor/jobs/{job_id}")
-async def get_supervisor_job(job_id: str):
-    """Proxy single supervisor job from supervisor service."""
-    if not SUPERVISOR_API_URL:
-        return JSONResponse(
-            status_code=503,
-            content={"error": "Supervisor not configured"}
-        )
-    
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.get(f"{SUPERVISOR_API_URL.rstrip('/')}/jobs/{job_id}")
-            resp.raise_for_status()
-            return JSONResponse(content=resp.json())
-    except httpx.HTTPStatusError as e:
-        return JSONResponse(
-            status_code=e.response.status_code,
-            content={"error": str(e)}
-        )
-    except Exception as e:
-        return JSONResponse(
-            status_code=500,
-            content={"error": str(e)}
-        )
+# NOTE: Supervisor API routes are provided by src/web/routes_supervisor.py under /api/supervisor.
+# (The legacy proxy endpoints were removed to avoid path conflicts.)

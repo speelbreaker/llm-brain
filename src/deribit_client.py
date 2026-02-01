@@ -185,6 +185,47 @@ class DeribitClient(DeribitBaseClient):
         """Cancel all orders for an instrument (private endpoint)."""
         params = {"instrument_name": instrument_name}
         return self._make_request("private/cancel_all_by_instrument", params, private=True)
+
+    def get_order_state(self, order_id: str) -> dict[str, Any]:
+        """Get order state by order_id (private endpoint)."""
+        params = {"order_id": order_id}
+        return self._make_request("private/get_order_state", params, private=True)
+
+    def get_open_orders_by_label(self, currency: str, label: str) -> list[dict[str, Any]]:
+        """Get open orders matching label (private endpoint).
+
+        Requires currency + label.
+        """
+        params = {"currency": currency.upper(), "label": label}
+        res = self._make_request("private/get_open_orders_by_label", params, private=True)
+        if isinstance(res, dict) and "result" in res:
+            return list(res.get("result") or [])
+        if isinstance(res, list):
+            return list(res)
+        return []
+
+    def get_order_state_by_label(self, currency: str, label: str) -> list[dict[str, Any]]:
+        """Get order state(s) by label (private endpoint).
+
+        Requires currency + label. Returns a list of orders.
+        """
+        params = {"currency": currency.upper(), "label": label}
+        res = self._make_request("private/get_order_state_by_label", params, private=True)
+        if isinstance(res, dict) and "result" in res:
+            return list(res.get("result") or [])
+        if isinstance(res, list):
+            return list(res)
+        return []
+
+    def cancel_by_label(self, label: str, currency: str | None = None) -> dict[str, Any]:
+        """Cancel orders by label (private endpoint).
+
+        currency is optional; omitting cancels across all currencies.
+        """
+        params: dict[str, Any] = {"label": label}
+        if currency:
+            params["currency"] = currency.upper()
+        return self._make_request("private/cancel_by_label", params, private=True)
     
     def get_tradingview_chart_data(
         self,

@@ -56,6 +56,7 @@ def build_default_registry(settings: "Settings") -> StrategyRegistry:
         StrategyRegistry with default strategies
     """
     from src.strategies.covered_call import CoveredCallStrategy
+    from src.strategies.greg_strategy import GregStrategy
     
     if settings.is_training_enabled:
         mode = "training"
@@ -65,7 +66,7 @@ def build_default_registry(settings: "Settings") -> StrategyRegistry:
         mode = "rule_based"
     
     cfg = StrategyConfig(
-        name="CoveredCallLadder",
+        name="GregBot VRP Harvester", # Updated name
         underlyings=settings.underlyings,
         mode=mode,
         enabled=True,
@@ -83,5 +84,29 @@ def build_default_registry(settings: "Settings") -> StrategyRegistry:
         training_strategies=settings.training_strategies,
     )
     
-    strategy = CoveredCallStrategy(cfg)
-    return StrategyRegistry([strategy])
+    # Strategies (run in parallel; execution/selection is handled by agent_loop)
+    greg_strategy = GregStrategy(cfg)
+
+    # Covered call strategy for side-by-side observation on testnet
+    cc_cfg = StrategyConfig(
+        name="Covered Call",
+        underlyings=settings.underlyings,
+        mode=mode,
+        enabled=True,
+        training_enabled=settings.is_training_enabled,
+        explore_prob=settings.explore_prob,
+        delta_min=settings.effective_delta_min,
+        delta_max=settings.effective_delta_max,
+        dte_min=settings.effective_dte_min,
+        dte_max=settings.effective_dte_max,
+        ivrv_min=settings.effective_ivrv_min,
+        size_fraction=settings.default_order_size,
+        profile_name=settings.training_profile_mode,
+        max_calls_per_underlying=settings.max_calls_per_underlying,
+        training_max_calls_per_expiry=settings.training_max_calls_per_expiry,
+        training_strategies=settings.training_strategies,
+    )
+    covered_call_strategy = CoveredCallStrategy(cc_cfg)
+
+    # Keep Greg first to preserve existing execution behavior (agent_loop takes first proposal).
+    return StrategyRegistry([greg_strategy, covered_call_strategy])

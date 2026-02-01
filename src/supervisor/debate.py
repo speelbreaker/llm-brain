@@ -139,6 +139,10 @@ class DebateSystem:
                     temperature=0.7 if attempt == 0 else 0.3,
                 )
                 
+                # Provider output may already include 'role'; avoid passing it twice.
+                if isinstance(result, dict) and "role" in result:
+                    result = dict(result)
+                    result.pop("role", None)
                 response = DebateResponse(role=role, **result)
                 return response.model_dump()
                 
@@ -174,6 +178,10 @@ class DebateSystem:
                     temperature=0.3,
                 )
                 
+                # Provider output may already include 'role'; avoid passing it twice.
+                if isinstance(result, dict) and "role" in result:
+                    result = dict(result)
+                    result.pop("role", None)
                 response = DebateResponse(role="arbiter", **result)
                 
                 return ArbiterDecision(

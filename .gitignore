@@ -101,3 +101,10 @@ attached_assets/codex_vps_key.pub
 
 # Prevent vault files from being accidentally committed to the app repo.
 docs/obsidian/
+
+# local env/runtime
+.env.platform
+.env
+.env.*
+!.env.platform.example
+logs/

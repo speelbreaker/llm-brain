@@ -31,7 +31,7 @@ def render_dashboard_html() -> str:
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
       max-width: 1200px;
       margin: 0 auto;
-      padding: 1rem;
+      padding: 0.4rem 1rem 1rem 1rem;
       background: #f8f9fa;
       color: #333;
     }}
@@ -744,22 +744,87 @@ def render_dashboard_html() -> str:
     </div>
 
     <div class="section">
-      <h2>Latest Decision</h2>
-      <div class="decision-card" id="latest-decision">
-        <h3 id="decision-time">Waiting for first decision...</h3>
-        <div class="action" id="decision-action">--</div>
-        <div class="details" id="decision-details">--</div>
-        <div class="reasoning" id="decision-reasoning" style="font-size:0.9em;max-height:60px;overflow:hidden;text-overflow:ellipsis;">Agent is starting up...</div>
+      <h2>Paper Portfolios (Rule vs LLM vs Debate)</h2>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:8px;">
+        <div style="flex:1;min-width:220px;background:#fff;border:1px solid #ddd;border-radius:8px;padding:10px;">
+          <div style="font-weight:700;color:#1565c0;">Rule (paper)</div>
+          <div id="paper-rule-summary" style="margin-top:6px;color:#444;font-size:0.95em;">Loading...</div>
+        </div>
+        <div style="flex:1;min-width:220px;background:#fff;border:1px solid #ddd;border-radius:8px;padding:10px;">
+          <div style="font-weight:700;color:#7b1fa2;">LLM (paper)</div>
+          <div id="paper-llm-summary" style="margin-top:6px;color:#444;font-size:0.95em;">Loading...</div>
+        </div>
+        <div style="flex:1;min-width:220px;background:#fff;border:1px solid #ddd;border-radius:8px;padding:10px;">
+          <div style="font-weight:700;color:#2e7d32;">Debate (paper)</div>
+          <div id="paper-debate-summary" style="margin-top:6px;color:#444;font-size:0.95em;">Loading...</div>
+        </div>
       </div>
-      <div style="margin-top:12px;">
-        <h4 style="font-size:0.9rem;margin-bottom:8px;color:#888;">Recent Decisions</h4>
-        <div id="mini-timeline" style="display:flex;flex-wrap:wrap;gap:6px;"></div>
-      </div>
+
+      <details>
+        <summary style="cursor:pointer;color:#666;">Show paper positions</summary>
+        <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:10px;">
+          <div style="flex:1;min-width:340px;">
+            <h3 style="margin:0 0 6px 0;">Rule</h3>
+            <div style="font-size:0.85em;color:#666;margin-bottom:6px;" id="paper-rule-closed-summary">Loading...</div>
+            <div style="overflow-x:auto; max-height:180px; overflow-y:auto;">
+              <table class="steps-table"><thead><tr>
+                <th>Underlying</th><th>Symbol</th><th>Qty</th><th>Entry</th><th>Mark</th><th>Unreal. PnL</th><th>Unreal. %</th>
+              </tr></thead>
+              <tbody id="paper-rule-open-body"><tr><td colspan="7" style="text-align:center;color:#666;">Loading...</td></tr></tbody>
+              </table>
+            </div>
+            <div style="margin-top:8px;overflow-x:auto; max-height:160px; overflow-y:auto;">
+              <table class="steps-table"><thead><tr>
+                <th>Closed At</th><th>Underlying</th><th>Symbol</th><th>Real. PnL</th><th>Real. %</th>
+              </tr></thead>
+              <tbody id="paper-rule-closed-body"><tr><td colspan="5" style="text-align:center;color:#666;">Loading...</td></tr></tbody>
+              </table>
+            </div>
+          </div>
+          <div style="flex:1;min-width:340px;">
+            <h3 style="margin:0 0 6px 0;">LLM</h3>
+            <div style="font-size:0.85em;color:#666;margin-bottom:6px;" id="paper-llm-closed-summary">Loading...</div>
+            <div style="overflow-x:auto; max-height:180px; overflow-y:auto;">
+              <table class="steps-table"><thead><tr>
+                <th>Underlying</th><th>Symbol</th><th>Qty</th><th>Entry</th><th>Mark</th><th>Unreal. PnL</th><th>Unreal. %</th>
+              </tr></thead>
+              <tbody id="paper-llm-open-body"><tr><td colspan="7" style="text-align:center;color:#666;">Loading...</td></tr></tbody>
+              </table>
+            </div>
+            <div style="margin-top:8px;overflow-x:auto; max-height:160px; overflow-y:auto;">
+              <table class="steps-table"><thead><tr>
+                <th>Closed At</th><th>Underlying</th><th>Symbol</th><th>Real. PnL</th><th>Real. %</th>
+              </tr></thead>
+              <tbody id="paper-llm-closed-body"><tr><td colspan="5" style="text-align:center;color:#666;">Loading...</td></tr></tbody>
+              </table>
+            </div>
+          </div>
+          <div style="flex:1;min-width:340px;">
+            <h3 style="margin:0 0 6px 0;">Debate</h3>
+            <div style="font-size:0.85em;color:#666;margin-bottom:6px;" id="paper-debate-closed-summary">Loading...</div>
+            <div style="overflow-x:auto; max-height:180px; overflow-y:auto;">
+              <table class="steps-table"><thead><tr>
+                <th>Underlying</th><th>Symbol</th><th>Qty</th><th>Entry</th><th>Mark</th><th>Unreal. PnL</th><th>Unreal. %</th>
+              </tr></thead>
+              <tbody id="paper-debate-open-body"><tr><td colspan="7" style="text-align:center;color:#666;">Loading...</td></tr></tbody>
+              </table>
+            </div>
+            <div style="margin-top:8px;overflow-x:auto; max-height:160px; overflow-y:auto;">
+              <table class="steps-table"><thead><tr>
+                <th>Closed At</th><th>Underlying</th><th>Symbol</th><th>Real. PnL</th><th>Real. %</th>
+              </tr></thead>
+              <tbody id="paper-debate-closed-body"><tr><td colspan="5" style="text-align:center;color:#666;">Loading...</td></tr></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </details>
     </div>
 
     <div class="section">
       <h2>Bot Positions</h2>
       <div id="positions-pnl-summary" style="font-size:0.9rem;color:#888;margin-bottom:0.5rem;"></div>
+      <div id="positions-pnl-summary-closed" style="font-size:0.85rem;color:#777;margin-bottom:0.5rem;"></div>
       
       <div class="subsection">
         <h3 style="margin:0 0 8px 0;color:#ff9800;">Test Positions (DRY_RUN)</h3>
@@ -838,6 +903,63 @@ def render_dashboard_html() -> str:
           </table>
         </div>
       </details>
+    </div>
+
+
+    <div class="section">
+      <h2>Latest Decision</h2>
+      <div class="decision-card" id="latest-decision">
+        <h3 id="decision-time">Waiting for first decision...</h3>
+        <div class="action" id="decision-action">--</div>
+        <div class="details" id="decision-details">--</div>
+        <div class="reasoning" id="decision-reasoning" style="font-size:0.9em;max-height:60px;overflow:hidden;text-overflow:ellipsis;">Agent is starting up...</div>
+      </div>
+
+      <!-- Side-by-side proposals (shadow) -->
+      <div style="margin-top:12px;background:#1f1f1f;border:1px solid #333;border-radius:8px;padding:10px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+          <h4 style="font-size:0.95rem;margin:0;color:#ddd;">Parallel Proposals (Testnet Observation)</h4>
+          <button id="refresh-parallel-proposals" style="background:#2a2a2a;border:1px solid #444;color:#ccc;padding:4px 10px;border-radius:6px;cursor:pointer;font-size:0.85em;">Refresh</button>
+        </div>
+        <div style="display:grid;grid-template-columns:repeat(3, 1fr);gap:10px;">
+          <div style="background:#151515;border:1px solid #2a2a2a;border-radius:8px;padding:10px;">
+            <div style="display:flex;justify-content:space-between;align-items:center;">
+              <div style="color:#b0bec5;font-weight:700;">Covered Call (rule)</div>
+              <div id="pp-rule-badge" style="font-size:0.75em;color:#888;">--</div>
+            </div>
+            <div id="pp-rule-action" style="font-size:0.95em;margin-top:6px;color:#fff;font-weight:600;">--</div>
+            <div id="pp-rule-reason" style="font-size:0.82em;margin-top:6px;color:#aaa;white-space:pre-wrap;max-height:72px;overflow:hidden;">--</div>
+          </div>
+
+          <div style="background:#151515;border:1px solid #2a2a2a;border-radius:8px;padding:10px;">
+            <div style="display:flex;justify-content:space-between;align-items:center;">
+              <div style="color:#7c4dff;font-weight:700;">LLM (single-agent)</div>
+              <div id="pp-llm-badge" style="font-size:0.75em;color:#888;">--</div>
+            </div>
+            <div id="pp-llm-action" style="font-size:0.95em;margin-top:6px;color:#fff;font-weight:600;">--</div>
+            <div id="pp-llm-reason" style="font-size:0.82em;margin-top:6px;color:#aaa;white-space:pre-wrap;max-height:72px;overflow:hidden;">--</div>
+          </div>
+
+          <div style="background:#151515;border:1px solid #2a2a2a;border-radius:8px;padding:10px;">
+            <div style="display:flex;justify-content:space-between;align-items:center;">
+              <div style="color:#00c853;font-weight:700;">Debate (Opt/Skeptic/Arbiter)</div>
+              <div id="pp-debate-badge" style="font-size:0.75em;color:#888;">--</div>
+            </div>
+            <div id="pp-debate-action" style="font-size:0.95em;margin-top:6px;color:#fff;font-weight:600;">--</div>
+            <div id="pp-debate-reason" style="font-size:0.82em;margin-top:6px;color:#aaa;white-space:pre-wrap;max-height:72px;overflow:hidden;">--</div>
+            <details style="margin-top:8px;">
+              <summary style="cursor:pointer;color:#888;font-size:0.8em;">debate debug</summary>
+              <pre id="pp-debate-debug" style="white-space:pre-wrap;font-size:0.75em;color:#9e9e9e;margin:6px 0 0 0;">--</pre>
+            </details>
+          </div>
+        </div>
+        <div style="margin-top:8px;font-size:0.78em;color:#777;">Note: only the main decision path executes. The other two are computed in shadow for comparison.</div>
+      </div>
+
+      <div style="margin-top:12px;">
+        <h4 style="font-size:0.9rem;margin-bottom:8px;color:#888;">Recent Decisions</h4>
+        <div id="mini-timeline" style="display:flex;flex-wrap:wrap;gap:6px;"></div>
+      </div>
     </div>
 
     <div class="section">
@@ -3023,7 +3145,7 @@ def render_dashboard_html() -> str:
       if (!el) return;
 
       try {{
-        const res = await fetch('/api/meta/version');
+        const res = await fetch('api/meta/version');
         const data = await res.json();
         if (!data || data.ok !== true) {{
           el.textContent = 'unknown';
@@ -3090,7 +3212,7 @@ def render_dashboard_html() -> str:
     
     async function loadSupervisorJobs() {{
       try {{
-        const resp = await fetch('/api/supervisor/jobs');
+        const resp = await fetch('api/supervisor/jobs');
         const data = await resp.json();
         
         if (data.error === 'not_configured') {{
@@ -3163,7 +3285,7 @@ def render_dashboard_html() -> str:
     
     async function viewSupervisorJob(jobId) {{
       try {{
-        const resp = await fetch(`/api/supervisor/jobs/${{jobId}}`);
+        const resp = await fetch(`api/supervisor/jobs/${{jobId}}`);
         const job = await resp.json();
         
         const detailDiv = document.getElementById('supervisor-job-detail');
@@ -3332,7 +3454,7 @@ def render_dashboard_html() -> str:
       const debugMode = debugToggle && debugToggle.checked ? '1' : '0';
       
       try {{
-        const res = await fetch(`/api/bots/market_sensors?debug=${{debugMode}}`);
+        const res = await fetch(`api/bots/market_sensors?debug=${{debugMode}}`);
         const data = await res.json();
         
         if (data.ok) {{
@@ -3408,7 +3530,7 @@ def render_dashboard_html() -> str:
       expertContainer.innerHTML = '<p style="color: #666; font-style: italic;">Loading...</p>';
       
       try {{
-        const res = await fetch('/api/bots/strategies');
+        const res = await fetch('api/bots/strategies');
         const data = await res.json();
         
         if (data.ok) {{
@@ -3690,7 +3812,7 @@ def render_dashboard_html() -> str:
       if (status) status.textContent = '';
       
       try {{
-        const res = await fetch(`/api/bots/${{currentBotId}}/entry_rules?env=${{currentBotsEnv}}`);
+        const res = await fetch(`api/bots/${{currentBotId}}/entry_rules?env=${{currentBotsEnv}}`);
         const data = await res.json();
         
         if (data.ok) {{
@@ -3740,7 +3862,7 @@ def render_dashboard_html() -> str:
       }});
       
       try {{
-        const res = await fetch(`/api/bots/${{currentBotId}}/entry_rules`, {{
+        const res = await fetch(`api/bots/${{currentBotId}}/entry_rules`, {{
           method: 'POST',
           headers: {{'Content-Type': 'application/json'}},
           body: JSON.stringify({{
@@ -3767,7 +3889,7 @@ def render_dashboard_html() -> str:
       if (status) status.textContent = 'Resetting...';
       
       try {{
-        const res = await fetch(`/api/bots/${{currentBotId}}/entry_rules`, {{
+        const res = await fetch(`api/bots/${{currentBotId}}/entry_rules`, {{
           method: 'POST',
           headers: {{'Content-Type': 'application/json'}},
           body: JSON.stringify({{
@@ -3817,7 +3939,7 @@ def render_dashboard_html() -> str:
       if (status) status.textContent = '';
       
       try {{
-        const res = await fetch(`/api/bots/global_risk?env=${{currentBotsEnv}}`);
+        const res = await fetch(`api/bots/global_risk?env=${{currentBotsEnv}}`);
         const data = await res.json();
         
         if (data.ok) {{
@@ -3867,7 +3989,7 @@ def render_dashboard_html() -> str:
       }});
       
       try {{
-        const res = await fetch('/api/bots/global_risk', {{
+        const res = await fetch('api/bots/global_risk', {{
           method: 'POST',
           headers: {{'Content-Type': 'application/json'}},
           body: JSON.stringify({{
@@ -3894,7 +4016,7 @@ def render_dashboard_html() -> str:
       if (status) status.textContent = 'Resetting...';
       
       try {{
-        const res = await fetch('/api/bots/global_risk', {{
+        const res = await fetch('api/bots/global_risk', {{
           method: 'POST',
           headers: {{'Content-Type': 'application/json'}},
           body: JSON.stringify({{
@@ -3942,7 +4064,7 @@ def render_dashboard_html() -> str:
       if (status) status.textContent = '';
       
       try {{
-        const res = await fetch(`/api/bots/${{currentBotId}}/risk?env=${{currentBotsEnv}}`);
+        const res = await fetch(`api/bots/${{currentBotId}}/risk?env=${{currentBotsEnv}}`);
         const data = await res.json();
         
         if (data.ok) {{
@@ -3992,7 +4114,7 @@ def render_dashboard_html() -> str:
       }});
       
       try {{
-        const res = await fetch(`/api/bots/${{currentBotId}}/risk`, {{
+        const res = await fetch(`api/bots/${{currentBotId}}/risk`, {{
           method: 'POST',
           headers: {{'Content-Type': 'application/json'}},
           body: JSON.stringify({{
@@ -4019,7 +4141,7 @@ def render_dashboard_html() -> str:
       if (status) status.textContent = 'Resetting...';
       
       try {{
-        const res = await fetch(`/api/bots/${{currentBotId}}/risk`, {{
+        const res = await fetch(`api/bots/${{currentBotId}}/risk`, {{
           method: 'POST',
           headers: {{'Content-Type': 'application/json'}},
           body: JSON.stringify({{
@@ -4065,7 +4187,7 @@ def render_dashboard_html() -> str:
       valuesEl.innerHTML = '';
       
       try {{
-        const res = await fetch('/api/greg/calibration');
+        const res = await fetch('api/greg/calibration');
         const data = await res.json();
         
         if (data.ok) {{
@@ -4117,7 +4239,7 @@ def render_dashboard_html() -> str:
     
     async function loadGregTradingMode() {{
       try {{
-        const res = await fetch('/api/greg/trading_mode');
+        const res = await fetch('api/greg/trading_mode');
         const data = await res.json();
         if (data.ok) {{
           gregTradingMode = data.mode;
@@ -4204,7 +4326,7 @@ def render_dashboard_html() -> str:
       }});
       
       try {{
-        const res = await fetch('/api/greg/trading_mode', {{
+        const res = await fetch('api/greg/trading_mode', {{
           method: 'POST',
           headers: {{ 'Content-Type': 'application/json' }},
           body: JSON.stringify({{
@@ -4245,7 +4367,7 @@ def render_dashboard_html() -> str:
       await loadGregTradingMode();
       
       try {{
-        const res = await fetch('/api/bots/greg/management');
+        const res = await fetch('api/bots/greg/management');
         const data = await res.json();
         
         if (data.ok) {{
@@ -4273,7 +4395,7 @@ def render_dashboard_html() -> str:
       await loadGregTradingMode();
       
       try {{
-        const res = await fetch('/api/bots/greg/management/mock', {{ method: 'POST' }});
+        const res = await fetch('api/bots/greg/management/mock', {{ method: 'POST' }});
         const data = await res.json();
         
         if (data.ok) {{
@@ -4367,7 +4489,7 @@ def render_dashboard_html() -> str:
         html += `<tr style="border-bottom: 1px solid #eee; border-left: 3px solid ${{prioStyle.border}};" title="${{prioStyle.tooltip}}: ${{s.reason}}">
           <td style="padding: 0.5rem;">${{typeBadge}}</td>
           <td style="padding: 0.5rem; font-weight: 600;">${{s.underlying}}</td>
-          <td style="padding: 0.5rem;">${{stratLabel}}</td>
+          <td style="padding: 0.5rem;">${{escapeHtml(stratLabel)}}</td>
           <td style="padding: 0.5rem; font-size: 0.8rem; color: #666;">${{s.position_id.substring(0, 25)}}...</td>
           <td style="padding: 0.5rem;">
             <span style="background: ${{actionStyle.bg}}; color: ${{actionStyle.color}}; padding: 0.2rem 0.5rem; border-radius: 4px; font-weight: 600; font-size: 0.8rem;">
@@ -4404,7 +4526,7 @@ def render_dashboard_html() -> str:
       }}
       
       try {{
-        const res = await fetch('/api/bots/greg/execute_suggestion', {{
+        const res = await fetch('api/bots/greg/execute_suggestion', {{
           method: 'POST',
           headers: {{ 'Content-Type': 'application/json' }},
           body: JSON.stringify({{
@@ -4446,7 +4568,7 @@ def render_dashboard_html() -> str:
       const dryRunBadge = document.getElementById('hedge-dry-run-badge');
       
       try {{
-        const res = await fetch('/api/bots/greg/hedging');
+        const res = await fetch('api/bots/greg/hedging');
         const data = await res.json();
         
         if (data.ok) {{
@@ -4529,7 +4651,7 @@ def render_dashboard_html() -> str:
       statusEl.textContent = 'Evaluating hedge needs...';
       
       try {{
-        const res = await fetch('/api/bots/greg/hedging/evaluate', {{ method: 'POST' }});
+        const res = await fetch('api/bots/greg/hedging/evaluate', {{ method: 'POST' }});
         const data = await res.json();
         
         if (data.ok) {{
@@ -4590,7 +4712,7 @@ def render_dashboard_html() -> str:
       tbody.innerHTML = '<tr><td colspan="9" style="padding: 1rem; text-align: center; color: #666;">Loading...</td></tr>';
       
       try {{
-        let url = `/api/greg/positions?sandbox_filter=${{sandboxFilter}}`;
+        let url = `api/greg/positions?sandbox_filter=${{sandboxFilter}}`;
         if (gregFilteredUnderlying) {{
           url += `&underlying=${{gregFilteredUnderlying}}`;
         }}
@@ -4705,7 +4827,7 @@ def render_dashboard_html() -> str:
       tbody.innerHTML = '<tr><td colspan="7" style="padding: 0.5rem; color: #666;">Loading...</td></tr>';
       
       try {{
-        const resp = await fetch(`/api/greg/positions/${{positionId}}/logs`);
+        const resp = await fetch(`api/greg/positions/${{positionId}}/logs`);
         const data = await resp.json();
         
         if (!data.ok) {{
@@ -4758,7 +4880,7 @@ def render_dashboard_html() -> str:
     async function loadSystemHealthStatus() {{
       // Load agent health guard status
       try {{
-        const healthStatusRes = await fetch('/api/system_health/status');
+        const healthStatusRes = await fetch('api/system_health/status');
         const healthStatus = await healthStatusRes.json();
         
         const healthGuardEl = document.getElementById('health-guard-status');
@@ -4794,8 +4916,8 @@ def render_dashboard_html() -> str:
       // Load LLM status and check LLM readiness
       try {{
         const [llmRes, readinessRes] = await Promise.all([
-          fetch('/api/llm_status'),
-          fetch('/api/llm_readiness')
+          fetch('api/llm_status'),
+          fetch('api/llm_readiness')
         ]);
         const llmData = await llmRes.json();
         const readinessData = await readinessRes.json();
@@ -4827,7 +4949,7 @@ def render_dashboard_html() -> str:
       
       // Load risk limits
       try {{
-        const riskRes = await fetch('/api/risk_limits');
+        const riskRes = await fetch('api/risk_limits');
         const riskData = await riskRes.json();
         if (riskData.ok) {{
           const ks = riskData.kill_switch_enabled ? 'ON' : 'OFF';
@@ -4964,7 +5086,7 @@ def render_dashboard_html() -> str:
       detailsEl.innerHTML = '';
 
       try {{
-        const res = await fetch('/api/ops/health/status');
+        const res = await fetch('api/ops/health/status');
         if (res.status === 404) {{
           statusEl.textContent = 'Status: no cached health yet';
           summaryEl.innerHTML = 'No cached health yet.';
@@ -4984,7 +5106,7 @@ def render_dashboard_html() -> str:
       const summaryEl = document.getElementById('ops-health-summary');
       if (summaryEl) summaryEl.innerHTML = '<span style="color: #666;">Running ops healthcheck...</span>';
       try {{
-        const res = await fetch('/api/ops/health/run', {{ method: 'POST' }});
+        const res = await fetch('api/ops/health/run', {{ method: 'POST' }});
         if (!res.ok) {{
           const err = await res.json();
           if (summaryEl) summaryEl.innerHTML = `<span style="color: #c62828;">${{err.error || 'Healthcheck failed'}}</span>`;
@@ -4999,7 +5121,7 @@ def render_dashboard_html() -> str:
     
     async function loadRuntimeConfig() {{
       try {{
-        const res = await fetch('/api/system/runtime-config');
+        const res = await fetch('api/system/runtime-config');
         const data = await res.json();
         if (data.ok) {{
           // Kill switch toggle
@@ -5056,7 +5178,7 @@ def render_dashboard_html() -> str:
       const labelEl = document.getElementById('kill-switch-label');
       feedbackEl.innerHTML = '<span style="color: #666;">Updating...</span>';
       try {{
-        const res = await fetch('/api/system/runtime-config', {{
+        const res = await fetch('api/system/runtime-config', {{
           method: 'POST',
           headers: {{'Content-Type': 'application/json'}},
           body: JSON.stringify({{kill_switch_enabled: enabled}})
@@ -5094,7 +5216,7 @@ def render_dashboard_html() -> str:
       const feedbackEl = document.getElementById('trade-mode-feedback');
       feedbackEl.innerHTML = '<span style="color: #666;">Updating...</span>';
       try {{
-        const res = await fetch('/api/system/runtime-config', {{
+        const res = await fetch('api/system/runtime-config', {{
           method: 'POST',
           headers: {{'Content-Type': 'application/json'}},
           body: JSON.stringify({{trade_mode: mode}})
@@ -5121,7 +5243,7 @@ def render_dashboard_html() -> str:
       const value = parseFloat(inputEl.value) || 0;
       feedbackEl.innerHTML = '<span style="color: #666;">Updating...</span>';
       try {{
-        const res = await fetch('/api/system/runtime-config', {{
+        const res = await fetch('api/system/runtime-config', {{
           method: 'POST',
           headers: {{'Content-Type': 'application/json'}},
           body: JSON.stringify({{daily_drawdown_limit_pct: value}})
@@ -5144,7 +5266,7 @@ def render_dashboard_html() -> str:
       feedbackEl.innerHTML = '<span style="color: #666;">Updating...</span>';
       const modeLabels = {{'rule_only': 'Rule Only', 'llm_only': 'LLM Only', 'hybrid_shadow': 'Hybrid (LLM Shadow)'}};
       try {{
-        const res = await fetch('/api/system/runtime-config', {{
+        const res = await fetch('api/system/runtime-config', {{
           method: 'POST',
           headers: {{'Content-Type': 'application/json'}},
           body: JSON.stringify({{decision_mode: mode}})
@@ -5167,7 +5289,7 @@ def render_dashboard_html() -> str:
       const labelEl = document.getElementById('dry-run-label');
       feedbackEl.innerHTML = '<span style="color: #666;">Updating...</span>';
       try {{
-        const res = await fetch('/api/system/runtime-config', {{
+        const res = await fetch('api/system/runtime-config', {{
           method: 'POST',
           headers: {{'Content-Type': 'application/json'}},
           body: JSON.stringify({{dry_run: enabled}})
@@ -5194,7 +5316,7 @@ def render_dashboard_html() -> str:
       feedbackEl.innerHTML = '<span style="color: #666;">Updating...</span>';
       const actionLabels = {{'halt': 'Halt', 'auto_heal': 'Auto-Heal'}};
       try {{
-        const res = await fetch('/api/system/runtime-config', {{
+        const res = await fetch('api/system/runtime-config', {{
           method: 'POST',
           headers: {{'Content-Type': 'application/json'}},
           body: JSON.stringify({{position_reconcile_action: action}})
@@ -5218,7 +5340,7 @@ def render_dashboard_html() -> str:
     async function loadLLMStrategyConfig() {{
       // Load LLM status
       try {{
-        const llmRes = await fetch('/api/llm_status');
+        const llmRes = await fetch('api/llm_status');
         const llmData = await llmRes.json();
         if (llmData.ok) {{
           document.getElementById('llm-mode-label').textContent = llmData.mode + ' / ' + llmData.decision_mode;
@@ -5244,7 +5366,7 @@ def render_dashboard_html() -> str:
       
       // Load strategy thresholds
       try {{
-        const stratRes = await fetch('/api/strategy_thresholds');
+        const stratRes = await fetch('api/strategy_thresholds');
         const stratData = await stratRes.json();
         if (stratData.ok) {{
           const eff = stratData.effective;
@@ -5265,7 +5387,7 @@ def render_dashboard_html() -> str:
       
       // Load risk limits
       try {{
-        const riskRes = await fetch('/api/risk_limits');
+        const riskRes = await fetch('api/risk_limits');
         const riskData = await riskRes.json();
         if (riskData.ok) {{
           document.getElementById('max-margin-input').value = riskData.max_margin_used_pct;
@@ -5281,7 +5403,7 @@ def render_dashboard_html() -> str:
       
       // Load reconciliation config
       try {{
-        const reconcileRes = await fetch('/api/reconciliation_config');
+        const reconcileRes = await fetch('api/reconciliation_config');
         const reconcileData = await reconcileRes.json();
         if (reconcileData.ok) {{
           document.getElementById('reconcile-action-config-select').value = reconcileData.position_reconcile_action;
@@ -5303,7 +5425,7 @@ def render_dashboard_html() -> str:
       const labelEl = document.getElementById('llm-enabled-label');
       feedbackEl.innerHTML = '<span style="color: #666;">Updating...</span>';
       try {{
-        const res = await fetch('/api/llm_status', {{
+        const res = await fetch('api/llm_status', {{
           method: 'POST',
           headers: {{'Content-Type': 'application/json'}},
           body: JSON.stringify({{llm_enabled: enabled}})
@@ -5331,7 +5453,7 @@ def render_dashboard_html() -> str:
       const exploreProb = sliderValue / 100.0;
       feedbackEl.innerHTML = '<span style="color: #666;">Updating...</span>';
       try {{
-        const res = await fetch('/api/llm_status', {{
+        const res = await fetch('api/llm_status', {{
           method: 'POST',
           headers: {{'Content-Type': 'application/json'}},
           body: JSON.stringify({{explore_prob: exploreProb}})
@@ -5352,7 +5474,7 @@ def render_dashboard_html() -> str:
       const feedbackEl = document.getElementById('training-profile-feedback');
       feedbackEl.innerHTML = '<span style="color: #666;">Updating...</span>';
       try {{
-        const res = await fetch('/api/strategy_thresholds', {{
+        const res = await fetch('api/strategy_thresholds', {{
           method: 'POST',
           headers: {{'Content-Type': 'application/json'}},
           body: JSON.stringify({{training_profile_mode: mode}})
@@ -5382,7 +5504,7 @@ def render_dashboard_html() -> str:
       }};
       
       try {{
-        const res = await fetch('/api/strategy_thresholds', {{
+        const res = await fetch('api/strategy_thresholds', {{
           method: 'POST',
           headers: {{'Content-Type': 'application/json'}},
           body: JSON.stringify(payload)
@@ -5411,7 +5533,7 @@ def render_dashboard_html() -> str:
       }};
       
       try {{
-        const res = await fetch('/api/risk_limits', {{
+        const res = await fetch('api/risk_limits', {{
           method: 'POST',
           headers: {{'Content-Type': 'application/json'}},
           body: JSON.stringify(payload)
@@ -5443,7 +5565,7 @@ def render_dashboard_html() -> str:
       }};
       
       try {{
-        const res = await fetch('/api/reconciliation_config', {{
+        const res = await fetch('api/reconciliation_config', {{
           method: 'POST',
           headers: {{'Content-Type': 'application/json'}},
           body: JSON.stringify(payload)
@@ -5464,7 +5586,7 @@ def render_dashboard_html() -> str:
       const el = document.getElementById('llm-result');
       el.innerHTML = '<span style="color: #666;">Testing LLM pipeline...</span>';
       try {{
-        const res = await fetch('/api/test_llm_decision', {{ method: 'POST' }});
+        const res = await fetch('api/test_llm_decision', {{ method: 'POST' }});
         const data = await res.json();
         if (data.ok) {{
           el.innerHTML = `<span style="color: #2e7d32;">✅ LLM OK: ${{data.action}}</span><br><span style="color: #666; font-size: 0.8em;">${{data.reasoning || ''}}</span>`;
@@ -5481,7 +5603,7 @@ def render_dashboard_html() -> str:
       const statusEl = document.getElementById('reconcile-status-line');
       el.innerHTML = '<span style="color: #666;">Running reconciliation...</span>';
       try {{
-        const res = await fetch('/api/reconcile_positions', {{ method: 'POST' }});
+        const res = await fetch('api/reconcile_positions', {{ method: 'POST' }});
         const data = await res.json();
         if (data.ok) {{
           const s = data.summary;
@@ -5505,7 +5627,7 @@ def render_dashboard_html() -> str:
       const el = document.getElementById('risk-result');
       el.innerHTML = '<span style="color: #666;">Testing risk engine...</span>';
       try {{
-        const res = await fetch('/api/test_kill_switch', {{ method: 'POST' }});
+        const res = await fetch('api/test_kill_switch', {{ method: 'POST' }});
         const data = await res.json();
         if (data.ok) {{
           if (data.allowed) {{
@@ -5536,7 +5658,7 @@ def render_dashboard_html() -> str:
       if (badge) {{ badge.textContent = 'CHECKING...'; badge.style.background = '#e0e0e0'; badge.style.color = '#666'; }}
       
       try {{
-        const res = await fetch('/api/agent_healthcheck', {{ method: 'POST' }});
+        const res = await fetch('api/agent_healthcheck', {{ method: 'POST' }});
         const data = await res.json();
         const now = new Date().toLocaleTimeString();
         
@@ -5624,7 +5746,7 @@ def render_dashboard_html() -> str:
       statusEl.style.color = '#666';
       
       try {{
-        const res = await fetch('/api/steward/run', {{ method: 'POST' }});
+        const res = await fetch('api/steward/run', {{ method: 'POST' }});
         const data = await res.json();
         renderStewardReport(data);
       }} catch (err) {{
@@ -5635,7 +5757,7 @@ def render_dashboard_html() -> str:
     
     async function loadStewardReport() {{
       try {{
-        const res = await fetch('/api/steward/report');
+        const res = await fetch('api/steward/report');
         const data = await res.json();
         renderStewardReport(data);
       }} catch (err) {{
@@ -5658,7 +5780,7 @@ def render_dashboard_html() -> str:
 
     async function fetchStatus() {{
       try {{
-        const res = await fetch('/status');
+        const res = await fetch('status');
         const data = await res.json();
         
         const spot = data.state?.spot || {{}};
@@ -5692,7 +5814,7 @@ def render_dashboard_html() -> str:
     
     async function updateStrategyStatus() {{
       try {{
-        const res = await fetch('/api/strategy-status');
+        const res = await fetch('api/strategy-status');
         const s = await res.json();
         
         const modeLabel = s.training_mode ? `Training (${{s.mode}})` : s.mode.charAt(0).toUpperCase() + s.mode.slice(1);
@@ -5747,7 +5869,7 @@ def render_dashboard_html() -> str:
     
     async function updateClosedPositions() {{
       try {{
-        const res = await fetch('/api/positions/closed');
+        const res = await fetch('api/positions/closed');
         const data = await res.json();
         const tbody = document.getElementById('live-closed-positions-body');
         const chains = data.chains || [];
@@ -5767,7 +5889,7 @@ def render_dashboard_html() -> str:
             <td>${{t}}</td>
             <td>${{chain.underlying}}</td>
             <td>${{typeLabel}}</td>
-            <td>${{stratLabel}}</td>
+            <td>${{escapeHtml(stratLabel)}}</td>
             <td>${{chain.symbol}}</td>
             <td>${{chain.num_legs}}</td>
             <td>${{chain.num_rolls}}</td>
@@ -5788,7 +5910,7 @@ def render_dashboard_html() -> str:
       const debugMode = debugToggle && debugToggle.checked ? '1' : '0';
       
       try {{
-        const res = await fetch(`/api/bots/market_sensors?debug=${{debugMode}}`);
+        const res = await fetch(`api/bots/market_sensors?debug=${{debugMode}}`);
         const data = await res.json();
         
         if (!data.ok) {{
@@ -5823,58 +5945,185 @@ def render_dashboard_html() -> str:
       }}
     }}
     
+    const API_BASE = (window.location.pathname || '').startsWith('/platform') ? '/platform' : '';
+
+    function escapeHtml(s) {{
+      s = (s === null || s === undefined) ? '' : String(s);
+      return s
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
+    }}
+
+    async function updatePaperPortfolios() {{
+      const lanes = [
+        {{lane:'rule', summary:'paper-rule-summary', tbody:'paper-rule-open-body', closedSummary:'paper-rule-closed-summary', closedBody:'paper-rule-closed-body'}},
+        {{lane:'llm', summary:'paper-llm-summary', tbody:'paper-llm-open-body', closedSummary:'paper-llm-closed-summary', closedBody:'paper-llm-closed-body'}},
+        {{lane:'debate', summary:'paper-debate-summary', tbody:'paper-debate-open-body', closedSummary:'paper-debate-closed-summary', closedBody:'paper-debate-closed-body'}},
+      ];
+
+      const fmtPnl = (x) => {{
+        x = Number(x || 0);
+        const c = x >= 0 ? '#26a69a' : '#ef5350';
+        return `<span style="color:${{c}};font-weight:700;">${{x >= 0 ? '+' : ''}}${{x.toFixed(2)}}</span>`;
+      }};
+
+      for (const l of lanes) {{
+        try {{
+          const res = await fetch(`${{API_BASE}}/api/paper/positions/open?lane=${{l.lane}}`);
+          const data = await res.json();
+          const positions = data.positions || [];
+          const totals = data.totals || {{}};
+          const unreal = totals.unrealized_pnl || 0;
+
+          const cres = await fetch(`${{API_BASE}}/api/paper/positions/closed?lane=${{l.lane}}`);
+          const cdata = await cres.json();
+          const chains = cdata.chains || [];
+          const ct = cdata.totals || {{}};
+          const real = ct.realized_pnl || 0;
+
+          const total = Number(unreal) + Number(real);
+
+          document.getElementById(l.summary).innerHTML = `Open: ${{fmtPnl(unreal)}} &nbsp;|&nbsp; Closed: ${{fmtPnl(real)}} &nbsp;|&nbsp; Total: ${{fmtPnl(total)}}`;
+          document.getElementById(l.closedSummary).innerHTML = `Open positions: <b>${{positions.length}}</b> &nbsp;|&nbsp; Closed chains: <b>${{chains.length}}</b>`;
+
+          const rows = positions.map(p => {{
+            const cls = (p.unrealized_pnl || 0) >= 0 ? 'traded-yes' : 'traded-no';
+            return `<tr>
+              <td>${{escapeHtml(p.underlying)}}</td>
+              <td>${{escapeHtml(p.symbol)}}</td>
+              <td>${{Number(p.quantity||0).toFixed(3)}}</td>
+              <td>${{Number(p.entry_price||0).toFixed(6)}}</td>
+              <td>${{Number(p.mark_price||0).toFixed(6)}}</td>
+              <td class="${{cls}}">${{Number(p.unrealized_pnl||0).toFixed(2)}}</td>
+              <td class="${{cls}}">${{Number(p.unrealized_pnl_pct||0).toFixed(1)}}%</td>
+            </tr>`;
+          }}).join('');
+
+          document.getElementById(l.tbody).innerHTML = rows || '<tr><td colspan="7" style="text-align:center;color:#666;">No open positions</td></tr>';
+
+          const crows = chains.slice(0, 40).map(c => {{
+            const cls = (c.realized_pnl || 0) >= 0 ? 'traded-yes' : 'traded-no';
+            const closedAt = (c.close_time || '').toString().replace('T',' ').slice(0,19);
+            return `<tr>
+              <td>${{escapeHtml(closedAt || '--')}}</td>
+              <td>${{escapeHtml(c.underlying || '--')}}</td>
+              <td>${{escapeHtml(c.symbol || '--')}}</td>
+              <td class="${{cls}}">${{Number(c.realized_pnl||0).toFixed(2)}}</td>
+              <td class="${{cls}}">${{Number(c.realized_pnl_pct||0).toFixed(1)}}%</td>
+            </tr>`;
+          }}).join('');
+
+          document.getElementById(l.closedBody).innerHTML = crows || '<tr><td colspan="5" style="text-align:center;color:#666;">No closed chains</td></tr>';
+
+        }} catch (e) {{
+          document.getElementById(l.summary).innerText = 'Error loading';
+          document.getElementById(l.tbody).innerHTML = '<tr><td colspan="7" style="text-align:center;color:#f44336;">Error</td></tr>';
+          const cs = document.getElementById(l.closedSummary);
+          if (cs) cs.innerText = 'Error loading';
+          const cb = document.getElementById(l.closedBody);
+          if (cb) cb.innerHTML = '<tr><td colspan="5" style="text-align:center;color:#f44336;">Error</td></tr>';
+        }}
+      }}
+    }}
+
     async function updateDashboardPositions() {{
       const testTbody = document.getElementById('dashboard-test-positions-body');
       const liveTbody = document.getElementById('dashboard-live-positions-body');
-      const summaryEl = document.getElementById('positions-pnl-summary');
-      
+      const closedTbody = document.getElementById('live-closed-positions-body');
+      const summaryOpenEl = document.getElementById('positions-pnl-summary');
+      const summaryClosedEl = document.getElementById('positions-pnl-summary-closed');
+
       try {{
-        const res = await fetch('/api/positions/open');
-        const data = await res.json();
-        const positions = data.positions || [];
-        const totals = data.totals || {{}};
-        
-        const testPositions = positions.filter(p => p.mode === 'DRY_RUN');
-        const livePositions = positions.filter(p => p.mode !== 'DRY_RUN');
-        
-        const totalPnl = totals.unrealized_pnl || 0;
-        const pnlColor = totalPnl >= 0 ? '#26a69a' : '#ef5350';
-        summaryEl.innerHTML = `Total Unrealized: <span style="color:${{pnlColor}};font-weight:600;">${{totalPnl >= 0 ? '+' : ''}}${{totalPnl.toFixed(2)}}</span>`;
-        
-        const renderPositionRow = (pos) => {{
+        // OPEN positions
+        const openRes = await fetch('api/positions/open');
+        const openData = await openRes.json();
+        const openPositions = openData.positions || [];
+        const openTotals = openData.totals || {{}};
+
+        const testPositions = openPositions.filter(p => p.mode === 'DRY_RUN');
+        const livePositions = openPositions.filter(p => p.mode !== 'DRY_RUN');
+
+        const unreal = Number(openTotals.unrealized_pnl || 0);
+        const unrealColor = unreal >= 0 ? '#26a69a' : '#ef5350';
+
+        // CLOSED positions
+        const closedRes = await fetch('api/positions/closed');
+        const closedData = await closedRes.json();
+        const chains = closedData.chains || [];
+        const closedTotals = closedData.totals || {{}};
+
+        const realized = Number(closedTotals.realized_pnl || 0);
+        const realizedColor = realized >= 0 ? '#26a69a' : '#ef5350';
+
+        const total = unreal + realized;
+        const totalColor = total >= 0 ? '#26a69a' : '#ef5350';
+
+        summaryOpenEl.innerHTML = `Open PnL (Unrealized): <span style="color:${{unrealColor}};font-weight:700;">${{unreal >= 0 ? '+' : ''}}${{unreal.toFixed(2)}}</span> 
+          &nbsp;|&nbsp; Total PnL: <span style="color:${{totalColor}};font-weight:700;">${{total >= 0 ? '+' : ''}}${{total.toFixed(2)}}</span>`;
+        summaryClosedEl.innerHTML = `Closed PnL (Realized): <span style="color:${{realizedColor}};font-weight:700;">${{realized >= 0 ? '+' : ''}}${{realized.toFixed(2)}}</span>`;
+
+        const renderOpenRow = (pos) => {{
           const stratLabel = (pos.strategy_type || '').replace(/_/g, ' ');
           const pnlClass = pos.unrealized_pnl >= 0 ? 'traded-yes' : 'traded-no';
           const entryMode = pos.entry_mode || 'NATURAL';
           return `<tr>
             <td>${{pos.underlying}}</td>
-            <td>${{stratLabel}}</td>
+            <td>${{escapeHtml(stratLabel)}}</td>
             <td>${{pos.symbol}}</td>
-            <td>${{pos.quantity.toFixed(3)}}</td>
-            <td>${{pos.entry_price.toFixed(6)}}</td>
-            <td>${{pos.mark_price.toFixed(6)}}</td>
-            <td class="${{pnlClass}}">${{pos.unrealized_pnl.toFixed(2)}}</td>
-            <td class="${{pnlClass}}">${{pos.unrealized_pnl_pct.toFixed(1)}}%</td>
-            <td>${{Math.max(0, pos.dte).toFixed(1)}}</td>
-            <td>${{pos.num_rolls}}</td>
+            <td>${{Number(pos.quantity || 0).toFixed(3)}}</td>
+            <td>${{Number(pos.entry_price || 0).toFixed(6)}}</td>
+            <td>${{Number(pos.mark_price || 0).toFixed(6)}}</td>
+            <td class="${{pnlClass}}">${{Number(pos.unrealized_pnl || 0).toFixed(2)}}</td>
+            <td class="${{pnlClass}}">${{Number(pos.unrealized_pnl_pct || 0).toFixed(1)}}%</td>
+            <td>${{Math.max(0, Number(pos.dte || 0)).toFixed(1)}}</td>
+            <td>${{pos.num_rolls || 0}}</td>
             <td>${{entryMode}}</td>
           </tr>`;
         }};
-        
-        if (testPositions.length === 0) {{
-          testTbody.innerHTML = '<tr><td colspan="11" style="text-align:center;color:#666;">No test positions</td></tr>';
-        }} else {{
-          testTbody.innerHTML = testPositions.map(renderPositionRow).join('');
+
+        const renderClosedRow = (c) => {{
+          const stratLabel = (c.strategy_type || '').replace(/_/g, ' ');
+          const pnlClass = (c.realized_pnl || 0) >= 0 ? 'traded-yes' : 'traded-no';
+          const closedAt = (c.close_time || c.open_time || '').toString().replace('T', ' ').slice(0, 19);
+          return `<tr>
+            <td>${{escapeHtml(closedAt || '--')}}</td>
+            <td>${{escapeHtml(c.underlying || '--')}}</td>
+            <td>${{(c.option_type || '--').toString().toUpperCase()}}</td>
+            <td>${{stratLabel || '--'}}</td>
+            <td>${{escapeHtml(c.symbol || '--')}}</td>
+            <td>${{c.num_legs || '--'}}</td>
+            <td>${{c.num_rolls || 0}}</td>
+            <td class="${{pnlClass}}">${{Number(c.realized_pnl || 0).toFixed(2)}}</td>
+            <td class="${{pnlClass}}">${{Number(c.realized_pnl_pct || 0).toFixed(1)}}%</td>
+            <td>${{Number(c.max_drawdown_pct || 0).toFixed(1)}}%</td>
+            <td>${{c.mode || '--'}}</td>
+          </tr>`;
+        }};
+
+        testTbody.innerHTML = testPositions.length
+          ? testPositions.map(renderOpenRow).join('')
+          : '<tr><td colspan="11" style="text-align:center;color:#666;">No test positions</td></tr>';
+
+        liveTbody.innerHTML = livePositions.length
+          ? livePositions.map(renderOpenRow).join('')
+          : '<tr><td colspan="11" style="text-align:center;color:#666;">No live positions</td></tr>';
+
+        if (closedTbody) {{
+          closedTbody.innerHTML = chains.length
+            ? chains.slice(0, 50).map(renderClosedRow).join('')
+            : '<tr><td colspan="11" style="text-align:center;color:#666;">No closed chains yet</td></tr>';
         }}
-        
-        if (livePositions.length === 0) {{
-          liveTbody.innerHTML = '<tr><td colspan="11" style="text-align:center;color:#666;">No live positions</td></tr>';
-        }} else {{
-          liveTbody.innerHTML = livePositions.map(renderPositionRow).join('');
-        }}
+
       }} catch (err) {{
         console.error('Dashboard positions fetch error:', err);
         testTbody.innerHTML = '<tr><td colspan="11" style="text-align:center;color:#f44336;">Error loading positions</td></tr>';
         liveTbody.innerHTML = '<tr><td colspan="11" style="text-align:center;color:#f44336;">Error loading positions</td></tr>';
+        if (closedTbody) closedTbody.innerHTML = '<tr><td colspan="11" style="text-align:center;color:#f44336;">Error loading closed positions</td></tr>';
+        if (summaryOpenEl) summaryOpenEl.innerText = '';
+        if (summaryClosedEl) summaryClosedEl.innerText = '';
       }}
     }}
     
@@ -5887,15 +6136,64 @@ def render_dashboard_html() -> str:
       if (debugToggle) {{
         debugToggle.addEventListener('change', updateDashboardSensors);
       }}
+
+      const ppBtn = document.getElementById('refresh-parallel-proposals');
+      if (ppBtn) {{
+        ppBtn.addEventListener('click', fetchParallelProposals);
+      }}
+
       updateDashboardSensors();
       updateDashboardPositions();
+      updatePaperPortfolios();
+      fetchParallelProposals();
+
       setInterval(updateDashboardSensors, 30000);
       setInterval(updateDashboardPositions, 30000);
+      setInterval(updatePaperPortfolios, 30000);
+      setInterval(fetchParallelProposals, 30000);
     }}
     
+    async function fetchParallelProposals() {{
+      try {{
+        const res = await fetch('status');
+        const data = await res.json();
+
+        if (!data || data.status === 'starting') {{
+          return;
+        }}
+
+        const fmt = (s) => (s || '').toString().replace(/_/g, ' ');
+        const clip = (s, n=180) => {{
+          s = (s || '').toString();
+          return s.length > n ? (s.slice(0, n) + '...') : s;
+        }};
+
+        const rule = data.rule_action || (data.strategy_proposals || {{}}).covered_call_v1 || {{}};
+        const llm = data.llm_action || {{}};
+        const debate = data.debate_action || {{}};
+
+        document.getElementById('pp-rule-action').innerText = fmt(rule.action || '--');
+        document.getElementById('pp-rule-reason').innerText = clip(rule.reasoning || '--');
+        document.getElementById('pp-rule-badge').innerText = (rule.strategy_id || 'rule').toString();
+
+        document.getElementById('pp-llm-action').innerText = fmt(llm.action || '--');
+        document.getElementById('pp-llm-reason').innerText = clip(llm.reasoning || '--');
+        document.getElementById('pp-llm-badge').innerText = llm.validated ? 'validated' : 'unvalidated';
+
+        document.getElementById('pp-debate-action').innerText = fmt(debate.action || '--');
+        document.getElementById('pp-debate-reason').innerText = clip(debate.reasoning || '--');
+        document.getElementById('pp-debate-badge').innerText = debate.validated ? 'validated' : 'unvalidated';
+
+        const dbg = debate.debate_debug || {{}};
+        document.getElementById('pp-debate-debug').innerText = JSON.stringify(dbg, null, 2) || '--';
+      }} catch (e) {{
+        console.error('Parallel proposals fetch error:', e);
+      }}
+    }}
+
     async function fetchDecisions() {{
       try {{
-        const res = await fetch('/api/agent/decisions');
+        const res = await fetch('api/agent/decisions');
         const data = await res.json();
         
         const decisions = data.decisions || [];
@@ -6039,7 +6337,7 @@ def render_dashboard_html() -> str:
     
     async function fetchBacktestRuns() {{
       try {{
-        const res = await fetch('/api/backtests');
+        const res = await fetch('api/backtests');
         const runs = await res.json();
         renderBacktestRuns(runs);
       }} catch (err) {{
@@ -6088,7 +6386,7 @@ def render_dashboard_html() -> str:
             <td>${{numTrades}}</td>
             <td>
               <button onclick="viewRunDetail('${{run.run_id}}')" style="background:#2196f3;color:#fff;border:none;padding:4px 8px;border-radius:3px;cursor:pointer;margin-right:4px;font-size:0.8em;">View</button>
-              <a href="/api/backtests/${{run.run_id}}/download" style="background:#4caf50;color:#fff;border:none;padding:4px 8px;border-radius:3px;cursor:pointer;text-decoration:none;font-size:0.8em;">Download</a>
+              <a href="api/backtests/${{run.run_id}}/download" style="background:#4caf50;color:#fff;border:none;padding:4px 8px;border-radius:3px;cursor:pointer;text-decoration:none;font-size:0.8em;">Download</a>
             </td>
           </tr>
         `;
@@ -6097,7 +6395,7 @@ def render_dashboard_html() -> str:
     
     async function viewRunDetail(runId) {{
       try {{
-        const res = await fetch('/api/backtests/' + runId);
+        const res = await fetch('api/backtests/' + runId);
         if (!res.ok) {{
           alert('Failed to load run details');
           return;
@@ -6171,7 +6469,7 @@ def render_dashboard_html() -> str:
     
     async function loadChatHistory() {{
       try {{
-        const res = await fetch('/chat/messages');
+        const res = await fetch('chat/messages');
         const data = await res.json();
         renderChatMessages(data.messages || []);
       }} catch (err) {{
@@ -6199,7 +6497,7 @@ def render_dashboard_html() -> str:
       document.getElementById('chat-messages').scrollTop = document.getElementById('chat-messages').scrollHeight;
 
       try {{
-        const res = await fetch('/chat', {{
+        const res = await fetch('chat', {{
           method: 'POST',
           headers: {{ 'Content-Type': 'application/json' }},
           body: JSON.stringify({{ question: q }})
@@ -6224,7 +6522,7 @@ def render_dashboard_html() -> str:
     
     async function clearChat() {{
       try {{
-        await fetch('/chat/clear', {{ method: 'POST' }});
+        await fetch('chat/clear', {{ method: 'POST' }});
         renderChatMessages([]);
       }} catch (err) {{
         console.error('Failed to clear chat:', err);
@@ -6526,7 +6824,7 @@ def render_dashboard_html() -> str:
           iv_multiplier: String(ivMult),
         }});
 
-        const res = await fetch(`/api/calibration?${{params.toString()}}`);
+        const res = await fetch(`api/calibration?${{params.toString()}}`);
         if (!res.ok) {{
           throw new Error(`HTTP ${{res.status}}`);
         }}
@@ -6620,7 +6918,7 @@ def render_dashboard_html() -> str:
       tbody.innerHTML = '<tr><td colspan="9" style="text-align:center;color:#666;">Loading...</td></tr>';
       
       try {{
-        const res = await fetch(`/api/calibration/history?underlying=${{underlying}}&limit=20`);
+        const res = await fetch(`api/calibration/history?underlying=${{underlying}}&limit=20`);
         if (!res.ok) throw new Error(`HTTP ${{res.status}}`);
         const data = await res.json();
         
@@ -6662,7 +6960,7 @@ def render_dashboard_html() -> str:
       container.innerHTML = '<div style="text-align:center;color:#666;grid-column:1/-1;">Loading...</div>';
       
       try {{
-        const res = await fetch('/api/calibration/auto_status');
+        const res = await fetch('api/calibration/auto_status');
         if (!res.ok) throw new Error(`HTTP ${{res.status}}`);
         const data = await res.json();
         
@@ -6734,7 +7032,7 @@ def render_dashboard_html() -> str:
         btn.innerText = 'Applying...';
         
         try {{
-          const res = await fetch('/api/calibration/apply_direct', {{
+          const res = await fetch('api/calibration/apply_direct', {{
             method: 'POST',
             headers: {{ 'Content-Type': 'application/json' }},
             body: JSON.stringify(lastCalibrationResult)
@@ -6770,7 +7068,7 @@ def render_dashboard_html() -> str:
       btn.innerText = 'Applying...';
       
       try {{
-        const res = await fetch('/api/calibration/use_latest', {{
+        const res = await fetch('api/calibration/use_latest', {{
           method: 'POST',
           headers: {{ 'Content-Type': 'application/json' }},
           body: JSON.stringify({{ underlying, dte_min: dteMin, dte_max: dteMax }})
@@ -6846,7 +7144,7 @@ def render_dashboard_html() -> str:
       compsEl.textContent = '';
 
       try {{
-        const res = await fetch(`/api/fidelity/latest`);
+        const res = await fetch(`api/fidelity/latest`);
         if (res.status === 404) {{
           gateEl.innerHTML = '<span style="color:#666;">No fidelity run yet</span>';
           compsEl.innerHTML = '<span style="color:#888;">No fidelity runs yet. Run <code>scripts/run_fidelity_from_lab.py</code> to generate a report.</span>';
@@ -6929,7 +7227,7 @@ def render_dashboard_html() -> str:
       _setFidelityDashboardLoading();
 
       try {{
-        const res = await fetch('/api/fidelity/latest');
+        const res = await fetch('api/fidelity/latest');
         const data = res.ok ? await res.json() : null;
         _applyFidelityDashboardReport(data);
 
@@ -6957,7 +7255,7 @@ def render_dashboard_html() -> str:
     
     async function fetchPolicy() {{
       try {{
-        const res = await fetch('/api/calibration/policy');
+        const res = await fetch('api/calibration/policy');
         if (!res.ok) throw new Error(`HTTP ${{res.status}}`);
         const data = await res.json();
         
@@ -6981,7 +7279,7 @@ def render_dashboard_html() -> str:
       const tbody = document.getElementById('current-multipliers-body');
       
       try {{
-        const res = await fetch(`/api/calibration/current_multipliers?underlying=${{underlying}}`);
+        const res = await fetch(`api/calibration/current_multipliers?underlying=${{underlying}}`);
         if (!res.ok) throw new Error(`HTTP ${{res.status}}`);
         const data = await res.json();
         
@@ -7013,7 +7311,7 @@ def render_dashboard_html() -> str:
       tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;color:#666;">Loading...</td></tr>';
       
       try {{
-        const res = await fetch(`/api/calibration/runs?underlying=${{underlying}}&limit=10`);
+        const res = await fetch(`api/calibration/runs?underlying=${{underlying}}&limit=10`);
         if (!res.ok) throw new Error(`HTTP ${{res.status}}`);
         const data = await res.json();
         
@@ -7130,7 +7428,7 @@ def render_dashboard_html() -> str:
     
     async function toggleTraining(enable) {{
       try {{
-        const res = await fetch('/api/training/toggle', {{
+        const res = await fetch('api/training/toggle', {{
           method: 'POST',
           headers: {{ 'Content-Type': 'application/json' }},
           body: JSON.stringify({{ enable }})
@@ -7270,7 +7568,7 @@ def render_dashboard_html() -> str:
       document.getElementById('bt-error').style.display = 'none';
       
       try {{
-        const res = await fetch('/api/backtest/start', {{
+        const res = await fetch('api/backtest/start', {{
           method: 'POST',
           headers: {{ 'Content-Type': 'application/json' }},
           body: JSON.stringify(payload),
@@ -7404,9 +7702,9 @@ def render_dashboard_html() -> str:
       
       try {{
         if (isPaused) {{
-          await fetch('/api/backtest/resume', {{ method: 'POST' }});
+          await fetch('api/backtest/resume', {{ method: 'POST' }});
         }} else {{
-          await fetch('/api/backtest/pause', {{ method: 'POST' }});
+          await fetch('api/backtest/pause', {{ method: 'POST' }});
         }}
       }} catch (err) {{
         console.error('Pause/Resume error:', err);
@@ -7415,7 +7713,7 @@ def render_dashboard_html() -> str:
     
     async function stopBacktest() {{
       try {{
-        await fetch('/api/backtest/stop', {{ method: 'POST' }});
+        await fetch('api/backtest/stop', {{ method: 'POST' }});
       }} catch (err) {{
         console.error('Stop backtest error:', err);
       }}
@@ -7423,7 +7721,7 @@ def render_dashboard_html() -> str:
     
     async function refreshBacktestStatus() {{
       try {{
-        const res = await fetch('/api/backtest/status');
+        const res = await fetch('api/backtest/status');
         if (!res.ok) return;
         const st = await res.json();
         
@@ -7647,7 +7945,7 @@ def render_dashboard_html() -> str:
       document.getElementById('insights-box').style.display = 'none';
       
       try {{
-        const res = await fetch('/api/backtest/run', {{
+        const res = await fetch('api/backtest/run', {{
           method: 'POST',
           headers: {{ 'Content-Type': 'application/json' }},
           body: JSON.stringify({{
@@ -7852,7 +8150,7 @@ def render_dashboard_html() -> str:
       box.innerText = 'Generating insights...';
       
       try {{
-        const res = await fetch('/api/backtest/insights', {{
+        const res = await fetch('api/backtest/insights', {{
           method: 'POST',
           headers: {{ 'Content-Type': 'application/json' }},
           body: JSON.stringify({{
@@ -7909,7 +8207,7 @@ def render_dashboard_html() -> str:
       }};
       
       try {{
-        const res = await fetch('/api/backtest/selector_scan', {{
+        const res = await fetch('api/backtest/selector_scan', {{
           method: 'POST',
           headers: {{ 'Content-Type': 'application/json' }},
           body: JSON.stringify(payload)
@@ -7952,7 +8250,7 @@ def render_dashboard_html() -> str:
       }}
 
       try {{
-        const resp = await fetch("/api/data_status/intraday");
+        const resp = await fetch("api/data_status/intraday");
         const data = await resp.json();
 
         if (!data.ok) {{
@@ -8051,7 +8349,7 @@ def render_dashboard_html() -> str:
       }};
       
       try {{
-        const res = await fetch('/api/backtest/selector_heatmap', {{
+        const res = await fetch('api/backtest/selector_heatmap', {{
           method: 'POST',
           headers: {{ 'Content-Type': 'application/json' }},
           body: JSON.stringify(payload)
@@ -8129,7 +8427,7 @@ def render_dashboard_html() -> str:
       }};
       
       try {{
-        const res = await fetch('/api/environment_heatmap', {{
+        const res = await fetch('api/environment_heatmap', {{
           method: 'POST',
           headers: {{ 'Content-Type': 'application/json' }},
           body: JSON.stringify(payload)
@@ -8231,7 +8529,7 @@ def render_dashboard_html() -> str:
         sweetStatus.textContent = 'Loading sweet spots...';
         sweetStatus.style.color = '';
         
-        fetch('/api/greg_sweetspots')
+        fetch('api/greg_sweetspots')
           .then(r => r.json())
           .then(renderSweetSpots)
           .catch(err => {{
@@ -8247,7 +8545,7 @@ def render_dashboard_html() -> str:
         if (runBtn) runBtn.disabled = true;
         if (refreshBtn) refreshBtn.disabled = true;
         
-        fetch('/api/greg_sweetspots/run', {{ method: 'POST' }})
+        fetch('api/greg_sweetspots/run', {{ method: 'POST' }})
           .then(r => r.json())
           .then(payload => {{
             if (!payload.ok) {{
