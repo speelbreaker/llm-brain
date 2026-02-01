@@ -720,21 +720,23 @@ def run_agent_loop_forever(
 
                     # If profit-capture checkpoint fired, set an anti-thrash cooldown in the PositionTracker.
                     try:
-                        from src.position_tracker import position_tracker
+                        # Do NOT re-import position_tracker here; importing inside this function creates
+                        # a local binding and can trigger UnboundLocalError in other code paths.
+                        from src.position_tracker import position_tracker as _position_tracker
 
                         rc = str((rule_action or {}).get("reason_code") or "")
                         if rc.startswith("EXIT_OR_ROLL"):
                             symbol = str((rule_action or {}).get("params", {}).get("symbol") or (rule_action or {}).get("params", {}).get("from_symbol") or "")
                             if symbol:
-                                pid = position_tracker.get_open_position_id_for_symbol(symbol)
+                                pid = _position_tracker.get_open_position_id_for_symbol(symbol)
                                 if pid:
-                                    position_tracker.set_exit_or_roll_cooldown_for_position(
+                                    _position_tracker.set_exit_or_roll_cooldown_for_position(
                                         position_id=pid,
                                         cooldown_minutes=int(getattr(settings, "profit_capture_cooldown_minutes", 15)),
                                     )
                                 else:
                                     # fallback
-                                    position_tracker.set_exit_or_roll_cooldown(
+                                    _position_tracker.set_exit_or_roll_cooldown(
                                         symbol=symbol,
                                         cooldown_minutes=int(getattr(settings, "profit_capture_cooldown_minutes", 15)),
                                     )
@@ -920,14 +922,16 @@ def run_agent_loop_forever(
 
                         # Safe roll execution: wait for close fill, then refresh state + re-check OPEN.
                         if final_action_type == ActionType.ROLL_COVERED_CALL.value and not settings.dry_run:
-                            from src.state_builder import build_agent_state
+                            # Do NOT import build_agent_state into this local scope; it causes Python to treat
+                            # build_agent_state as a local variable and can trigger UnboundLocalError earlier.
+                            from src.state_builder import build_agent_state as _build_agent_state
 
                             # 1) Execute close leg (execution.py defers open leg; returns status=close_filled)
                             execution_result = execute_action(client, final_action, settings)
 
                             if execution_result.get("status") == "close_filled":
                                 # 2) Refresh state after close
-                                refreshed_state = build_agent_state(client, settings)
+                                refreshed_state = _build_agent_state(client, settings)
 
                                 from_symbol = str(final_action.get("params", {}).get("from_symbol") or "")
                                 orig_to_symbol = str(final_action.get("params", {}).get("to_symbol") or "")
